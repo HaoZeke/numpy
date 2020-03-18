@@ -47,6 +47,15 @@ class TestPublicPrivate:
         assert "private" not in mod["vars"]["seta"]["attrspec"]
         assert "public" in mod["vars"]["seta"]["attrspec"]
 
+    def test_notPublicPrivate(self, tmp_path):
+        fpath = util.getpath("tests", "src", "crackfortran", "pubprivmod.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert len(mod) == 1
+        mod = mod[0]
+        assert mod['vars']['a']['attrspec'] == ['private', ]
+        assert mod['vars']['b']['attrspec'] == ['public', ]
+        assert mod['vars']['seta']['attrspec'] == ['public', ]
+
 
 class TestExternal(util.F2PyTest):
     # issue gh-17859: add external attribute support
