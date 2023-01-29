@@ -1778,9 +1778,10 @@ static PyObject *
 @name@_float(PyObject *obj)
 {
 #if @cmplx@
-    PyErr_SetString(PyExc_TypeError,
-                    "can't convert complex to float");
-    return NULL;
+    if (emit_complexwarning() < 0) {
+        return NULL;
+    }
+    return @func@(@to_ctype@(PyArrayScalar_VAL(obj, @Name@).real));
 #else
     return @func@(@to_ctype@(PyArrayScalar_VAL(obj, @Name@)));
 #endif
