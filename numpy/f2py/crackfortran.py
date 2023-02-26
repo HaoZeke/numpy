@@ -1375,7 +1375,7 @@ def analyzeline(m, case, line):
         value = ''
         init_list = ''
         state = 0
-        quote_open = 1
+        quote_open = True
         paren_open = 0
 
         for c in m.group('after'):
@@ -1429,30 +1429,21 @@ def analyzeline(m, case, line):
                     # Ignoring since data statements are irrelevant for
                     # wrapping.
                     continue
-                fc = 0
-                pair_type = groupcache[groupcounter]['vars'][pair[0]]['typespec']
-                if pair_type == 'complex':
-                    while (index < llen):
-                        if pair[1][index] == "'":
-                            fc = not fc
-                        index = index + 1
-                    index = index + 1
-                    if name not in variables:
-                        variables[name] = {}
-                    if '=' in variables[name] and not variables[name]['='] == pair[1][end_index:index - 1]:
-                        outmess('analyzeline: changing init expression of "%s" ("%s") to "%s"\n' % (
-                            name, variables[name]['='], pair[1][end_index:index - 1]))
-                else:
-                    while (index < llen) and (fc or not pair[1][index] == ','):
-                        if pair[1][index] == "'":
-                            fc = not fc
-                        index = index + 1
-                    index = index + 1
-                    if name not in variables:
-                        variables[name] = {}
-                    if '=' in variables[name] and not variables[name]['='] == pair[1][end_index:index - 1]:
-                        outmess('analyzeline: changing init expression of "%s" ("%s") to "%s"\n' % (
-                            name, variables[name]['='], pair[1][end_index:index - 1]))
+                quote_open = 0
+                try:
+                    pair_type = groupcache[groupcounter]['vars'][pair[0]]['typespec']
+                except KeyError:
+                    pair_type = None
+                while index < llen and (pair_type == 'complex' or (quote_open or pair[1][index] != ',')):
+                    if pair[1][index] == "'":
+                        quote_open = not quote_open
+                    index += 1
+                index = index + 1
+                if name not in variables:
+                    variables[name] = {}
+                if '=' in variables[name] and not variables[name]['='] == pair[1][end_index:index - 1]:
+                    outmess('analyzeline: changing init expression of "%s" ("%s") to "%s"\n' % (
+                        name, variables[name]['='], pair[1][end_index:index - 1]))
                 variables[name]['='] = pair[1][end_index:index - 1]
                 end_index = index
                 last_variable = name
