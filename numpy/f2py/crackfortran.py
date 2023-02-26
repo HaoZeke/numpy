@@ -1371,80 +1371,81 @@ def analyzeline(m, case, line):
                         impl[chr(o)] = decl
             groupcache[groupcounter]['implicit'] = impl
     elif case == 'data':
-        ll = []
-        dl = ''
-        il = ''
-        f = 0
-        fc = 1
-        inp = 0
+        values = []
+        value = ''
+        init_list = ''
+        state = 0
+        quote_open = 1
+        paren_open = 0
+
         for c in m.group('after'):
-            if not inp:
+            if not paren_open:
                 if c == "'":
-                    fc = not fc
-                if c == '/' and fc:
-                    f = f + 1
+                    quote_open = not quote_open
+                if c == '/' and quote_open:
+                    state += 1
                     continue
             if c == '(':
-                inp = inp + 1
+                paren_open += 1
             elif c == ')':
-                inp = inp - 1
-            if f == 0:
-                dl = dl + c
-            elif f == 1:
-                il = il + c
-            elif f == 2:
-                dl = dl.strip()
-                if dl.startswith(','):
-                    dl = dl[1:].strip()
-                ll.append([dl, il])
-                dl = c
-                il = ''
-                f = 0
-        if f == 2:
-            dl = dl.strip()
-            if dl.startswith(','):
-                dl = dl[1:].strip()
-            ll.append([dl, il])
-        vars = {}
+                paren_open -= 1
+            if state == 0:
+                value += c
+            elif state == 1:
+                init_list += c
+            elif state == 2:
+                value = value.strip()
+                if value.startswith(','):
+                    value = value[1:].strip()
+                values.append([value, init_list])
+                value = c
+                init_list = ''
+                state = 0
+        if state == 2:
+            value = value.strip()
+            if value.startswith(','):
+                value = value[1:].strip()
+            values.append([value, init_list])
+        variables = {}
         if 'vars' in groupcache[groupcounter]:
-            vars = groupcache[groupcounter]['vars']
-        last_name = None
-        for l in ll:
-            l = [x.strip() for x in l]
-            if l[0][0] == ',':
-                l[0] = l[0][1:]
-            if l[0][0] == '(':
+            variables = groupcache[groupcounter]['vars']
+        last_variable = None
+        for pair in values:
+            pair = [x.strip() for x in pair]
+            if pair[0][0] == ',':
+                pair[0] = pair[0][1:]
+            if pair[0][0] == '(':
                 outmess(
-                    'analyzeline: implied-DO list "%s" is not supported. Skipping.\n' % l[0])
+                    'analyzeline: implied-DO list "%s" is not supported. Skipping.\n' % pair[0])
                 continue
-            i = 0
-            j = 0
-            llen = len(l[1])
-            for v in rmbadname([x.strip() for x in markoutercomma(l[0]).split('@,@')]):
-                if v[0] == '(':
+            index = 0
+            end_index = 0
+            llen = len(pair[1])
+            for name in rmbadname([x.strip() for x in markoutercomma(pair[0]).split('@,@')]):
+                if name[0] == '(':
                     outmess(
-                        'analyzeline: implied-DO list "%s" is not supported. Skipping.\n' % v)
+                        'analyzeline: implied-DO list "%s" is not supported. Skipping.\n' % name)
                     # XXX: subsequent init expressions may get wrong values.
                     # Ignoring since data statements are irrelevant for
                     # wrapping.
                     continue
                 fc = 0
-                while (i < llen) and (fc or not l[1][i] == ','):
-                    if l[1][i] == "'":
+                while (index < llen) and (fc or not pair[1][index] == ','):
+                    if pair[1][index] == "'":
                         fc = not fc
-                    i = i + 1
-                i = i + 1
-                if v not in vars:
-                    vars[v] = {}
-                if '=' in vars[v] and not vars[v]['='] == l[1][j:i - 1]:
+                    index = index + 1
+                index = index + 1
+                if name not in variables:
+                    variables[name] = {}
+                if '=' in variables[name] and not variables[name]['='] == pair[1][end_index:index - 1]:
                     outmess('analyzeline: changing init expression of "%s" ("%s") to "%s"\n' % (
-                        v, vars[v]['='], l[1][j:i - 1]))
-                vars[v]['='] = l[1][j:i - 1]
-                j = i
-                last_name = v
-        groupcache[groupcounter]['vars'] = vars
-        if last_name is not None:
-            previous_context = ('variable', last_name, groupcounter)
+                        name, variables[name]['='], pair[1][end_index:index - 1]))
+                variables[name]['='] = pair[1][end_index:index - 1]
+                end_index = index
+                last_variable = name
+        groupcache[groupcounter]['vars'] = variables
+        if last_variable is not None:
+            previous_context = ('variable', last_variable, groupcounter)
     elif case == 'common':
         line = m.group('after').strip()
         if not line[0] == '/':
