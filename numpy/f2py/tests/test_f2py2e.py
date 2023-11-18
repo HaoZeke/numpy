@@ -5,6 +5,7 @@ from collections import namedtuple
 import pytest
 
 from . import util
+from numpy.f2py import auxfuncs
 from numpy.f2py.f2py2e import main as f2pycli
 
 #########################
@@ -82,7 +83,6 @@ def hello_world_f77(tmpdir_factory):
 
 @pytest.fixture(scope="session")
 def retreal_f77(tmpdir_factory):
-    """Generates a single f77 file for testing"""
     fdat = util.getpath("tests", "src", "return_real", "foo77.f").read_text()
     fn = tmpdir_factory.getbasetemp() / "foo.f"
     fn.write_text(fdat, encoding="ascii")
@@ -90,7 +90,6 @@ def retreal_f77(tmpdir_factory):
 
 @pytest.fixture(scope="session")
 def f2cmap_f90(tmpdir_factory):
-    """Generates a single f90 file for testing"""
     fdat = util.getpath("tests", "src", "f2cmap", "isoFortranEnvMap.f90").read_text()
     f2cmap = util.getpath("tests", "src", "f2cmap", ".f2py_f2cmap").read_text()
     fn = tmpdir_factory.getbasetemp() / "f2cmap.f90"
@@ -98,6 +97,27 @@ def f2cmap_f90(tmpdir_factory):
     fn.write_text(fdat, encoding="ascii")
     fmap.write_text(f2cmap, encoding="ascii")
     return fn
+
+@pytest.fixture(scope="session")
+def pyf_file_gen(tmpdir_factory):
+    fdat = util.getpath("tests", "src", "cli", "simple.pyf").read_text()
+    fn = tmpdir_factory.getbasetemp() / "f2cmap.f90"
+    fn.write_text(fdat, encoding="ascii")
+    return fn
+
+
+def test_modulename_cli(capfd, pyf_file_gen, monkeypatch):
+    """Check that module names are handled correctly
+    gh-25114
+    Essentially, the -m name cannot be used to import the module, so the module
+    named in the .pyf needs to be used instead
+
+    CLI :: -m and a .pyf file
+    """
+    ipath = Path(pyf_file_gen)
+    monkeypatch.setattr(sys, "argv", f"f2py -m blah {ipath}".split())
+    mname = auxfuncs.get_f2py_modulename(pyf_file_gen)
+    assert mname == "test_pyf_module"
 
 
 def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
