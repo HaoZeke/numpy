@@ -52,8 +52,6 @@ permissions:
 
 jobs:
   baseline_only:
-    # To enable this workflow on a fork, comment out:
-    if: github.repository == 'numpy/numpy'
     runs-on: ubuntu-latest
     env:
       MESON_ARGS: "-Dallow-noblas=true -Dcpu-dispatch=none"
