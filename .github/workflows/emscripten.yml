@@ -42,8 +42,6 @@ jobs:
   build-wasm-emscripten:
     name: Build NumPy distribution for Pyodide
     runs-on: ubuntu-22.04
-    # To enable this workflow on a fork, comment out:
-    if: github.repository == 'numpy/numpy'
     env:
       PYODIDE_VERSION: 0.26.0
       # PYTHON_VERSION and EMSCRIPTEN_VERSION are determined by PYODIDE_VERSION.
@@ -116,15 +114,3 @@ jobs:
           source .venv-pyodide/bin/activate
           cd ..
           pytest --pyargs numpy -m "not slow"
-
-        # Push to https://anaconda.org/scientific-python-nightly-wheels/numpy
-        # WARNING: this job will overwrite any existing WASM wheels.
-      - name: Push to Anaconda PyPI index
-        if: >-
-          (github.repository == 'numpy/numpy') &&
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.push_wheels == 'true') ||
-          (github.event_name == 'schedule')
-        uses: scientific-python/upload-nightly-action@b67d7fcc0396e1128a474d1ab2b48aa94680f9fc # v0.5.0
-        with:
-          artifacts_path: dist/
-          anaconda_nightly_upload_token: ${{ secrets.NUMPY_NIGHTLY_UPLOAD_TOKEN }}

@@ -15,8 +15,6 @@ permissions:
 jobs:
   cygwin_build_test:
     runs-on: windows-latest
-    # To enable this workflow on a fork, comment out:
-    if: github.repository == 'numpy/numpy'
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
