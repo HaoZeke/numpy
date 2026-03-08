@@ -185,3 +185,15 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.n_max == 16)
         assert (self.module.f_globals.i_max == 18)
         assert (self.module.f_globals.j_max == 72)
+
+
+@pytest.mark.slow
+class TestParameterConstants(util.F2PyTest):
+    # gh-22511: parameter constants must survive the init function return
+    sources = [util.getpath("tests", "src", "regression", "gh22511.f90")]
+
+    @pytest.mark.slow
+    def test_parameter_constant_values(self):
+        mod = self.module.gh22511_mod
+        assert int(mod.my_const) == 1234
+        assert abs(float(mod.my_real) - 3.14) < 0.01

@@ -187,7 +187,32 @@ def buildhooks(pymod):
                 fargs.append(n)
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
-                iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
+                if 'parameter' in var.get('attrspec', []):
+                    # Fortran PARAMETER constants may be placed on the
+                    # stack by some compilers (e.g. LLVM flang).  Copy
+                    # the data into persistent heap memory so the
+                    # pointer survives the init function return (gh-22511).
+                    iadd(f'\t{{\n'
+                         f'\t\tFortranDataDef *_def = '
+                         f'&f2py_{m["name"]}_def[i_f2py];\n'
+                         f'\t\tnpy_intp _sz = PyDataType_ELSIZE('
+                         f'PyArray_DescrFromType(_def->type));\n'
+                         f'\t\tif (_sz <= 0) _sz = _def->elsize;\n'
+                         f'\t\tif (_sz > 0) {{\n'
+                         f'\t\t\tchar *_buf = (char *)PyMem_Malloc(_sz);\n'
+                         f'\t\t\tif (_buf) {{\n'
+                         f'\t\t\t\tmemcpy(_buf, {n}, _sz);\n'
+                         f'\t\t\t\t_def->data = _buf;\n'
+                         f'\t\t\t}} else {{\n'
+                         f'\t\t\t\t_def->data = {n};\n'
+                         f'\t\t\t}}\n'
+                         f'\t\t}} else {{\n'
+                         f'\t\t\t_def->data = {n};\n'
+                         f'\t\t}}\n'
+                         f'\t\ti_f2py++;\n'
+                         f'\t}}')
+                else:
+                    iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
         if onlyvars:
             dadd('\\end{description}')
         if hasbody(m):
