@@ -14,7 +14,7 @@ f2py_version = 'See `f2py -v`'
 
 import numpy as np
 
-from . import capi_maps, func2subr
+from . import capi_maps, derived_type_rules, func2subr
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -109,6 +109,9 @@ def buildhooks(pymod):
             var = m['vars'][n]
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
+                # Skip derived type variables (handled by derived_type_rules)
+                if var.get('typespec') == 'type':
+                    continue
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
@@ -120,10 +123,21 @@ def buildhooks(pymod):
         if m['name'] in usenames and containscommon(m):
             outmess(f"\t\t\tSkipping {m['name']} since it is in 'use' and contains a common block...\n")
             continue
-        # skip modules with derived types
+        # skip modules with unwrappable derived types
         if m['name'] in usenames and containsderivedtypes(m):
-            outmess(f"\t\t\tSkipping {m['name']} since it is in 'use' and contains a derived type...\n")
-            continue
+            type_blocks = [b for b in m.get('body', [])
+                           if b.get('block') == 'type']
+            for tb in type_blocks:
+                tb['parent_block'] = m
+            has_unwrappable = any(
+                not (derived_type_rules._can_wrap_bindc(tb)
+                     or derived_type_rules._can_wrap_opaque(tb))
+                for tb in type_blocks
+            )
+            if has_unwrappable:
+                outmess(f"\t\t\tSkipping {m['name']} since it is in 'use'"
+                        f" and contains an unwrappable derived type...\n")
+                continue
         if onlyvars:
             outmess(f"\t\t  Variables: {' '.join(onlyvars)}\n")
         chooks = ['']
@@ -187,7 +201,32 @@ def buildhooks(pymod):
                 fargs.append(n)
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
-                iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
+                if 'parameter' in var.get('attrspec', []):
+                    # Fortran PARAMETER constants may be placed on the
+                    # stack by some compilers (e.g. LLVM flang).  Copy
+                    # the data into persistent heap memory so the
+                    # pointer survives the init function return (gh-22511).
+                    iadd(f'\t{{\n'
+                         f'\t\tFortranDataDef *_def = '
+                         f'&f2py_{m["name"]}_def[i_f2py];\n'
+                         f'\t\tnpy_intp _sz = PyDataType_ELSIZE('
+                         f'PyArray_DescrFromType(_def->type));\n'
+                         f'\t\tif (_sz <= 0) _sz = _def->elsize;\n'
+                         f'\t\tif (_sz > 0) {{\n'
+                         f'\t\t\tchar *_buf = (char *)PyMem_Malloc(_sz);\n'
+                         f'\t\t\tif (_buf) {{\n'
+                         f'\t\t\t\tmemcpy(_buf, {n}, _sz);\n'
+                         f'\t\t\t\t_def->data = _buf;\n'
+                         f'\t\t\t}} else {{\n'
+                         f'\t\t\t\t_def->data = {n};\n'
+                         f'\t\t\t}}\n'
+                         f'\t\t}} else {{\n'
+                         f'\t\t\t_def->data = {n};\n'
+                         f'\t\t}}\n'
+                         f'\t\ti_f2py++;\n'
+                         f'\t}}')
+                else:
+                    iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
         if onlyvars:
             dadd('\\end{description}')
         if hasbody(m):
@@ -197,6 +236,13 @@ def buildhooks(pymod):
                 if not isroutine(b):
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b['block']} {b_name}\n")
+                    continue
+                # Skip routines with derived type args -- they are handled
+                # by derived_type_rules instead of the standard pipeline
+                if derived_type_rules._has_derived_type_args(b):
+                    outmess("f90mod_rules.buildhooks:"
+                            f" skipping {b_name} (has derived type args,"
+                            f" handled by derived_type_rules)\n")
                     continue
                 modobjs.append(f"{b_name}()")
                 b['modulename'] = m_name
@@ -246,8 +292,10 @@ def buildhooks(pymod):
             '\t{',
             ('\t\tPyObject *tmp = '
             f'PyFortranObject_New(f2py_{m_name}_def,f2py_init_{m_name});'),
-            f'\t\tPyDict_SetItemString(d, "{m_name}", tmp);',
-            '\t\tPy_XDECREF(tmp);',
+            '\t\tif (tmp != NULL) {',
+            f'\t\t\tPyDict_SetItemString(d, "{m_name}", tmp);',
+            '\t\t\tPy_XDECREF(tmp);',
+            '\t\t}',
             '\t}',
         ] + ret["initf90modhooks"]
         fadd('')
@@ -271,6 +319,25 @@ def buildhooks(pymod):
         ret['latexdoc'] = []
         modobjs_str = ','.join(undo_rmbadname(modobjs))
         ret['docs'].append(f"\"\t{m_name} --- {modobjs_str}\"")
+
+    # Merge derived type hooks (opaque pointer types, routine wrappers)
+    dt_hooks = derived_type_rules.buildhooks(pymod)
+    ret['f90modhooks'].extend(dt_hooks.get('f90modhooks', []))
+    ret['initf90modhooks'].extend(dt_hooks.get('initf90modhooks', []))
+
+    # Generate Fortran wrappers for opaque pointer types
+    for m in findf90modules(pymod):
+        type_blocks = [b for b in m.get('body', [])
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = m
+        routines = [b for b in m.get('body', []) if isroutine(b)]
+        if type_blocks:
+            fwrap = derived_type_rules.generate_fortran_wrappers(
+                m['name'], type_blocks, routines=routines,
+                module_block=m)
+            if fwrap and fwrap.strip():
+                fhooks[0] = fhooks[0] + '\n' + fwrap
 
     ret['routine_defs'] = ''
     ret['doc'] = []
