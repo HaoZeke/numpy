@@ -14,7 +14,7 @@ f2py_version = 'See `f2py -v`'
 
 import numpy as np
 
-from . import capi_maps, func2subr
+from . import capi_maps, derived_type_rules, func2subr
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -157,10 +157,21 @@ def buildhooks(pymod):
         if m['name'] in usenames and containscommon(m):
             outmess(f"\t\t\tSkipping {m['name']} since it is in 'use' and contains a common block...\n")
             continue
-        # skip modules with derived types
+        # skip modules with unwrappable derived types
         if m['name'] in usenames and containsderivedtypes(m):
-            outmess(f"\t\t\tSkipping {m['name']} since it is in 'use' and contains a derived type...\n")
-            continue
+            type_blocks = [b for b in m.get('body', [])
+                           if b.get('block') == 'type']
+            for tb in type_blocks:
+                tb['parent_block'] = m
+            has_unwrappable = any(
+                not (derived_type_rules._can_wrap_bindc(tb)
+                     or derived_type_rules._can_wrap_opaque(tb))
+                for tb in type_blocks
+            )
+            if has_unwrappable:
+                outmess(f"\t\t\tSkipping {m['name']} since it is in 'use'"
+                        f" and contains an unwrappable derived type...\n")
+                continue
         if onlyvars:
             outmess(f"\t\t  Variables: {' '.join(onlyvars)}\n")
         chooks = ['']
@@ -242,6 +253,13 @@ def buildhooks(pymod):
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b['block']} {b_name}\n")
                     continue
+                # Skip routines with derived type args -- they are handled
+                # by derived_type_rules instead of the standard pipeline
+                if derived_type_rules._has_derived_type_args(b):
+                    outmess("f90mod_rules.buildhooks:"
+                            f" skipping {b_name} (has derived type args,"
+                            f" handled by derived_type_rules)\n")
+                    continue
                 modobjs.append(f"{b_name}()")
                 b['modulename'] = m_name
                 api, wrap = rules.buildapi(b)
@@ -316,6 +334,25 @@ def buildhooks(pymod):
         ret['latexdoc'] = []
         modobjs_str = ','.join(undo_rmbadname(modobjs))
         ret['docs'].append(f"\"\t{m_name} --- {modobjs_str}\"")
+
+    # Merge derived type hooks (opaque pointer types, routine wrappers)
+    dt_hooks = derived_type_rules.buildhooks(pymod)
+    ret['f90modhooks'].extend(dt_hooks.get('f90modhooks', []))
+    ret['initf90modhooks'].extend(dt_hooks.get('initf90modhooks', []))
+
+    # Generate Fortran wrappers for opaque pointer types
+    for m in findf90modules(pymod):
+        type_blocks = [b for b in m.get('body', [])
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = m
+        routines = [b for b in m.get('body', []) if isroutine(b)]
+        if type_blocks:
+            fwrap = derived_type_rules.generate_fortran_wrappers(
+                m['name'], type_blocks, routines=routines,
+                module_block=m)
+            if fwrap and fwrap.strip():
+                fhooks[0] = fhooks[0] + '\n' + fwrap
 
     ret['routine_defs'] = ''
     ret['doc'] = []
