@@ -324,6 +324,7 @@ def buildhooks(pymod):
     dt_hooks = derived_type_rules.buildhooks(pymod)
     ret['f90modhooks'].extend(dt_hooks.get('f90modhooks', []))
     ret['initf90modhooks'].extend(dt_hooks.get('initf90modhooks', []))
+    ret['need'].extend(dt_hooks.get('need', []))
 
     # Generate Fortran wrappers for opaque pointer types
     for m in findf90modules(pymod):

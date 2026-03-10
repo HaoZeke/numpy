@@ -62,6 +62,7 @@ includes['npy_math.h'] = '#include "numpy/npy_math.h"'
 
 includes['arrayobject.h'] = '#include "fortranobject.h"'
 includes['stdarg.h'] = '#include <stdarg.h>'
+includes['complex.h'] = '#include <complex.h>'
 
 ############# Type definitions ###############
 

@@ -2468,3 +2468,110 @@ class TestArrayOfTypesOpaque(util.F2PyTest):
     def test_molecule_natoms(self):
         m = self.module.molecule(natoms=3)
         assert m.natoms == 3
+
+
+class TestComplexMemberCodeGen:
+    """Test C code generation for types with complex-valued members."""
+
+    def test_bindc_complex_struct(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "complex_member_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # complex.h in needs (placed in #includes# section)
+        assert 'complex.h' in hooks.get('need', [])
+        # C struct has complex fields
+        assert 'double _Complex reactance' in all_code
+        # Getter uses creal/cimag
+        assert 'PyComplex_FromDoubles' in all_code
+        # Setter uses _Complex_I
+        assert '_Complex_I' in all_code
+
+    def test_opaque_complex_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "complex_member_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'double _Complex' in all_code
+        assert 'f2py_get_wavefunction_amplitude' in all_code
+        assert 'f2py_set_wavefunction_amplitude' in all_code
+
+    def test_complex_repr(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "complex_member_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # repr should include (%g+%gj) format for complex
+        assert '%g+%gj' in all_code
+
+
+@pytest.mark.slow
+class TestComplexMemberBindC(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "complex_member_bindc.f90")]
+
+    def test_impedance_exists(self):
+        assert hasattr(self.module, 'impedance')
+
+    def test_impedance_create(self):
+        z = self.module.impedance(resistance=50.0, reactance=10+20j)
+        assert z.resistance == 50.0
+        assert z.reactance == (10+20j)
+
+    def test_impedance_set_complex(self):
+        z = self.module.impedance()
+        z.reactance = 3+4j
+        assert z.reactance == (3+4j)
+
+    def test_impedance_real_only(self):
+        z = self.module.impedance(reactance=5.0)
+        assert z.reactance == (5+0j)
+
+    def test_impedance_repr(self):
+        z = self.module.impedance(resistance=100.0, reactance=1+2j)
+        r = repr(z)
+        assert 'impedance' in r
+        assert '100' in r
+
+    def test_signal_sample_exists(self):
+        assert hasattr(self.module, 'signal_sample')
+
+    def test_signal_sample_float_complex(self):
+        s = self.module.signal_sample(value=1.5+2.5j, timestamp=0.1)
+        assert abs(s.value - (1.5+2.5j)) < 1e-6
+        assert abs(s.timestamp - 0.1) < 1e-6
+
+
+@pytest.mark.slow
+class TestComplexMemberOpaque(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "complex_member_opaque.f90")]
+
+    def test_wavefunction_exists(self):
+        assert hasattr(self.module, 'wavefunction')
+
+    def test_wavefunction_create(self):
+        wf = self.module.wavefunction(amplitude=1+0j, phase=0.0)
+        assert wf.amplitude == (1+0j)
+        assert wf.phase == 0.0
+
+    def test_wavefunction_set_complex(self):
+        wf = self.module.wavefunction()
+        wf.amplitude = 0.5+0.5j
+        assert wf.amplitude == (0.5+0.5j)
+
+    def test_wavefunction_roundtrip(self):
+        wf = self.module.wavefunction(amplitude=3-4j, phase=1.57)
+        assert wf.amplitude == (3-4j)
+        wf.amplitude = -1+2j
+        assert wf.amplitude == (-1+2j)
+        assert wf.phase == 1.57
