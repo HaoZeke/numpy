@@ -58,6 +58,8 @@ _FORTRAN_TO_C = {
     ('complex', None): 'float _Complex',
     ('complex', '8'): 'float _Complex',
     ('complex', '16'): 'double _Complex',
+    ('complex', 'c_float_complex'): 'float _Complex',
+    ('complex', 'c_double_complex'): 'double _Complex',
     ('double complex', None): 'double _Complex',
 }
 
@@ -69,6 +71,8 @@ _C_TO_PYFORMAT = {
     'long': 'l',
     'long long': 'L',
     'unsigned char': 'b',
+    'float _Complex': 'D',
+    'double _Complex': 'D',
 }
 
 # Map C type to PyObject conversion for getters
@@ -100,6 +104,8 @@ _C_TO_NPY_ENUM = {
     'long': 'NPY_LONG',
     'long long': 'NPY_LONGLONG',
     'unsigned char': 'NPY_UBYTE',
+    'float _Complex': 'NPY_CFLOAT',
+    'double _Complex': 'NPY_CDOUBLE',
 }
 
 
@@ -251,6 +257,12 @@ def _get_char_len(var):
 def _is_char_member(var):
     """Check if a member is a fixed-length character."""
     return var.get('typespec', '') == 'character' and _get_char_len(var) is not None
+
+
+def _is_complex_member(var):
+    """Check if a member is a complex scalar (not array)."""
+    ctype = _get_member_ctype(var)
+    return ctype in ('float _Complex', 'double _Complex') and not _is_array_member(var)
 
 
 def _is_allocatable_member(var):
@@ -411,7 +423,13 @@ def _gen_tp_init(typename, members):
             continue
         kwlist.append(mname)
         fmt_parts.append(fmt)
-        extract_lines.append(f'    data->{mname} = {mname};')
+        if ctype in ('float _Complex', 'double _Complex'):
+            cast = '(float)' if ctype == 'float _Complex' else ''
+            extract_lines.append(
+                f'    data->{mname} = {cast}{mname}.real'
+                f' + {cast}{mname}.imag * _Complex_I;')
+        else:
+            extract_lines.append(f'    data->{mname} = {mname};')
 
     kwlist_str = ', '.join(f'"{k}"' for k in kwlist)
     fmt_str = ''.join(fmt_parts)
@@ -425,8 +443,10 @@ def _gen_tp_init(typename, members):
         ctype = _get_member_ctype(mvar)
         if _C_TO_PYFORMAT.get(ctype) is None:
             continue
-        default = '0'
-        decl_lines.append(f'    {ctype} {mname} = {default};')
+        if ctype in ('float _Complex', 'double _Complex'):
+            decl_lines.append(f'    Py_complex {mname} = {{0, 0}};')
+        else:
+            decl_lines.append(f'    {ctype} {mname} = 0;')
         parse_args.append(f'&{mname}')
 
     decl_str = '\n'.join(decl_lines)
@@ -750,6 +770,65 @@ static int
             )
             continue
 
+        if _is_complex_member(mvar):
+            ctype = _get_member_ctype(mvar)
+            is_single = (ctype == 'float _Complex')
+            creal_fn = 'crealf' if is_single else 'creal'
+            cimag_fn = 'cimagf' if is_single else 'cimag'
+            cast = '(float)' if is_single else ''
+
+            getter_name = f'Py{typename}_get_{mname}'
+            funcs.append(f"""\
+static PyObject *
+{getter_name}(PyObject *selfobj, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return NULL;
+    }}
+    f2py_{typename}_t *data = (f2py_{typename}_t *)PyCapsule_GetPointer(
+        self->capsule, "{capsule_name}");
+    if (data == NULL) return NULL;
+    return PyComplex_FromDoubles(
+        (double){creal_fn}(data->{mname}),
+        (double){cimag_fn}(data->{mname}));
+}}
+""")
+
+            setter_name = f'Py{typename}_set_{mname}'
+            funcs.append(f"""\
+static int
+{setter_name}(PyObject *selfobj, PyObject *value, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (value == NULL) {{
+        PyErr_SetString(PyExc_TypeError,
+                        "Cannot delete {mname} attribute");
+        return -1;
+    }}
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return -1;
+    }}
+    f2py_{typename}_t *data = (f2py_{typename}_t *)PyCapsule_GetPointer(
+        self->capsule, "{capsule_name}");
+    if (data == NULL) return -1;
+    Py_complex c = PyComplex_AsCComplex(value);
+    if (PyErr_Occurred()) return -1;
+    data->{mname} = {cast}c.real + {cast}c.imag * _Complex_I;
+    return 0;
+}}
+""")
+
+            getset_entries.append(
+                f'    {{"{mname}", {getter_name}, {setter_name}, '
+                f'"{mname} member", NULL}},'
+            )
+            continue
+
         ctype = _get_member_ctype(mvar)
         dims = _get_array_dims(mvar)
 
@@ -926,7 +1005,13 @@ def _gen_tp_repr(typename, members):
             fmt_parts.append(f'{mname}=<array({dim_str})>')
             continue
         ctype = _get_member_ctype(mvar)
-        if ctype in ('float', 'double'):
+        if ctype in ('float _Complex', 'double _Complex'):
+            creal_fn = 'crealf' if ctype == 'float _Complex' else 'creal'
+            cimag_fn = 'cimagf' if ctype == 'float _Complex' else 'cimag'
+            fmt_parts.append(f'{mname}=(%g+%gj)')
+            val_args.append(f'(double){creal_fn}(data->{mname})')
+            val_args.append(f'(double){cimag_fn}(data->{mname})')
+        elif ctype in ('float', 'double'):
             fmt_parts.append(f'{mname}=%g')
             if ctype == 'float':
                 val_args.append(f'(double)data->{mname}')
@@ -1463,6 +1548,20 @@ def buildhooks(pymod):
                 ret['initf90modhooks'].extend(
                     _gen_routine_init_code(modulename, method_entries))
 
+    # Add <complex.h> to needs if any type has complex members
+    if ret['f90modhooks']:
+        for m in findf90modules(pymod):
+            for tb in _find_derived_types(m):
+                for mvar in get_type_members(tb).values():
+                    ctype = _get_member_ctype(mvar)
+                    if ctype in ('float _Complex', 'double _Complex'):
+                        ret.setdefault('need', []).append('complex.h')
+                        break
+                if 'need' in ret:
+                    break
+            if 'need' in ret:
+                break
+
     return ret
 
 
@@ -1762,9 +1861,16 @@ def _gen_opaque_tp_init(typename, members):
         ctype = _get_member_ctype(mvar)
         if _C_TO_PYFORMAT.get(ctype) is None:
             continue
-        decl_lines.append(f'    {ctype} {mname} = 0;')
-        parse_args.append(f'&{mname}')
-        call_args.append(mname)
+        if ctype in ('float _Complex', 'double _Complex'):
+            decl_lines.append(f'    Py_complex {mname} = {{0, 0}};')
+            parse_args.append(f'&{mname}')
+            cast = '(float)' if ctype == 'float _Complex' else ''
+            call_args.append(
+                f'{cast}{mname}.real + {cast}{mname}.imag * _Complex_I')
+        else:
+            decl_lines.append(f'    {ctype} {mname} = 0;')
+            parse_args.append(f'&{mname}')
+            call_args.append(mname)
 
     decl_str = '\n'.join(decl_lines)
     parse_args_str = ', '.join(parse_args)
@@ -2071,6 +2177,65 @@ static int
             )
             continue
 
+        if _is_complex_member(mvar):
+            ctype = _get_member_ctype(mvar)
+            is_single = (ctype == 'float _Complex')
+            creal_fn = 'crealf' if is_single else 'creal'
+            cimag_fn = 'cimagf' if is_single else 'cimag'
+            cast = '(float)' if is_single else ''
+
+            getter_name = f'Py{typename}_get_{mname}'
+            funcs.append(f"""\
+static PyObject *
+{getter_name}(PyObject *selfobj, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return NULL;
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return NULL;
+    {ctype} val = f2py_get_{sym}_{mname}(ptr);
+    return PyComplex_FromDoubles(
+        (double){creal_fn}(val),
+        (double){cimag_fn}(val));
+}}
+""")
+
+            setter_name = f'Py{typename}_set_{mname}'
+            funcs.append(f"""\
+static int
+{setter_name}(PyObject *selfobj, PyObject *value, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (value == NULL) {{
+        PyErr_SetString(PyExc_TypeError,
+                        "Cannot delete {mname} attribute");
+        return -1;
+    }}
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return -1;
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return -1;
+    Py_complex c = PyComplex_AsCComplex(value);
+    if (PyErr_Occurred()) return -1;
+    {ctype} cval = {cast}c.real + {cast}c.imag * _Complex_I;
+    f2py_set_{sym}_{mname}(ptr, cval);
+    return 0;
+}}
+""")
+
+            getset_entries.append(
+                f'    {{"{mname}", {getter_name}, {setter_name}, '
+                f'"{mname} member", NULL}},'
+            )
+            continue
+
         if _is_allocatable_member(mvar):
             alloc_ctype = _get_member_ctype(mvar)
             npy_enum = _C_TO_NPY_ENUM.get(alloc_ctype)
@@ -2318,7 +2483,15 @@ def _gen_opaque_tp_repr(typename, members):
             dim_str = 'x'.join(str(d) for d in dims)
             fmt_parts.append(f'{mname}=<array({dim_str})>')
             continue
-        if ctype in ('float', 'double'):
+        if ctype in ('float _Complex', 'double _Complex'):
+            creal_fn = 'crealf' if ctype == 'float _Complex' else 'creal'
+            cimag_fn = 'cimagf' if ctype == 'float _Complex' else 'cimag'
+            fmt_parts.append(f'{mname}=(%g+%gj)')
+            val_args.append(
+                f'(double){creal_fn}(f2py_get_{sym}_{mname}(ptr))')
+            val_args.append(
+                f'(double){cimag_fn}(f2py_get_{sym}_{mname}(ptr))')
+        elif ctype in ('float', 'double'):
             fmt_parts.append(f'{mname}=%g')
             val_args.append(
                 f'(double)f2py_get_{sym}_{mname}(ptr)')
@@ -2364,14 +2537,20 @@ _FORTRAN_TO_ISOC = {
     ('real', None): 'real(c_float)',
     ('real', '4'): 'real(c_float)',
     ('real', '8'): 'real(c_double)',
+    ('real', 'c_float'): 'real(c_float)',
+    ('real', 'c_double'): 'real(c_double)',
     ('double precision', None): 'real(c_double)',
     ('integer', None): 'integer(c_int)',
     ('integer', '4'): 'integer(c_int)',
     ('integer', '8'): 'integer(c_long_long)',
+    ('integer', 'c_int'): 'integer(c_int)',
+    ('integer', 'c_long_long'): 'integer(c_long_long)',
     ('logical', None): 'integer(c_int)',
     ('complex', None): 'complex(c_float_complex)',
     ('complex', '8'): 'complex(c_float_complex)',
     ('complex', '16'): 'complex(c_double_complex)',
+    ('complex', 'c_float_complex'): 'complex(c_float_complex)',
+    ('complex', 'c_double_complex'): 'complex(c_double_complex)',
     ('double complex', None): 'complex(c_double_complex)',
 }
 
