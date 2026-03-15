@@ -45,7 +45,9 @@ from ._dt_helpers import (
     _is_type_array_member,
     _is_type_member,
     _is_type_parameter,
+    _enumerate_specializations,
     _get_fortran_type_spec,
+    _resolve_type_for_kind,
 )
 
 from ._dt_codegen import (
@@ -123,25 +125,40 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
     lines.append('contains')
     lines.append('')
 
+    # One wrapper set per KIND value. The C side calls the suffixed name.
+    opaque_specs = []
     for tb in opaque_types:
-        typename = tb['name']
-        # Fortran type specifier (includes KIND params for parameterized types)
-        type_spec = _get_fortran_type_spec(tb)
-        # For types with extends(parent), include all inherited members
-        parent_name = _get_extends_parent(tb)
-        if parent_name and parent_name in type_map:
-            from collections import OrderedDict
-            parent_members, own_members = _get_all_members(
-                tb, type_map)
-            members = OrderedDict()
-            members.update(parent_members)
-            members.update(own_members)
-        else:
-            members = {
+        base_name = tb['name']
+        specs = _enumerate_specializations(tb)
+
+        def members_of(block):
+            parent_name = _get_extends_parent(block)
+            if parent_name and parent_name in type_map:
+                from collections import OrderedDict
+                parent_members, own_members = _get_all_members(
+                    block, type_map)
+                members = OrderedDict()
+                members.update(parent_members)
+                members.update(own_members)
+                return members
+            return {
                 name: var for name, var
-                in get_type_members(tb).items()
+                in get_type_members(block).items()
                 if not _is_type_parameter(var)
             }
+
+        if specs:
+            for kind_dict, suffix in specs:
+                resolved = _resolve_type_for_kind(tb, kind_dict)
+                type_spec = _get_fortran_type_spec(
+                    resolved, kind_override=kind_dict)
+                opaque_specs.append(
+                    (base_name + suffix, type_spec, members_of(resolved)))
+        else:
+            opaque_specs.append(
+                (base_name, _get_fortran_type_spec(tb), members_of(tb)))
+
+    for typename, type_spec, members in opaque_specs:
 
         # Constructor: allocate + populate + return c_ptr
         # (scalar members only; arrays are zero-initialized by allocate)

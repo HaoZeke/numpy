@@ -32,6 +32,7 @@ from ._dt_helpers import (
     _is_allocatable_member,
     _is_array_member,
     _is_deferred_char_member,
+    _is_len_sized_array,
     _is_pointer_member,
     _is_char_member,
     _is_complex_member,
@@ -64,12 +65,24 @@ def _gen_bindc_struct(typename, members):
     return '\n'.join(lines)
 
 
-def _gen_pytype_struct(typename):
+def _gen_pytype_struct(typename, has_kind=False, len_info=None):
     """Generate the Python type object struct."""
+    kind_field = ''
+    if has_kind:
+        kind_field = (
+            f'\n    int kind_value;'
+            f'  /* KIND parameter value for dispatch */')
+    len_fields = ''
+    if len_info:
+        for li in len_info:
+            lname = li['name']
+            len_fields += (
+                f'\n    int len_{lname};'
+                f'  /* LEN parameter {lname} */')
     return f"""\
 typedef struct {{
     PyObject_HEAD
-    PyObject *capsule;  /* PyCapsule wrapping Fortran {typename} data */
+    PyObject *capsule;  /* PyCapsule wrapping Fortran {typename} data */{kind_field}{len_fields}
 }} Py{typename}Object;
 """
 
@@ -122,11 +135,15 @@ def _gen_tp_init(typename, members):
             continue
         kwlist.append(mname)
         fmt_parts.append(fmt)
-        if ctype in ('float _Complex', 'double _Complex'):
-            cast = '(float)' if ctype == 'float _Complex' else ''
-            extract_lines.append(
-                f'    data->{mname} = {cast}{mname}.real'
-                f' + {cast}{mname}.imag * _Complex_I;')
+        if ctype in ('npy_cfloat', 'npy_cdouble'):
+            if ctype == 'npy_cfloat':
+                extract_lines.append(
+                    f'    data->{mname} = npy_cpackf('
+                    f'(float){mname}.real, (float){mname}.imag);')
+            else:
+                extract_lines.append(
+                    f'    data->{mname} = npy_cpack('
+                    f'{mname}.real, {mname}.imag);')
         else:
             extract_lines.append(f'    data->{mname} = {mname};')
 
@@ -142,7 +159,7 @@ def _gen_tp_init(typename, members):
         ctype = _get_member_ctype(mvar)
         if _C_TO_PYFORMAT.get(ctype) is None:
             continue
-        if ctype in ('float _Complex', 'double _Complex'):
+        if ctype in ('npy_cfloat', 'npy_cdouble'):
             decl_lines.append(f'    Py_complex {mname} = {{0, 0}};')
         else:
             decl_lines.append(f'    {ctype} {mname} = 0;')
@@ -471,9 +488,10 @@ static int
 
         if _is_complex_member(mvar):
             ctype = _get_member_ctype(mvar)
-            is_single = (ctype == 'float _Complex')
-            creal_fn = 'crealf' if is_single else 'creal'
-            cimag_fn = 'cimagf' if is_single else 'cimag'
+            is_single = (ctype == 'npy_cfloat')
+            creal_fn = 'npy_crealf' if is_single else 'npy_creal'
+            cimag_fn = 'npy_cimagf' if is_single else 'npy_cimag'
+            cpack_fn = 'npy_cpackf' if is_single else 'npy_cpack'
             cast = '(float)' if is_single else ''
 
             getter_name = f'Py{typename}_get_{mname}'
@@ -517,7 +535,7 @@ static int
     if (data == NULL) return -1;
     Py_complex c = PyComplex_AsCComplex(value);
     if (PyErr_Occurred()) return -1;
-    data->{mname} = {cast}c.real + {cast}c.imag * _Complex_I;
+    data->{mname} = {cpack_fn}({cast}c.real, {cast}c.imag);
     return 0;
 }}
 """)
@@ -704,9 +722,9 @@ def _gen_tp_repr(typename, members):
             fmt_parts.append(f'{mname}=<array({dim_str})>')
             continue
         ctype = _get_member_ctype(mvar)
-        if ctype in ('float _Complex', 'double _Complex'):
-            creal_fn = 'crealf' if ctype == 'float _Complex' else 'creal'
-            cimag_fn = 'cimagf' if ctype == 'float _Complex' else 'cimag'
+        if ctype in ('npy_cfloat', 'npy_cdouble'):
+            creal_fn = 'npy_crealf' if ctype == 'npy_cfloat' else 'npy_creal'
+            cimag_fn = 'npy_cimagf' if ctype == 'npy_cfloat' else 'npy_cimag'
             fmt_parts.append(f'{mname}=(%g+%gj)')
             val_args.append(f'(double){creal_fn}(data->{mname})')
             val_args.append(f'(double){cimag_fn}(data->{mname})')
@@ -1129,13 +1147,194 @@ def _gen_init_code(typename, modulename):
     ]
 
 
-def _gen_opaque_extern_decls(typename, members):
-    """Generate extern declarations for the Fortran bind(c) wrappers."""
+def _gen_opaque_extern_decls(typename, members, specializations=None,
+                             len_info=None):
+    """Generate extern declarations for the Fortran bind(c) wrappers.
+
+    If specializations is provided, generates separate declarations for
+    each KIND variant with suffixed function names and resolved types.
+    If len_info is provided, LEN params are added as extra int arguments
+    to all extern declarations (destructor, getters, setters).
+    """
+    if specializations:
+        all_lines = ['/* Extern declarations for Fortran wrappers */']
+        for suffix, kind_dict, resolved_members in specializations:
+            sym = _fortran_sym(typename + suffix)
+            all_lines.append(
+                f'/* KIND specialization {suffix} */')
+            all_lines.append(
+                _gen_opaque_extern_decls_one(sym, resolved_members))
+        return '\n'.join(all_lines)
+
     sym = _fortran_sym(typename)
     lines = []
     lines.append(f'/* Extern declarations for Fortran wrappers */')
 
-    # Constructor: returns void* (c_ptr) -- scalar args only
+    # LEN parameter extra args for extern declarations.
+    # For LEN types, every function after the constructor needs
+    # these extra int args so Fortran can reconstruct the type.
+    len_param_names = []
+    if len_info:
+        len_param_names = [li['name'] for li in len_info]
+    len_extra = ', '.join(['int'] * len(len_param_names))
+    # e.g. ', int' or ', int, int' or ''
+    len_extra_prefix = (', ' + len_extra) if len_extra else ''
+    len_param_name_set = set(len_param_names)
+
+    # Constructor: returns void* (c_ptr) -- LEN params + scalar args
+    args = []
+    for li in (len_info or []):
+        args.append(f'int {li["name"]}')
+    for mname, mvar in members.items():
+        if (_is_array_member(mvar) or _is_type_member(mvar)
+                or _is_type_array_member(mvar) or _is_char_member(mvar)
+                or _is_allocatable_member(mvar)
+                or _is_pointer_member(mvar)
+                or _is_deferred_char_member(mvar)):
+            continue
+        if (len_param_name_set
+                and _is_len_sized_array(mvar, len_param_name_set)):
+            continue
+        ctype = _get_member_ctype(mvar)
+        if ctype and _C_TO_PYFORMAT.get(ctype):
+            args.append(f'{ctype} {mname}')
+    args_str = ', '.join(args) if args else 'void'
+    lines.append(f'extern void *f2py_create_{sym}({args_str});')
+
+    # Destructor: takes void* + LEN params
+    destr_args = f'void *{len_extra_prefix}'
+    lines.append(f'extern void f2py_destroy_{sym}({destr_args});')
+
+    # Getters and setters -- all take LEN params after void*
+    for mname, mvar in members.items():
+        if _is_type_array_member(mvar):
+            lines.append(
+                f'extern void *f2py_get_{sym}_{mname}'
+                f'(void *{len_extra_prefix}, int);')
+            lines.append(
+                f'extern void f2py_set_{sym}_{mname}'
+                f'(void *{len_extra_prefix}, int, void *);')
+            continue
+
+        if _is_type_member(mvar):
+            lines.append(
+                f'extern void *f2py_get_{sym}_{mname}'
+                f'(void *{len_extra_prefix});')
+            lines.append(
+                f'extern void f2py_set_{sym}_{mname}'
+                f'(void *{len_extra_prefix}, void *);')
+            continue
+
+        if _is_char_member(mvar):
+            lines.append(
+                f'extern void f2py_get_{sym}_{mname}'
+                f'(void *{len_extra_prefix}, char *, int);')
+            lines.append(
+                f'extern void f2py_set_{sym}_{mname}'
+                f'(void *{len_extra_prefix}, const char *, int);')
+            continue
+
+        if _is_allocatable_member(mvar):
+            ndim = _get_alloc_ndim(mvar)
+            lines.append(
+                f'extern unsigned char f2py_get_{sym}_{mname}'
+                f'_allocated(void *{len_extra_prefix});')
+            lines.append(
+                f'extern int f2py_get_{sym}_{mname}'
+                f'_ndim(void *{len_extra_prefix});')
+            lines.append(
+                f'extern void f2py_get_{sym}_{mname}'
+                f'_shape(void *{len_extra_prefix}, int *);')
+            lines.append(
+                f'extern void *f2py_get_{sym}_{mname}'
+                f'_data(void *{len_extra_prefix});')
+            set_args = ', '.join(
+                ['void *'] + ['int'] * len(len_param_names)
+                + ['int'] * ndim + ['void *'])
+            lines.append(
+                f'extern void f2py_set_{sym}_{mname}'
+                f'({set_args});')
+            continue
+
+        if _is_pointer_member(mvar):
+            ndim = _get_pointer_ndim(mvar)
+            lines.append(
+                f'extern unsigned char f2py_get_{sym}_{mname}'
+                f'_associated(void *{len_extra_prefix});')
+            lines.append(
+                f'extern int f2py_get_{sym}_{mname}'
+                f'_ndim(void *{len_extra_prefix});')
+            lines.append(
+                f'extern void f2py_get_{sym}_{mname}'
+                f'_shape(void *{len_extra_prefix}, int *);')
+            lines.append(
+                f'extern void *f2py_get_{sym}_{mname}'
+                f'_data(void *{len_extra_prefix});')
+            continue
+
+        if _is_deferred_char_member(mvar):
+            lines.append(
+                f'extern unsigned char f2py_get_{sym}_{mname}'
+                f'_allocated(void *{len_extra_prefix});')
+            lines.append(
+                f'extern int f2py_get_{sym}_{mname}'
+                f'_len(void *{len_extra_prefix});')
+            lines.append(
+                f'extern void f2py_get_{sym}_{mname}'
+                f'(void *{len_extra_prefix}, char *, int);')
+            lines.append(
+                f'extern void f2py_set_{sym}_{mname}'
+                f'(void *{len_extra_prefix}, const char *, int);')
+            continue
+
+        # LEN-sized array members
+        if (len_param_name_set
+                and _is_len_sized_array(mvar, len_param_name_set)):
+            ctype = _get_member_ctype(mvar)
+            if ctype is None or _C_TO_NPY_ENUM.get(ctype) is None:
+                continue
+            ndim = len(mvar.get('dimension', []))
+            lines.append(
+                f'extern void *f2py_get_{sym}_{mname}'
+                f'_data(void *{len_extra_prefix});')
+            set_args = ', '.join(
+                ['void *'] + ['int'] * len(len_param_names)
+                + ['int'] * ndim + ['void *'])
+            lines.append(
+                f'extern void f2py_set_{sym}_{mname}'
+                f'({set_args});')
+            continue
+
+        ctype = _get_member_ctype(mvar)
+        dims = _get_array_dims(mvar)
+
+        if dims:
+            if _C_TO_NPY_ENUM.get(ctype) is None:
+                continue
+            lines.append(
+                f'extern void *f2py_get_{sym}_{mname}'
+                f'(void *{len_extra_prefix});')
+            lines.append(
+                f'extern void f2py_set_{sym}_{mname}'
+                f'(void *{len_extra_prefix}, {ctype} *);')
+        else:
+            if ctype is None or _C_TO_PYFORMAT.get(ctype) is None:
+                continue
+            rtype = _get_c_return_type(ctype)
+            lines.append(
+                f'extern {rtype} f2py_get_{sym}_{mname}'
+                f'(void *{len_extra_prefix});')
+            lines.append(
+                f'extern void f2py_set_{sym}_{mname}'
+                f'(void *{len_extra_prefix}, {ctype});')
+
+    lines.append('')
+    return '\n'.join(lines)
+
+
+def _gen_opaque_extern_decls_one(sym, members):
+    """Generate extern declarations for one specialization."""
+    lines = []
     args = []
     for mname, mvar in members.items():
         if (_is_array_member(mvar) or _is_type_member(mvar)
@@ -1149,135 +1348,74 @@ def _gen_opaque_extern_decls(typename, members):
             args.append(f'{ctype} {mname}')
     args_str = ', '.join(args) if args else 'void'
     lines.append(f'extern void *f2py_create_{sym}({args_str});')
-
-    # Destructor: takes void*
     lines.append(f'extern void f2py_destroy_{sym}(void *);')
-
-    # Getters and setters
     for mname, mvar in members.items():
-        if _is_type_array_member(mvar):
-            # Array of derived types: indexed get/set
-            lines.append(
-                f'extern void *f2py_get_{sym}_{mname}'
-                f'(void *, int);')
-            lines.append(
-                f'extern void f2py_set_{sym}_{mname}'
-                f'(void *, int, void *);')
-            continue
-
-        if _is_type_member(mvar):
-            # Nested type: getter returns void* (new allocation),
-            # setter takes void* (copies data)
-            lines.append(
-                f'extern void *f2py_get_{sym}_{mname}(void *);')
-            lines.append(
-                f'extern void f2py_set_{sym}_{mname}'
-                f'(void *, void *);')
-            continue
-
-        if _is_char_member(mvar):
-            char_len = _get_char_len(mvar)
-            lines.append(
-                f'extern void f2py_get_{sym}_{mname}'
-                f'(void *, char *, int);')
-            lines.append(
-                f'extern void f2py_set_{sym}_{mname}'
-                f'(void *, const char *, int);')
-            continue
-
-        if _is_allocatable_member(mvar):
-            ndim = _get_alloc_ndim(mvar)
-            # Allocatable array: allocated, ndim, shape, data, set
-            lines.append(
-                f'extern unsigned char f2py_get_{sym}_{mname}'
-                f'_allocated(void *);')
-            lines.append(
-                f'extern int f2py_get_{sym}_{mname}'
-                f'_ndim(void *);')
-            lines.append(
-                f'extern void f2py_get_{sym}_{mname}'
-                f'_shape(void *, int *);')
-            lines.append(
-                f'extern void *f2py_get_{sym}_{mname}'
-                f'_data(void *);')
-            # setter takes ndim dimension args then data pointer
-            set_args = ', '.join(['void *'] + ['int'] * ndim + ['void *'])
-            lines.append(
-                f'extern void f2py_set_{sym}_{mname}'
-                f'({set_args});')
-            continue
-
-        if _is_pointer_member(mvar):
-            ndim = _get_pointer_ndim(mvar)
-            # Pointer member: read-only (associated, ndim, shape, data)
-            # No setter -- pointer association from C needs careful
-            # lifetime management (F2018 7.5.4.6, 10.2.2)
-            lines.append(
-                f'extern unsigned char f2py_get_{sym}_{mname}'
-                f'_associated(void *);')
-            lines.append(
-                f'extern int f2py_get_{sym}_{mname}'
-                f'_ndim(void *);')
-            lines.append(
-                f'extern void f2py_get_{sym}_{mname}'
-                f'_shape(void *, int *);')
-            lines.append(
-                f'extern void *f2py_get_{sym}_{mname}'
-                f'_data(void *);')
-            continue
-
-        if _is_deferred_char_member(mvar):
-            # Deferred-length allocatable character (F2018 7.4.4.2)
-            # 3 externs: allocated, len, get (copies to buffer)
-            # Plus setter that allocates with new length
-            lines.append(
-                f'extern unsigned char f2py_get_{sym}_{mname}'
-                f'_allocated(void *);')
-            lines.append(
-                f'extern int f2py_get_{sym}_{mname}'
-                f'_len(void *);')
-            lines.append(
-                f'extern void f2py_get_{sym}_{mname}'
-                f'(void *, char *, int);')
-            lines.append(
-                f'extern void f2py_set_{sym}_{mname}'
-                f'(void *, const char *, int);')
-            continue
-
         ctype = _get_member_ctype(mvar)
+        if _is_type_array_member(mvar) or _is_type_member(mvar):
+            continue
+        if _is_char_member(mvar) or _is_allocatable_member(mvar):
+            continue
+        if _is_pointer_member(mvar) or _is_deferred_char_member(mvar):
+            continue
         dims = _get_array_dims(mvar)
-
         if dims:
-            # Array member: getter returns c_ptr to array data,
-            # setter accepts pointer + copies
-            if _C_TO_NPY_ENUM.get(ctype) is None:
-                continue
-            lines.append(
-                f'extern void *f2py_get_{sym}_{mname}(void *);')
-            total = 1
-            for d in dims:
-                total *= d
-            lines.append(
-                f'extern void f2py_set_{sym}_{mname}'
-                f'(void *, {ctype} *);')
-        else:
-            if ctype is None or _C_TO_PYFORMAT.get(ctype) is None:
-                continue
-            rtype = _get_c_return_type(ctype)
-            lines.append(
-                f'extern {rtype} f2py_get_{sym}_{mname}(void *);')
-            lines.append(
-                f'extern void f2py_set_{sym}_{mname}'
-                f'(void *, {ctype});')
-
-    lines.append('')
+            continue
+        if ctype is None or _C_TO_PYFORMAT.get(ctype) is None:
+            continue
+        rtype = _get_c_return_type(ctype)
+        lines.append(f'extern {rtype} f2py_get_{sym}_{mname}(void *);')
+        lines.append(
+            f'extern void f2py_set_{sym}_{mname}(void *, {ctype});')
     return '\n'.join(lines)
 
 
-def _gen_opaque_capsule_destructor(typename):
+def _gen_opaque_capsule_destructor(typename, specializations=None,
+                                    len_info=None):
     """Generate PyCapsule destructor that calls Fortran deallocator."""
+    if specializations:
+        # Multi-kind: dispatch based on capsule name
+        sym = _fortran_sym(typename)
+        branches = []
+        for suffix, kind_dict, _ in specializations:
+            cap_name = f'f2py.{typename}{suffix}'
+            dsym = _fortran_sym(typename + suffix)
+            cond = 'if' if not branches else 'else if'
+            branches.append(
+                f'    {cond} (strcmp(name, "{cap_name}") == 0) {{\n'
+                f'        f2py_destroy_{dsym}(ptr);\n'
+                f'    }}')
+        dispatch = '\n'.join(branches)
+        return f"""\
+static void
+f2py_{typename}_capsule_destructor(PyObject *capsule)
+{{
+    const char *name = PyCapsule_GetName(capsule);
+    void *ptr = PyCapsule_GetPointer(capsule, name);
+    if (ptr == NULL) return;
+{dispatch}
+}}
+"""
     sym = _fortran_sym(typename)
     capsule_name = f'f2py.{typename}'
+    if len_info:
+        # LEN types: retrieve LEN values from capsule context
+        # (stored as a malloc'd int array by tp_init)
+        nlen = len(len_info)
+        len_args = ', '.join(
+            f'len_ctx[{i}]' for i in range(nlen))
+        return f"""\
+static void
+f2py_{typename}_capsule_destructor(PyObject *capsule)
+{{
+    void *ptr = PyCapsule_GetPointer(capsule, "{capsule_name}");
+    if (ptr == NULL) return;
+    int *len_ctx = (int *)PyCapsule_GetContext(capsule);
+    if (len_ctx != NULL) {{
+        f2py_destroy_{sym}(ptr, {len_args});
+        free(len_ctx);
+    }}
+}}
+"""
     return f"""\
 static void
 f2py_{typename}_capsule_destructor(PyObject *capsule)
@@ -1290,12 +1428,29 @@ f2py_{typename}_capsule_destructor(PyObject *capsule)
 """
 
 
-def _gen_opaque_tp_init(typename, members):
+def _gen_opaque_tp_init(typename, members, specializations=None,
+                        kind_info=None, len_info=None):
     """Generate tp_init that calls the Fortran constructor."""
+    if specializations and kind_info:
+        return _gen_opaque_tp_init_multi(
+            typename, members, specializations, kind_info)
     sym = _fortran_sym(typename)
     capsule_name = f'f2py.{typename}'
+
+    # Collect LEN param names for skipping LEN-sized arrays
+    len_param_names = set()
+    if len_info:
+        len_param_names = {li['name'] for li in len_info}
+
+    # Build kwlist: LEN params first (required), then scalar members
     kwlist = []
-    fmt_parts = []
+    fmt_required = []  # required args (LEN params)
+    fmt_optional = []  # optional args (scalar members)
+    if len_info:
+        for li in len_info:
+            kwlist.append(li['name'])
+            fmt_required.append('i')
+
     for mname, mvar in members.items():
         if (_is_array_member(mvar) or _is_type_member(mvar)
                 or _is_type_array_member(mvar) or _is_char_member(mvar)
@@ -1303,19 +1458,35 @@ def _gen_opaque_tp_init(typename, members):
                 or _is_pointer_member(mvar)
                 or _is_deferred_char_member(mvar)):
             continue  # arrays, nested types, chars, allocs set via props
+        if (len_param_names
+                and _is_len_sized_array(mvar, len_param_names)):
+            continue
         ctype = _get_member_ctype(mvar)
         fmt = _C_TO_PYFORMAT.get(ctype)
         if fmt is None:
             continue
         kwlist.append(mname)
-        fmt_parts.append(fmt)
+        fmt_optional.append(fmt)
 
     kwlist_str = ', '.join(f'"{k}"' for k in kwlist)
-    fmt_str = ''.join(fmt_parts)
+    # Format: required args, then '|', then optional args
+    if fmt_required:
+        fmt_str = ''.join(fmt_required) + '|' + ''.join(fmt_optional)
+    else:
+        fmt_str = '|' + ''.join(fmt_optional)
 
     decl_lines = []
     parse_args = []
     call_args = []
+
+    # LEN param declarations and parse args
+    if len_info:
+        for li in len_info:
+            lname = li['name']
+            decl_lines.append(f'    int {lname} = 0;')
+            parse_args.append(f'&{lname}')
+            call_args.append(lname)
+
     for mname, mvar in members.items():
         if (_is_array_member(mvar) or _is_type_member(mvar)
                 or _is_type_array_member(mvar) or _is_char_member(mvar)
@@ -1323,22 +1494,24 @@ def _gen_opaque_tp_init(typename, members):
                 or _is_pointer_member(mvar)
                 or _is_deferred_char_member(mvar)):
             continue
+        if (len_param_names
+                and _is_len_sized_array(mvar, len_param_names)):
+            continue
         ctype = _get_member_ctype(mvar)
         if _C_TO_PYFORMAT.get(ctype) is None:
             continue
-        # Use declared default value if present (F2018 R739
-        # component-initialization), otherwise 0
         fortran_default = mvar.get('=')
-        if ctype in ('float _Complex', 'double _Complex'):
+        if ctype in ('npy_cfloat', 'npy_cdouble'):
             decl_lines.append(f'    Py_complex {mname} = {{0, 0}};')
             parse_args.append(f'&{mname}')
-            cast = '(float)' if ctype == 'float _Complex' else ''
-            call_args.append(
-                f'{cast}{mname}.real + {cast}{mname}.imag * _Complex_I')
+            if ctype == 'npy_cfloat':
+                call_args.append(
+                    f'npy_cpackf((float){mname}.real, (float){mname}.imag)')
+            else:
+                call_args.append(
+                    f'npy_cpack({mname}.real, {mname}.imag)')
         else:
             if fortran_default is not None:
-                # Convert Fortran literal to C: .true.->1, .false.->0,
-                # 1.0d-6->1.0e-6, keep integers as-is
                 c_default = str(fortran_default).strip()
                 c_default = c_default.replace('d', 'e').replace('D', 'E')
                 if c_default.lower() == '.true.':
@@ -1355,18 +1528,44 @@ def _gen_opaque_tp_init(typename, members):
     parse_args_str = ', '.join(parse_args)
     call_args_str = ', '.join(call_args)
 
-    # When no scalar members exist (all arrays), skip arg parsing
     if kwlist:
         parse_block = f"""\
     static char *kwlist[] = {{{kwlist_str}, NULL}};
 {decl_str}
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|{fmt_str}", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "{fmt_str}", kwlist,
                                      {parse_args_str}))
         return -1;"""
     else:
         parse_block = """\
     /* No scalar members; all members are arrays set via properties */"""
+
+    # Store LEN values and set capsule context
+    if len_info:
+        nlen = len(len_info)
+        store_len = '\n'.join(
+            f'    self->len_{li["name"]} = {li["name"]};'
+            for li in len_info)
+        len_destr_args = ', '.join(
+            li['name'] for li in len_info)
+        ctx_lines = f"""\
+
+{store_len}
+
+    /* Store LEN params in capsule context for destructor */
+    int *len_ctx = (int *)malloc({nlen} * sizeof(int));
+    if (len_ctx == NULL) {{
+        f2py_destroy_{sym}(ptr, {len_destr_args});
+        PyErr_NoMemory();
+        return -1;
+    }}"""
+        for i, li in enumerate(len_info):
+            ctx_lines += f'\n    len_ctx[{i}] = {li["name"]};'
+        ctx_lines += f"""
+    PyCapsule_SetContext(self->capsule, len_ctx);"""
+        post_capsule = ctx_lines
+    else:
+        post_capsule = ''
 
     return f"""\
 static int
@@ -1391,6 +1590,156 @@ Py{typename}_tp_init(PyObject *selfobj, PyObject *args, PyObject *kwds)
     if (self->capsule == NULL) {{
         f2py_destroy_{sym}(ptr);
         return -1;
+    }}{post_capsule}
+
+    return 0;
+}}
+"""
+
+
+def _gen_opaque_tp_init_multi(typename, members, specializations, kind_info):
+    """Generate multi-kind tp_init with dispatch."""
+    # Use the first specialization's members for the kwlist
+    # (all specializations have the same member names)
+    _, _, first_members = specializations[0]
+    ki = kind_info[0]  # First (typically only) KIND param
+    kname = ki['name']
+    has_default = ki['has_default']
+    default_val = ki['default']
+
+    # Build kwlist: kind param first, then data members
+    kwlist = [kname]
+    fmt_parts = ['i']  # kind is always int
+    for mname, mvar in first_members.items():
+        if (_is_array_member(mvar) or _is_type_member(mvar)
+                or _is_type_array_member(mvar) or _is_char_member(mvar)
+                or _is_allocatable_member(mvar)
+                or _is_pointer_member(mvar)
+                or _is_deferred_char_member(mvar)):
+            continue
+        ctype = _get_member_ctype(mvar)
+        fmt = _C_TO_PYFORMAT.get(ctype)
+        if fmt is None:
+            continue
+        kwlist.append(mname)
+        # Parse all numeric args as double (widest), cast on call
+        fmt_parts.append('d')
+
+    kwlist_str = ', '.join(f'"{k}"' for k in kwlist)
+    fmt_str = ''.join(fmt_parts)
+
+    # Declarations: kind + all members as double
+    decl_lines = []
+    if has_default:
+        decl_lines.append(f'    int {kname} = {default_val};')
+    else:
+        decl_lines.append(f'    int {kname} = -1;')
+    parse_args = [f'&{kname}']
+
+    member_names = []
+    for mname, mvar in first_members.items():
+        if (_is_array_member(mvar) or _is_type_member(mvar)
+                or _is_type_array_member(mvar) or _is_char_member(mvar)
+                or _is_allocatable_member(mvar)
+                or _is_pointer_member(mvar)
+                or _is_deferred_char_member(mvar)):
+            continue
+        ctype = _get_member_ctype(mvar)
+        if _C_TO_PYFORMAT.get(ctype) is None:
+            continue
+        decl_lines.append(f'    double {mname} = 0;')
+        parse_args.append(f'&{mname}')
+        member_names.append(mname)
+
+    decl_str = '\n'.join(decl_lines)
+    parse_args_str = ', '.join(parse_args)
+
+    # Build dispatch branches
+    branches = []
+    for suffix, kind_dict, resolved_members in specializations:
+        kv = kind_dict[kname]
+        sym = _fortran_sym(typename + suffix)
+        cap_name = f'f2py.{typename}{suffix}'
+
+        # Build call args with casts
+        call_parts = []
+        for mname in member_names:
+            mvar = resolved_members.get(mname, {})
+            ctype = _get_member_ctype(mvar) or 'double'
+            if ctype == 'float':
+                call_parts.append(f'(float){mname}')
+            elif ctype == 'int':
+                call_parts.append(f'(int){mname}')
+            elif ctype == 'long long':
+                call_parts.append(f'(long long){mname}')
+            else:
+                call_parts.append(mname)
+        call_args_str = ', '.join(call_parts)
+
+        cond = 'if' if not branches else 'else if'
+        branches.append(f"""\
+    {cond} ({kname} == {kv}) {{
+        ptr = f2py_create_{sym}({call_args_str});
+        capsule_name = "{cap_name}";
+    }}""")
+
+    dispatch = '\n'.join(branches)
+
+    # Required kind check for types without default
+    if not has_default:
+        required_check = f"""\
+    if ({kname} == -1) {{
+        PyErr_SetString(PyExc_TypeError,
+                        "{typename}() requires '{kname}=' keyword argument");
+        return -1;
+    }}"""
+    else:
+        required_check = ''
+
+    # Valid kind values for error message
+    valid_kinds = [str(kind_dict[kname])
+                   for _, kind_dict, _ in specializations]
+    valid_str = ', '.join(valid_kinds)
+
+    return f"""\
+static int
+Py{typename}_tp_init(PyObject *selfobj, PyObject *args, PyObject *kwds)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    static char *kwlist[] = {{{kwlist_str}, NULL}};
+{decl_str}
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|{fmt_str}", kwlist,
+                                     {parse_args_str}))
+        return -1;
+{required_check}
+
+    void *ptr = NULL;
+    const char *capsule_name = NULL;
+{dispatch}
+    else {{
+        PyErr_Format(PyExc_ValueError,
+                     "unsupported {kname}=%d for {typename} "
+                     "(valid: {valid_str})", {kname});
+        return -1;
+    }}
+
+    if (ptr == NULL) {{
+        PyErr_SetString(PyExc_MemoryError,
+                        "Fortran allocate failed for {typename}");
+        return -1;
+    }}
+
+    self->kind_value = {kname};
+
+    /* Clean up old capsule if re-initializing */
+    Py_XDECREF(self->capsule);
+    self->capsule = PyCapsule_New(
+        ptr, capsule_name,
+        f2py_{typename}_capsule_destructor);
+    if (self->capsule == NULL) {{
+        /* capsule creation failed -- leak is acceptable (extremely rare) */
+        return -1;
     }}
 
     return 0;
@@ -1398,12 +1747,43 @@ Py{typename}_tp_init(PyObject *selfobj, PyObject *args, PyObject *kwds)
 """
 
 
-def _gen_opaque_getset(typename, members):
+def _gen_opaque_getset(typename, members, specializations=None,
+                       kind_info=None, len_info=None):
     """Generate getters/setters that call Fortran accessor wrappers."""
+    if specializations and kind_info:
+        return _gen_opaque_getset_multi(
+            typename, members, specializations, kind_info)
     sym = _fortran_sym(typename)
     capsule_name = f'f2py.{typename}'
     funcs = []
     getset_entries = []
+
+    # For LEN types, build the extra args string for Fortran calls.
+    # e.g. ', self->len_n' or ', self->len_m, self->len_n' or ''.
+    len_param_names = set()
+    len_call_extra = ''
+    if len_info:
+        len_param_names = {li['name'] for li in len_info}
+        len_call_extra = ', '.join(
+            f'self->len_{li["name"]}' for li in len_info)
+        len_call_extra = ', ' + len_call_extra
+
+    # Add read-only LEN properties
+    if len_info:
+        for li in len_info:
+            lname = li['name']
+            getter_name = f'Py{typename}_get_len_{lname}'
+            funcs.append(f"""\
+static PyObject *
+{getter_name}(PyObject *selfobj, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    return PyLong_FromLong((long)self->len_{lname});
+}}
+""")
+            getset_entries.append(
+                f'    {{"{lname}", {getter_name}, NULL, '
+                f'"{lname} (LEN parameter, read-only)", NULL}},')
 
     for mname, mvar in members.items():
         if _is_type_array_member(mvar):
@@ -1531,7 +1911,7 @@ static PyObject *
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
     /* Get an opaque copy of the nested type from Fortran */
-    void *inner_ptr = f2py_get_{sym}_{mname}(ptr);
+    void *inner_ptr = f2py_get_{sym}_{mname}(ptr{len_call_extra});
     if (inner_ptr == NULL) {{
         PyErr_SetString(PyExc_RuntimeError,
                         "Fortran returned NULL for {mname}");
@@ -1658,9 +2038,10 @@ static int
 
         if _is_complex_member(mvar):
             ctype = _get_member_ctype(mvar)
-            is_single = (ctype == 'float _Complex')
-            creal_fn = 'crealf' if is_single else 'creal'
-            cimag_fn = 'cimagf' if is_single else 'cimag'
+            is_single = (ctype == 'npy_cfloat')
+            creal_fn = 'npy_crealf' if is_single else 'npy_creal'
+            cimag_fn = 'npy_cimagf' if is_single else 'npy_cimag'
+            cpack_fn = 'npy_cpackf' if is_single else 'npy_cpack'
             cast = '(float)' if is_single else ''
 
             getter_name = f'Py{typename}_get_{mname}'
@@ -1703,8 +2084,8 @@ static int
     if (ptr == NULL) return -1;
     Py_complex c = PyComplex_AsCComplex(value);
     if (PyErr_Occurred()) return -1;
-    {ctype} cval = {cast}c.real + {cast}c.imag * _Complex_I;
-    f2py_set_{sym}_{mname}(ptr, cval);
+    {ctype} cval = {cpack_fn}({cast}c.real, {cast}c.imag);
+    f2py_set_{sym}_{mname}(ptr{len_call_extra}, cval);
     return 0;
 }}
 """)
@@ -1968,6 +2349,96 @@ static int
             )
             continue
 
+        # LEN-sized array members: dynamic size from LEN param
+        if (len_param_names
+                and _is_len_sized_array(mvar, len_param_names)):
+            ctype = _get_member_ctype(mvar)
+            npy_enum = _C_TO_NPY_ENUM.get(ctype)
+            if npy_enum is None:
+                continue
+            ndim = len(mvar.get('dimension', []))
+            # Determine shape from LEN params stored in self
+            # For 1D arrays sized by single LEN param, shape = (len_n,)
+            dim_exprs = []
+            for d in mvar.get('dimension', []):
+                ds = str(d).strip().lower()
+                if ds in len_param_names:
+                    dim_exprs.append(f'self->len_{ds}')
+                else:
+                    dim_exprs.append(ds)
+
+            getter_name = f'Py{typename}_get_{mname}'
+            dims_assign = '\n'.join(
+                f'    dims[{i}] = (npy_intp){dim_exprs[i]};'
+                for i in range(ndim))
+            total_expr = ' * '.join(dim_exprs)
+            funcs.append(f"""\
+static PyObject *
+{getter_name}(PyObject *selfobj, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return NULL;
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return NULL;
+    npy_intp dims[{ndim}];
+{dims_assign}
+    npy_intp total = {total_expr};
+    if (total <= 0) {{
+        return PyArray_SimpleNew({ndim}, dims, {npy_enum});
+    }}
+    void *data = f2py_get_{sym}_{mname}_data(ptr{len_call_extra});
+    if (data == NULL) {{
+        return PyArray_SimpleNew({ndim}, dims, {npy_enum});
+    }}
+    PyObject *arr = PyArray_SimpleNew({ndim}, dims, {npy_enum});
+    if (arr == NULL) return NULL;
+    memcpy(PyArray_DATA((PyArrayObject *)arr), data,
+           total * sizeof({ctype}));
+    return arr;
+}}
+""")
+
+            # Build setter args for Fortran
+            set_dim_args = ', '.join(
+                f'(int)PyArray_DIM((PyArrayObject *)arr, {i})'
+                for i in range(ndim))
+
+            setter_name = f'Py{typename}_set_{mname}'
+            funcs.append(f"""\
+static int
+{setter_name}(PyObject *selfobj, PyObject *value, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (value == NULL) {{
+        PyErr_SetString(PyExc_TypeError,
+                        "Cannot delete {mname} attribute");
+        return -1;
+    }}
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return -1;
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return -1;
+    PyObject *arr = PyArray_FROM_OTF(value, {npy_enum},
+                                      NPY_ARRAY_IN_ARRAY);
+    if (arr == NULL) return -1;
+    f2py_set_{sym}_{mname}(ptr{len_call_extra}, {set_dim_args},
+                            PyArray_DATA((PyArrayObject *)arr));
+    Py_DECREF(arr);
+    return 0;
+}}
+""")
+            getset_entries.append(
+                f'    {{"{mname}", {getter_name}, {setter_name}, '
+                f'"{mname} member", NULL}},')
+            continue
+
         ctype = _get_member_ctype(mvar)
         dims = _get_array_dims(mvar)
 
@@ -1996,7 +2467,7 @@ static PyObject *
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
-    void *arrptr = f2py_get_{sym}_{mname}(ptr);
+    void *arrptr = f2py_get_{sym}_{mname}(ptr{len_call_extra});
     if (arrptr == NULL) {{
         PyErr_SetString(PyExc_RuntimeError,
                         "Fortran returned NULL for {mname}");
@@ -2039,7 +2510,7 @@ static int
         Py_DECREF(arr);
         return -1;
     }}
-    f2py_set_{sym}_{mname}(ptr,
+    f2py_set_{sym}_{mname}(ptr{len_call_extra},
         ({ctype} *)PyArray_DATA((PyArrayObject *)arr));
     Py_DECREF(arr);
     return 0;
@@ -2067,7 +2538,7 @@ static PyObject *
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
-    {rtype} val = f2py_get_{sym}_{mname}(ptr);
+    {rtype} val = f2py_get_{sym}_{mname}(ptr{len_call_extra});
     return {val_expr};
 }}
 """)
@@ -2093,7 +2564,7 @@ static int
     if (ptr == NULL) return -1;
     {ctype} cval = {conv_expr};
     if (PyErr_Occurred()) return -1;
-    f2py_set_{sym}_{mname}(ptr, cval);
+    f2py_set_{sym}_{mname}(ptr{len_call_extra}, cval);
     return 0;
 }}
 """)
@@ -2113,8 +2584,161 @@ static int
     return '\n'.join(funcs) + '\n' + getset_array
 
 
-def _gen_opaque_tp_repr(typename, members):
+def _gen_opaque_getset_multi(typename, members, specializations, kind_info):
+    """Generate multi-kind dispatch getters/setters for PDTs."""
+    ki = kind_info[0]
+    kname = ki['name']
+    funcs = []
+    getset_entries = []
+
+    # Add read-only 'k' property for the kind value
+    getter_name = f'Py{typename}_get_{kname}'
+    funcs.append(f"""\
+static PyObject *
+{getter_name}(PyObject *selfobj, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    return PyLong_FromLong((long)self->kind_value);
+}}
+""")
+    getset_entries.append(
+        f'    {{"{kname}", {getter_name}, NULL, '
+        f'"{kname} (KIND parameter, read-only)", NULL}},')
+
+    for mname, mvar in members.items():
+        # Skip complex member types for now (array-of-types, nested, etc.)
+        if (_is_type_array_member(mvar) or _is_type_member(mvar)
+                or _is_char_member(mvar) or _is_allocatable_member(mvar)
+                or _is_pointer_member(mvar)
+                or _is_deferred_char_member(mvar)
+                or _is_array_member(mvar)):
+            continue
+        if _is_complex_member(mvar):
+            continue  # Complex dispatch not yet implemented
+
+        ctype = _get_member_ctype(mvar)
+        if ctype is None or _C_TO_PYFORMAT.get(ctype) is None:
+            continue
+
+        # Build dispatch getter
+        getter_name = f'Py{typename}_get_{mname}'
+        getter_branches = []
+        for suffix, kind_dict, resolved_members in specializations:
+            kv = kind_dict[kname]
+            dsym = _fortran_sym(typename + suffix)
+            cap_name = f'f2py.{typename}{suffix}'
+            rmvar = resolved_members.get(mname, mvar)
+            rctype = _get_member_ctype(rmvar) or ctype
+            if rctype in ('float', 'double'):
+                val_expr = (f'(double)f2py_get_{dsym}_{mname}(ptr)')
+                ret_expr = f'PyFloat_FromDouble({val_expr})'
+            elif rctype in ('int',):
+                ret_expr = (
+                    f'PyLong_FromLong((long)'
+                    f'f2py_get_{dsym}_{mname}(ptr))')
+            elif rctype in ('long long',):
+                ret_expr = (
+                    f'PyLong_FromLongLong('
+                    f'f2py_get_{dsym}_{mname}(ptr))')
+            else:
+                ret_expr = (
+                    f'PyFloat_FromDouble((double)'
+                    f'f2py_get_{dsym}_{mname}(ptr))')
+
+            cond = 'if' if not getter_branches else 'else if'
+            getter_branches.append(
+                f'    {cond} (self->kind_value == {kv}) {{\n'
+                f'        return {ret_expr};\n'
+                f'    }}')
+
+        getter_dispatch = '\n'.join(getter_branches)
+        funcs.append(f"""\
+static PyObject *
+{getter_name}(PyObject *selfobj, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return NULL;
+    }}
+    const char *cap = PyCapsule_GetName(self->capsule);
+    void *ptr = PyCapsule_GetPointer(self->capsule, cap);
+    if (ptr == NULL) return NULL;
+{getter_dispatch}
+    PyErr_SetString(PyExc_RuntimeError, "invalid kind_value");
+    return NULL;
+}}
+""")
+
+        # Build dispatch setter
+        setter_name = f'Py{typename}_set_{mname}'
+        setter_branches = []
+        for suffix, kind_dict, resolved_members in specializations:
+            kv = kind_dict[kname]
+            dsym = _fortran_sym(typename + suffix)
+            rmvar = resolved_members.get(mname, mvar)
+            rctype = _get_member_ctype(rmvar) or ctype
+            if rctype == 'float':
+                parse = f'(float)PyFloat_AsDouble(value)'
+            elif rctype == 'double':
+                parse = 'PyFloat_AsDouble(value)'
+            elif rctype == 'int':
+                parse = '(int)PyLong_AsLong(value)'
+            elif rctype == 'long long':
+                parse = 'PyLong_AsLongLong(value)'
+            else:
+                parse = f'({rctype})PyFloat_AsDouble(value)'
+
+            cond = 'if' if not setter_branches else 'else if'
+            setter_branches.append(
+                f'    {cond} (self->kind_value == {kv}) {{\n'
+                f'        f2py_set_{dsym}_{mname}(ptr, {parse});\n'
+                f'    }}')
+
+        setter_dispatch = '\n'.join(setter_branches)
+        funcs.append(f"""\
+static int
+{setter_name}(PyObject *selfobj, PyObject *value, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (value == NULL) {{
+        PyErr_SetString(PyExc_TypeError,
+                        "Cannot delete {mname} attribute");
+        return -1;
+    }}
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return -1;
+    }}
+    const char *cap = PyCapsule_GetName(self->capsule);
+    void *ptr = PyCapsule_GetPointer(self->capsule, cap);
+    if (ptr == NULL) return -1;
+{setter_dispatch}
+    if (PyErr_Occurred()) return -1;
+    return 0;
+}}
+""")
+        getset_entries.append(
+            f'    {{"{mname}", {getter_name}, {setter_name}, '
+            f'"{mname} member", NULL}},')
+
+    getset_array = (
+        f'static PyGetSetDef Py{typename}_getset[] = {{\n'
+        + '\n'.join(getset_entries) + '\n'
+        + '    {NULL}  /* sentinel */\n'
+        + '};\n'
+    )
+    return '\n'.join(funcs) + '\n' + getset_array
+
+
+def _gen_opaque_tp_repr(typename, members, specializations=None,
+                        kind_info=None, len_info=None):
     """Generate tp_repr that calls Fortran getters for display."""
+    if specializations and kind_info:
+        return _gen_opaque_tp_repr_multi(
+            typename, members, specializations, kind_info)
     sym = _fortran_sym(typename)
     capsule_name = f'f2py.{typename}'
     fmt_parts = []
@@ -2151,9 +2775,9 @@ def _gen_opaque_tp_repr(typename, members):
             dim_str = 'x'.join(str(d) for d in dims)
             fmt_parts.append(f'{mname}=<array({dim_str})>')
             continue
-        if ctype in ('float _Complex', 'double _Complex'):
-            creal_fn = 'crealf' if ctype == 'float _Complex' else 'creal'
-            cimag_fn = 'cimagf' if ctype == 'float _Complex' else 'cimag'
+        if ctype in ('npy_cfloat', 'npy_cdouble'):
+            creal_fn = 'npy_crealf' if ctype == 'npy_cfloat' else 'npy_creal'
+            cimag_fn = 'npy_cimagf' if ctype == 'npy_cfloat' else 'npy_cimag'
             fmt_parts.append(f'{mname}=(%g+%gj)')
             val_args.append(
                 f'(double){creal_fn}(f2py_get_{sym}_{mname}(ptr))')
@@ -2195,6 +2819,64 @@ Py{typename}_tp_repr(PyObject *selfobj)
     }}
     char buf[256];
     snprintf(buf, sizeof(buf), "{typename}({fmt_str})"{val_str});
+    return PyUnicode_FromString(buf);
+}}
+"""
+
+
+def _gen_opaque_tp_repr_multi(typename, members, specializations, kind_info):
+    """Generate multi-kind dispatch repr for PDTs.
+
+    Uses Python-level attribute access via getset (which already
+    dispatches per kind) to avoid duplicating dispatch logic.
+    """
+    ki = kind_info[0]
+    kname = ki['name']
+
+    member_names = []
+    for mname, mvar in members.items():
+        if (_is_type_array_member(mvar) or _is_type_member(mvar)
+                or _is_char_member(mvar) or _is_allocatable_member(mvar)
+                or _is_pointer_member(mvar)
+                or _is_deferred_char_member(mvar)
+                or _is_array_member(mvar) or _is_complex_member(mvar)):
+            continue
+        ctype = _get_member_ctype(mvar)
+        if ctype is None or _C_TO_PYFORMAT.get(ctype) is None:
+            continue
+        member_names.append(mname)
+
+    get_lines = []
+    fmt_parts = [f'{kname}=%d']
+    val_parts = ['self->kind_value']
+    for mname in member_names:
+        fmt_parts.append(f'{mname}=%g')
+        get_lines.append(
+            f'    PyObject *py_{mname} = '
+            f'PyObject_GetAttrString(selfobj, "{mname}");')
+        get_lines.append(
+            f'    double v_{mname} = py_{mname} ? '
+            f'PyFloat_AsDouble(py_{mname}) : 0.0;')
+        get_lines.append(f'    Py_XDECREF(py_{mname});')
+        val_parts.append(f'v_{mname}')
+
+    get_str = '\n'.join(get_lines)
+    fmt_str = ', '.join(fmt_parts)
+    val_str = ', '.join(val_parts)
+
+    return f"""\
+static PyObject *
+Py{typename}_tp_repr(PyObject *selfobj)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (self->capsule == NULL) {{
+        return PyUnicode_FromString("{typename}(<uninitialized>)");
+    }}
+{get_str}
+    PyErr_Clear();
+    char buf[256];
+    snprintf(buf, sizeof(buf), "{typename}({fmt_str})",
+        {val_str});
     return PyUnicode_FromString(buf);
 }}
 """
