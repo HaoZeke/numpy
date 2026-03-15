@@ -1821,7 +1821,8 @@ class TestAllocMemberCodeGen:
         hooks = derived_type_rules.buildhooks(mod[0])
         all_code = '\n'.join(hooks['f90modhooks'])
         assert 'f2py_get_datavec_values_allocated' in all_code
-        assert 'f2py_get_datavec_values_size' in all_code
+        assert 'f2py_get_datavec_values_ndim' in all_code
+        assert 'f2py_get_datavec_values_shape' in all_code
         assert 'f2py_get_datavec_values_data' in all_code
         assert 'f2py_set_datavec_values' in all_code
 
@@ -1891,6 +1892,141 @@ class TestAllocMember(util.F2PyTest):
         d.values = np.array([1.0], dtype=np.float32)
         assert d.tag == 42
         assert len(d.values) == 1
+
+
+class TestAllocMemberNDCodeGen:
+    """Test code generation for multi-dimensional allocatable arrays."""
+
+    def test_2d_alloc_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member_nd.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Matrix type has 2D allocatable 'data'
+        assert 'f2py_get_matrix_data_allocated' in all_code
+        assert 'f2py_get_matrix_data_ndim' in all_code
+        assert 'f2py_get_matrix_data_shape' in all_code
+        assert 'f2py_get_matrix_data_data' in all_code
+        assert 'f2py_set_matrix_data' in all_code
+
+    def test_3d_alloc_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member_nd.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Tensor3D type has 3D allocatable 'field'
+        assert 'f2py_get_tensor3d_field_ndim' in all_code
+        assert 'f2py_get_tensor3d_field_shape' in all_code
+
+    def test_mixed_1d_2d_alloc(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member_nd.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # MixedAlloc has both 1D 'vector' and 2D 'matrix'
+        assert 'f2py_get_mixedalloc_vector_ndim' in all_code
+        assert 'f2py_get_mixedalloc_matrix_ndim' in all_code
+
+    def test_2d_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member_nd.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for module in findf90modules(mod[0]):
+            type_blocks = derived_type_rules._find_derived_types(module)
+            src = derived_type_rules.generate_fortran_wrappers(
+                module['name'], type_blocks)
+        assert src is not None
+        # 2D allocatable setter takes dim_1, dim_2 arguments
+        assert 'dim_1' in src
+        assert 'dim_2' in src
+        # shape accessor uses size(obj%data, 1) and size(obj%data, 2)
+        assert 'size(obj%data, 1)' in src
+        assert 'size(obj%data, 2)' in src
+
+
+@pytest.mark.slow
+class TestAllocMemberND(util.F2PyTest):
+    """Test multi-dimensional allocatable array members with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "alloc_member_nd.f90")]
+
+    def test_matrix_exists(self):
+        assert hasattr(self.module, 'matrix')
+
+    def test_matrix_data_starts_none(self):
+        mat = self.module.matrix(rows=3, cols=4)
+        assert mat.data is None
+
+    def test_matrix_set_get_2d(self):
+        mat = self.module.matrix(rows=3, cols=4)
+        # Use Fortran-order input: Fortran allocatables are column-major
+        # (F2018 8.5.8.1), so the round-trip preserves Fortran order
+        input_data = np.asfortranarray(
+            np.array([[1, 2, 3, 4],
+                      [5, 6, 7, 8],
+                      [9, 10, 11, 12]], dtype=np.float64))
+        mat.data = input_data
+        result = mat.data
+        assert result is not None
+        assert result.shape == (3, 4)
+        np.testing.assert_array_almost_equal(result, input_data)
+
+    def test_matrix_deallocate_with_none(self):
+        mat = self.module.matrix(rows=2, cols=2)
+        mat.data = np.ones((2, 2), dtype=np.float64)
+        assert mat.data is not None
+        mat.data = None
+        assert mat.data is None
+
+    def test_matrix_resize(self):
+        mat = self.module.matrix(rows=2, cols=2)
+        mat.data = np.ones((2, 2), dtype=np.float64)
+        assert mat.data.shape == (2, 2)
+        mat.data = np.zeros((3, 5), dtype=np.float64)
+        assert mat.data.shape == (3, 5)
+
+    def test_matrix_scalar_coexists(self):
+        mat = self.module.matrix(rows=10, cols=20)
+        mat.data = np.eye(3, dtype=np.float64)
+        assert mat.rows == 10
+        assert mat.cols == 20
+        assert mat.data.shape == (3, 3)
+
+    def test_tensor3d_exists(self):
+        assert hasattr(self.module, 'tensor3d')
+
+    def test_tensor3d_set_get_3d(self):
+        tensor = self.module.tensor3d(label=7)
+        # Fortran allocatable arrays are column-major (F2018 8.5.8.1)
+        input_data = np.asfortranarray(
+            np.arange(24, dtype=np.float32).reshape(2, 3, 4))
+        tensor.field = input_data
+        result = tensor.field
+        assert result is not None
+        assert result.shape == (2, 3, 4)
+        np.testing.assert_array_almost_equal(result, input_data)
+
+    def test_mixed_alloc_both_members(self):
+        mixed = self.module.mixedalloc(tag=99)
+        # Set 1D vector (order irrelevant for 1D)
+        mixed.vector = np.array([1.0, 2.0, 3.0])
+        # Set 2D matrix (Fortran column-major, F2018 8.5.8.1)
+        mat_input = np.asfortranarray(
+            np.array([[10.0, 20.0], [30.0, 40.0]]))
+        mixed.matrix = mat_input
+        assert mixed.vector.shape == (3,)
+        assert mixed.matrix.shape == (2, 2)
+        np.testing.assert_array_almost_equal(mixed.vector, [1.0, 2.0, 3.0])
+        np.testing.assert_array_almost_equal(mixed.matrix, mat_input)
+
+    def test_wrong_ndim_raises(self):
+        mat = self.module.matrix(rows=2, cols=2)
+        with pytest.raises(ValueError, match="2D"):
+            mat.data = np.array([1.0, 2.0, 3.0])
 
 
 class TestIntentOutTypeArrayCodeGen:
