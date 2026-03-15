@@ -43,7 +43,10 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
         return ''
     vardef = vars[a]['typespec']
     if vardef == 'type' and 'typename' in vars[a]:
-        vardef = f"{vardef}({vars[a]['typename']})"
+        typename = vars[a]['typename']
+        if 'typeparams' in vars[a]:
+            typename = f"{typename}({vars[a]['typeparams']})"
+        vardef = f'{vardef}({typename})'
     selector = {}
     lk = ''
     if 'kindselector' in vars[a]:

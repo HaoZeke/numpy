@@ -1208,6 +1208,64 @@ class TestCharacterLengths:
         assert vs["buf"]["dimension"] == ["5"]
 
 
+class TestTypeParameters:
+    # a declaration keeps the parameters of its type(name(...)), so that
+    # signatures declare a parameterized type as the source does
+    def test_kept(self, tmp_path):
+        fpath = tmp_path / "pdt.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module pdt
+              implicit none
+              type :: vec(k)
+                integer, kind :: k = kind(0.0d0)
+                real(k) :: x
+              end type vec
+            contains
+              subroutine scale(v, a)
+                type(vec(kind(0.0d0))), intent(inout) :: v
+                real, intent(in) :: a
+                v%x = a * v%x
+              end subroutine scale
+            end module pdt
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])
+        v = mod[0]["body"][1]["vars"]["v"]
+        assert v["typename"] == "vec"
+        assert v["typeparams"] == "kind(0.0d0)"
+        assert ("type(vec(kind(0.0d0))) intent(inout) :: v"
+                in crackfortran.crack2fortran(mod))
+
+
+class TestComponentHostParameters:
+    # the components of a type see the parameters of its module, except
+    # where a name of the type hides them
+    def test_kinds_and_sizes(self, tmp_path):
+        fpath = tmp_path / "host.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module host
+              implicit none
+              integer, parameter :: dp = selected_real_kind(15, 307)
+              integer, parameter :: k = kind(1.0), nlen = 6, npts = 3
+              type :: sample
+                real(dp) :: a
+                character(len=nlen) :: name
+                real(dp) :: pts(npts)
+              end type sample
+              type :: vec(k)
+                integer, kind :: k = kind(0.0d0)
+                real(k) :: x
+              end type vec
+            end module host
+            """))
+        sample, vec = crackfortran.crackfortran([str(fpath)])[0]["body"]
+        vs = sample["vars"]
+        assert vs["a"]["kindselector"] == {"kind": "8"}
+        assert vs["name"]["charselector"] == {"len": "6"}
+        assert vs["pts"]["kindselector"] == {"kind": "8"}
+        assert vs["pts"]["dimension"] == ["3"]
+        assert vec["vars"]["x"]["kindselector"] == {"kind": "k"}
+
+
 class TestGetStrLength:
     def test_stringarray(self, capsys):
         # get_elsize asks for the length of string arrays as well

@@ -2133,6 +2133,22 @@ class TestPointerMember(util.F2PyTest):
         assert dv.view is not None
 
 
+@pytest.mark.slow
+class TestHostParameters(util.F2PyTest):
+    """Components take kinds and sizes from parameters of their module."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "host_kinds.f90")]
+
+    def test_members(self):
+        s = self.module.sample()
+        s.a = 1 / 3
+        assert s.a == 1 / 3
+        self.module.fill(s)
+        assert s.a == 1 / 3
+        assert s.name == "filled"
+        np.testing.assert_array_equal(s.pts, np.array([1, 2, 3]) / 3)
+
+
 class TestDefaultInitCodeGen:
     """Test that component defaults are applied in constructors (F2018 R739)."""
 
@@ -3475,3 +3491,54 @@ class TestEvalKindExpr:
     def test_unknown_returns_none(self):
         from numpy.f2py._dt_helpers import _eval_kind_expr
         assert _eval_kind_expr('my_custom_kind') is None
+
+
+@pytest.mark.slow
+class TestParameterizedKindCompilation(util.F2PyTest):
+    """Test compilation and runtime of KIND-parameterized derived types.
+
+    Requires a Fortran compiler with parameterized derived type support
+    (F2008+, gfortran 8+).
+    """
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "parameterized_kind.f90")]
+
+    def test_realvec_exists(self):
+        assert hasattr(self.module, 'realvec')
+
+    def test_realvec_construct_default(self):
+        v = self.module.realvec()
+        assert v.x == 0.0
+        assert v.y == 0.0
+        assert v.z == 0.0
+        assert v.length == 0
+
+    def test_realvec_construct_with_args(self):
+        v = self.module.realvec(length=3, x=1.0, y=2.0, z=3.0)
+        assert v.length == 3
+        assert abs(v.x - 1.0) < 1e-10
+        assert abs(v.y - 2.0) < 1e-10
+        assert abs(v.z - 3.0) < 1e-10
+
+    def test_realvec_set_members(self):
+        v = self.module.realvec()
+        v.x = 4.5
+        v.y = 5.5
+        v.z = 6.5
+        v.length = 10
+        assert abs(v.x - 4.5) < 1e-10
+        assert abs(v.y - 5.5) < 1e-10
+        assert abs(v.z - 6.5) < 1e-10
+        assert v.length == 10
+
+    def test_realvec_no_kind_param_attr(self):
+        """The type parameter k should not be exposed as a Python attribute."""
+        v = self.module.realvec()
+        assert not hasattr(v, 'k')
+
+    def test_realvec_double_precision(self):
+        """Members should be double precision (kind=8)."""
+        v = self.module.realvec()
+        v.x = 1.23456789012345e15
+        # Double precision can represent this exactly
+        assert abs(v.x - 1.23456789012345e15) < 1.0
