@@ -1326,6 +1326,9 @@ def _gen_opaque_tp_init(typename, members):
         ctype = _get_member_ctype(mvar)
         if _C_TO_PYFORMAT.get(ctype) is None:
             continue
+        # Use declared default value if present (F2018 R739
+        # component-initialization), otherwise 0
+        fortran_default = mvar.get('=')
         if ctype in ('float _Complex', 'double _Complex'):
             decl_lines.append(f'    Py_complex {mname} = {{0, 0}};')
             parse_args.append(f'&{mname}')
@@ -1333,7 +1336,18 @@ def _gen_opaque_tp_init(typename, members):
             call_args.append(
                 f'{cast}{mname}.real + {cast}{mname}.imag * _Complex_I')
         else:
-            decl_lines.append(f'    {ctype} {mname} = 0;')
+            if fortran_default is not None:
+                # Convert Fortran literal to C: .true.->1, .false.->0,
+                # 1.0d-6->1.0e-6, keep integers as-is
+                c_default = str(fortran_default).strip()
+                c_default = c_default.replace('d', 'e').replace('D', 'E')
+                if c_default.lower() == '.true.':
+                    c_default = '1'
+                elif c_default.lower() == '.false.':
+                    c_default = '0'
+                decl_lines.append(f'    {ctype} {mname} = {c_default};')
+            else:
+                decl_lines.append(f'    {ctype} {mname} = 0;')
             parse_args.append(f'&{mname}')
             call_args.append(mname)
 

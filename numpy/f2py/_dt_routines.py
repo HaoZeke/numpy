@@ -190,6 +190,22 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                                 f'    obj%{mname}%{imname} = 0')
             elif _is_char_member(mvar):
                 lines.append(f'    obj%{mname} = \' \'')
+        # Apply declared default values (F2018 7.5.4.1 R739
+        # component-initialization). These run before user-provided
+        # arguments so that defaults are used when args are omitted.
+        for mname, mvar in members.items():
+            default_val = mvar.get('=')
+            if default_val is not None:
+                # Only apply defaults for scalar members that are
+                # also constructor arguments (skip arrays, types, etc.)
+                if (_is_array_member(mvar) or _is_type_member(mvar)
+                        or _is_type_array_member(mvar)
+                        or _is_char_member(mvar)
+                        or _is_allocatable_member(mvar)
+                        or _is_pointer_member(mvar)
+                        or _is_deferred_char_member(mvar)):
+                    continue
+                lines.append(f'    obj%{mname} = {default_val}')
         lines.append(assigns_str)
         lines.append(f'    cptr = c_loc(obj)')
         lines.append(f'  end function f2py_create_{typename}')

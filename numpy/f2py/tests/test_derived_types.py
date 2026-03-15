@@ -2133,6 +2133,52 @@ class TestPointerMember(util.F2PyTest):
         assert dv.view is not None
 
 
+class TestDefaultInitCodeGen:
+    """Test that component defaults are applied in constructors (F2018 R739)."""
+
+    def test_defaults_in_fortran_wrapper(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "default_init.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for module in findf90modules(mod[0]):
+            type_blocks = derived_type_rules._find_derived_types(module)
+            src = derived_type_rules.generate_fortran_wrappers(
+                module['name'], type_blocks)
+        assert src is not None
+        # Default values should appear in the constructor
+        assert '100' in src  # max_iterations default
+        assert '1.0d-6' in src  # tolerance default
+
+
+@pytest.mark.slow
+class TestDefaultInit(util.F2PyTest):
+    """Test component default initialization with compilation (F2018 R739)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "default_init.f90")]
+
+    def test_config_exists(self):
+        assert hasattr(self.module, 'config')
+
+    def test_defaults_applied(self):
+        cfg = self.module.config()
+        assert cfg.max_iterations == 100
+        assert abs(cfg.tolerance - 1.0e-6) < 1e-12
+        assert cfg.scale_factor == 1.0
+
+    def test_override_defaults(self):
+        cfg = self.module.config(max_iterations=50, tolerance=0.01)
+        assert cfg.max_iterations == 50
+        assert abs(cfg.tolerance - 0.01) < 1e-10
+        # Non-overridden defaults should still apply
+        assert cfg.scale_factor == 1.0
+
+    def test_partial_override(self):
+        cfg = self.module.config(scale_factor=2.5)
+        assert cfg.max_iterations == 100  # default
+        assert cfg.scale_factor == 2.5    # overridden
+
+
 class TestDeferredCharCodeGen:
     """Test code generation for deferred-length character members (F2018 7.4.4.2)."""
 
