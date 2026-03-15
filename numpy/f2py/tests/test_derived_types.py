@@ -2029,6 +2029,110 @@ class TestAllocMemberND(util.F2PyTest):
             mat.data = np.array([1.0, 2.0, 3.0])
 
 
+class TestPointerMemberCodeGen:
+    """Test code generation for pointer array members (F2018 7.5.4.6)."""
+
+    def test_pointer_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # DataView has 1D pointer 'view'
+        assert 'f2py_get_dataview_view_associated' in all_code
+        assert 'f2py_get_dataview_view_ndim' in all_code
+        assert 'f2py_get_dataview_view_shape' in all_code
+        assert 'f2py_get_dataview_view_data' in all_code
+        # No setter for pointer members
+        assert 'f2py_set_dataview_view' not in all_code
+
+    def test_pointer_read_only_setter(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Setter should raise AttributeError (read-only)
+        assert 'read-only' in all_code
+
+    def test_pointer_repr(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert '<pointer>' in all_code
+
+    def test_pointer_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for module in findf90modules(mod[0]):
+            type_blocks = derived_type_rules._find_derived_types(module)
+            src = derived_type_rules.generate_fortran_wrappers(
+                module['name'], type_blocks)
+        assert src is not None
+        # Uses associated() instead of allocated() (F2018 16.9.16)
+        assert 'associated(obj%view)' in src
+        assert 'associated(obj%grid)' in src
+
+
+@pytest.mark.slow
+class TestPointerMember(util.F2PyTest):
+    """Test pointer array members with compilation (F2018 7.5.4.6)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "pointer_member.f90")]
+
+    def test_dataview_exists(self):
+        assert hasattr(self.module, 'dataview')
+
+    def test_view_starts_none(self):
+        dv = self.module.dataview(label=1)
+        # Pointer not associated -> returns None
+        assert dv.view is None
+
+    def test_attach_and_read_view(self):
+        dv = self.module.dataview(label=42)
+        self.module.attach_view(dv)
+        result = dv.view
+        assert result is not None
+        assert len(result) == 5
+        np.testing.assert_array_almost_equal(
+            result, [10.0, 20.0, 30.0, 40.0, 50.0])
+
+    def test_detach_returns_none(self):
+        dv = self.module.dataview(label=1)
+        self.module.attach_view(dv)
+        assert dv.view is not None
+        self.module.detach_view(dv)
+        assert dv.view is None
+
+    def test_pointer_setter_raises(self):
+        dv = self.module.dataview(label=1)
+        with pytest.raises(AttributeError, match="read-only"):
+            dv.view = np.array([1.0, 2.0])
+
+    def test_matrixview_2d_pointer(self):
+        mv = self.module.matrixview(tag=7)
+        self.module.attach_matrix_view(mv)
+        result = mv.grid
+        assert result is not None
+        assert result.shape == (3, 3)
+        # shared_matrix(i,j) = i*10 + j
+        expected = np.asfortranarray(
+            np.array([[11, 12, 13],
+                      [21, 22, 23],
+                      [31, 32, 33]], dtype=np.float64))
+        np.testing.assert_array_almost_equal(result, expected)
+
+    def test_label_coexists(self):
+        dv = self.module.dataview(label=99)
+        self.module.attach_view(dv)
+        assert dv.label == 99
+        assert dv.view is not None
+
+
 class TestIntentOutTypeArrayCodeGen:
     """Test code generation for intent(out) allocatable arrays of types."""
 
