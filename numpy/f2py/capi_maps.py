@@ -229,11 +229,39 @@ def getctype(var):
                     try:
                         ctype = f2cmap[str(var['kindselector']['kind'])]
                     except KeyError:
+                        # Try evaluating kind expressions like kind(0.0d0)
+                        # to integer values (F2018 16.9.108)
                         kind = var['kindselector']['kind']
-                        errmess(f'getctype: "{typespec}({kind=})" is mapped to C '
-                                f'"{ctype}" (to override define {{{typespec!r}: '
+                        kind_str = str(kind).lower().strip()
+                        resolved = None
+                        if kind_str.startswith('kind('):
+                            # kind(0.0d0) -> 8, kind(0.0) -> 4, etc.
+                            inner = kind_str[5:-1].strip()
+                            if 'd' in inner or inner == '0.0d0':
+                                resolved = '8'
+                            elif '.' in inner:
+                                resolved = '4'
+                            elif inner.isdigit():
+                                resolved = '4'  # kind(0) = default int
+                        elif kind_str in ('real64', 'real32',
+                                          'int64', 'int32', 'int16',
+                                          'int8'):
+                            iso_map = {
+                                'real64': '8', 'real32': '4',
+                                'int64': '8', 'int32': '4',
+                                'int16': '2', 'int8': '1',
+                            }
+                            resolved = iso_map.get(kind_str)
+                        if resolved and resolved in f2cmap:
+                            ctype = f2cmap[resolved]
+                        else:
+                            errmess(
+                                f'getctype: "{typespec}({kind=})" is '
+                                f'mapped to C "{ctype}" (to override '
+                                f'define {{{typespec!r}: '
                                 f'{{{kind!r}: "<C typespec>"}}}} '
-                                f'in {os.getcwd()}/.f2py_f2cmap file).\n')
+                                f'in {os.getcwd()}/.f2py_f2cmap '
+                                f'file).\n')
     elif not isexternal(var):
         errmess(f'getctype: No C-type found in "{var}", assuming void.\n')
     return ctype
