@@ -1474,6 +1474,57 @@ def _scan_type_bound_procedures(source_file, typename):
     return result
 
 
+def _scan_final_subroutines(source_file, typename):
+    """Scan Fortran source for FINAL subroutine declarations in a type.
+
+    Returns a set of lowercased final subroutine names from lines like:
+        final :: sub1, sub2
+    within the 'contains' section of the named type block.
+
+    F2018 7.5.6.1 (R753): FINAL [ :: ] final-subroutine-name-list
+    """
+    import re
+    result = set()
+    if not source_file or not os.path.isfile(source_file):
+        return result
+
+    in_type = False
+    in_contains = False
+    type_pat = re.compile(
+        r'^\s*type\b(?:\s*,\s*\w+)*\s*::\s*' + re.escape(typename),
+        re.I)
+    end_type_pat = re.compile(
+        r'^\s*end\s+type\b', re.I)
+    contains_pat = re.compile(r'^\s*contains\b', re.I)
+    final_pat = re.compile(
+        r'^\s*final\s*(?:::)?\s*(.+)\s*$', re.I)
+
+    with open(source_file) as f:
+        for line in f:
+            stripped = line.split('!')[0].strip()
+            if not stripped:
+                continue
+            if not in_type:
+                if type_pat.match(stripped):
+                    in_type = True
+                continue
+            if end_type_pat.match(stripped):
+                break
+            if contains_pat.match(stripped):
+                in_contains = True
+                continue
+            if in_contains:
+                final_match = final_pat.match(stripped)
+                if final_match:
+                    names = final_match.group(1)
+                    for name in names.split(','):
+                        name = name.strip().lower()
+                        if name:
+                            result.add(name)
+
+    return result
+
+
 def _gen_type_methods(typename, bound_procs, routines, type_map):
     """Generate PyMethodDef entries and C method functions for type-bound
     procedures.
