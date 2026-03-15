@@ -57,6 +57,7 @@ from ._dt_helpers import (  # noqa: F401
     _is_array_member,
     _is_char_member,
     _is_complex_member,
+    _is_deferred_char_member,
     _is_pointer_member,
     _is_type_array_member,
     _is_type_member,

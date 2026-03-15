@@ -31,6 +31,7 @@ from ._dt_helpers import (
     _get_pointer_ndim,
     _is_allocatable_member,
     _is_array_member,
+    _is_deferred_char_member,
     _is_pointer_member,
     _is_char_member,
     _is_complex_member,
@@ -1140,7 +1141,8 @@ def _gen_opaque_extern_decls(typename, members):
         if (_is_array_member(mvar) or _is_type_member(mvar)
                 or _is_type_array_member(mvar) or _is_char_member(mvar)
                 or _is_allocatable_member(mvar)
-                or _is_pointer_member(mvar)):
+                or _is_pointer_member(mvar)
+                or _is_deferred_char_member(mvar)):
             continue
         ctype = _get_member_ctype(mvar)
         if ctype and _C_TO_PYFORMAT.get(ctype):
@@ -1224,6 +1226,24 @@ def _gen_opaque_extern_decls(typename, members):
                 f'_data(void *);')
             continue
 
+        if _is_deferred_char_member(mvar):
+            # Deferred-length allocatable character (F2018 7.4.4.2)
+            # 3 externs: allocated, len, get (copies to buffer)
+            # Plus setter that allocates with new length
+            lines.append(
+                f'extern unsigned char f2py_get_{sym}_{mname}'
+                f'_allocated(void *);')
+            lines.append(
+                f'extern int f2py_get_{sym}_{mname}'
+                f'_len(void *);')
+            lines.append(
+                f'extern void f2py_get_{sym}_{mname}'
+                f'(void *, char *, int);')
+            lines.append(
+                f'extern void f2py_set_{sym}_{mname}'
+                f'(void *, const char *, int);')
+            continue
+
         ctype = _get_member_ctype(mvar)
         dims = _get_array_dims(mvar)
 
@@ -1280,7 +1300,8 @@ def _gen_opaque_tp_init(typename, members):
         if (_is_array_member(mvar) or _is_type_member(mvar)
                 or _is_type_array_member(mvar) or _is_char_member(mvar)
                 or _is_allocatable_member(mvar)
-                or _is_pointer_member(mvar)):
+                or _is_pointer_member(mvar)
+                or _is_deferred_char_member(mvar)):
             continue  # arrays, nested types, chars, allocs set via props
         ctype = _get_member_ctype(mvar)
         fmt = _C_TO_PYFORMAT.get(ctype)
@@ -1299,7 +1320,8 @@ def _gen_opaque_tp_init(typename, members):
         if (_is_array_member(mvar) or _is_type_member(mvar)
                 or _is_type_array_member(mvar) or _is_char_member(mvar)
                 or _is_allocatable_member(mvar)
-                or _is_pointer_member(mvar)):
+                or _is_pointer_member(mvar)
+                or _is_deferred_char_member(mvar)):
             continue
         ctype = _get_member_ctype(mvar)
         if _C_TO_PYFORMAT.get(ctype) is None:
@@ -1852,6 +1874,86 @@ static int
             )
             continue
 
+        if _is_deferred_char_member(mvar):
+            # Deferred-length allocatable character (F2018 7.4.4.2)
+            # Getter: query length via len() (F2018 16.9.109),
+            # copy to buffer, return as Python string
+            getter_name = f'Py{typename}_get_{mname}'
+            funcs.append(f"""\
+static PyObject *
+{getter_name}(PyObject *selfobj, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return NULL;
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return NULL;
+    /* Check allocation status (F2018 16.9.3 allocated()) */
+    unsigned char is_alloc = f2py_get_{sym}_{mname}_allocated(ptr);
+    if (!is_alloc) Py_RETURN_NONE;
+    /* Query runtime length (F2018 16.9.109 len()) */
+    int str_length = f2py_get_{sym}_{mname}_len(ptr);
+    if (str_length <= 0) return PyUnicode_FromString("");
+    char *buffer = (char *)malloc(str_length + 1);
+    if (buffer == NULL) return PyErr_NoMemory();
+    f2py_get_{sym}_{mname}(ptr, buffer, str_length);
+    buffer[str_length] = '\\0';
+    /* Trim trailing spaces (Fortran pads with spaces) */
+    int trimmed_length = str_length;
+    while (trimmed_length > 0 && buffer[trimmed_length - 1] == ' ')
+        trimmed_length--;
+    PyObject *result = PyUnicode_FromStringAndSize(buffer, trimmed_length);
+    free(buffer);
+    return result;
+}}
+""")
+
+            # Setter: allocate with new length, copy from Python string
+            setter_name = f'Py{typename}_set_{mname}'
+            funcs.append(f"""\
+static int
+{setter_name}(PyObject *selfobj, PyObject *value, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (value == NULL) {{
+        PyErr_SetString(PyExc_TypeError,
+                        "Cannot delete {mname} attribute");
+        return -1;
+    }}
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return -1;
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return -1;
+    if (value == Py_None) {{
+        /* Deallocate: pass empty string with length 0 */
+        f2py_set_{sym}_{mname}(ptr, "", 0);
+        return 0;
+    }}
+    if (!PyUnicode_Check(value)) {{
+        PyErr_SetString(PyExc_TypeError,
+                        "{mname} must be a string or None");
+        return -1;
+    }}
+    Py_ssize_t py_str_length;
+    const char *str_data = PyUnicode_AsUTF8AndSize(value, &py_str_length);
+    if (str_data == NULL) return -1;
+    f2py_set_{sym}_{mname}(ptr, str_data, (int)py_str_length);
+    return 0;
+}}
+""")
+
+            getset_entries.append(
+                f'    {{"{mname}", {getter_name}, {setter_name}, '
+                f'"{mname} member", NULL}},'
+            )
+            continue
+
         ctype = _get_member_ctype(mvar)
         dims = _get_array_dims(mvar)
 
@@ -2025,6 +2127,9 @@ def _gen_opaque_tp_repr(typename, members):
             continue
         if _is_pointer_member(mvar):
             fmt_parts.append(f'{mname}=<pointer>')
+            continue
+        if _is_deferred_char_member(mvar):
+            fmt_parts.append(f'{mname}=<deferred-char>')
             continue
         ctype = _get_member_ctype(mvar)
         dims = _get_array_dims(mvar)
