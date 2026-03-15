@@ -1,0 +1,14 @@
+``f2py`` derived type support
+-----------------------------
+``f2py`` can now wrap Fortran derived types, generating Python classes with
+attribute access, constructors, and repr. Two strategies are supported:
+
+* **bind(c) types**: mapped to C structs with direct field access and zero-copy
+  NumPy array views for array members.
+* **Opaque types**: arbitrary Fortran types (no ``bind(c)`` required) wrapped via
+  auto-generated Fortran ``bind(c)`` accessor routines.
+
+Supported features include fixed-size and allocatable array members, nested
+types, inheritance (``extends``), type-bound procedures, operator overloading,
+character string members, complex-valued members, arrays of derived types as
+routine arguments, and functions returning derived types.
