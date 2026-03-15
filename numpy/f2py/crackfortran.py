@@ -593,7 +593,7 @@ beforethisafter = r'\s*(?P<before>%s(?=\s*(\b(%s)\b)))'\
     r'\s*(?P<this>(\b(%s)\b))'\
     r'\s*(?P<after>%s)\s*\Z'
 ##
-fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|class(?=\s*\([\w\s,=(*)]*\))|byte'
+fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*).+-]*\))|class(?=\s*\([\w\s,=(*).+-]*\))|byte'
 typespattern = re.compile(
     beforethisafter % ('', fortrantypes, fortrantypes, '.*'), re.I), 'type'
 typespattern4implicit = re.compile(beforethisafter % (
@@ -1608,6 +1608,8 @@ kindselector = re.compile(
     r'\s*(\(\s*(kind\s*=)?\s*(?P<kind>.*)\s*\)|\*\s*(?P<kind2>.*?))\s*\Z', re.I)
 charselector = re.compile(
     r'\s*(\((?P<lenkind>.*)\)|\*\s*(?P<charlen>.*))\s*\Z', re.I)
+typenamepattern = re.compile(
+    r'\s*\(\s*(?P<name>\w+)\s*(?P<params>\(.*\))?\s*\)', re.I)
 lenkindpattern = re.compile(
     r'\s*(kind\s*=\s*(?P<kind>.*?)\s*(@,@\s*len\s*=\s*(?P<len>.*)|)'
     r'|(len\s*=\s*|)(?P<len2>.*?)\s*(@,@\s*(kind\s*=\s*|)(?P<kind2>.*)'
@@ -1681,6 +1683,7 @@ def updatevars(typespec, selector, attrspec, entitydecl):
 
     last_name = None
     kindselect, charselect, typename = cracktypespec(typespec, selector)
+    typeparams = cracktypeparams(typespec, selector)
     # Clean up outer commas, whitespace and undesired chars from attrspec
     if attrspec:
         attrspec = [x.strip() for x in markoutercomma(attrspec).split('@,@')]
@@ -1755,6 +1758,8 @@ def updatevars(typespec, selector, attrspec, entitydecl):
             elif typename and (not edecl['typename'] == typename):
                 outmess(f'updatevars: attempt to change the typename of "{ename}" '
                         f'("{edecl["typename"]}") to "{typename}". Ignoring.\n')
+            if typeparams and 'typeparams' not in edecl:
+                edecl['typeparams'] = typeparams
             if 'attrspec' not in edecl:
                 edecl['attrspec'] = copy.copy(attrspec)
             elif attrspec:
@@ -1766,6 +1771,8 @@ def updatevars(typespec, selector, attrspec, entitydecl):
             edecl['kindselector'] = copy.copy(kindselect)
             edecl['charselector'] = copy.copy(charselect)
             edecl['typename'] = typename
+            if typeparams:
+                edecl['typeparams'] = typeparams
             edecl['attrspec'] = copy.copy(attrspec)
         if 'external' in (edecl.get('attrspec') or []) and e in groupcache[groupcounter]['args']:
             if 'externals' not in groupcache[groupcounter]:
@@ -1900,7 +1907,8 @@ def cracktypespec(typespec, selector):
             for k, i in list(charselect.items()):
                 charselect[k] = rmbadname1(i)
         elif typespec == 'type':
-            typename = re.match(r'\s*\(\s*(?P<name>\w+)\s*\)', selector, re.I)
+            # Match type(Name) or type(Name(params)) for parameterized types
+            typename = typenamepattern.match(selector)
             if typename:
                 typename = typename.group('name')
             else:
@@ -1908,6 +1916,16 @@ def cracktypespec(typespec, selector):
         else:
             outmess(f'cracktypespec: no selector used for {repr(selector)}\n')
     return kindselect, charselect, typename
+
+
+def cracktypeparams(typespec, selector):
+    """Return the type parameter list of a ``type(name(...))`` selector."""
+    if typespec != 'type' or not selector:
+        return None
+    m = typenamepattern.match(selector)
+    if m and m.group('params'):
+        return m.group('params')[1:-1].strip()
+    return None
 ######
 
 
@@ -3784,6 +3802,12 @@ def analyzevars(block):
             svars.append(n)
 
     use_params = get_useparameters(block)
+    host = block.get('parent_block', {})
+    if block['block'] == 'type' and host.get('block') == 'module':
+        # components see the parameters of the module by host association,
+        # unless a name of the type itself hides them (F2018 19.5.1.4)
+        use_params = {**{k: v for k, v in f90moduleparams.get(
+            host['name'], {}).items() if k not in vars}, **use_params}
     params = get_parameters(vars, use_params, implicitrules)
     declared = _Declarations(vars, params)
     if block['block'] == 'module':
@@ -4122,6 +4146,9 @@ def analyzevars(block):
                             vars[n]['charselector'] = charselect
                         if typename:
                             vars[n]['typename'] = typename
+                            typeparams = cracktypeparams(typespec, selector)
+                            if typeparams:
+                                vars[n]['typeparams'] = typeparams
                         if ispure:
                             vars[n] = setattrspec(vars[n], 'pure')
                         if isrec:
@@ -4708,7 +4735,10 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             continue
         vardef = vars[a]['typespec']
         if vardef == 'type' and 'typename' in vars[a]:
-            vardef = f"{vardef}({vars[a]['typename']})"
+            typename = vars[a]['typename']
+            if 'typeparams' in vars[a]:
+                typename = f"{typename}({vars[a]['typeparams']})"
+            vardef = f'{vardef}({typename})'
         selector = {}
         if 'kindselector' in vars[a]:
             selector = vars[a]['kindselector']
