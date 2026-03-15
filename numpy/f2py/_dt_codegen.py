@@ -1588,7 +1588,7 @@ Py{typename}_tp_init(PyObject *selfobj, PyObject *args, PyObject *kwds)
         ptr, "{capsule_name}",
         f2py_{typename}_capsule_destructor);
     if (self->capsule == NULL) {{
-        f2py_destroy_{sym}(ptr);
+        f2py_destroy_{sym}(ptr{', ' + ', '.join(li['name'] for li in len_info) if len_info else ''});
         return -1;
     }}{post_capsule}
 
@@ -2741,6 +2741,14 @@ def _gen_opaque_tp_repr(typename, members, specializations=None,
             typename, members, specializations, kind_info)
     sym = _fortran_sym(typename)
     capsule_name = f'f2py.{typename}'
+    # Build LEN call suffix for Fortran getter calls
+    len_call_extra = ''
+    if len_info:
+        len_param_names = {li['name'] for li in len_info}
+        len_call_extra = ', ' + ', '.join(
+            f'self->len_{li["name"]}' for li in len_info)
+    else:
+        len_param_names = set()
     fmt_parts = []
     val_args = []
     for mname, mvar in members.items():
@@ -2769,6 +2777,11 @@ def _gen_opaque_tp_repr(typename, members, specializations=None,
         if _is_deferred_char_member(mvar):
             fmt_parts.append(f'{mname}=<deferred-char>')
             continue
+        # LEN-sized arrays show as placeholder
+        if (len_param_names
+                and _is_len_sized_array(mvar, len_param_names)):
+            fmt_parts.append(f'{mname}=<array>')
+            continue
         ctype = _get_member_ctype(mvar)
         dims = _get_array_dims(mvar)
         if dims:
@@ -2780,22 +2793,27 @@ def _gen_opaque_tp_repr(typename, members, specializations=None,
             cimag_fn = 'npy_cimagf' if ctype == 'npy_cfloat' else 'npy_cimag'
             fmt_parts.append(f'{mname}=(%g+%gj)')
             val_args.append(
-                f'(double){creal_fn}(f2py_get_{sym}_{mname}(ptr))')
+                f'(double){creal_fn}(f2py_get_{sym}_{mname}'
+                f'(ptr{len_call_extra}))')
             val_args.append(
-                f'(double){cimag_fn}(f2py_get_{sym}_{mname}(ptr))')
+                f'(double){cimag_fn}(f2py_get_{sym}_{mname}'
+                f'(ptr{len_call_extra}))')
         elif ctype in ('float', 'double'):
             fmt_parts.append(f'{mname}=%g')
             val_args.append(
-                f'(double)f2py_get_{sym}_{mname}(ptr)')
+                f'(double)f2py_get_{sym}_{mname}(ptr{len_call_extra})')
         elif ctype in ('int',):
             fmt_parts.append(f'{mname}=%d')
-            val_args.append(f'f2py_get_{sym}_{mname}(ptr)')
+            val_args.append(
+                f'f2py_get_{sym}_{mname}(ptr{len_call_extra})')
         elif ctype in ('long',):
             fmt_parts.append(f'{mname}=%ld')
-            val_args.append(f'f2py_get_{sym}_{mname}(ptr)')
+            val_args.append(
+                f'f2py_get_{sym}_{mname}(ptr{len_call_extra})')
         elif ctype in ('long long',):
             fmt_parts.append(f'{mname}=%lld')
-            val_args.append(f'f2py_get_{sym}_{mname}(ptr)')
+            val_args.append(
+                f'f2py_get_{sym}_{mname}(ptr{len_call_extra})')
         else:
             continue
 

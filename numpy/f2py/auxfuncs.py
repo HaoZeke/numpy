@@ -716,9 +716,16 @@ def is_simple_derived_type(typeblock):
                         and all(str(d).strip() == ':' for d in dims)):
                     continue
             return False
-        # Arrays are allowed only if fixed-size
+        # Arrays are allowed only if fixed-size or LEN-sized
         if isarray(var) and not is_fixed_array(var):
-            return False
+            # Check if this is a LEN-parameterized array (F2018 7.5.3)
+            # whose dimensions reference LEN type parameters
+            dims = var.get('dimension', [])
+            len_params = {n for n, v in members.items()
+                          if 'len' in v.get('attrspec', [])}
+            if not all(str(d).strip().lower() in len_params
+                       for d in dims):
+                return False
     return has_data_members
 
 
