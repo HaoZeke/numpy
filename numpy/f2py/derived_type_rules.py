@@ -93,6 +93,7 @@ from ._dt_routines import (  # noqa: F401
     _get_wrappable_routines,
     _has_derived_type_args,
     _is_array_type_arg,
+    _scan_final_subroutines,
     _scan_type_bound_procedures,
     generate_fortran_wrappers,
     write_fortran_wrappers,
@@ -167,6 +168,16 @@ def buildhooks(pymod):
             _topo_visit(tb, type_blocks, type_map,
                         generated, gen_order)
 
+        # Collect all final subroutine names across types.
+        # These must be excluded from routine wrapping since they
+        # are called automatically during deallocation (F2018 7.5.6.3)
+        # and should not be exposed as Python-callable wrappers.
+        final_subroutine_names = set()
+        for tb in gen_order:
+            finals = _scan_final_subroutines(
+                source_file, tb['name'])
+            final_subroutine_names.update(finals)
+
         for tb in gen_order:
             typename = tb['name']
 
@@ -201,6 +212,13 @@ def buildhooks(pymod):
         # Process routines with derived type arguments
         if type_map:
             wrappable_routines = _get_wrappable_routines(m, type_map)
+            # Exclude final subroutines (F2018 7.5.6.1) from
+            # routine wrapping -- they run via deallocate, not
+            # as user-callable Python methods
+            wrappable_routines = [
+                routine for routine in wrappable_routines
+                if routine['name'].lower() not in final_subroutine_names
+            ]
             method_entries = []
             for routine in wrappable_routines:
                 rname = routine['name']

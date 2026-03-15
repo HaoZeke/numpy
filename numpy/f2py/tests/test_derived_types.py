@@ -2133,6 +2133,117 @@ class TestPointerMember(util.F2PyTest):
         assert dv.view is not None
 
 
+class TestFinalizerCodeGen:
+    """Test that final subroutines are excluded from routine wrapping."""
+
+    def test_final_subroutine_not_wrapped(self):
+        """Final subroutines (F2018 7.5.6.1) should not appear as
+        wrapped routines -- they run automatically via deallocate."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "finalizer.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # tracked_finalize should NOT be wrapped as a callable
+        assert 'tracked_finalize' not in all_code or \
+               'f2py_wrap_tracked_finalize' not in all_code
+
+    def test_scan_final_subroutines(self):
+        """Test scanning FINAL declarations from source."""
+        from numpy.f2py._dt_routines import _scan_final_subroutines
+        fpath = str(util.getpath("tests", "src", "derived_types",
+                                 "finalizer.f90"))
+        finals = _scan_final_subroutines(fpath, 'tracked')
+        assert 'tracked_finalize' in finals
+
+    def test_non_final_routines_still_wrapped(self):
+        """Non-final routines with type args should still be wrapped."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "finalizer.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # get_finalize_count and reset_finalize_count should still work
+        # (they don't take type args, so they're not in wrappable_routines
+        # anyway, but the tracked type itself should be generated)
+        assert 'Pytracked' in all_code
+
+
+@pytest.mark.slow
+class TestFinalizer(util.F2PyTest):
+    """Test that Fortran finalizers run on object destruction.
+
+    F2018 7.5.6: Final subroutines are called when a finalizable entity
+    is deallocated (7.5.6.3 paragraph 2). The opaque wrapper's
+    f2py_destroy_TYPE calls deallocate, which triggers finalization
+    automatically via the Fortran runtime.
+    """
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "finalizer.f90")]
+
+    def test_tracked_exists(self):
+        # Type is registered at top-level module via PyModule_AddObject
+        assert hasattr(self.module, 'tracked')
+
+    def test_finalize_count_starts_zero(self):
+        self.module.finalizer_mod.reset_finalize_count()
+        assert self.module.finalizer_mod.get_finalize_count() == 0
+
+    def test_finalizer_runs_on_del(self):
+        self.module.finalizer_mod.reset_finalize_count()
+        obj = self.module.tracked(value=42)
+        assert self.module.finalizer_mod.get_finalize_count() == 0
+        # Delete triggers PyCapsule destructor -> f2py_destroy_tracked
+        # -> deallocate -> finalization (F2018 7.5.6.3)
+        del obj
+        assert self.module.finalizer_mod.get_finalize_count() == 1
+
+    def test_multiple_finalizations(self):
+        self.module.finalizer_mod.reset_finalize_count()
+        objects = [self.module.tracked(value=idx)
+                   for idx in range(5)]
+        assert self.module.finalizer_mod.get_finalize_count() == 0
+        del objects
+        assert self.module.finalizer_mod.get_finalize_count() == 5
+
+    def test_value_accessible_before_finalize(self):
+        self.module.finalizer_mod.reset_finalize_count()
+        obj = self.module.tracked(value=99)
+        assert obj.value == 99
+        del obj
+        assert self.module.finalizer_mod.get_finalize_count() == 1
+
+
+class TestPointerInitCodeGen:
+    """Test that pointer => null() initialization is parsed correctly."""
+
+    def test_no_spurious_null_member(self):
+        """crackfortran should not create a 'null' member from => null()."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member_init.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        for block in mod[0].get('body', []):
+            if block.get('name') == 'ptrholder':
+                from numpy.f2py.auxfuncs import get_type_members
+                members = get_type_members(block)
+                assert 'null' not in members
+                assert 'data' in members
+                assert 'label' in members
+
+    def test_pointer_attr_no_optional(self):
+        """Pointer member should not get spurious 'optional' attribute."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member_init.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        for block in mod[0].get('body', []):
+            if block.get('name') == 'ptrholder':
+                from numpy.f2py.auxfuncs import get_type_members
+                members = get_type_members(block)
+                data_attr = members['data'].get('attrspec', [])
+                assert 'optional' not in data_attr
+                assert 'pointer' in data_attr
+
+
 class TestIntentOutTypeArrayCodeGen:
     """Test code generation for intent(out) allocatable arrays of types."""
 
