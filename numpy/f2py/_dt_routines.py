@@ -39,6 +39,7 @@ from ._dt_helpers import (
     _is_array_member,
     _is_pointer_member,
     _is_char_member,
+    _is_deferred_char_member,
     _is_type_array_member,
     _is_type_member,
 )
@@ -140,7 +141,8 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
             if (_is_array_member(mvar) or _is_type_member(mvar)
                     or _is_type_array_member(mvar) or _is_char_member(mvar)
                     or _is_allocatable_member(mvar)
-                    or _is_pointer_member(mvar)):
+                    or _is_pointer_member(mvar)
+                    or _is_deferred_char_member(mvar)):
                 continue  # arrays, nested types, chars, allocs, ptrs skip ctor
             isoc_type = _get_member_isoc_type(mvar)
             if isoc_type is None:
@@ -337,6 +339,114 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'      obj%{mname}(i:i) = buf(i)')
                 lines.append(f'    end do')
+                lines.append(
+                    f'  end subroutine f2py_set_{typename}_{mname}')
+                lines.append('')
+                continue
+
+            if _is_deferred_char_member(mvar):
+                # Deferred-length allocatable character
+                # F2018 7.4.4.2 paragraph 3: length determined at runtime
+
+                # _allocated: returns logical(c_bool)
+                # F2018 16.9.3: ALLOCATED intrinsic
+                lines.append(
+                    f'  function f2py_get_{typename}_{mname}'
+                    f'_allocated(cptr) '
+                    f'result(is_alloc) bind(c)')
+                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append(
+                    f'    logical(c_bool) :: is_alloc')
+                lines.append(
+                    f'    type({typename}), pointer :: obj')
+                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append(
+                    f'    is_alloc = allocated(obj%{mname})')
+                lines.append(
+                    f'  end function f2py_get_{typename}_{mname}'
+                    f'_allocated')
+                lines.append('')
+
+                # _len: returns integer(c_int) via len() intrinsic
+                # F2018 16.9.109: LEN intrinsic
+                lines.append(
+                    f'  function f2py_get_{typename}_{mname}'
+                    f'_len(cptr) '
+                    f'result(str_length) bind(c)')
+                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append(
+                    f'    integer(c_int) :: str_length')
+                lines.append(
+                    f'    type({typename}), pointer :: obj')
+                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append(
+                    f'    if (allocated(obj%{mname})) then')
+                lines.append(
+                    f'      str_length = len(obj%{mname})')
+                lines.append(f'    else')
+                lines.append(f'      str_length = 0')
+                lines.append(f'    end if')
+                lines.append(
+                    f'  end function f2py_get_{typename}_{mname}'
+                    f'_len')
+                lines.append('')
+
+                # getter: copies character into C buffer
+                lines.append(
+                    f'  subroutine f2py_get_{typename}_{mname}'
+                    f'(cptr, buf, buflen) bind(c)')
+                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append(
+                    f'    integer(c_int), value :: buflen')
+                lines.append(
+                    f'    character(c_char), intent(out) '
+                    f':: buf(buflen)')
+                lines.append(
+                    f'    type({typename}), pointer :: obj')
+                lines.append(
+                    f'    integer :: char_idx')
+                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append(
+                    f'    do char_idx = 1, '
+                    f'min(buflen, len(obj%{mname}))')
+                lines.append(
+                    f'      buf(char_idx) = '
+                    f'obj%{mname}(char_idx:char_idx)')
+                lines.append(f'    end do')
+                lines.append(
+                    f'  end subroutine f2py_get_{typename}_{mname}')
+                lines.append('')
+
+                # setter: deallocate, allocate with new length, copy
+                # F2018 9.7.1.1: ALLOCATE with character length
+                lines.append(
+                    f'  subroutine f2py_set_{typename}_{mname}'
+                    f'(cptr, buf, buflen) bind(c)')
+                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append(
+                    f'    integer(c_int), value :: buflen')
+                lines.append(
+                    f'    character(c_char), intent(in) '
+                    f':: buf(buflen)')
+                lines.append(
+                    f'    type({typename}), pointer :: obj')
+                lines.append(
+                    f'    integer :: char_idx')
+                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append(
+                    f'    if (allocated(obj%{mname})) '
+                    f'deallocate(obj%{mname})')
+                lines.append(f'    if (buflen > 0) then')
+                lines.append(
+                    f'      allocate(character(buflen) '
+                    f':: obj%{mname})')
+                lines.append(
+                    f'      do char_idx = 1, buflen')
+                lines.append(
+                    f'        obj%{mname}(char_idx:char_idx) '
+                    f'= buf(char_idx)')
+                lines.append(f'      end do')
+                lines.append(f'    end if')
                 lines.append(
                     f'  end subroutine f2py_set_{typename}_{mname}')
                 lines.append('')

@@ -672,11 +672,15 @@ def is_simple_derived_type(typeblock):
                 return False
             continue
         if typespec == 'character':
-            # Fixed-length character members are allowed
             cs = var.get('charselector', {})
             char_len = cs.get('len') or cs.get('*')
             if char_len is None:
                 return False
+            # Deferred-length allocatable characters are allowed
+            # (F2018 7.4.4.2 paragraph 3, character(:), allocatable)
+            if str(char_len).strip() == ':' and isallocatable(var):
+                continue
+            # Fixed-length character members are allowed
             try:
                 int(char_len)
             except (ValueError, TypeError):

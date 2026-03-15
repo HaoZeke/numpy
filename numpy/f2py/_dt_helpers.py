@@ -239,6 +239,23 @@ def _is_char_member(var):
     return var.get('typespec', '') == 'character' and _get_char_len(var) is not None
 
 
+def _is_deferred_char_member(var):
+    """Check if a member is a deferred-length allocatable character.
+
+    Deferred-length character components (F2018 7.4.4.2 paragraph 3)
+    use a colon for the length type parameter:
+        character(:), allocatable :: name
+    The length is determined at runtime when allocated.
+    """
+    if var.get('typespec', '') != 'character':
+        return False
+    if not isallocatable(var):
+        return False
+    char_selector = var.get('charselector', {})
+    char_len = char_selector.get('len') or char_selector.get('*')
+    return char_len is not None and str(char_len).strip() == ':'
+
+
 def _is_complex_member(var):
     """Check if a member is a complex scalar (not array)."""
     ctype = _get_member_ctype(var)
@@ -316,6 +333,8 @@ def _can_wrap_bindc(typeblock, type_map=None):
                 return False
         elif _is_char_member(var):
             continue
+        elif _is_deferred_char_member(var):
+            continue
         elif _is_allocatable_member(var):
             continue
         elif _is_pointer_member(var):
@@ -346,6 +365,8 @@ def _can_wrap_opaque(typeblock, type_map=None):
             if type_map is None or inner not in type_map:
                 return False
         elif _is_char_member(var):
+            continue
+        elif _is_deferred_char_member(var):
             continue
         elif _is_allocatable_member(var):
             continue
