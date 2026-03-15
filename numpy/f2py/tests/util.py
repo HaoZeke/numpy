@@ -121,6 +121,34 @@ def has_fortran_compiler():
     return (checker.has_f90 and checker.has_f77)
 
 
+_pdt_support = None
+
+
+def has_pdt_support():
+    """Check if the Fortran compiler supports parameterized derived types.
+
+    PDTs (F2003/F2008) are not supported by flang-new (LLVM Flang).
+    Uses a try-compile check via meson, cached after first call.
+    """
+    global _pdt_support
+    if _pdt_support is not None:
+        return _pdt_support
+    if not has_f90_compiler():
+        _pdt_support = False
+        return False
+    pdt_code = (
+        'module pdt_check\n'
+        '  implicit none\n'
+        '  type :: vec(k)\n'
+        '    integer, kind :: k = kind(0.0d0)\n'
+        '    real(k) :: x\n'
+        '  end type vec\n'
+        'end module pdt_check\n'
+    )
+    _pdt_support = check_language('fortran', pdt_code)
+    return _pdt_support
+
+
 #
 # Maintaining a temporary module directory
 #

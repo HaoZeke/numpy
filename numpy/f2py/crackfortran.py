@@ -582,7 +582,7 @@ beforethisafter = r'\s*(?P<before>%s(?=\s*(\b(%s)\b)))'\
     r'\s*(?P<this>(\b(%s)\b))'\
     r'\s*(?P<after>%s)\s*\Z'
 ##
-fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|class(?=\s*\([\w\s,=(*)]*\))|byte'
+fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*).+-]*\))|class(?=\s*\([\w\s,=(*).+-]*\))|byte'
 typespattern = re.compile(
     beforethisafter % ('', fortrantypes, fortrantypes, '.*'), re.I), 'type'
 typespattern4implicit = re.compile(beforethisafter % (
@@ -951,7 +951,6 @@ def _is_intent_callback(vdecl):
 def _resolvetypedefpattern(line):
     line = ''.join(line.split())  # removes whitespace
     m1 = typedefpattern.match(line)
-    print(line, m1)
     if m1:
         attrs = m1.group('attributes')
         attrs = [a.lower() for a in attrs.split(',')] if attrs else []
@@ -1887,7 +1886,9 @@ def cracktypespec(typespec, selector):
             for k, i in list(charselect.items()):
                 charselect[k] = rmbadname1(i)
         elif typespec == 'type':
-            typename = re.match(r'\s*\(\s*(?P<name>\w+)\s*\)', selector, re.I)
+            # Match type(Name) or type(Name(params)) for parameterized types
+            typename = re.match(r'\s*\(\s*(?P<name>\w+)\s*(\(.*\))?\s*\)',
+                                selector, re.I)
             if typename:
                 typename = typename.group('name')
             else:
