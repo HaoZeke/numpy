@@ -1,29 +1,26 @@
 .. _f2py-skbuild:
 
-============================
-Using via ``scikit-build``
-============================
+========================================================
+Distributing F2PY extensions with ``scikit-build-core``
+========================================================
 
-``scikit-build`` provides two separate concepts geared towards the users of Python extension modules.
-
-1. A ``setuptools`` replacement (legacy behaviour)
-2. A series of ``cmake`` modules with definitions which help building Python extensions
+``scikit-build-core`` is a build backend that drives ``CMake`` from a
+``pyproject.toml`` file, producing wheels and sdists without ``setup.py``.
+It also ships ``CMake`` modules that simplify building Python extensions.
 
 .. note::
 
-   It is possible to use ``scikit-build``'s ``cmake`` modules to `bypass the
-   cmake setup mechanism`_ completely, and to write targets which call ``f2py
-   -c``. This usage is **not recommended** since the point of these build system
-   documents are to move away from the internal ``numpy.distutils`` methods.
+   The legacy ``scikit-build`` package (which wrapped ``setuptools``) is
+   superseded by ``scikit-build-core``. The examples in the ``setuptools``
+   replacement section below reflect the old workflow for reference only.
 
-For situations where no ``setuptools`` replacements are required or wanted (i.e.
-if ``wheels`` are not needed), it is recommended to instead use the vanilla
-``cmake`` setup described in :ref:`f2py-cmake`.
+If you do not need wheel packaging and just want to call ``CMake`` directly,
+use the plain ``CMake`` setup described in :ref:`f2py-cmake`.
 
 Fibonacci walkthrough (F77)
 ===========================
 
-We will consider the ``fib``  example from :ref:`f2py-getting-started` section.
+We use the ``fib`` example from :ref:`f2py-getting-started`.
 
 .. literalinclude:: ./../code/fib1.f
     :language: fortran
@@ -31,14 +28,14 @@ We will consider the ``fib``  example from :ref:`f2py-getting-started` section.
 ``CMake`` modules only
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Consider using the following ``CMakeLists.txt``.
+The following ``CMakeLists.txt`` uses ``scikit-build-core``'s CMake modules
+directly:
 
 .. literalinclude:: ./../code/CMakeLists_skbuild.txt
    :language: cmake
 
-Much of the logic is the same as in :ref:`f2py-cmake`, however notably here the
-appropriate module suffix is generated via ``sysconfig.get_config_var("SO")``.
-The resulting extension can be built and loaded in the standard workflow.
+The logic mirrors :ref:`f2py-cmake`, but here the module suffix comes from
+``sysconfig.get_config_var("SO")``. Build and load the extension as usual:
 
 .. code:: bash
 
@@ -51,34 +48,29 @@ The resulting extension can be built and loaded in the standard workflow.
     # [ 0.  1.  1.  2.  3.  5.  8. 13. 21.]
 
 
-``setuptools`` replacement
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+``setuptools`` replacement (legacy)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. note::
 
-   **As of November 2021**
+   The ``setup.py``-driven workflow below uses the legacy ``scikit-build``
+   package and should not be depended on for new projects. Prefer
+   ``scikit-build-core`` with a ``pyproject.toml``-only configuration.
 
-   The behavior described here of driving the ``cmake`` build of a module is
-   considered to be legacy behaviour and should not be depended on.
-
-The utility of ``scikit-build`` lies in being able to drive the generation of
-more than extension modules, in particular a common usage pattern is the
-generation of Python distributables (for example for PyPI).
-
-The workflow with ``scikit-build`` straightforwardly supports such packaging requirements. Consider augmenting the project with a ``setup.py`` as defined:
+The legacy ``scikit-build`` package could drive ``CMake`` through
+``setuptools``, producing wheels for PyPI. The project needed a ``setup.py``:
 
 .. literalinclude:: ./../code/setup_skbuild.py
    :language: python
 
-Along with a commensurate ``pyproject.toml``
+Along with a matching ``pyproject.toml``:
 
 .. literalinclude:: ./../code/pyproj_skbuild.toml
    :language: toml
 
-Together these can build the extension using ``cmake`` in tandem with other
-standard ``setuptools`` outputs. Running ``cmake`` through ``setup.py`` is
-mostly used when it is necessary to integrate with extension modules not built
-with ``cmake``.
+Together these build the extension using ``CMake`` alongside standard
+``setuptools`` outputs. This pattern was mostly used to integrate with
+extension modules not built with ``CMake``.
 
 .. code:: bash
 
@@ -88,7 +80,7 @@ with ``cmake``.
     python -c "import numpy as np; import fibby.fibby; a = np.zeros(9); fibby.fibby.fib(a); print (a)"
     # [ 0.  1.  1.  2.  3.  5.  8. 13. 21.]
 
-Where we have modified the path to the module as ``--inplace`` places the
-extension module in a subfolder.
+The module path differs here because ``--inplace`` places the extension in a
+subfolder.
 
 .. _bypass the cmake setup mechanism: https://scikit-build.readthedocs.io/en/latest/cmake-modules/F2PY.html

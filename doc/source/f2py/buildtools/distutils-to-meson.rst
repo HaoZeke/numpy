@@ -1,23 +1,24 @@
 .. _f2py-meson-distutils:
 
-
-1 Migrating to ``meson``
-------------------------
+================================================
+Migrating from ``distutils`` to ``meson``
+================================================
 
 As per the timeline laid out in :ref:`distutils-status-migration`,
-``distutils`` has been removed. This page collects common workflows.
+``distutils`` has been removed. This page collects common ``meson``-based
+workflows that replace the old ``distutils`` patterns.
 
 .. note::
 
-    This is a **living** document, `pull requests <https://numpy.org/doc/stable/dev/howto-docs.html>`_ are very welcome!
+    Contributions welcome via
+    `pull requests <https://numpy.org/doc/stable/dev/howto-docs.html>`_.
 
-1.1 Baseline
-~~~~~~~~~~~~
+Baseline
+--------
 
-We will start out with a slightly modern variation of the classic Fibonnaci
-series generator.
+The examples below use a Fibonacci series generator with ``iso_c_binding``:
 
-.. code:: fortran
+.. code-block:: fortran
 
     ! fib.f90
     subroutine fib(a, n)
@@ -35,44 +36,40 @@ series generator.
        end do
     end
 
-This will not win any awards, but can be a reasonable starting point.
+Compilation options
+-------------------
 
-1.2 Compilation options
-~~~~~~~~~~~~~~~~~~~~~~~
+Basic usage
+~~~~~~~~~~~
 
-1.2.1 Basic Usage
-^^^^^^^^^^^^^^^^^
-
-.. code:: bash
+.. code-block:: bash
 
     python -m numpy.f2py -c fib.f90 -m fib
-    ❯ python -c "import fib; print(fib.fib(30))"
-    [     0      1      1      2      3      5      8     13     21     34
-         55     89    144    233    377    610    987   1597   2584   4181
-       6765  10946  17711  28657  46368  75025 121393 196418 317811 514229]
+    python -c "import fib; print(fib.fib(30))"
+    # [     0      1      1      2      3      5      8     13     21     34
+    #       55     89    144    233    377    610    987   1597   2584   4181
+    #     6765  10946  17711  28657  46368  75025 121393 196418 317811 514229]
 
-1.2.2 Specify the backend
-^^^^^^^^^^^^^^^^^^^^^^^^^
+Specify the backend
+~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
   python -m numpy.f2py -c fib.f90 -m fib
 
-This is the only option. There used to be a ``distutils`` backend but it was
-removed in NumPy2.5.0.
+``meson`` is the only backend. The ``distutils`` backend was removed in
+NumPy 2.5.0.
 
-1.2.3 Pass a compiler name
-^^^^^^^^^^^^^^^^^^^^^^^^^^
+Pass a compiler name
+~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
   FC=gfortran python -m numpy.f2py -c fib.f90 -m fib
 
-Native files can also be used.
-
-Similarly, ``CC`` can be used in both cases to set the ``C`` compiler. Since the
-environment variables are generally pretty common across both, so a small
-sample is included below.
+`Meson native files <https://mesonbuild.com/Native-environments.html>`_ can
+also be used. ``CC`` sets the C compiler in the same way. The table below
+lists the recognized environment variables.
 
 .. table::
 
@@ -103,37 +100,40 @@ sample is included below.
 
 .. note::
 
-    For Windows, these may not work very reliably, so `native files <https://mesonbuild.com/Native-environments.html>`_ are likely the
-    best bet, or by direct `1.3 Customizing builds`_.
+    On Windows, environment variables may not propagate reliably.
+    Use `native files <https://mesonbuild.com/Native-environments.html>`_
+    or direct build customization (see `Customizing builds`_ below) instead.
 
-1.2.4 Dependencies
-^^^^^^^^^^^^^^^^^^
+Dependencies
+~~~~~~~~~~~~
 
 .. code-block:: bash
 
   python -m numpy.f2py -c fib.f90 -m fib --dep lapack
 
-This maps to ``dependency("lapack")`` and so can be used for a wide variety
-of dependencies. They can be `customized further <https://mesonbuild.com/Dependencies.html>`_
-to use CMake or other systems to resolve dependencies.
+This maps to ``dependency("lapack")`` in the generated ``meson.build`` and
+works for any dependency that meson can resolve. See the
+`meson dependency documentation <https://mesonbuild.com/Dependencies.html>`_
+for CMake-based and other resolution methods.
 
-1.2.5 Libraries
-^^^^^^^^^^^^^^^
+Libraries
+~~~~~~~~~
 
-``meson`` is capable of linking against libraries.
+To link against additional libraries:
 
 .. code-block:: bash
 
   python -m numpy.f2py -c fib.f90 -m fib -lmylib -L/path/to/mylib
 
-1.3 Customizing builds
-~~~~~~~~~~~~~~~~~~~~~~
+Customizing builds
+------------------
 
 .. code-block:: bash
 
   python -m numpy.f2py -c fib.f90 -m fib --build-dir blah
 
-The resulting build can be customized via the
-`Meson Build How-To Guide <https://mesonbuild.com/howtox.html>`_.
-In fact, the resulting set of files can even be committed directly and used
-as a meson subproject in a separate codebase.
+The ``--build-dir`` flag writes the generated ``meson.build`` and wrapper
+sources to the specified directory. From there, standard meson customization
+applies; see the `Meson Build How-To Guide <https://mesonbuild.com/howtox.html>`_.
+The generated files can also be committed and used as a meson subproject in a
+larger codebase.

@@ -4,14 +4,13 @@
 F2PY and PGI Fortran on Windows
 ===============================
 
-A variant of these are part of the so called "classic" Flang, however, 
-as classic Flang requires a custom LLVM and compilation from sources.
+A variant of these compilers forms the "classic" Flang, which requires a
+custom LLVM build and compilation from source.
 
 .. warning::
 
-	Since the proprietary compilers are no longer available for
-	usage they are not recommended and will not be ported to the
-	new ``f2py`` CLI. 
+	The proprietary compilers are no longer available and will not
+	be ported to the new ``f2py`` CLI.
 	
 
 

@@ -4,7 +4,7 @@
 F2PY and Windows with MSYS2
 ===========================
 
-Follow the standard `installation instructions`_. Then, to grab the requisite Fortran compiler with ``MVSC``:
+Follow the standard `installation instructions`_. Then install the Fortran compiler alongside ``MSVC``:
 
 .. code-block:: bash
 

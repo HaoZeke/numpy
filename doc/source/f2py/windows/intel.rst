@@ -8,27 +8,25 @@ As of NumPy 1.23, only the classic Intel compilers (``ifort``) are supported.
 
 .. note::
 
-	The licensing restrictions for beta software `have been relaxed`_ during
-	the transition to the LLVM backed ``ifx/icc`` family of compilers.
-	However this document does not endorse the usage of Intel in downstream
-	projects due to the issues pertaining to `disassembly of components and
-	liability`_.
-	
+	Licensing restrictions for beta software `have been relaxed`_ during
+	the transition to the LLVM-backed ``ifx``/``icx`` family of compilers.
+	This document does not endorse Intel compilers in downstream projects
+	due to `disassembly of components and liability`_ concerns.
+
 	Neither the Python Intel installation nor the `Classic Intel C/C++
 	Compiler` are required.
 
 - The `Intel Fortran Compilers`_ come in a combined installer providing both
   Classic and Beta versions; these also take around a gigabyte and a half or so.
 
-We will consider the classic example of the generation of Fibonnaci numbers,
-``fib1.f``, given by:
+Consider the Fibonacci example ``fib1.f``:
 
 .. literalinclude:: ../code/fib1.f
    :language: fortran
 
-For ``cmd.exe`` fans, using the Intel oneAPI command prompt is the easiest approach, as
-it loads the required environment for both ``ifort`` and ``msvc``. Helper batch
-scripts are also provided.
+Using ``cmd.exe``, the Intel oneAPI command prompt is the simplest approach; it
+loads the environment for both ``ifort`` and ``msvc``. Helper batch scripts are
+also provided.
 
 .. code-block:: bat
 
@@ -37,7 +35,7 @@ scripts are also provided.
    python -m numpy.f2py -c fib1.f -m fib1
    python -c "import fib1; import numpy as np; a=np.zeros(8); fib1.fib(a); print(a)"
 
-Powershell usage is a little less pleasant, and this configuration now works with MSVC as:
+For PowerShell, the configuration works with MSVC as follows:
 
 .. code-block:: powershell
 
@@ -49,7 +47,7 @@ Powershell usage is a little less pleasant, and this configuration now works wit
    python -m numpy.f2py -c fib1.f -m fib1
    python -c "import fib1; import numpy as np; a=np.zeros(8); fib1.fib(a); print(a)"
 
-Note that the actual path to your local installation of `ifort` may vary, and the command above will need to be updated accordingly.
+The actual path to ``ifort`` may vary; update the commands accordingly.
 
 .. _have been relaxed: https://www.intel.com/content/www/us/en/developer/articles/release-notes/oneapi-fortran-compiler-release-notes.html
 .. _disassembly of components and liability: https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html

@@ -1,36 +1,34 @@
 .. _f2py-meson:
 
-===================
-Using via ``meson``
-===================
+=========================================
+Building an extension with ``meson``
+=========================================
 
 .. note::
 
-   Much of this document is now obsoleted, one can run ``f2py`` with
-   ``--build-dir`` to get a skeleton ``meson`` project with basic dependencies
-   setup.
+   Much of this page is obsoleted by ``f2py --build-dir``, which generates a
+   skeleton ``meson`` project with dependencies already configured.
 
 .. versionchanged:: 1.26.x
 
-   The default build system for ``f2py`` is now ``meson``, see
-   :ref:`distutils-status-migration` for some more details..
+   The default build system for ``f2py`` is ``meson``. See
+   :ref:`distutils-status-migration` for details.
 
 Fibonacci walkthrough (F77)
 ===========================
 
-We will need the generated ``C`` wrapper before we can use a general purpose
-build system like ``meson``. We will acquire this by:
+Generate the ``C`` wrapper first:
 
 .. code-block:: bash
 
     python -m numpy.f2py fib1.f -m fib2
 
-Now, consider the following ``meson.build`` file for the ``fib`` and ``scalar``
-examples from :ref:`f2py-getting-started` section:
+The following ``meson.build`` file covers the ``fib`` and ``scalar`` examples
+from :ref:`f2py-getting-started`:
 
 .. literalinclude:: ../code/meson.build
 
-At this point the build will complete, but the import will fail:
+The build will complete, but the import fails:
 
 .. code-block:: bash
 
@@ -45,14 +43,13 @@ At this point the build will complete, but the import will fail:
    nm -A fib2.cpython-39-x86_64-linux-gnu.so | grep FIB_
    fib2.cpython-39-x86_64-linux-gnu.so: U FIB_
 
-Recall that the original example, as reproduced below, was in SCREAMCASE:
+The original Fortran source uses SCREAMCASE:
 
 .. literalinclude:: ./../code/fib1.f
    :language: fortran
 
-With the standard approach, the subroutine exposed to ``python`` is ``fib`` and
-not ``FIB``. This means we have a few options. One approach (where possible) is
-to lowercase the original Fortran file with say:
+The subroutine exposed to ``python`` is ``fib``, not ``FIB``. One fix is to
+lowercase the source file:
 
 .. code-block:: bash
 
@@ -63,8 +60,8 @@ to lowercase the original Fortran file with say:
    cd builddir
    python -c 'import fib2'
 
-However this requires the ability to modify the source which is not always
-possible. The easiest way to solve this is to let ``f2py`` deal with it:
+When modifying the source is not an option, pass ``--lower`` to ``f2py``
+instead:
 
 .. code-block:: bash
 
@@ -78,23 +75,22 @@ possible. The easiest way to solve this is to let ``f2py`` deal with it:
 Automating wrapper generation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A major pain point in the workflow defined above, is the manual tracking of
-inputs. Although it would require more effort to figure out the actual outputs
-for reasons discussed in :ref:`f2py-bldsys`.
+The workflow above requires manual tracking of inputs. Determining the actual
+outputs requires more effort, for reasons discussed in :ref:`f2py-bldsys`.
 
 .. note::
 
-   From NumPy ``1.22.4`` onwards, ``f2py`` will deterministically generate
-   wrapper files based on the input file Fortran standard (F77 or greater).
-   ``--skip-empty-wrappers`` can be passed to ``f2py`` to restore the previous
-   behaviour of only generating wrappers when needed by the input .
+   From NumPy ``1.22.4`` onwards, ``f2py`` deterministically generates wrapper
+   files based on the input file Fortran standard (F77 or greater).
+   ``--skip-empty-wrappers`` restores the previous behaviour of only generating
+   wrappers when the input requires them.
 
-However, we can augment our workflow in a straightforward to take into account
-files for which the outputs are known when the build system is set up.
+We can augment the build to account for files whose outputs are known at
+configuration time:
 
 .. literalinclude:: ../code/meson_upd.build
 
-This can be compiled and run as before.
+Compile and run as before:
 
 .. code-block:: bash
 
@@ -108,9 +104,6 @@ This can be compiled and run as before.
 Salient points
 ===============
 
-It is worth keeping in mind the following:
-
-* It is not possible to use SCREAMCASE in this context, so either the contents
-  of the ``.f`` file or the generated wrapper ``.c`` needs to be lowered to
-  regular letters; which can be facilitated by the ``--lower`` option of
-  ``F2PY``
+* SCREAMCASE symbols are not resolved automatically. Either lowercase the
+  ``.f`` source or lowercase the generated ``.c`` wrapper. The ``--lower``
+  option of ``F2PY`` handles this.

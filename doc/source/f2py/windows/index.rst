@@ -6,7 +6,7 @@ F2PY and Windows
 
 .. warning::
 
-   F2PY support for Windows is not always at par with Linux support
+   F2PY support on Windows is not always on par with Linux support.
 
 .. note::
    `SciPy's documentation`_ has some information on system-level dependencies
@@ -17,8 +17,8 @@ Broadly speaking, there are two issues working with F2PY on Windows:
 - the lack of actively developed FOSS Fortran compilers, and,
 - the linking issues related to the C runtime library for building Python-C extensions.
 
-The focus of this section is to establish a guideline for developing and
-extending Fortran modules for Python natively, via F2PY on Windows.
+This section provides a guide for building and extending Fortran modules for
+Python natively via F2PY on Windows.
 
 Currently supported toolchains are:
 
@@ -30,24 +30,19 @@ Currently supported toolchains are:
 Overview
 ========
 
-From a user perspective, the most UNIX compatible Windows
-development environment is through emulation, either via the Windows Subsystem
-on Linux, or facilitated by Docker. In a similar vein, traditional
-virtualization methods like VirtualBox are also reasonable methods to develop
-UNIX tools on Windows.
+From a user perspective, the most UNIX-compatible Windows development
+environment comes through emulation: the Windows Subsystem for Linux (WSL) or
+Docker. Traditional virtualization (e.g. VirtualBox) also works.
 
-Native Windows support is typically stunted beyond the usage of commercial compilers.
-However, as of 2022, most commercial compilers have free plans which are sufficient for
-general use. Additionally, the Fortran language features supported by ``f2py``
-(partial coverage of Fortran 2003), means that newer toolchains are often not
-required. Briefly, then, for an end user, in order of use:
+Native Windows support is limited outside of commercial compilers. As of 2022,
+most commercial compilers offer free plans sufficient for general use. Since
+``f2py`` covers only a subset of Fortran 2003, newer toolchains are often
+unnecessary. In order of recommended use:
 
 Classic Intel Compilers (commercial)
-   These are maintained actively, though licensing restrictions may apply as
-   further detailed in :ref:`f2py-win-intel`.
-
-   Suitable for general use for those building native Windows programs by
-   building off of MSVC.
+   Actively maintained; licensing restrictions may apply as detailed in
+   :ref:`f2py-win-intel`. Suitable for building native Windows programs
+   against MSVC.
 
 MSYS2 (FOSS)
    In conjunction with the ``mingw-w64`` project, ``gfortran`` and ``gcc``
@@ -67,22 +62,22 @@ PGI Compilers (commercial)
    Windows support`_.
 
 Cygwin (FOSS)
-   Can also be used for ``gfortran``. However, the POSIX API compatibility layer provided by
-   Cygwin is meant to compile UNIX software on Windows, instead of building
-   native Windows programs. This means cross compilation is required.
+   Provides ``gfortran``, but its POSIX compatibility layer targets compiling
+   UNIX software on Windows rather than building native Windows programs.
+   Cross compilation is required.
 
 Intel oneAPI
    The newer Intel compilers (``ifx``, ``icx``) are based on LLVM and can be
    used for native compilation. Licensing requirements can be onerous.
 
 Classic Flang (FOSS)
-   The backbone of the PGI compilers were cannibalized to form the "classic" or
-   `legacy version of Flang`_. This may be compiled from source and used
+   The PGI compiler codebase was repurposed into the "classic" or
+   `legacy version of Flang`_. It can be compiled from source and used
    natively. `LLVM Flang`_ does not support Windows yet (30-01-2022).
    
 LFortran (FOSS)
-   One of two LLVM based compilers. Not all of F2PY supported Fortran can be
-   compiled yet (30-01-2022) but uses MSVC for native linking.
+   One of two LLVM-based compilers. Not all F2PY-supported Fortran can be
+   compiled yet (30-01-2022), but it uses MSVC for native linking.
 
 
 Baseline
@@ -98,8 +93,7 @@ For this document we will assume the following basic tools:
    ``C:\Users\$USERNAME\AppData\Local\Microsoft\WindowsApps\python.exe``
 - The Microsoft Visual C++ (MSVC) toolset
 
-With this baseline configuration, we will further consider a configuration
-matrix as follows:
+With this baseline, the following configuration matrix applies:
 
 .. _table-f2py-winsup-mat:
 
@@ -119,28 +113,27 @@ matrix as follows:
   | Anaconda GFortran    | Anaconda GCC       | exe               |
   +----------------------+--------------------+-------------------+
 
-For an understanding of the key issues motivating the need for such a matrix
-`Pauli Virtanen's in-depth post on wheels with Fortran for Windows`_ is an
-excellent resource. An entertaining explanation of an application binary
-interface (ABI) can be found in this post by `JeanHeyd Meneide`_. 
+For background on the issues motivating this matrix, see
+`Pauli Virtanen's in-depth post on wheels with Fortran for Windows`_. For an
+accessible explanation of application binary interfaces (ABI), see the post by
+`JeanHeyd Meneide`_.
 
 PowerShell and MSVC
 ====================
 
-MSVC is installed either via the Visual Studio Bundle or the lighter (preferred)
+Install MSVC either via the Visual Studio Bundle or the lighter (preferred)
 `Build Tools for Visual Studio`_ with the ``Desktop development with C++``
-setting.
+workload.
 
 .. note::
    
-  This can take a significant amount of time as it includes a download of around
-  2GB and requires a restart.
+  This download is around 2 GB and requires a restart.
 
-It is possible to use the resulting environment from a `standard command
-prompt`_. However, it is more pleasant to use a `developer powershell`_,
-with a `profile in Windows Terminal`_. This can be achieved by adding the
-following block to the ``profiles->list`` section of the JSON file used to 
-configure Windows Terminal (see ``Settings->Open JSON file``):
+The resulting environment can be used from a `standard command prompt`_.
+A more convenient option is a `developer powershell`_ with a
+`profile in Windows Terminal`_. Add the following block to the
+``profiles->list`` section of the Windows Terminal JSON configuration
+(``Settings -> Open JSON file``):
 
 .. code-block:: json
 
@@ -150,7 +143,7 @@ configure Windows Terminal (see ``Settings->Open JSON file``):
   "icon": "ms-appx:///ProfileIcons/{61c54bbd-c2c6-5271-96e7-009a87ff44bf}.png"
   }
 
-Now, testing the compiler toolchain could look like:
+Test the compiler toolchain:
 
 .. code-block:: powershell
 
@@ -170,15 +163,14 @@ Now, testing the compiler toolchain could look like:
    # Hi
    rm blah.cpp
 
-It is also possible to check that the environment has been updated correctly
-with ``$ENV:PATH``.
+Verify the environment with ``$ENV:PATH``.
 
 
 Microsoft Store Python paths
 ============================
 
-The MS Windows version of Python discussed here installs to a non-deterministic
-path using a hash. This needs to be added to the ``PATH`` variable.
+The Microsoft Store version of Python installs to a non-deterministic path
+containing a hash. Add it to the ``PATH`` variable:
 
 .. code-block:: powershell
 

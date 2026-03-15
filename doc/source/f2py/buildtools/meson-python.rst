@@ -4,51 +4,44 @@
 Distributing F2PY extensions with ``meson-python``
 =====================================================
 
-The :ref:`f2py-meson` page covers building F2PY extensions using raw ``meson``
-commands. This page shows how to package those extensions into installable
-Python distributions (sdists and wheels) using `meson-python
-<https://meson-python.readthedocs.io/>`_ as the PEP 517 build backend.
+This tutorial produces an installable Python wheel from a Fortran subroutine
+using `meson-python <https://meson-python.readthedocs.io/>`_ as the build
+backend.  At the end you will have:
 
-This is the recommended approach for distributing F2PY-wrapped Fortran code as a
-Python package on PyPI or for local ``pip install`` workflows.
+.. code-block:: python
 
-.. note::
+   >>> from fib_wrapper import fib
+   >>> fib(10)
+   array([ 0,  1,  1,  2,  3,  5,  8, 13, 21, 34], dtype=int32)
 
-   ``meson-python`` replaced ``setuptools`` / ``numpy.distutils`` as the
-   standard way to build and distribute compiled extensions in the NumPy and
-   SciPy ecosystem. See :ref:`distutils-status-migration` for background.
+``meson-python`` is the recommended way to distribute F2PY extensions.
+NumPy and SciPy use the same build system.
+See :ref:`distutils-status-migration` for migration background.
 
 Prerequisites
 =============
 
-You need:
-
 * A C compiler
 * A Fortran compiler (``gfortran``, ``ifort``, ``ifx``, ``flang-new``, etc.),
-  if you use any Fortran code in your package
+  if your package includes Fortran source
 * Python >= 3.10
-* ``meson``, ``meson-python``, and ``numpy`` (installed automatically during the
-  build when listed in ``build-system.requires``)
+* ``meson``, ``meson-python``, and ``numpy`` (pulled in automatically during
+  the build via ``build-system.requires``)
 
-Minimal example
-===============
+Project layout
+==============
 
-The project below wraps a Fortran ``fib`` subroutine into an importable Python
-package called ``fib_wrapper``.
+Create the following four files::
 
-Project layout::
-
-    fib_wrapper/           # project root
+    fib_project/           # project root
     ├── fib.f90            # Fortran source
     ├── fib_wrapper/       # Python package directory
     │   └── __init__.py
     ├── meson.build
     └── pyproject.toml
 
-Fortran source
---------------
-
-Save the following as ``fib.f90``:
+Fortran source (``fib.f90``)
+-----------------------------
 
 .. literalinclude:: ../code/fib_mesonpy.f90
    :language: fortran
@@ -59,12 +52,9 @@ Save the following as ``fib.f90``:
 .. literalinclude:: ../code/pyproj_mesonpy.toml
    :language: toml
 
-Two entries matter here:
-
-* ``build-backend = "mesonpy"`` tells build frontends to use ``meson-python``.
-* ``requires`` lists build-time dependencies. ``numpy >= 2.0`` is required so
-  that ``f2py``, the NumPy headers, and ``dependency('numpy')`` support in Meson
-  are available during compilation.
+``build-backend = "mesonpy"`` selects ``meson-python`` as the PEP 517 backend.
+``numpy >= 2.0`` is required because ``dependency('numpy')`` support in Meson
+and the current ``f2py`` code generation both need it.
 
 ``meson.build``
 ---------------
@@ -73,68 +63,58 @@ Two entries matter here:
 
 .. note::
 
-   The file is stored as ``meson_mesonpy.build`` in the documentation source
-   tree to avoid collisions with other examples. In your project, name it
+   This file is stored as ``meson_mesonpy.build`` in the documentation source
+   tree to avoid collisions with other examples.  In your project, name it
    ``meson.build``.
 
-The ``meson.build`` file does four things:
+The file:
 
-1. Uses ``dependency('numpy')`` to locate NumPy headers, and a
-   ``declare_dependency`` to add the F2PY include directory (for
-   ``fortranobject.h``).
-2. Runs ``f2py`` via ``custom_target`` to generate the C wrapper sources.
+1. Locates NumPy headers via ``dependency('numpy')`` and adds the F2PY include
+   directory (``fortranobject.h``) with ``declare_dependency``.
+2. Runs ``f2py`` via ``custom_target`` to generate C wrapper sources.
 3. Compiles the generated C code together with the Fortran source into a Python
-   extension module using ``py.extension_module``.
-4. Installs ``__init__.py`` into the package directory so the result is a proper
-   Python package.
+   extension module (``py.extension_module``).
+4. Installs ``__init__.py`` into the package directory.
 
-The ``subdir: 'fib_wrapper'`` argument on the extension module is required so
-that the compiled ``fib`` shared library is installed inside the ``fib_wrapper/``
-package directory, next to ``__init__.py``. Without it the extension would
-be installed at the top level and ``import fib_wrapper`` would not find the
-``fib`` extension. The resulting installed layout is::
+The ``subdir: 'fib_wrapper'`` argument places the compiled extension inside the
+``fib_wrapper/`` package directory, next to ``__init__.py``.  Without it the
+extension lands at the top level and ``import fib_wrapper`` cannot find it.
+The installed layout::
 
     site-packages/
     └── fib_wrapper/
         ├── __init__.py        # from .fib import fib
         └── fib.cpython-*.so   # compiled extension module
 
-``__init__.py``
----------------
-
-A minimal ``__init__.py`` re-exports the wrapped function:
+``fib_wrapper/__init__.py``
+----------------------------
 
 .. code-block:: python
 
    from .fib import fib
 
-Building and installing
-=======================
+Build the wheel
+===============
 
-Editable install (development)
-------------------------------
+.. code-block:: bash
+
+   # Install pypa/build if you don't have it: pip install build
+   python -m build --wheel
+
+The ``.whl`` file in ``dist/`` can be uploaded to PyPI or installed locally
+with ``pip install dist/fib_wrapper-0.1.0-*.whl``.
+
+For development iteration, an editable install avoids repeated wheel builds:
 
 .. code-block:: bash
 
    pip install --no-build-isolation --editable .
 
-``--no-build-isolation`` reuses the current environment, which is useful when
-iterating. This requires ``meson-python``, ``meson``, ``ninja``, and ``numpy``
-to already be installed.
+This reuses the current environment and requires ``meson-python``, ``meson``,
+``ninja``, and ``numpy`` to already be installed.
 
-Building a wheel
-----------------
-
-.. code-block:: bash
-
-   # If you don't yet have `pypa/build` installed: `pip install build`
-   python -m build --wheel
-
-The resulting ``.whl`` file in ``dist/`` can be uploaded to PyPI, or installed
-elsewhere with ``pip install dist/fib_wrapper-0.1.0-*.whl``.
-
-Verifying the install
----------------------
+Verify
+======
 
 .. code-block:: python
 
@@ -142,19 +122,17 @@ Verifying the install
    >>> fib(10)
    array([ 0,  1,  1,  2,  3,  5,  8, 13, 21, 34], dtype=int32)
 
-Customizing the Fortran compiler
-================================
+Selecting a Fortran compiler
+=============================
 
-``meson-python`` delegates compiler selection to ``meson``. By default,
-``meson`` will choose the first Fortran compiler it finds on the PATH.
-If you want more control over Fortran compiler selection, set the ``FC``
-environment variable before building:
+By default ``meson`` picks the first Fortran compiler on ``PATH``.
+Set ``FC`` to override:
 
 .. code-block:: bash
 
    FC=ifx python -m build --wheel
 
-For more control, use a `Meson native file
+For finer control, write a `Meson native file
 <https://mesonbuild.com/Native-environments.html>`_:
 
 .. code-block:: ini
@@ -173,7 +151,7 @@ Adding dependencies (BLAS, LAPACK, etc.)
 
 Use ``dependency()`` in ``meson.build`` to link against system libraries:
 
-.. code-block:: none
+.. code-block:: meson
 
    lapack_dep = dependency('lapack')
 
@@ -184,25 +162,22 @@ Use ``dependency()`` in ``meson.build`` to link against system libraries:
    )
 
 ``meson`` resolves dependencies through ``pkg-config``, CMake, or its own
-detection logic. See the `Meson dependency documentation
+detection logic.  See the `Meson dependency documentation
 <https://mesonbuild.com/Dependencies.html>`_ for details.
 
-Differences from the ``scikit-build-core`` workflow
-====================================================
+Comparison with ``scikit-build-core``
+======================================
 
-The ``scikit-build-core`` approach documented in :ref:`f2py-skbuild` uses CMake
-under the hood. ``meson-python`` provides:
-
-* Native Fortran compiler support in ``meson`` (no CMake layer).
-* Direct integration with ``pip`` / ``build`` via PEP 517.
-* The same build system used by NumPy and SciPy themselves.
+:ref:`f2py-skbuild` uses CMake under the hood.  ``meson-python`` provides
+native Fortran compiler support without a CMake layer and is the same build
+system NumPy and SciPy use.
 
 Further reading
 ===============
 
 * `meson-python documentation <https://meson-python.readthedocs.io/>`_
 * `Meson build system <https://mesonbuild.com/>`_
-* `SciPy's meson build configuration <https://github.com/scipy/scipy/blob/main/meson.build>`_ (real-world F2PY usage)
-* :ref:`f2py-meson` (raw meson build without ``meson-python``)
-* :ref:`f2py-skbuild` (alternative using ``scikit-build-core`` / CMake)
+* `SciPy meson.build <https://github.com/scipy/scipy/blob/main/meson.build>`_ (real-world F2PY usage)
+* :ref:`f2py-meson` (building without ``meson-python``)
+* :ref:`f2py-skbuild` (alternative with ``scikit-build-core`` / CMake)
 * :ref:`f2py-meson-distutils` (migration from ``distutils``)

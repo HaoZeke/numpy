@@ -4,15 +4,14 @@
 F2PY and Conda on Windows
 =========================
 
-As a convenience measure, we will additionally assume the
-existence of ``scoop``, which can be used to install tools without
+This guide assumes ``scoop`` is available for installing tools without
 administrative access.
 
 .. code-block:: powershell
 
   Invoke-Expression (New-Object System.Net.WebClient).DownloadString('https://get.scoop.sh')
 
-Now we will setup a ``conda`` environment.
+Set up a ``conda`` environment:
 
 .. code-block:: powershell
 
@@ -23,7 +22,7 @@ Now we will setup a ``conda`` environment.
 	conda init powershell
 	# Open a new shell for the rest
 
-``conda`` pulls packages from ``msys2``, however, the UX is sufficiently different enough to warrant a separate discussion.
+``conda`` pulls packages from ``msys2``, but the workflow differs enough to warrant separate discussion.
 
 .. warning::
 

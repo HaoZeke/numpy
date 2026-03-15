@@ -2,15 +2,14 @@
 Using F2PY
 ===========
 
-This page contains a reference to all command-line options for the ``f2py``
-command, as well as a reference to internal functions of the ``numpy.f2py``
-module.
+This page lists all command-line options for ``f2py`` and the public API of
+the ``numpy.f2py`` module.
 
 Using ``f2py`` as a command-line tool
 =====================================
 
-When used as a command-line tool, ``f2py`` has three major modes, distinguished
-by the usage of ``-c`` and ``-h`` switches.
+As a command-line tool, ``f2py`` has three modes, selected by the ``-c`` and
+``-h`` switches.
 
 1. Signature file generation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -26,13 +25,12 @@ To scan Fortran sources and generate a signature file, use
 
 .. note::
 
-  A Fortran source file can contain many routines, and it is often not
-  necessary to allow all routines to be usable from Python. In such cases,
-  either specify which routines should be wrapped (in the ``only: .. :`` part)
-  or which routines F2PY should ignore (in the ``skip: .. :`` part).
+  A Fortran source file can contain many routines, and not all of them need
+  Python wrappers. Use the ``only: .. :`` part to select routines to wrap, or
+  the ``skip: .. :`` part to exclude routines.
 
-  F2PY has no concept of a "per-file" ``skip`` or ``only`` list, so if functions
-  are listed in ``only``, no other functions will be taken from any other files.
+  The ``skip`` and ``only`` lists are global, not per-file: if any functions
+  appear in ``only``, no other functions from any file will be wrapped.
 
 If ``<filename.pyf>`` is specified as ``stdout``, then signatures are written to
 standard output instead of a file.
@@ -61,25 +59,23 @@ Here ``<fortran files>`` may also contain signature files. Among other options
 (see below), the following options can be used in this mode:
 
 ``--debug-capi``
-  Adds debugging hooks to the extension module. When using this extension
-  module, various diagnostic information about the wrapper is written to the
-  standard output, for example, the values of variables, the steps taken, etc.
+  Add debugging hooks to the extension module. At runtime the wrapper writes
+  diagnostic information (variable values, execution steps) to standard output.
 
 ``-include'<includefile>'``
   Add a CPP ``#include`` statement to the extension module source.
-  ``<includefile>`` should be given in one of the following forms
+  ``<includefile>`` takes one of the following forms:
 
   .. code-block:: cpp
 
     "filename.ext"
     <filename.ext>
 
-  The include statement is inserted just before the wrapper functions. This
-  feature enables using arbitrary C functions (defined in ``<includefile>``)
-  in F2PY generated wrappers.
+  The include statement is inserted just before the wrapper functions, which
+  allows using arbitrary C functions in F2PY generated wrappers.
 
-  .. note:: This option is deprecated. Use ``usercode`` statement to specify
-    C code snippets directly in signature files.
+  .. note:: This option is deprecated. Use the ``usercode`` statement to
+    specify C code snippets directly in signature files.
 
 ``--[no-]wrap-functions``
   Create Fortran subroutine wrappers to Fortran functions.
@@ -87,11 +83,11 @@ Here ``<fortran files>`` may also contain signature files. Among other options
   compiler independence.
 
 ``--[no-]freethreading-compatible``
-  Create a module that declares it does or doesn't require the GIL. The default
-  is ``--no-freethreading-compatible`` for backwards compatibility. Inspect the
-  fortran code you are wrapping for thread safety issues before passing
-  ``--freethreading-compatible``, as ``f2py`` does not analyze fortran code for
-  thread safety issues.
+  Declare whether the module requires the GIL. The default is
+  ``--no-freethreading-compatible`` for backward compatibility. Verify that
+  the Fortran code is thread-safe before passing
+  ``--freethreading-compatible``; ``f2py`` does not analyze Fortran code for
+  thread safety.
 
 ``--include-paths "<path1>:<path2>..."``
   Search include files from given directories.
@@ -127,7 +123,7 @@ signatures, before proceeding to build the extension module.
    variables or native files to interact with ``meson`` instead. See its `FAQ
    <https://mesonbuild.com/howtox.html>`__ for more information.
 
-Among other options (see below) and options described for previous modes, the following can be used.
+In addition to the options described above, the following apply in this mode.
 
 .. note::
 
@@ -158,11 +154,9 @@ Common build flags:
   ``-l``.
 
 ``--dep <dependency>``
-  Specify a meson dependency for the module. This may be passed multiple times
-  for multiple dependencies. Dependencies are stored in a list for further
-  processing. Example: ``--dep lapack --dep scalapack`` This will identify
-  "lapack" and "scalapack" as dependencies and remove them from argv, leaving a
-  dependencies list containing ["lapack", "scalapack"].
+  Specify a Meson dependency for the module. Pass this option multiple times
+  for multiple dependencies.
+  Example: ``--dep lapack --dep scalapack``.
 
 .. note::
   
@@ -188,8 +182,7 @@ Common build flags:
   __ https://docs.python.org/3/extending/building.html
 
 
-When building an extension module, a combination of the following macros may be
-required for non-gcc Fortran compilers:
+Non-GCC Fortran compilers may require one or more of the following macros:
 
 .. code-block:: sh
 
@@ -197,14 +190,11 @@ required for non-gcc Fortran compilers:
   -DNO_APPEND_FORTRAN
   -DUPPERCASE_FORTRAN
  
-To test the performance of F2PY generated interfaces, use
-``-DF2PY_REPORT_ATEXIT``. Then a report of various timings is printed out at the
-exit of Python. This feature may not work on all platforms, and currently only
-Linux is supported.
- 
-To see whether F2PY generated interface performs copies of array arguments, use
-``-DF2PY_REPORT_ON_ARRAY_COPY=<int>``. When the size of an array argument is
-larger than ``<int>``, a message about the copying is sent to ``stderr``.
+To profile F2PY generated interfaces, use ``-DF2PY_REPORT_ATEXIT``. A timing
+report is printed when Python exits. Currently only Linux is supported.
+
+To detect array copies, use ``-DF2PY_REPORT_ON_ARRAY_COPY=<int>``. When the
+size of an array argument exceeds ``<int>``, a message is sent to ``stderr``.
 
 Other options
 ~~~~~~~~~~~~~
@@ -252,11 +242,11 @@ Python module ``numpy.f2py``
 
    .. versionchanged:: 2.0.0
 
-      There used to be a ``f2py.compile`` function, which was removed, users
-      may wrap ``python -m numpy.f2py`` via ``subprocess.run`` manually, and
-      set environment variables to interact with ``meson`` as required.
+      The ``f2py.compile`` function has been removed. Use
+      ``subprocess.run`` to call ``python -m numpy.f2py`` and set environment
+      variables to interact with ``meson`` as needed.
 
-When using ``numpy.f2py`` as a module, the following functions can be invoked.
+The following functions are available when ``numpy.f2py`` is used as a module.
 
 .. automodule:: numpy.f2py
     :members:
@@ -267,17 +257,12 @@ Building with Meson (Examples)
 Using f2py with Meson
 ~~~~~~~~~~~~~~~~~~~~~
 
-Meson is a modern build system recommended for building Python extension
-modules, especially starting with Python 3.12 and NumPy 2.x. Meson provides
-a robust and maintainable way to build Fortran extensions with f2py.
+Meson is the recommended build system for Python extension modules starting
+with Python 3.12 and NumPy 2.x.
 
-To build a Fortran extension using f2py and Meson, you can use Meson's
-``custom_target`` to invoke f2py and generate the extension module. The
-following minimal example demonstrates how to do this:
-
-This example shows how to build the ``add`` extension from the ``add.f`` and ``add.pyf``
-files described in the :ref:`f2py-examples` (note that you do not always need
-a ``.pyf`` file: in many cases ``f2py`` can figure out the annotations by itself).
+The example below builds the ``add`` extension from the ``add.f`` and
+``add.pyf`` files described in the :ref:`f2py-examples`. A ``.pyf`` file is
+not always necessary; in many cases ``f2py`` can infer the annotations.
 
 Project layout::
 
@@ -319,6 +304,5 @@ Example ``meson.build``:
    # Also install the built extension (place it beside __init__.py)
    install_data(add_mod, install_dir: join_paths(py.site_packages_dir(), 'f2py_examples'))
 
-For more details and advanced usage, see the Meson build guide in the
-user documentation or refer to SciPy's Meson build files for real-world
-examples: https://github.com/scipy/scipy/tree/main/meson.build
+For advanced usage, see the Meson build guide in the user documentation or
+SciPy's build files: https://github.com/scipy/scipy/tree/main/meson.build

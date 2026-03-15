@@ -4,19 +4,18 @@
 F2PY and build systems
 =======================
 
-In this section we will cover the various popular build systems and their usage
-with ``f2py``.
+This section covers popular build systems and their usage with ``f2py``.
 
 .. versionchanged:: NumPy 1.26.x
 
-   The default build system for ``f2py`` has traditionally been through the
-   enhanced ``numpy.distutils`` module. This module is based on ``distutils``
-   which was removed in ``NumPy2.5.0`` in **June 2026**. Like the rest of
-   NumPy and SciPy, ``f2py`` uses ``meson`` now, see
-   :ref:`distutils-status-migration` for some more details.
+   The default build system for ``f2py`` was historically the enhanced
+   ``numpy.distutils`` module, which is based on ``distutils``.  ``distutils``
+   was removed in ``NumPy 2.5.0`` (June 2026). Like the rest of NumPy and
+   SciPy, ``f2py`` now uses ``meson``; see :ref:`distutils-status-migration`
+   for details.
 
-    All changes to ``f2py`` are tested on SciPy, so their `CI configuration`_ is
-    always supported.
+   All changes to ``f2py`` are tested on SciPy, so their `CI configuration`_ is
+   always supported.
 
 
 .. note::
@@ -47,7 +46,7 @@ Building an extension module which includes Python and Fortran consists of:
 
 - Python libraries and development headers
 
-Broadly speaking there are three cases which arise when considering the outputs of ``f2py``:
+Three cases arise when considering the outputs of ``f2py``:
 
 Fortran 77 programs
    - Input file ``blah.f``
@@ -80,9 +79,9 @@ Signature files
      + ``blah-f2pywrappers2.f90`` (occasionally)
      + ``blah-f2pywrappers.f`` (occasionally)
 
-   Signature files ``.pyf`` do not signal their language standard via the file
-   extension, they may generate the F90 and F77 specific wrappers depending on
-   their contents; which shifts the burden of checking for generated files onto
+   Signature files (``.pyf``) do not signal their language standard via the
+   file extension. They may generate F90 and F77 specific wrappers depending on
+   their contents, which shifts the burden of checking for generated files onto
    the build system.
 
 .. versionchanged:: NumPy ``1.22.4``
@@ -90,12 +89,12 @@ Signature files
    ``f2py`` will deterministically generate wrapper files based on the input
    file Fortran standard (F77 or greater).  ``--skip-empty-wrappers`` can be
    passed to ``f2py`` to restore the previous behaviour of only generating
-   wrappers when needed by the input .
+   wrappers when needed by the input.
 
 
-In theory keeping the above requirements in hand, any build system can be
-adapted to generate ``f2py`` extension modules. Here we will cover a subset of
-the more popular systems.
+In principle, any build system can be adapted to generate ``f2py`` extension
+modules given the requirements above. The following sections cover the most
+popular systems.
 
 .. note::
    ``make`` has no place in a modern multi-language setup, and so is not

@@ -7,10 +7,10 @@ Boilerplate reduction and templating
 Using FYPP for binding generic interfaces
 =========================================
 
-``f2py`` doesn't currently support binding interface blocks. However, there are
-workarounds in use. Perhaps the best known is the usage of ``tempita`` for using
-``.pyf.src`` files as is done in the bindings which `are part of scipy`_. `tempita` support has been removed and
-is no longer recommended in any case.
+``f2py`` does not support binding interface blocks directly. A common
+workaround was to use ``tempita`` with ``.pyf.src`` files, as done in the
+bindings `that are part of scipy`_. ``tempita`` support has been removed and
+is no longer recommended.
 
 .. note::
     The reason interfaces cannot be supported within ``f2py`` itself is because
@@ -25,9 +25,9 @@ is no longer recommended in any case.
         0000000000000124 T __add_mod_MOD_add_real
         00000000000000ee T __add_mod_MOD_add_real_dp
 
-Here we will discuss a few techniques to leverage ``f2py`` in conjunction with
-`fypp`_ to emulate generic interfaces and to ease the binding of multiple
-(similar) functions.
+This section covers techniques that combine ``f2py`` with `fypp`_ to emulate
+generic interfaces and reduce repetition when binding multiple similar
+functions.
 
 
 Basic example: Addition module
@@ -40,27 +40,27 @@ subroutine which takes in two arrays and returns its sum.
     :language: fortran
 
 
-We will recast this into modern fortran:
+Recast this into modern Fortran:
 
 .. literalinclude:: ./../code/advanced/boilerplating/src/adder_base.f90
     :language: fortran
 
-We could go on as in the original example, adding intents by hand among other
-things, however in production often there are other concerns. For one, we can
-template via FYPP the construction of similar functions:
+Rather than adding intents by hand for each variant, we can template the
+construction of similar functions with FYPP:
 
 .. literalinclude:: ./../code/advanced/boilerplating/src/gen_adder.f90.fypp
 
-This can be pre-processed to generate the full fortran code:
+Pre-process to generate the full Fortran code:
 
 .. code:: sh
 
        ❯ fypp gen_adder.f90.fypp > adder.f90
 
-As to be expected, this can be wrapped by ``f2py`` subsequently.
+This output can then be wrapped by ``f2py``.
 
-Now we will consider maintaining the bindings in a separate file. Note the
-following basic ``.pyf`` which can be generated for a single subroutine via ``f2py -m adder adder_base.f90 -h adder.pyf``:
+Now consider maintaining the bindings in a separate file. The following
+``.pyf`` can be generated for a single subroutine via
+``f2py -m adder adder_base.f90 -h adder.pyf``:
 
 .. literalinclude:: ./../code/advanced/boilerplating/src/base_adder.pyf
     :language: fortran
@@ -70,24 +70,23 @@ With the docstring:
 .. literalinclude:: ./../code/advanced/boilerplating/res/base_docstring.dat
     :language: reST
 
-Which is already pretty good. However, ``n`` should never be passed in the first
-place so we will make some minor adjustments.
+This is already reasonable. However, ``n`` should not be passed by the
+caller, so we make some adjustments:
 
 .. literalinclude:: ./../code/advanced/boilerplating/src/improved_base_adder.pyf
     :language: fortran
 
-Which corresponds to:
+This produces the docstring:
 
 .. literalinclude:: ./../code/advanced/boilerplating/res/improved_docstring.dat
     :language: reST
 
-Finally, we can template over this in a similar manner, to attain the original
-goal of having bindings which make use of ``f2py`` directives and have minimal
-spurious repetition.
+Finally, template over this in the same manner to produce bindings that use
+``f2py`` directives with minimal repetition:
 
 .. literalinclude:: ./../code/advanced/boilerplating/src/adder.pyf.fypp
 
-Usage boils down to:
+The full build sequence:
 
 .. code:: sh
 
@@ -96,4 +95,4 @@ Usage boils down to:
    f2py -m adder -c adder.pyf adder.f90 --backend meson
 
 .. _`fypp`: https://fypp.readthedocs.io/en/stable/fypp.html
-.. _`are part of scipy`: https://github.com/scipy/scipy/blob/c93da6f46dbed8b3cc0ccd2495b5678f7b740a03/scipy/linalg/clapack.pyf.src
+.. _`that are part of scipy`: https://github.com/scipy/scipy/blob/c93da6f46dbed8b3cc0ccd2495b5678f7b740a03/scipy/linalg/clapack.pyf.src
