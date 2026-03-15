@@ -1449,6 +1449,13 @@ def _scan_type_bound_procedures(source_file, typename):
     contains_pat = re.compile(r'^\s*contains\b', re.I)
     proc_pat = re.compile(
         r'^\s*procedure\s*::\s*(\w+)\s*(?:=>\s*(\w+))?\s*$', re.I)
+    # F2018 7.5.5 paragraph 3, R751:
+    # GENERIC [ , access-spec ] :: generic-spec => binding-name-list
+    # Maps a generic name to multiple specific procedures.
+    # We use the first specific binding as the implementation.
+    generic_pat = re.compile(
+        r'^\s*generic\s*(?:,\s*\w+)?\s*::\s*(\w+)\s*=>\s*(.+)\s*$',
+        re.I)
 
     with open(source_file) as f:
         for line in f:
@@ -1470,6 +1477,20 @@ def _scan_type_bound_procedures(source_file, typename):
                     method_name = m.group(1).lower()
                     impl_name = (m.group(2) or m.group(1)).lower()
                     result[method_name] = impl_name
+                    continue
+                # Generic bindings (F2018 R751): use first specific
+                # binding as implementation. Type dispatch from Python
+                # is not supported -- the first implementation is used.
+                generic_match = generic_pat.match(stripped)
+                if generic_match:
+                    generic_name = generic_match.group(1).lower()
+                    bindings = [
+                        binding.strip().lower()
+                        for binding in generic_match.group(2).split(',')
+                    ]
+                    if bindings:
+                        # Map generic name to first specific binding
+                        result[generic_name] = bindings[0]
 
     return result
 
@@ -1542,7 +1563,21 @@ def _gen_type_methods(typename, bound_procs, routines, type_map):
         routine_map[r['name'].lower()] = r
 
     for method_name, impl_name in bound_procs.items():
-        routine = routine_map.get(impl_name)
+        # Resolve binding chain: generic bindings map to specific
+        # binding names (F2018 7.5.5 R751), which in turn map to
+        # implementation names. Follow the chain until we find an
+        # actual module routine.
+        resolved_name = impl_name
+        max_chain_depth = 5  # prevent infinite loops
+        for _ in range(max_chain_depth):
+            if resolved_name in routine_map:
+                break
+            # Check if this is itself a binding name
+            next_name = bound_procs.get(resolved_name)
+            if next_name is None or next_name == resolved_name:
+                break
+            resolved_name = next_name
+        routine = routine_map.get(resolved_name)
         if routine is None:
             continue
 
@@ -1562,7 +1597,9 @@ def _gen_type_methods(typename, bound_procs, routines, type_map):
         # Generate a C method that takes the type instance as self
         # and remaining args as positional/keyword args
         is_func = isfunction(routine)
-        wrapper_sym = f'f2py_wrap_{impl_name}'
+        # Use resolved_name for the wrapper symbol since that is the
+        # actual module routine whose C wrapper was generated
+        wrapper_sym = f'f2py_wrap_{resolved_name}'
 
         # Generate extern declaration for the Fortran wrapper
         extern_args = []

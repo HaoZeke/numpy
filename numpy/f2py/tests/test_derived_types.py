@@ -2133,6 +2133,69 @@ class TestPointerMember(util.F2PyTest):
         assert dv.view is not None
 
 
+class TestGenericTBPCodeGen:
+    """Test code generation for generic type-bound procedures (F2018 7.5.5)."""
+
+    def test_generic_binding_scanned(self):
+        """GENERIC :: scale => scale_int, scale_real should be detected."""
+        from numpy.f2py._dt_routines import _scan_type_bound_procedures
+        fpath = str(util.getpath("tests", "src", "derived_types",
+                                 "generic_tbp.f90"))
+        procs = _scan_type_bound_procedures(fpath, 'scaler')
+        # Generic binding 'scale' maps to first specific 'scale_int'
+        assert 'scale' in procs
+        assert procs['scale'] == 'scale_int'
+
+    def test_specific_bindings_also_scanned(self):
+        """Specific procedures should still be individually available."""
+        from numpy.f2py._dt_routines import _scan_type_bound_procedures
+        fpath = str(util.getpath("tests", "src", "derived_types",
+                                 "generic_tbp.f90"))
+        procs = _scan_type_bound_procedures(fpath, 'scaler')
+        assert 'scale_int' in procs
+        assert 'scale_real' in procs
+
+    def test_generic_generates_method(self):
+        """Generic binding should produce a Python method."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "generic_tbp.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'scale' in all_code
+
+
+@pytest.mark.slow
+class TestGenericTBP(util.F2PyTest):
+    """Test generic type-bound procedures with compilation (F2018 7.5.5)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "generic_tbp.f90")]
+
+    def test_scaler_exists(self):
+        assert hasattr(self.module, 'scaler')
+
+    def test_scale_int_method(self):
+        scl = self.module.scaler(value=10.0)
+        scl.scale_int(3)
+        assert abs(scl.value - 30.0) < 1e-10
+
+    def test_scale_real_method(self):
+        scl = self.module.scaler(value=10.0)
+        scl.scale_real(2.5)
+        assert abs(scl.value - 25.0) < 1e-10
+
+    def test_scale_method_exists(self):
+        """Generic 'scale' should be accessible as a method."""
+        scl = self.module.scaler(value=1.0)
+        assert hasattr(scl, 'scale')
+
+    def test_scale_generic_calls_first_specific(self):
+        """Generic 'scale' dispatches to first specific (scale_int)."""
+        scl = self.module.scaler(value=10.0)
+        scl.scale(2)  # calls scale_int (first specific)
+        assert abs(scl.value - 20.0) < 1e-10
+
+
 class TestFinalizerCodeGen:
     """Test that final subroutines are excluded from routine wrapping."""
 
