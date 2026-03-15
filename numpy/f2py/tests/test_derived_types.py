@@ -3128,3 +3128,166 @@ class TestComplexMemberOpaque(util.F2PyTest):
         wf.amplitude = -1+2j
         assert wf.amplitude == (-1+2j)
         assert wf.phase == 1.57
+
+
+class TestAbstractTypeCodeGen:
+    """Test code generation for abstract types with concrete extensions."""
+
+    def test_abstract_type_detected(self):
+        from numpy.f2py._dt_helpers import _is_abstract_type
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        # Set parent_block for attribute lookup
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        names = {tb['name'].lower() for tb in type_blocks}
+        assert 'baseshape' in names
+        assert 'disk' in names
+        # BaseShape should be detected as abstract
+        baseshape_tb = next(tb for tb in type_blocks
+                        if tb['name'].lower() == 'baseshape')
+        assert _is_abstract_type(baseshape_tb)
+        # Disk should NOT be abstract
+        circle_tb = next(tb for tb in type_blocks
+                         if tb['name'].lower() == 'disk')
+        assert not _is_abstract_type(circle_tb)
+
+    def test_abstract_generates_skeleton(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Should generate code for both shape (abstract skeleton)
+        # and circle (concrete opaque)
+        assert len(hooks['f90modhooks']) >= 2
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Abstract shape skeleton should exist
+        assert 'Pybaseshape_Type' in all_code
+        assert 'PybaseshapeObject' in all_code
+        # Concrete circle should exist
+        assert 'Pydisk_Type' in all_code
+        assert 'PydiskObject' in all_code
+
+    def test_abstract_tp_init_raises(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # BaseShape skeleton should raise TypeError on init
+        baseshape_code = hooks['f90modhooks'][0]
+        assert 'Cannot instantiate abstract Fortran type' in baseshape_code
+        assert 'PyErr_SetString(PyExc_TypeError' in baseshape_code
+
+    def test_abstract_no_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # BaseShape skeleton should have no extern declarations
+        # for Fortran wrappers (no f2py_create_baseshape etc.)
+        baseshape_code = hooks['f90modhooks'][0]
+        assert 'f2py_create_baseshape' not in baseshape_code.lower()
+        assert 'f2py_destroy_baseshape' not in baseshape_code.lower()
+        assert 'extern' not in baseshape_code.lower()
+
+    def test_abstract_has_basetype_flag(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        baseshape_code = hooks['f90modhooks'][0]
+        assert 'Py_TPFLAGS_BASETYPE' in baseshape_code
+
+    def test_child_has_tp_base_to_abstract(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # circle should have tp_base pointing to shape
+        assert '.tp_base = &Pybaseshape_Type,' in all_code
+
+    def test_child_has_all_members(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Disk should have both area (inherited) and radius (own)
+        disk_code = hooks['f90modhooks'][1]
+        assert 'area' in disk_code
+        assert 'radius' in disk_code
+
+    def test_abstract_shape_generated_before_circle(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        baseshape_pos = all_code.find('Pybaseshape_Type')
+        disk_pos = all_code.find('Pydisk_Type')
+        assert baseshape_pos < disk_pos
+
+    def test_fortran_wrappers_skip_abstract(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        source = derived_type_rules.generate_fortran_wrappers(
+            'abstract_type_mod', type_blocks)
+        # Should generate wrappers for Disk but not BaseShape
+        if source is not None:
+            assert 'f2py_create_disk' in source
+            assert 'f2py_create_baseshape' not in source
+
+
+@pytest.mark.slow
+class TestAbstractTypeOpaque(util.F2PyTest):
+    """Test abstract type inheritance with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "abstract_type.f90")]
+
+    def test_shape_type_exists(self):
+        assert hasattr(self.module, 'baseshape')
+
+    def test_circle_type_exists(self):
+        assert hasattr(self.module, 'disk')
+
+    def test_shape_cannot_instantiate(self):
+        with pytest.raises(TypeError, match="abstract"):
+            self.module.baseshape()
+
+    def test_circle_can_instantiate(self):
+        c = self.module.disk(area=0.0, radius=1.0)
+        assert abs(c.radius - 1.0) < 1e-10
+
+    def test_circle_has_area(self):
+        c = self.module.disk(area=0.0, radius=1.0)
+        assert hasattr(c, 'area')
+
+    def test_circle_isinstance_shape(self):
+        """Disk should be an instance of BaseShape via tp_base."""
+        c = self.module.disk(area=0.0, radius=1.0)
+        # self.module.baseshape is the BaseShape type object itself
+        assert isinstance(c, self.module.baseshape)

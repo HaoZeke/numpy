@@ -139,6 +139,26 @@ def _is_array_member(var):
     return is_fixed_array(var)
 
 
+def _is_abstract_type(typeblock):
+    """Check if a type block has the 'abstract' attribute.
+
+    Fortran abstract types (F2003 4.5.7) cannot be instantiated directly.
+    crackfortran stores type attributes in attrspec on the type block
+    and/or in the parent module's vars dict.
+    """
+    for attr in typeblock.get('attrspec', []):
+        if isinstance(attr, str) and attr.lower() == 'abstract':
+            return True
+    parent = typeblock.get('parent_block')
+    if parent and typeblock.get('name'):
+        tname = typeblock['name']
+        parent_var = parent.get('vars', {}).get(tname, {})
+        for attr in parent_var.get('attrspec', []):
+            if isinstance(attr, str) and attr.lower() == 'abstract':
+                return True
+    return False
+
+
 def _get_extends_parent(typeblock):
     """Extract parent type name from extends(parent) attribute, or None.
 
@@ -344,12 +364,47 @@ def _can_wrap_bindc(typeblock, type_map=None):
     return True
 
 
+def _can_wrap_abstract(typeblock, type_map=None):
+    """Check if an abstract type can be wrapped as a skeleton base type.
+
+    Abstract types (F2003 4.5.7) cannot be instantiated, but their
+    concrete extensions need the abstract parent's PyTypeObject for
+    tp_base (isinstance() support). Returns True if the abstract type
+    has wrappable data members.
+    """
+    if not _is_abstract_type(typeblock):
+        return False
+    if isbindctype(typeblock):
+        return False
+    if not is_simple_derived_type(typeblock):
+        return False
+    for name, var in get_type_members(typeblock).items():
+        if _is_type_member(var) or _is_type_array_member(var):
+            inner = var.get('typename', '').lower()
+            if type_map is None or inner not in type_map:
+                return False
+        elif _is_char_member(var):
+            continue
+        elif _is_deferred_char_member(var):
+            continue
+        elif _is_allocatable_member(var):
+            continue
+        elif _is_pointer_member(var):
+            continue
+        elif _get_member_ctype(var) is None:
+            return False
+    return True
+
+
 def _can_wrap_opaque(typeblock, type_map=None):
     """Check if a non-bind(c) type can be wrapped via opaque pointers.
 
     type_map is a dict of already-known wrappable types, used to
     validate nested type members and extends(parent) dependencies.
+    Abstract types are excluded (handled by _can_wrap_abstract).
     """
+    if _is_abstract_type(typeblock):
+        return False
     if isbindctype(typeblock):
         return False
     if not is_simple_derived_type(typeblock):
