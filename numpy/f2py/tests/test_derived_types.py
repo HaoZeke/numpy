@@ -2133,6 +2133,99 @@ class TestPointerMember(util.F2PyTest):
         assert dv.view is not None
 
 
+class TestDeferredCharCodeGen:
+    """Test code generation for deferred-length character members (F2018 7.4.4.2)."""
+
+    def test_deferred_char_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_char.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'f2py_get_nameditem_label_allocated' in all_code
+        assert 'f2py_get_nameditem_label_len' in all_code
+        assert 'f2py_set_nameditem_label' in all_code
+
+    def test_deferred_char_repr(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_char.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert '<deferred-char>' in all_code
+
+    def test_deferred_char_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_char.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for module in findf90modules(mod[0]):
+            type_blocks = derived_type_rules._find_derived_types(module)
+            src = derived_type_rules.generate_fortran_wrappers(
+                module['name'], type_blocks)
+        assert src is not None
+        # Uses allocate(character(buflen) :: ...) for runtime length
+        assert 'allocate(character' in src
+        # Uses len() intrinsic (F2018 16.9.109)
+        assert 'len(obj%label)' in src
+
+
+@pytest.mark.slow
+class TestDeferredChar(util.F2PyTest):
+    """Test deferred-length character members with compilation (F2018 7.4.4.2)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "deferred_char.f90")]
+
+    def test_nameditem_exists(self):
+        assert hasattr(self.module, 'nameditem')
+
+    def test_label_starts_none(self):
+        item = self.module.nameditem(item_id=1)
+        assert item.label is None
+
+    def test_set_get_label(self):
+        item = self.module.nameditem(item_id=42)
+        item.label = "hello world"
+        assert item.label == "hello world"
+
+    def test_set_none_deallocates(self):
+        item = self.module.nameditem(item_id=1)
+        item.label = "test"
+        assert item.label is not None
+        item.label = None
+        assert item.label is None
+
+    def test_different_lengths(self):
+        item = self.module.nameditem(item_id=1)
+        item.label = "short"
+        assert item.label == "short"
+        item.label = "a much longer string value"
+        assert item.label == "a much longer string value"
+        item.label = "x"
+        assert item.label == "x"
+
+    def test_empty_string(self):
+        item = self.module.nameditem(item_id=1)
+        item.label = ""
+        # Empty string may come back as None (length 0 = deallocated)
+        result = item.label
+        assert result is None or result == ""
+
+    def test_scalar_member_coexists(self):
+        item = self.module.nameditem(item_id=99)
+        item.label = "tagged"
+        assert item.item_id == 99
+        assert item.label == "tagged"
+
+    def test_document_multiple_chars(self):
+        doc = self.module.document(page_count=42)
+        doc.title = "Fortran 2018 Standard"
+        doc.author = "ISO/IEC JTC1/SC22/WG5"
+        assert doc.title == "Fortran 2018 Standard"
+        assert doc.author == "ISO/IEC JTC1/SC22/WG5"
+        assert doc.page_count == 42
+
+
 class TestGenericTBPCodeGen:
     """Test code generation for generic type-bound procedures (F2018 7.5.5)."""
 
