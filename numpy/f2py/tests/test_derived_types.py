@@ -3654,3 +3654,174 @@ class TestParameterizedKindCompilation(util.F2PyTest):
         v.x = 1.23456789012345e15
         # Double precision can represent this exactly
         assert abs(v.x - 1.23456789012345e15) < 1.0
+
+
+class TestParameterizedLenCodeGen:
+    """Test code generation for LEN-parameterized derived types."""
+
+    def test_len_param_detected(self):
+        """Test _get_len_param_info identifies LEN members."""
+        from numpy.f2py._dt_helpers import _get_len_param_info
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        flexvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'flexvec':
+                flexvec_tb = tb
+                break
+        assert flexvec_tb is not None
+
+        len_info = _get_len_param_info(flexvec_tb)
+        assert len(len_info) == 1
+        assert len_info[0]['name'] == 'n'
+
+    def test_len_type_wrappable(self):
+        """Test that LEN-parameterized types pass wrappability checks."""
+        from numpy.f2py._dt_helpers import _can_wrap_opaque
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        flexvec_tb = [tb for tb in type_blocks
+                      if tb['name'].lower() == 'flexvec'][0]
+        assert _can_wrap_opaque(flexvec_tb)
+
+    def test_len_sized_array_detected(self):
+        """Test _is_len_sized_array identifies LEN-dimensioned members."""
+        from numpy.f2py._dt_helpers import (
+            _is_len_sized_array, _get_len_param_info,
+        )
+        from numpy.f2py.auxfuncs import get_type_members
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        flexvec_tb = [tb for tb in type_blocks
+                      if tb['name'].lower() == 'flexvec'][0]
+        len_info = _get_len_param_info(flexvec_tb)
+        len_names = {li['name'] for li in len_info}
+        members = get_type_members(flexvec_tb)
+        # 'data' should be a LEN-sized array
+        assert _is_len_sized_array(members['data'], len_names)
+        # 'scale' should not
+        assert not _is_len_sized_array(members['scale'], len_names)
+
+    def test_buildhooks_generates_wrapper(self):
+        """Test that buildhooks generates wrapper code for LEN type."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        assert len(hooks['f90modhooks']) >= 1
+
+        flexvec_code = hooks['f90modhooks'][0]
+        # Should have constructor with LEN param
+        assert 'f2py_create_flexvec' in flexvec_code
+        # Destructor should accept LEN param (int arg after void*)
+        assert 'f2py_destroy_flexvec' in flexvec_code
+        # Should have getter/setter for scalar member 'scale'
+        assert 'f2py_get_flexvec_scale' in flexvec_code
+        assert 'f2py_set_flexvec_scale' in flexvec_code
+        # Should have LEN-sized array data getter
+        assert 'f2py_get_flexvec_data_data' in flexvec_code
+        # Should have LEN-sized array data setter
+        assert 'f2py_set_flexvec_data' in flexvec_code
+
+    def test_pytype_struct_has_len_field(self):
+        """PyTypeObject struct should have len_n field."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        flexvec_code = hooks['f90modhooks'][0]
+        assert 'int len_n;' in flexvec_code
+
+    def test_tp_init_has_n_kwarg(self):
+        """tp_init should accept n as keyword argument."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        flexvec_code = hooks['f90modhooks'][0]
+        assert '"n"' in flexvec_code
+
+    def test_len_property_readonly(self):
+        """LEN parameter should be exposed as read-only property."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        flexvec_code = hooks['f90modhooks'][0]
+        # Should have len_n field in the struct
+        assert 'len_n' in flexvec_code
+        # Should have LEN parameter as constructor arg
+        assert '"n"' in flexvec_code
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not util.has_pdt_len_support(),
+    reason="Fortran compiler cannot build LEN type parameter wrappers")
+class TestParameterizedLenCompilation(util.F2PyTest):
+    """Test compilation and runtime of LEN-parameterized derived types."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "parameterized_len.f90")]
+
+    def test_flexvec_exists(self):
+        assert hasattr(self.module, 'flexvec')
+
+    def test_flexvec_construct(self):
+        v = self.module.flexvec(n=5)
+        assert v.n == 5
+        assert abs(v.scale) < 1e-10
+
+    def test_flexvec_scale_member(self):
+        v = self.module.flexvec(n=3, scale=2.5)
+        assert abs(v.scale - 2.5) < 1e-10
+        v.scale = 7.0
+        assert abs(v.scale - 7.0) < 1e-10
+
+    def test_flexvec_data_getter(self):
+        v = self.module.flexvec(n=4)
+        data = v.data
+        assert isinstance(data, np.ndarray)
+        assert data.shape == (4,)
+
+    def test_flexvec_data_setter(self):
+        v = self.module.flexvec(n=3, scale=1.0)
+        v.data = np.array([1.0, 2.0, 3.0])
+        data = v.data
+        assert abs(data[0] - 1.0) < 1e-10
+        assert abs(data[1] - 2.0) < 1e-10
+        assert abs(data[2] - 3.0) < 1e-10
+
+    def test_flexvec_n_readonly(self):
+        v = self.module.flexvec(n=5)
+        assert v.n == 5
+        with pytest.raises(AttributeError):
+            v.n = 10
