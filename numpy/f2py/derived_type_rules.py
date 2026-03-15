@@ -40,11 +40,14 @@ from ._dt_helpers import (  # noqa: F401
     _FORTRAN_TO_C,
     _FORTRAN_TO_ISOC,
     _PYOBJ_TO_C,
+    _can_wrap_abstract,
     _can_wrap_bindc,
     _can_wrap_opaque,
+    _eval_kind_expr,
     _find_derived_types,
     _fortran_sym,
     _get_all_members,
+    _get_fortran_type_spec,
     _get_array_dims,
     _get_c_return_type,
     _get_char_len,
@@ -53,6 +56,9 @@ from ._dt_helpers import (  # noqa: F401
     _get_member_isoc_type,
     _get_alloc_ndim,
     _get_pointer_ndim,
+    _has_len_params,
+    _has_unresolved_kind_params,
+    _is_abstract_type,
     _is_allocatable_member,
     _is_array_member,
     _is_char_member,
@@ -61,6 +67,9 @@ from ._dt_helpers import (  # noqa: F401
     _is_pointer_member,
     _is_type_array_member,
     _is_type_member,
+    _is_type_parameter,
+    _resolve_kind_params,
+    _resolve_parameterized_type,
     _topo_visit,
 )
 
@@ -154,7 +163,8 @@ def buildhooks(pymod):
             for tb in remaining:
                 typename = tb['name']
                 if (_can_wrap_bindc(tb, type_map)
-                        or _can_wrap_opaque(tb, type_map)):
+                        or _can_wrap_opaque(tb, type_map)
+                        or _can_wrap_abstract(tb, type_map)):
                     type_map[typename.lower()] = tb
                 else:
                     still_remaining.append(tb)
@@ -190,7 +200,12 @@ def buildhooks(pymod):
                         f'"{typename}": '
                         f'{", ".join(bound_procs.keys())}\n')
 
-            if _can_wrap_bindc(tb, type_map):
+            if _can_wrap_abstract(tb, type_map):
+                outmess(f'\t\tGenerating abstract type skeleton '
+                        f'for "{typename}"...\n')
+                _generate_abstract_hooks(
+                    ret, typename, tb, modulename)
+            elif _can_wrap_bindc(tb, type_map):
                 outmess(f'\t\tGenerating bind(c) type wrapper '
                         f'for "{typename}"...\n')
                 _generate_bindc_hooks(
@@ -257,7 +272,10 @@ def _generate_bindc_hooks(ret, typename, typeblock, modulename,
                           module_block, bound_procs=None, routines=None,
                           type_map=None):
     """Generate hooks for a bind(c) derived type."""
-    members = get_type_members(typeblock)
+    members = {
+        name: var for name, var in get_type_members(typeblock).items()
+        if not _is_type_parameter(var)
+    }
 
     code_parts = []
     code_parts.append(_gen_bindc_struct(typename, members))
@@ -301,6 +319,96 @@ def _generate_bindc_hooks(ret, typename, typeblock, modulename,
     ret['initf90modhooks'].extend(_gen_init_code(typename, modulename))
 
 
+def _generate_abstract_hooks(ret, typename, typeblock, modulename):
+    """Generate a skeleton PyTypeObject for an abstract Fortran type.
+
+    Abstract types (F2003 4.5.7) cannot be instantiated, but their
+    concrete extensions need the abstract parent's PyTypeObject so
+    that tp_base gives isinstance() support. The generated type has:
+    - A PyObject struct (no capsule, no data)
+    - tp_new that works (required by Python type machinery)
+    - tp_init that raises TypeError
+    - Py_TPFLAGS_BASETYPE so concrete children can inherit
+    - No getters/setters (concrete children have their own)
+    - No Fortran wrappers (nothing to construct/destroy)
+    """
+    code_parts = []
+
+    # Minimal PyObject struct (no capsule member)
+    code_parts.append(f"""\
+/* Abstract type {typename} -- skeleton for isinstance() support */
+typedef struct {{
+    PyObject_HEAD
+}} Py{typename}Object;
+""")
+
+    # tp_new -- standard allocator
+    code_parts.append(f"""\
+static PyObject *
+Py{typename}_tp_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+{{
+    Py{typename}Object *self;
+    self = (Py{typename}Object *)type->tp_alloc(type, 0);
+    return (PyObject *)self;
+}}
+""")
+
+    # tp_init -- raises TypeError (abstract types cannot be instantiated)
+    code_parts.append(f"""\
+static int
+Py{typename}_tp_init(PyObject *self, PyObject *args, PyObject *kwds)
+{{
+    PyErr_SetString(PyExc_TypeError,
+        "Cannot instantiate abstract Fortran type '{typename}'");
+    return -1;
+}}
+""")
+
+    # tp_dealloc -- minimal
+    code_parts.append(f"""\
+static void
+Py{typename}_tp_dealloc(PyObject *self)
+{{
+    Py_TYPE(self)->tp_free(self);
+}}
+""")
+
+    # tp_repr
+    code_parts.append(f"""\
+static PyObject *
+Py{typename}_tp_repr(PyObject *self)
+{{
+    return PyUnicode_FromString("<abstract type {typename}>");
+}}
+""")
+
+    # Empty getset (sentinel only)
+    code_parts.append(f"""\
+static PyGetSetDef Py{typename}_getset[] = {{
+    {{NULL}}  /* sentinel */
+}};
+""")
+
+    # PyTypeObject
+    code_parts.append(f"""\
+static PyTypeObject Py{typename}_Type = {{
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "f2py.{typename}",
+    .tp_doc = "Abstract Fortran type {typename} (cannot be instantiated)",
+    .tp_basicsize = sizeof(Py{typename}Object),
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_new = Py{typename}_tp_new,
+    .tp_init = Py{typename}_tp_init,
+    .tp_dealloc = Py{typename}_tp_dealloc,
+    .tp_repr = Py{typename}_tp_repr,
+    .tp_getset = Py{typename}_getset,
+}};
+""")
+
+    ret['f90modhooks'].append('\n'.join(code_parts))
+    ret['initf90modhooks'].extend(_gen_init_code(typename, modulename))
+
+
 def _generate_opaque_hooks(ret, typename, typeblock, modulename,
                            module_block, bound_procs=None, routines=None,
                            type_map=None):
@@ -315,7 +423,10 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
     added to getset (parent members inherited via tp_base). The Fortran
     wrappers and tp_init cover all members (parent + child).
     """
-    own_members = get_type_members(typeblock)
+    own_members = {
+        name: var for name, var in get_type_members(typeblock).items()
+        if not _is_type_parameter(var)
+    }
     parent_name = _get_extends_parent(typeblock)
 
     # For inheritance: all_members = parent + own for extern/init/repr/getset

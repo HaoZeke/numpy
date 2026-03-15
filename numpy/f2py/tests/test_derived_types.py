@@ -3128,3 +3128,401 @@ class TestComplexMemberOpaque(util.F2PyTest):
         wf.amplitude = -1+2j
         assert wf.amplitude == (-1+2j)
         assert wf.phase == 1.57
+
+
+class TestAbstractTypeCodeGen:
+    """Test code generation for abstract types with concrete extensions."""
+
+    def test_abstract_type_detected(self):
+        from numpy.f2py._dt_helpers import _is_abstract_type
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        # Set parent_block for attribute lookup
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        names = {tb['name'].lower() for tb in type_blocks}
+        assert 'baseshape' in names
+        assert 'disk' in names
+        # BaseShape should be detected as abstract
+        baseshape_tb = next(tb for tb in type_blocks
+                        if tb['name'].lower() == 'baseshape')
+        assert _is_abstract_type(baseshape_tb)
+        # Disk should NOT be abstract
+        circle_tb = next(tb for tb in type_blocks
+                         if tb['name'].lower() == 'disk')
+        assert not _is_abstract_type(circle_tb)
+
+    def test_abstract_generates_skeleton(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Should generate code for both shape (abstract skeleton)
+        # and circle (concrete opaque)
+        assert len(hooks['f90modhooks']) >= 2
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Abstract shape skeleton should exist
+        assert 'Pybaseshape_Type' in all_code
+        assert 'PybaseshapeObject' in all_code
+        # Concrete circle should exist
+        assert 'Pydisk_Type' in all_code
+        assert 'PydiskObject' in all_code
+
+    def test_abstract_tp_init_raises(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # BaseShape skeleton should raise TypeError on init
+        baseshape_code = hooks['f90modhooks'][0]
+        assert 'Cannot instantiate abstract Fortran type' in baseshape_code
+        assert 'PyErr_SetString(PyExc_TypeError' in baseshape_code
+
+    def test_abstract_no_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # BaseShape skeleton should have no extern declarations
+        # for Fortran wrappers (no f2py_create_baseshape etc.)
+        baseshape_code = hooks['f90modhooks'][0]
+        assert 'f2py_create_baseshape' not in baseshape_code.lower()
+        assert 'f2py_destroy_baseshape' not in baseshape_code.lower()
+        assert 'extern' not in baseshape_code.lower()
+
+    def test_abstract_has_basetype_flag(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        baseshape_code = hooks['f90modhooks'][0]
+        assert 'Py_TPFLAGS_BASETYPE' in baseshape_code
+
+    def test_child_has_tp_base_to_abstract(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # circle should have tp_base pointing to shape
+        assert '.tp_base = &Pybaseshape_Type,' in all_code
+
+    def test_child_has_all_members(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Disk should have both area (inherited) and radius (own)
+        disk_code = hooks['f90modhooks'][1]
+        assert 'area' in disk_code
+        assert 'radius' in disk_code
+
+    def test_abstract_shape_generated_before_circle(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        baseshape_pos = all_code.find('Pybaseshape_Type')
+        disk_pos = all_code.find('Pydisk_Type')
+        assert baseshape_pos < disk_pos
+
+    def test_fortran_wrappers_skip_abstract(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        source = derived_type_rules.generate_fortran_wrappers(
+            'abstract_type_mod', type_blocks)
+        # Should generate wrappers for Disk but not BaseShape
+        if source is not None:
+            assert 'f2py_create_disk' in source
+            assert 'f2py_create_baseshape' not in source
+
+
+@pytest.mark.slow
+class TestAbstractTypeOpaque(util.F2PyTest):
+    """Test abstract type inheritance with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "abstract_type.f90")]
+
+    def test_shape_type_exists(self):
+        assert hasattr(self.module, 'baseshape')
+
+    def test_circle_type_exists(self):
+        assert hasattr(self.module, 'disk')
+
+    def test_shape_cannot_instantiate(self):
+        with pytest.raises(TypeError, match="abstract"):
+            self.module.baseshape()
+
+    def test_circle_can_instantiate(self):
+        c = self.module.disk(area=0.0, radius=1.0)
+        assert abs(c.radius - 1.0) < 1e-10
+
+    def test_circle_has_area(self):
+        c = self.module.disk(area=0.0, radius=1.0)
+        assert hasattr(c, 'area')
+
+    def test_circle_isinstance_shape(self):
+        """Disk should be an instance of BaseShape via tp_base."""
+        c = self.module.disk(area=0.0, radius=1.0)
+        # self.module.baseshape is the BaseShape type object itself
+        assert isinstance(c, self.module.baseshape)
+
+
+class TestParameterizedKindCodeGen:
+    """Test code generation for KIND-parameterized derived types."""
+
+    def test_kind_param_resolution(self):
+        """Test _resolve_kind_params extracts KIND defaults."""
+        from numpy.f2py._dt_helpers import _resolve_kind_params
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+
+        params = _resolve_kind_params(realvec_tb)
+        assert 'k' in params
+        # kind(0.0d0) = 8 (double precision)
+        assert params['k'] == 8
+
+    def test_type_parameter_detected(self):
+        """Test _is_type_parameter identifies KIND members."""
+        from numpy.f2py._dt_helpers import _is_type_parameter
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+
+        members = realvec_tb.get('vars', {})
+        # 'k' should be identified as a type parameter
+        assert _is_type_parameter(members['k'])
+        # 'length', 'x', 'y', 'z' are not type parameters
+        assert not _is_type_parameter(members['length'])
+        assert not _is_type_parameter(members['x'])
+
+    def test_parameterized_type_wrappable(self):
+        """Test that KIND-parameterized types pass wrappability checks."""
+        from numpy.f2py._dt_helpers import _can_wrap_opaque
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+        assert _can_wrap_opaque(realvec_tb)
+
+    def test_kind_resolved_in_members(self):
+        """Test that kind parameters are resolved in member types."""
+        from numpy.f2py._dt_helpers import (
+            _get_member_ctype, _resolve_parameterized_type
+        )
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+
+        _resolve_parameterized_type(realvec_tb)
+
+        members = realvec_tb.get('vars', {})
+        # After resolution, x should have kind='8' -> double
+        ctype = _get_member_ctype(members['x'])
+        assert ctype == 'double'
+        ctype = _get_member_ctype(members['y'])
+        assert ctype == 'double'
+        ctype = _get_member_ctype(members['z'])
+        assert ctype == 'double'
+
+    def test_buildhooks_generates_wrapper(self):
+        """Test that buildhooks generates wrapper code for parameterized type."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Should have generated code for RealVec
+        assert len(hooks['f90modhooks']) >= 1
+
+        # Check the opaque type generates correct extern declarations
+        realvec_code = hooks['f90modhooks'][0]
+        assert 'f2py_create_realvec' in realvec_code
+        assert 'f2py_destroy_realvec' in realvec_code
+        # Should have getters/setters for data members (not for k)
+        assert 'f2py_get_realvec_x' in realvec_code
+        assert 'f2py_get_realvec_y' in realvec_code
+        assert 'f2py_get_realvec_z' in realvec_code
+        assert 'f2py_get_realvec_length' in realvec_code
+        # Should NOT have getter/setter for the type parameter k
+        assert 'f2py_get_realvec_k' not in realvec_code
+        assert 'f2py_set_realvec_k' not in realvec_code
+
+    def test_type_param_not_in_getset(self):
+        """Type parameters should not appear in Python getset descriptors."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        realvec_code = hooks['f90modhooks'][0]
+        # The getset array should not mention k
+        assert 'Pyrealvec_get_k' not in realvec_code
+        assert 'Pyrealvec_set_k' not in realvec_code
+        # But data members should be present
+        assert 'Pyrealvec_get_x' in realvec_code
+        assert 'Pyrealvec_set_x' in realvec_code
+
+
+class TestEvalKindExpr:
+    """Test the _eval_kind_expr helper for various Fortran kind expressions."""
+
+    def test_integer_literal(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('4') == 4
+        assert _eval_kind_expr('8') == 8
+        assert _eval_kind_expr('16') == 16
+
+    def test_kind_double(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('kind(0.0d0)') == 8
+        assert _eval_kind_expr('kind(1.0d0)') == 8
+
+    def test_kind_single(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('kind(0.0)') == 4
+        assert _eval_kind_expr('kind(0.0e0)') == 4
+
+    def test_kind_integer(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('kind(0)') == 4
+
+    def test_iso_fortran_env(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('real64') == 8
+        assert _eval_kind_expr('real32') == 4
+        assert _eval_kind_expr('int32') == 4
+        assert _eval_kind_expr('int64') == 8
+
+    def test_iso_c_binding(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('c_double') == 8
+        assert _eval_kind_expr('c_float') == 4
+
+    def test_unknown_returns_none(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('my_custom_kind') is None
+
+
+@pytest.mark.slow
+class TestParameterizedKindCompilation(util.F2PyTest):
+    """Test compilation and runtime of KIND-parameterized derived types.
+
+    Requires a Fortran compiler with parameterized derived type support
+    (F2008+, gfortran 8+).
+    """
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "parameterized_kind.f90")]
+
+    def test_realvec_exists(self):
+        assert hasattr(self.module, 'realvec')
+
+    def test_realvec_construct_default(self):
+        v = self.module.realvec()
+        assert v.x == 0.0
+        assert v.y == 0.0
+        assert v.z == 0.0
+        assert v.length == 0
+
+    def test_realvec_construct_with_args(self):
+        v = self.module.realvec(length=3, x=1.0, y=2.0, z=3.0)
+        assert v.length == 3
+        assert abs(v.x - 1.0) < 1e-10
+        assert abs(v.y - 2.0) < 1e-10
+        assert abs(v.z - 3.0) < 1e-10
+
+    def test_realvec_set_members(self):
+        v = self.module.realvec()
+        v.x = 4.5
+        v.y = 5.5
+        v.z = 6.5
+        v.length = 10
+        assert abs(v.x - 4.5) < 1e-10
+        assert abs(v.y - 5.5) < 1e-10
+        assert abs(v.z - 6.5) < 1e-10
+        assert v.length == 10
+
+    def test_realvec_no_kind_param_attr(self):
+        """The type parameter k should not be exposed as a Python attribute."""
+        v = self.module.realvec()
+        assert not hasattr(v, 'k')
+
+    def test_realvec_double_precision(self):
+        """Members should be double precision (kind=8)."""
+        v = self.module.realvec()
+        v.x = 1.23456789012345e15
+        # Double precision can represent this exactly
+        assert abs(v.x - 1.23456789012345e15) < 1.0

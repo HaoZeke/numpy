@@ -660,7 +660,15 @@ def is_simple_derived_type(typeblock):
     members = get_type_members(typeblock)
     if not members:
         return False
+    # Count real (non-type-parameter) members
+    has_data_members = False
     for name, var in members.items():
+        # Skip type parameters (KIND/LEN from parameterized types)
+        # F2018 7.5.3 -- these are not data members
+        attrspec = var.get('attrspec', [])
+        if 'kind' in attrspec or 'len' in attrspec:
+            continue
+        has_data_members = True
         typespec = var.get('typespec', '')
         if typespec == 'type':
             # Nested derived type member (scalar or fixed-size array)
@@ -711,7 +719,7 @@ def is_simple_derived_type(typeblock):
         # Arrays are allowed only if fixed-size
         if isarray(var) and not is_fixed_array(var):
             return False
-    return True
+    return has_data_members
 
 
 def get_type_by_name(module, typename):
