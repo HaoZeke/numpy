@@ -240,10 +240,13 @@ def getctype(var):
                         ctype = f2cmap[str(var['kindselector']['kind'])]
                     except KeyError:
                         kind = var['kindselector']['kind']
-                        errmess(f'getctype: "{typespec}({kind=})" is mapped to C '
-                                f'"{ctype}" (to override define {{{typespec!r}: '
-                                f'{{{kind!r}: "<C typespec>"}}}} '
-                                f'in {os.getcwd()}/.f2py_f2cmap file).\n')
+                        errmess(
+                            f'getctype: "{typespec}({kind=})" is '
+                            f'mapped to C "{ctype}" (to override '
+                            f'define {{{typespec!r}: '
+                            f'{{{kind!r}: "<C typespec>"}}}} '
+                            f'in {os.getcwd()}/.f2py_f2cmap '
+                            f'file).\n')
     elif not isexternal(var):
         errmess(f'getctype: No C-type found in "{var}", assuming void.\n')
     return ctype
