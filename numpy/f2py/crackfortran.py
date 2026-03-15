@@ -1682,7 +1682,14 @@ def updatevars(typespec, selector, attrspec, entitydecl):
                 a = s + a[len(s):]
             l.append(a)
         attrspec = l
-    el = [x.strip() for x in markoutercomma(entitydecl).split('@,@')]
+    # Strip pointer default initialization before entity splitting.
+    # F2018 R741: component-initialization is "=> null-init" or
+    # "=> initial-data-target" for pointer components (7.5.4.6).
+    # This must happen before space-based splitting, otherwise
+    # "data(:) => null()" becomes three tokens: "data(:)", "=>", "null()".
+    entitydecl_clean = re.sub(
+        r'\s*=>\s*null\s*\(\s*\)', '', entitydecl, flags=re.I)
+    el = [x.strip() for x in markoutercomma(entitydecl_clean).split('@,@')]
     el1 = []
     for e in el:
         for e1 in [x.strip() for x in markoutercomma(removespaces(markinnerspaces(e)), comma=' ').split('@ @')]:
