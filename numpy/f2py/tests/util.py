@@ -121,6 +121,97 @@ def has_fortran_compiler():
     return (checker.has_f90 and checker.has_f77)
 
 
+def fortran_builds(code):
+    """Return whether the Fortran compiler builds ``code`` into an object.
+
+    ``compiler.compiles()`` cannot answer this: its result is not checked by
+    ``check_language``, and for LLVM flang Meson adds clang-only
+    ``-Werror=`` options that make every check fail.  Building a static
+    library uses the same flags as the extension modules under test.
+    """
+    if sys.platform == "win32" or not has_f90_compiler():
+        return False
+    tmpdir = tempfile.mkdtemp()
+    try:
+        with open(os.path.join(tmpdir, "meson.build"), "w") as f:
+            f.write("project('check_build', 'fortran')\n")
+            f.write("static_library('check', 'check.f90')\n")
+        with open(os.path.join(tmpdir, "check.f90"), "w") as f:
+            f.write(code)
+        for cmd in (["meson", "setup", "btmp"],
+                    ["meson", "compile", "-C", "btmp"]):
+            if subprocess.run(cmd, check=False, cwd=tmpdir,
+                              capture_output=True).returncode != 0:
+                return False
+        return True
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+_pdt_support = None
+
+
+def has_pdt_support():
+    """Check if the Fortran compiler supports KIND type parameters.
+
+    Cached after the first call.
+    """
+    global _pdt_support
+    if _pdt_support is None:
+        _pdt_support = fortran_builds(
+            'module pdt_check\n'
+            '  implicit none\n'
+            '  type :: vec(k)\n'
+            '    integer, kind :: k = kind(0.0d0)\n'
+            '    real(k) :: x\n'
+            '  end type vec\n'
+            'contains\n'
+            '  subroutine make(v)\n'
+            '    type(vec(kind(0.0))), intent(out) :: v\n'
+            '    v%x = 0\n'
+            '  end subroutine make\n'
+            'end module pdt_check\n'
+        )
+    return _pdt_support
+
+
+_pdt_len_support = None
+
+
+def has_pdt_len_support():
+    """Check if the Fortran compiler handles LEN type parameters as f2py
+    wraps them.
+
+    The handle of a LEN-parameterized object is ``c_loc`` of a pointer
+    allocated with the requested length.  F2018 18.2.3.6 only allows
+    ``c_loc`` on noninteroperable scalars without length type parameters,
+    so this needs a compiler that accepts it as an extension; LLVM flang
+    rejects it and cannot lower LEN-parameterized objects either.  Cached
+    after the first call.
+    """
+    global _pdt_len_support
+    if _pdt_len_support is None:
+        _pdt_len_support = fortran_builds(
+            'module pdt_len_check\n'
+            '  use iso_c_binding, only: c_ptr, c_loc\n'
+            '  implicit none\n'
+            '  type :: vec(n)\n'
+            '    integer, len :: n\n'
+            '    real :: x(n)\n'
+            '  end type vec\n'
+            'contains\n'
+            '  function make(n) result(cptr)\n'
+            '    integer, intent(in) :: n\n'
+            '    type(c_ptr) :: cptr\n'
+            '    type(vec(n=n)), pointer :: v\n'
+            '    allocate(vec(n=n) :: v)\n'
+            '    cptr = c_loc(v)\n'
+            '  end function make\n'
+            'end module pdt_len_check\n'
+        )
+    return _pdt_len_support
+
+
 #
 # Maintaining a temporary module directory
 #
