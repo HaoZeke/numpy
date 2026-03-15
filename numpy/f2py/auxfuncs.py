@@ -684,10 +684,12 @@ def is_simple_derived_type(typeblock):
             continue
         if typespec not in _SIMPLE_SCALAR_TYPESPECS:
             return False
-        # Allocatable 1D numeric arrays are allowed
+        # Allocatable numeric arrays of any rank are allowed
+        # (F2003 allocatable components, F2018 9.7.1)
         if isallocatable(var) and isarray(var):
             dims = var.get('dimension', [])
-            if len(dims) == 1 and str(dims[0]).strip() == ':':
+            if (len(dims) >= 1
+                    and all(str(d).strip() == ':' for d in dims)):
                 continue
             return False
         if isallocatable(var):

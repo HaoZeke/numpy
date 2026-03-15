@@ -51,6 +51,7 @@ from ._dt_helpers import (  # noqa: F401
     _get_extends_parent,
     _get_member_ctype,
     _get_member_isoc_type,
+    _get_alloc_ndim,
     _is_allocatable_member,
     _is_array_member,
     _is_char_member,

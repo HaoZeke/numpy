@@ -27,6 +27,7 @@ from ._dt_helpers import (
     _get_char_len,
     _get_member_ctype,
     _get_member_isoc_type,
+    _get_alloc_ndim,
     _is_allocatable_member,
     _is_array_member,
     _is_char_member,
@@ -1180,19 +1181,25 @@ def _gen_opaque_extern_decls(typename, members):
             continue
 
         if _is_allocatable_member(mvar):
-            # Allocatable array: 4 externs (allocated, size, data, set)
+            ndim = _get_alloc_ndim(mvar)
+            # Allocatable array: allocated, ndim, shape, data, set
             lines.append(
                 f'extern unsigned char f2py_get_{sym}_{mname}'
                 f'_allocated(void *);')
             lines.append(
                 f'extern int f2py_get_{sym}_{mname}'
-                f'_size(void *);')
+                f'_ndim(void *);')
+            lines.append(
+                f'extern void f2py_get_{sym}_{mname}'
+                f'_shape(void *, int *);')
             lines.append(
                 f'extern void *f2py_get_{sym}_{mname}'
                 f'_data(void *);')
+            # setter takes ndim dimension args then data pointer
+            set_args = ', '.join(['void *'] + ['int'] * ndim + ['void *'])
             lines.append(
                 f'extern void f2py_set_{sym}_{mname}'
-                f'(void *, int, void *);')
+                f'({set_args});')
             continue
 
         ctype = _get_member_ctype(mvar)
@@ -1653,6 +1660,7 @@ static int
             npy_enum = _C_TO_NPY_ENUM.get(alloc_ctype)
             if npy_enum is None:
                 continue
+            ndim = _get_alloc_ndim(mvar)
 
             getter_name = f'Py{typename}_get_{mname}'
             funcs.append(f"""\
@@ -1669,16 +1677,41 @@ static PyObject *
     if (ptr == NULL) return NULL;
     unsigned char is_alloc = f2py_get_{sym}_{mname}_allocated(ptr);
     if (!is_alloc) Py_RETURN_NONE;
-    int n = f2py_get_{sym}_{mname}_size(ptr);
+    /* Query rank and shape from Fortran (F2018 16.9.182 size intrinsic) */
+    int rank = f2py_get_{sym}_{mname}_ndim(ptr);
+    int fortran_shape[{ndim}];
+    f2py_get_{sym}_{mname}_shape(ptr, fortran_shape);
+    npy_intp numpy_dims[{ndim}];
+    npy_intp total_elements = 1;
+    for (int dim_idx = 0; dim_idx < rank; dim_idx++) {{
+        numpy_dims[dim_idx] = (npy_intp)fortran_shape[dim_idx];
+        total_elements *= numpy_dims[dim_idx];
+    }}
     void *data = f2py_get_{sym}_{mname}_data(ptr);
-    npy_intp dims[1] = {{n}};
-    PyObject *arr = PyArray_SimpleNew(1, dims, {npy_enum});
+    /* Allocate NumPy array matching Fortran memory layout.
+       Fortran allocatables are column-major (F2018 8.5.8.1),
+       so multi-dimensional arrays use Fortran order. 1D arrays
+       have identical layout in both C and Fortran order. */
+    PyObject *arr;
+    if (rank > 1) {{
+        arr = PyArray_EMPTY(rank, numpy_dims, {npy_enum},
+                            1 /* fortran_order */);
+    }} else {{
+        arr = PyArray_SimpleNew(rank, numpy_dims, {npy_enum});
+    }}
     if (arr == NULL) return NULL;
     memcpy(PyArray_DATA((PyArrayObject *)arr), data,
-           n * sizeof({alloc_ctype}));
+           total_elements * sizeof({alloc_ctype}));
     return arr;
 }}
 """)
+
+            # Build setter args for the Fortran set call
+            # f2py_set_TYPE_MEMBER(ptr, n1, n2, ..., src)
+            set_dim_args = ', '.join(
+                f'(int)PyArray_DIM((PyArrayObject *)arr, {i})'
+                for i in range(ndim))
+            dealloc_args = ', '.join(['0'] * ndim + ['NULL'])
 
             setter_name = f'Py{typename}_set_{mname}'
             funcs.append(f"""\
@@ -1699,14 +1732,21 @@ static int
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return -1;
     if (value == Py_None) {{
-        f2py_set_{sym}_{mname}(ptr, 0, NULL);
+        f2py_set_{sym}_{mname}(ptr, {dealloc_args});
         return 0;
     }}
     PyObject *arr = PyArray_FROM_OTF(value, {npy_enum},
-                                      NPY_ARRAY_IN_ARRAY);
+                                      NPY_ARRAY_F_CONTIGUOUS);
     if (arr == NULL) return -1;
-    int n = (int)PyArray_SIZE((PyArrayObject *)arr);
-    f2py_set_{sym}_{mname}(ptr, n, PyArray_DATA((PyArrayObject *)arr));
+    if (PyArray_NDIM((PyArrayObject *)arr) != {ndim}) {{
+        PyErr_Format(PyExc_ValueError,
+                     "{mname} requires a {ndim}D array, got %dD",
+                     PyArray_NDIM((PyArrayObject *)arr));
+        Py_DECREF(arr);
+        return -1;
+    }}
+    f2py_set_{sym}_{mname}(ptr, {set_dim_args},
+                            PyArray_DATA((PyArrayObject *)arr));
     Py_DECREF(arr);
     return 0;
 }}

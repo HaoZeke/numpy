@@ -33,6 +33,7 @@ from ._dt_helpers import (
     _get_extends_parent,
     _get_member_ctype,
     _get_member_isoc_type,
+    _get_alloc_ndim,
     _is_allocatable_member,
     _is_array_member,
     _is_char_member,
@@ -342,7 +343,10 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 isoc_type = _get_member_isoc_type(mvar)
                 if isoc_type is None:
                     continue
+                ndim = _get_alloc_ndim(mvar)
+
                 # _allocated: returns logical(c_bool)
+                # Uses Fortran allocated() intrinsic (F2018 16.9.3)
                 lines.append(
                     f'  function f2py_get_{typename}_{mname}'
                     f'_allocated(cptr) '
@@ -360,71 +364,120 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'_allocated')
                 lines.append('')
 
-                # _size: returns integer(c_int)
+                # _ndim: returns rank as integer(c_int)
+                # Uses Fortran rank intrinsic concept (known at
+                # compile time from the type declaration)
                 lines.append(
                     f'  function f2py_get_{typename}_{mname}'
-                    f'_size(cptr) '
-                    f'result(n) bind(c)')
+                    f'_ndim(cptr) '
+                    f'result(array_rank) bind(c)')
                 lines.append(f'    type(c_ptr), value :: cptr')
-                lines.append(f'    integer(c_int) :: n')
+                lines.append(
+                    f'    integer(c_int) :: array_rank')
                 lines.append(
                     f'    type({typename}), pointer :: obj')
                 lines.append(f'    call c_f_pointer(cptr, obj)')
                 lines.append(
-                    f'    if (allocated(obj%{mname})) then')
-                lines.append(
-                    f'      n = size(obj%{mname})')
-                lines.append(f'    else')
-                lines.append(f'      n = 0')
-                lines.append(f'    end if')
+                    f'    array_rank = {ndim}')
                 lines.append(
                     f'  end function f2py_get_{typename}_{mname}'
-                    f'_size')
+                    f'_ndim')
                 lines.append('')
 
-                # _data: returns type(c_ptr)
-                # F2018 18.2.3.3: c_loc on allocatable requires F2008+
+                # _shape: fills caller-provided array with
+                # size(member, dim) for each dimension
+                # Uses Fortran size() intrinsic (F2018 16.9.182)
+                lines.append(
+                    f'  subroutine f2py_get_{typename}_{mname}'
+                    f'_shape(cptr, shape_out) bind(c)')
+                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append(
+                    f'    integer(c_int) :: shape_out({ndim})')
+                lines.append(
+                    f'    type({typename}), pointer :: obj')
+                lines.append(
+                    f'    integer :: dim_idx')
+                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append(
+                    f'    if (allocated(obj%{mname})) then')
+                for dim_idx in range(1, ndim + 1):
+                    lines.append(
+                        f'      shape_out({dim_idx}) = '
+                        f'size(obj%{mname}, {dim_idx})')
+                lines.append(f'    else')
+                for dim_idx in range(1, ndim + 1):
+                    lines.append(
+                        f'      shape_out({dim_idx}) = 0')
+                lines.append(f'    end if')
+                lines.append(
+                    f'  end subroutine f2py_get_{typename}_{mname}'
+                    f'_shape')
+                lines.append('')
+
+                # _data: returns type(c_ptr) to contiguous array data
+                # F2018 18.2.3.3: c_loc on allocatable requires
+                # TARGET attribute or allocatable (F2008+)
                 lines.append(
                     f'  function f2py_get_{typename}_{mname}'
                     f'_data(cptr) '
-                    f'result(dptr) bind(c)')
+                    f'result(data_ptr) bind(c)')
                 lines.append(f'    type(c_ptr), value :: cptr')
-                lines.append(f'    type(c_ptr) :: dptr')
+                lines.append(f'    type(c_ptr) :: data_ptr')
                 lines.append(
                     f'    type({typename}), pointer :: obj')
                 lines.append(f'    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    if (allocated(obj%{mname})) then')
                 lines.append(
-                    f'      dptr = c_loc(obj%{mname})')
+                    f'      data_ptr = c_loc(obj%{mname})')
                 lines.append(f'    else')
-                lines.append(f'      dptr = c_null_ptr')
+                lines.append(f'      data_ptr = c_null_ptr')
                 lines.append(f'    end if')
                 lines.append(
                     f'  end function f2py_get_{typename}_{mname}'
                     f'_data')
                 lines.append('')
 
-                # setter: deallocate if allocated, allocate(n), copy
+                # setter: deallocate if allocated, allocate with
+                # per-dimension sizes, copy data from C pointer
+                # F2018 9.7.1.2: deallocate statement
+                # F2018 9.7.1.1: allocate statement with shape
+                dim_args = ', '.join(
+                    f'dim_{idx}' for idx in range(1, ndim + 1))
+                dim_decls = ', '.join(
+                    f'dim_{idx}' for idx in range(1, ndim + 1))
+                alloc_shape = ', '.join(
+                    f'dim_{idx}' for idx in range(1, ndim + 1))
+                colon_shape = ', '.join([':'] * ndim)
+                cf_shape = ', '.join(
+                    f'dim_{idx}' for idx in range(1, ndim + 1))
+
                 lines.append(
                     f'  subroutine f2py_set_{typename}_{mname}'
-                    f'(cptr, n, src) bind(c)')
+                    f'(cptr, {dim_args}, src) bind(c)')
                 lines.append(f'    type(c_ptr), value :: cptr')
-                lines.append(f'    integer(c_int), value :: n')
+                for idx in range(1, ndim + 1):
+                    lines.append(
+                        f'    integer(c_int), value :: dim_{idx}')
                 lines.append(f'    type(c_ptr), value :: src')
                 lines.append(
                     f'    type({typename}), pointer :: obj')
                 lines.append(
-                    f'    {isoc_type}, pointer :: src_arr(:)')
+                    f'    {isoc_type}, pointer :: '
+                    f'src_arr({colon_shape})')
                 lines.append(f'    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    if (allocated(obj%{mname})) '
                     f'deallocate(obj%{mname})')
-                lines.append(f'    if (n > 0) then')
+                # Check first dimension > 0 as sentinel for
+                # "deallocate only" calls (all dims = 0)
+                lines.append(f'    if (dim_1 > 0) then')
                 lines.append(
-                    f'      allocate(obj%{mname}(n))')
+                    f'      allocate(obj%{mname}'
+                    f'({alloc_shape}))')
                 lines.append(
-                    f'      call c_f_pointer(src, src_arr, [n])')
+                    f'      call c_f_pointer(src, src_arr, '
+                    f'[{cf_shape}])')
                 lines.append(
                     f'      obj%{mname} = src_arr')
                 lines.append(f'    end if')
