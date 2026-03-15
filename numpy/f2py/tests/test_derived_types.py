@@ -3453,6 +3453,15 @@ class TestParameterizedKindCodeGen:
         assert 'Pyrealvec_set_x' in realvec_code
 
 
+@pytest.mark.slow
+@pytest.mark.skipif(not util.has_f90_compiler(),
+                    reason="No Fortran 90 compiler available")
+def test_fortran_builds_probe():
+    # Compiler feature gates rely on the probe failing for broken code
+    assert util.fortran_builds("module probe_ok\nend module probe_ok\n")
+    assert not util.fortran_builds("end module probe_never_started\n")
+
+
 class TestEvalKindExpr:
     """Test the _eval_kind_expr helper for various Fortran kind expressions."""
 
@@ -3497,8 +3506,8 @@ class TestEvalKindExpr:
 class TestParameterizedKindCompilation(util.F2PyTest):
     """Test compilation and runtime of KIND-parameterized derived types.
 
-    Requires a Fortran compiler with parameterized derived type support
-    (F2008+, gfortran 8+).
+    Requires a Fortran compiler with KIND type parameter support
+    (F2003, gfortran 8+, LLVM flang).
     """
     sources = [util.getpath("tests", "src", "derived_types",
                             "parameterized_kind.f90")]
