@@ -261,6 +261,32 @@ def _get_alloc_ndim(var):
     return len(var.get('dimension', []))
 
 
+def _is_pointer_member(var):
+    """Check if a member is a pointer numeric array (any rank).
+
+    Fortran pointer components (F2018 7.5.4.6 "Pointer components")
+    point to existing data via pointer association (F2018 10.2.2).
+    Distinct from allocatables (F2018 7.5.4.7): the wrapper does not
+    manage the target memory. Exposed as read-only (getter) from Python
+    since pointer assignment from C requires careful lifetime management.
+    """
+    attrspec = var.get('attrspec', [])
+    if 'pointer' not in attrspec:
+        return False
+    if not isarray(var):
+        return False
+    typespec = var.get('typespec', '').lower()
+    if typespec not in _SIMPLE_SCALAR_TYPESPECS:
+        return False
+    dims = var.get('dimension', [])
+    return len(dims) >= 1 and all(str(d).strip() == ':' for d in dims)
+
+
+def _get_pointer_ndim(var):
+    """Return the rank (number of dimensions) of a pointer member."""
+    return len(var.get('dimension', []))
+
+
 def _is_type_member(var):
     """Check if a member is a scalar nested derived type."""
     return (var.get('typespec') == 'type'
@@ -292,6 +318,8 @@ def _can_wrap_bindc(typeblock, type_map=None):
             continue
         elif _is_allocatable_member(var):
             continue
+        elif _is_pointer_member(var):
+            continue
         elif _get_member_ctype(var) is None:
             return False
     return True
@@ -320,6 +348,8 @@ def _can_wrap_opaque(typeblock, type_map=None):
         elif _is_char_member(var):
             continue
         elif _is_allocatable_member(var):
+            continue
+        elif _is_pointer_member(var):
             continue
         elif _get_member_ctype(var) is None:
             return False

@@ -28,8 +28,10 @@ from ._dt_helpers import (
     _get_member_ctype,
     _get_member_isoc_type,
     _get_alloc_ndim,
+    _get_pointer_ndim,
     _is_allocatable_member,
     _is_array_member,
+    _is_pointer_member,
     _is_char_member,
     _is_complex_member,
     _is_type_array_member,
@@ -1137,7 +1139,8 @@ def _gen_opaque_extern_decls(typename, members):
     for mname, mvar in members.items():
         if (_is_array_member(mvar) or _is_type_member(mvar)
                 or _is_type_array_member(mvar) or _is_char_member(mvar)
-                or _is_allocatable_member(mvar)):
+                or _is_allocatable_member(mvar)
+                or _is_pointer_member(mvar)):
             continue
         ctype = _get_member_ctype(mvar)
         if ctype and _C_TO_PYFORMAT.get(ctype):
@@ -1202,6 +1205,25 @@ def _gen_opaque_extern_decls(typename, members):
                 f'({set_args});')
             continue
 
+        if _is_pointer_member(mvar):
+            ndim = _get_pointer_ndim(mvar)
+            # Pointer member: read-only (associated, ndim, shape, data)
+            # No setter -- pointer association from C needs careful
+            # lifetime management (F2018 7.5.4.6, 10.2.2)
+            lines.append(
+                f'extern unsigned char f2py_get_{sym}_{mname}'
+                f'_associated(void *);')
+            lines.append(
+                f'extern int f2py_get_{sym}_{mname}'
+                f'_ndim(void *);')
+            lines.append(
+                f'extern void f2py_get_{sym}_{mname}'
+                f'_shape(void *, int *);')
+            lines.append(
+                f'extern void *f2py_get_{sym}_{mname}'
+                f'_data(void *);')
+            continue
+
         ctype = _get_member_ctype(mvar)
         dims = _get_array_dims(mvar)
 
@@ -1257,7 +1279,8 @@ def _gen_opaque_tp_init(typename, members):
     for mname, mvar in members.items():
         if (_is_array_member(mvar) or _is_type_member(mvar)
                 or _is_type_array_member(mvar) or _is_char_member(mvar)
-                or _is_allocatable_member(mvar)):
+                or _is_allocatable_member(mvar)
+                or _is_pointer_member(mvar)):
             continue  # arrays, nested types, chars, allocs set via props
         ctype = _get_member_ctype(mvar)
         fmt = _C_TO_PYFORMAT.get(ctype)
@@ -1275,7 +1298,8 @@ def _gen_opaque_tp_init(typename, members):
     for mname, mvar in members.items():
         if (_is_array_member(mvar) or _is_type_member(mvar)
                 or _is_type_array_member(mvar) or _is_char_member(mvar)
-                or _is_allocatable_member(mvar)):
+                or _is_allocatable_member(mvar)
+                or _is_pointer_member(mvar)):
             continue
         ctype = _get_member_ctype(mvar)
         if _C_TO_PYFORMAT.get(ctype) is None:
@@ -1758,6 +1782,76 @@ static int
             )
             continue
 
+        if _is_pointer_member(mvar):
+            # Pointer member: read-only getter, no setter
+            # F2018 7.5.4.6 pointer components, 16.9.16 associated()
+            ptr_ctype = _get_member_ctype(mvar)
+            npy_enum = _C_TO_NPY_ENUM.get(ptr_ctype)
+            if npy_enum is None:
+                continue
+            ndim = _get_pointer_ndim(mvar)
+
+            getter_name = f'Py{typename}_get_{mname}'
+            funcs.append(f"""\
+static PyObject *
+{getter_name}(PyObject *selfobj, void *closure)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return NULL;
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return NULL;
+    /* Check pointer association (F2018 16.9.16 associated()) */
+    unsigned char is_assoc = f2py_get_{sym}_{mname}_associated(ptr);
+    if (!is_assoc) Py_RETURN_NONE;
+    /* Query shape from Fortran (F2018 16.9.182 size()) */
+    int rank = f2py_get_{sym}_{mname}_ndim(ptr);
+    int fortran_shape[{ndim}];
+    f2py_get_{sym}_{mname}_shape(ptr, fortran_shape);
+    npy_intp numpy_dims[{ndim}];
+    npy_intp total_elements = 1;
+    for (int dim_idx = 0; dim_idx < rank; dim_idx++) {{
+        numpy_dims[dim_idx] = (npy_intp)fortran_shape[dim_idx];
+        total_elements *= numpy_dims[dim_idx];
+    }}
+    void *data = f2py_get_{sym}_{mname}_data(ptr);
+    /* Copy data from Fortran pointer target.
+       Column-major layout for rank > 1 (F2018 8.5.8.1). */
+    PyObject *arr;
+    if (rank > 1) {{
+        arr = PyArray_EMPTY(rank, numpy_dims, {npy_enum},
+                            1 /* fortran_order */);
+    }} else {{
+        arr = PyArray_SimpleNew(rank, numpy_dims, {npy_enum});
+    }}
+    if (arr == NULL) return NULL;
+    memcpy(PyArray_DATA((PyArrayObject *)arr), data,
+           total_elements * sizeof({ptr_ctype}));
+    return arr;
+}}
+""")
+
+            # Read-only: setter raises AttributeError
+            setter_name = f'Py{typename}_set_{mname}'
+            funcs.append(f"""\
+static int
+{setter_name}(PyObject *selfobj, PyObject *value, void *closure)
+{{
+    PyErr_SetString(PyExc_AttributeError,
+                    "{mname} is a Fortran pointer member (read-only)");
+    return -1;
+}}
+""")
+
+            getset_entries.append(
+                f'    {{"{mname}", {getter_name}, {setter_name}, '
+                f'"{mname} pointer member (read-only)", NULL}},'
+            )
+            continue
+
         ctype = _get_member_ctype(mvar)
         dims = _get_array_dims(mvar)
 
@@ -1928,6 +2022,9 @@ def _gen_opaque_tp_repr(typename, members):
             continue
         if _is_allocatable_member(mvar):
             fmt_parts.append(f'{mname}=<allocatable>')
+            continue
+        if _is_pointer_member(mvar):
+            fmt_parts.append(f'{mname}=<pointer>')
             continue
         ctype = _get_member_ctype(mvar)
         dims = _get_array_dims(mvar)
