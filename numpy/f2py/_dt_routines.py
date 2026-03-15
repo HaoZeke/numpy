@@ -34,8 +34,10 @@ from ._dt_helpers import (
     _get_member_ctype,
     _get_member_isoc_type,
     _get_alloc_ndim,
+    _get_pointer_ndim,
     _is_allocatable_member,
     _is_array_member,
+    _is_pointer_member,
     _is_char_member,
     _is_type_array_member,
     _is_type_member,
@@ -137,8 +139,9 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
         for mname, mvar in members.items():
             if (_is_array_member(mvar) or _is_type_member(mvar)
                     or _is_type_array_member(mvar) or _is_char_member(mvar)
-                    or _is_allocatable_member(mvar)):
-                continue  # arrays, nested types, chars, allocs skip ctor
+                    or _is_allocatable_member(mvar)
+                    or _is_pointer_member(mvar)):
+                continue  # arrays, nested types, chars, allocs, ptrs skip ctor
             isoc_type = _get_member_isoc_type(mvar)
             if isoc_type is None:
                 continue
@@ -484,6 +487,105 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  end subroutine f2py_set_{typename}_{mname}')
                 lines.append('')
+                continue
+
+            if _is_pointer_member(mvar):
+                isoc_type = _get_member_isoc_type(mvar)
+                if isoc_type is None:
+                    continue
+                ndim = _get_pointer_ndim(mvar)
+
+                # _associated: returns logical(c_bool)
+                # F2018 16.9.16: ASSOCIATED intrinsic
+                lines.append(
+                    f'  function f2py_get_{typename}_{mname}'
+                    f'_associated(cptr) '
+                    f'result(is_assoc) bind(c)')
+                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append(
+                    f'    logical(c_bool) :: is_assoc')
+                lines.append(
+                    f'    type({typename}), pointer :: obj')
+                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append(
+                    f'    is_assoc = associated(obj%{mname})')
+                lines.append(
+                    f'  end function f2py_get_{typename}_{mname}'
+                    f'_associated')
+                lines.append('')
+
+                # _ndim: returns compile-time rank
+                lines.append(
+                    f'  function f2py_get_{typename}_{mname}'
+                    f'_ndim(cptr) '
+                    f'result(array_rank) bind(c)')
+                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append(
+                    f'    integer(c_int) :: array_rank')
+                lines.append(
+                    f'    type({typename}), pointer :: obj')
+                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append(
+                    f'    array_rank = {ndim}')
+                lines.append(
+                    f'  end function f2py_get_{typename}_{mname}'
+                    f'_ndim')
+                lines.append('')
+
+                # _shape: fills shape array with size per dimension
+                # F2018 16.9.182: SIZE intrinsic
+                lines.append(
+                    f'  subroutine f2py_get_{typename}_{mname}'
+                    f'_shape(cptr, shape_out) bind(c)')
+                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append(
+                    f'    integer(c_int) :: shape_out({ndim})')
+                lines.append(
+                    f'    type({typename}), pointer :: obj')
+                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append(
+                    f'    if (associated(obj%{mname})) then')
+                for dim_idx in range(1, ndim + 1):
+                    lines.append(
+                        f'      shape_out({dim_idx}) = '
+                        f'size(obj%{mname}, {dim_idx})')
+                lines.append(f'    else')
+                for dim_idx in range(1, ndim + 1):
+                    lines.append(
+                        f'      shape_out({dim_idx}) = 0')
+                lines.append(f'    end if')
+                lines.append(
+                    f'  end subroutine f2py_get_{typename}_{mname}'
+                    f'_shape')
+                lines.append('')
+
+                # _data: returns c_loc of pointer target
+                # F2018 18.2.3.3: C_LOC argument constraints
+                # Pointer targets must have the TARGET attribute
+                # or be pointer-associated (F2018 10.2.2.2)
+                lines.append(
+                    f'  function f2py_get_{typename}_{mname}'
+                    f'_data(cptr) '
+                    f'result(data_ptr) bind(c)')
+                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append(f'    type(c_ptr) :: data_ptr')
+                lines.append(
+                    f'    type({typename}), pointer :: obj')
+                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append(
+                    f'    if (associated(obj%{mname})) then')
+                lines.append(
+                    f'      data_ptr = c_loc(obj%{mname})')
+                lines.append(f'    else')
+                lines.append(f'      data_ptr = c_null_ptr')
+                lines.append(f'    end if')
+                lines.append(
+                    f'  end function f2py_get_{typename}_{mname}'
+                    f'_data')
+                lines.append('')
+                # No setter for pointer members -- pointer association
+                # from C would require the target to have TARGET
+                # attribute and lifetime management (F2018 10.2.2)
                 continue
 
             isoc_type = _get_member_isoc_type(mvar)

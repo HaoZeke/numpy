@@ -695,7 +695,14 @@ def is_simple_derived_type(typeblock):
         if isallocatable(var):
             return False
         attrspec = var.get('attrspec', [])
+        # Pointer numeric arrays are allowed (read-only from Python)
+        # F2018 7.5.4.6 "Pointer components"
         if 'pointer' in attrspec:
+            if isarray(var):
+                dims = var.get('dimension', [])
+                if (len(dims) >= 1
+                        and all(str(d).strip() == ':' for d in dims)):
+                    continue
             return False
         # Arrays are allowed only if fixed-size
         if isarray(var) and not is_fixed_array(var):
