@@ -246,14 +246,19 @@ def _is_complex_member(var):
 
 
 def _is_allocatable_member(var):
-    """Check if a member is a 1D allocatable numeric array."""
+    """Check if a member is an allocatable numeric array (any rank)."""
     if not isallocatable(var) or not isarray(var):
         return False
     typespec = var.get('typespec', '').lower()
     if typespec not in _SIMPLE_SCALAR_TYPESPECS:
         return False
     dims = var.get('dimension', [])
-    return len(dims) == 1 and str(dims[0]).strip() == ':'
+    return len(dims) >= 1 and all(str(d).strip() == ':' for d in dims)
+
+
+def _get_alloc_ndim(var):
+    """Return the rank (number of dimensions) of an allocatable member."""
+    return len(var.get('dimension', []))
 
 
 def _is_type_member(var):
