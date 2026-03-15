@@ -24,6 +24,7 @@ from ._dt_helpers import (
     _C_TO_PYFORMAT,
     _C_TO_PYOBJ,
     _PYOBJ_TO_C,
+    _can_wrap_abstract,
     _can_wrap_bindc,
     _can_wrap_opaque,
     _fortran_sym,
@@ -35,6 +36,7 @@ from ._dt_helpers import (
     _get_member_isoc_type,
     _get_alloc_ndim,
     _get_pointer_ndim,
+    _is_abstract_type,
     _is_allocatable_member,
     _is_array_member,
     _is_pointer_member,
@@ -68,7 +70,8 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
         for tb in remaining:
             tname = tb['name'].lower()
             if (_can_wrap_bindc(tb, type_map)
-                    or _can_wrap_opaque(tb, type_map)):
+                    or _can_wrap_opaque(tb, type_map)
+                    or _can_wrap_abstract(tb, type_map)):
                 type_map[tname] = tb
             else:
                 still_remaining.append(tb)
