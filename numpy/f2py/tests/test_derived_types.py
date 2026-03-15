@@ -3034,14 +3034,15 @@ class TestComplexMemberCodeGen:
         hooks = derived_type_rules.buildhooks(module)
 
         all_code = '\n'.join(hooks['f90modhooks'])
-        # complex.h in needs (placed in #includes# section)
-        assert 'complex.h' in hooks.get('need', [])
-        # C struct has complex fields
-        assert 'double _Complex reactance' in all_code
-        # Getter uses creal/cimag
+        # Uses NumPy complex types (MSVC-compatible, no complex.h needed)
+        assert 'complex.h' not in hooks.get('need', [])
+        assert 'npy_math.h' in hooks.get('need', [])
+        # C struct has npy_cdouble fields
+        assert 'npy_cdouble reactance' in all_code
+        # Getter uses npy_creal/npy_cimag
         assert 'PyComplex_FromDoubles' in all_code
-        # Setter uses _Complex_I
-        assert '_Complex_I' in all_code
+        # Setter uses npy_cpack
+        assert 'npy_cpack' in all_code
 
     def test_opaque_complex_extern_decls(self):
         fpath = util.getpath("tests", "src", "derived_types",
@@ -3051,7 +3052,7 @@ class TestComplexMemberCodeGen:
         hooks = derived_type_rules.buildhooks(module)
 
         all_code = '\n'.join(hooks['f90modhooks'])
-        assert 'double _Complex' in all_code
+        assert 'npy_cdouble' in all_code
         assert 'f2py_get_wavefunction_amplitude' in all_code
         assert 'f2py_set_wavefunction_amplitude' in all_code
 
@@ -3407,18 +3408,21 @@ class TestParameterizedKindCodeGen:
         # Should have generated code for RealVec
         assert len(hooks['f90modhooks']) >= 1
 
-        # Check the opaque type generates correct extern declarations
+        # Check the opaque type generates multi-kind extern declarations
         realvec_code = hooks['f90modhooks'][0]
-        assert 'f2py_create_realvec' in realvec_code
-        assert 'f2py_destroy_realvec' in realvec_code
-        # Should have getters/setters for data members (not for k)
-        assert 'f2py_get_realvec_x' in realvec_code
-        assert 'f2py_get_realvec_y' in realvec_code
-        assert 'f2py_get_realvec_z' in realvec_code
-        assert 'f2py_get_realvec_length' in realvec_code
+        # Should have k4 and k8 specializations
+        assert 'f2py_create_realvec_k4' in realvec_code
+        assert 'f2py_create_realvec_k8' in realvec_code
+        assert 'f2py_destroy_realvec_k4' in realvec_code
+        assert 'f2py_destroy_realvec_k8' in realvec_code
+        # Should have getters/setters for data members per specialization
+        assert 'f2py_get_realvec_k8_x' in realvec_code
+        assert 'f2py_get_realvec_k4_x' in realvec_code
+        assert 'f2py_get_realvec_k8_length' in realvec_code
         # Should NOT have getter/setter for the type parameter k
-        assert 'f2py_get_realvec_k' not in realvec_code
-        assert 'f2py_set_realvec_k' not in realvec_code
+        # (k is dispatched in tp_init, not via getset)
+        assert 'f2py_get_realvec_k' not in realvec_code.replace(
+            'realvec_k4', '').replace('realvec_k8', '')
 
     def test_type_param_not_in_getset(self):
         """Type parameters should not appear in Python getset descriptors."""
@@ -3429,12 +3433,105 @@ class TestParameterizedKindCodeGen:
         hooks = derived_type_rules.buildhooks(module)
 
         realvec_code = hooks['f90modhooks'][0]
-        # The getset array should not mention k
-        assert 'Pyrealvec_get_k' not in realvec_code
-        assert 'Pyrealvec_set_k' not in realvec_code
-        # But data members should be present
+        # Dispatch tp_init should have 'k' kwarg
+        assert '"k"' in realvec_code
+        # But data members should be present in getset
         assert 'Pyrealvec_get_x' in realvec_code
         assert 'Pyrealvec_set_x' in realvec_code
+
+
+class TestParameterizedKindNoDefaultCodeGen:
+    """Test code generation for KIND params without defaults."""
+
+    def test_no_default_wrappable(self):
+        """Type with KIND without default should be wrappable."""
+        from numpy.f2py._dt_helpers import _can_wrap_opaque, _enumerate_specializations
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind_no_default.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        gvec_tb = [tb for tb in type_blocks
+                   if tb['name'].lower() == 'genericvec'][0]
+        assert _can_wrap_opaque(gvec_tb)
+
+    def test_no_default_specializations(self):
+        """Should enumerate k=4 and k=8 specializations."""
+        from numpy.f2py._dt_helpers import _enumerate_specializations
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind_no_default.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        gvec_tb = [tb for tb in type_blocks
+                   if tb['name'].lower() == 'genericvec'][0]
+        specs = _enumerate_specializations(gvec_tb)
+        kind_values = [kd['k'] for kd, _ in specs]
+        assert 4 in kind_values
+        assert 8 in kind_values
+
+    def test_no_default_buildhooks(self):
+        """buildhooks should generate multi-kind wrapper."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind_no_default.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        assert len(hooks['f90modhooks']) >= 1
+        code = hooks['f90modhooks'][0]
+        # Should have k4 and k8 variants
+        assert 'f2py_create_genericvec_k4' in code
+        assert 'f2py_create_genericvec_k8' in code
+        # k should be in kwlist (required, no default)
+        assert '"k"' in code
+
+    def test_no_default_k_required(self):
+        """tp_init should require k when no default exists."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind_no_default.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        code = hooks['f90modhooks'][0]
+        # Should have error message about requiring k
+        assert "requires" in code.lower() or "k=" in code
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not util.has_pdt_support(),
+    reason="Fortran compiler does not support parameterized derived types")
+class TestParameterizedKindNoDefaultCompilation(util.F2PyTest):
+    """Test compilation of KIND params without defaults."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "parameterized_kind_no_default.f90")]
+
+    def test_genericvec_exists(self):
+        assert hasattr(self.module, 'genericvec')
+
+    def test_genericvec_k8(self):
+        v = self.module.genericvec(k=8, x=1.0, y=2.0, z=3.0)
+        assert abs(v.x - 1.0) < 1e-10
+        assert abs(v.y - 2.0) < 1e-10
+
+    def test_genericvec_k4(self):
+        v = self.module.genericvec(k=4, x=1.0, y=2.0, z=3.0)
+        assert abs(v.x - 1.0) < 1e-5
+
+    def test_genericvec_k_required(self):
+        """Should raise TypeError when k is not provided."""
+        with pytest.raises(TypeError):
+            self.module.genericvec(x=1.0)
+
+    def test_genericvec_k_readonly(self):
+        v = self.module.genericvec(k=8, x=1.0)
+        assert v.k == 8
 
 
 class TestEvalKindExpr:
@@ -3478,11 +3575,14 @@ class TestEvalKindExpr:
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(
+    not util.has_pdt_support(),
+    reason="Fortran compiler does not support parameterized derived types")
 class TestParameterizedKindCompilation(util.F2PyTest):
     """Test compilation and runtime of KIND-parameterized derived types.
 
     Requires a Fortran compiler with parameterized derived type support
-    (F2008+, gfortran 8+).
+    (F2008+, gfortran 8+). Not supported by flang-new (LLVM Flang).
     """
     sources = [util.getpath("tests", "src", "derived_types",
                             "parameterized_kind.f90")]
@@ -3515,10 +3615,13 @@ class TestParameterizedKindCompilation(util.F2PyTest):
         assert abs(v.z - 6.5) < 1e-10
         assert v.length == 10
 
-    def test_realvec_no_kind_param_attr(self):
-        """The type parameter k should not be exposed as a Python attribute."""
+    def test_realvec_kind_param_readonly(self):
+        """The type parameter k should be a read-only property."""
         v = self.module.realvec()
-        assert not hasattr(v, 'k')
+        assert hasattr(v, 'k')
+        assert v.k == 8  # default kind
+        with pytest.raises(AttributeError):
+            v.k = 4
 
     def test_realvec_double_precision(self):
         """Members should be double precision (kind=8)."""
@@ -3526,3 +3629,174 @@ class TestParameterizedKindCompilation(util.F2PyTest):
         v.x = 1.23456789012345e15
         # Double precision can represent this exactly
         assert abs(v.x - 1.23456789012345e15) < 1.0
+
+
+class TestParameterizedLenCodeGen:
+    """Test code generation for LEN-parameterized derived types."""
+
+    def test_len_param_detected(self):
+        """Test _get_len_param_info identifies LEN members."""
+        from numpy.f2py._dt_helpers import _get_len_param_info
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        flexvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'flexvec':
+                flexvec_tb = tb
+                break
+        assert flexvec_tb is not None
+
+        len_info = _get_len_param_info(flexvec_tb)
+        assert len(len_info) == 1
+        assert len_info[0]['name'] == 'n'
+
+    def test_len_type_wrappable(self):
+        """Test that LEN-parameterized types pass wrappability checks."""
+        from numpy.f2py._dt_helpers import _can_wrap_opaque
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        flexvec_tb = [tb for tb in type_blocks
+                      if tb['name'].lower() == 'flexvec'][0]
+        assert _can_wrap_opaque(flexvec_tb)
+
+    def test_len_sized_array_detected(self):
+        """Test _is_len_sized_array identifies LEN-dimensioned members."""
+        from numpy.f2py._dt_helpers import (
+            _is_len_sized_array, _get_len_param_info,
+        )
+        from numpy.f2py.auxfuncs import get_type_members
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        flexvec_tb = [tb for tb in type_blocks
+                      if tb['name'].lower() == 'flexvec'][0]
+        len_info = _get_len_param_info(flexvec_tb)
+        len_names = {li['name'] for li in len_info}
+        members = get_type_members(flexvec_tb)
+        # 'data' should be a LEN-sized array
+        assert _is_len_sized_array(members['data'], len_names)
+        # 'scale' should not
+        assert not _is_len_sized_array(members['scale'], len_names)
+
+    def test_buildhooks_generates_wrapper(self):
+        """Test that buildhooks generates wrapper code for LEN type."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        assert len(hooks['f90modhooks']) >= 1
+
+        flexvec_code = hooks['f90modhooks'][0]
+        # Should have constructor with LEN param
+        assert 'f2py_create_flexvec' in flexvec_code
+        # Destructor should accept LEN param (int arg after void*)
+        assert 'f2py_destroy_flexvec' in flexvec_code
+        # Should have getter/setter for scalar member 'scale'
+        assert 'f2py_get_flexvec_scale' in flexvec_code
+        assert 'f2py_set_flexvec_scale' in flexvec_code
+        # Should have LEN-sized array data getter
+        assert 'f2py_get_flexvec_data_data' in flexvec_code
+        # Should have LEN-sized array data setter
+        assert 'f2py_set_flexvec_data' in flexvec_code
+
+    def test_pytype_struct_has_len_field(self):
+        """PyTypeObject struct should have len_n field."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        flexvec_code = hooks['f90modhooks'][0]
+        assert 'int len_n;' in flexvec_code
+
+    def test_tp_init_has_n_kwarg(self):
+        """tp_init should accept n as keyword argument."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        flexvec_code = hooks['f90modhooks'][0]
+        assert '"n"' in flexvec_code
+
+    def test_len_property_readonly(self):
+        """LEN parameter should be exposed as read-only property."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        flexvec_code = hooks['f90modhooks'][0]
+        # Should have len_n field in the struct
+        assert 'len_n' in flexvec_code
+        # Should have LEN parameter as constructor arg
+        assert '"n"' in flexvec_code
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not util.has_pdt_support(),
+    reason="Fortran compiler does not support parameterized derived types")
+class TestParameterizedLenCompilation(util.F2PyTest):
+    """Test compilation and runtime of LEN-parameterized derived types."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "parameterized_len.f90")]
+
+    def test_flexvec_exists(self):
+        assert hasattr(self.module, 'flexvec')
+
+    def test_flexvec_construct(self):
+        v = self.module.flexvec(n=5)
+        assert v.n == 5
+        assert abs(v.scale) < 1e-10
+
+    def test_flexvec_scale_member(self):
+        v = self.module.flexvec(n=3, scale=2.5)
+        assert abs(v.scale - 2.5) < 1e-10
+        v.scale = 7.0
+        assert abs(v.scale - 7.0) < 1e-10
+
+    def test_flexvec_data_getter(self):
+        v = self.module.flexvec(n=4)
+        data = v.data
+        assert isinstance(data, np.ndarray)
+        assert data.shape == (4,)
+
+    def test_flexvec_data_setter(self):
+        v = self.module.flexvec(n=3, scale=1.0)
+        v.data = np.array([1.0, 2.0, 3.0])
+        data = v.data
+        assert abs(data[0] - 1.0) < 1e-10
+        assert abs(data[1] - 2.0) < 1e-10
+        assert abs(data[2] - 3.0) < 1e-10
+
+    def test_flexvec_n_readonly(self):
+        v = self.module.flexvec(n=5)
+        assert v.n == 5
+        with pytest.raises(AttributeError):
+            v.n = 10

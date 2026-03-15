@@ -70,6 +70,11 @@ from ._dt_helpers import (  # noqa: F401
     _is_type_parameter,
     _resolve_kind_params,
     _resolve_parameterized_type,
+    _resolve_type_for_kind,
+    _enumerate_specializations,
+    _get_kind_param_info,
+    _get_len_param_info,
+    _is_len_sized_array,
     _topo_visit,
 )
 
@@ -251,18 +256,21 @@ def buildhooks(pymod):
                 ret['initf90modhooks'].extend(
                     _gen_routine_init_code(modulename, method_entries))
 
-    # Add <complex.h> to needs if any type has complex members
+    # Complex members use npy_cfloat/npy_cdouble (MSVC-compatible) with
+    # npy_creal/npy_cpack helpers from npy_math.h. The type definitions
+    # come from npy_common.h (included via arrayobject.h), but the
+    # accessor functions need npy_math.h explicitly.
     if ret['f90modhooks']:
         for m in findf90modules(pymod):
             for tb in _find_derived_types(m):
                 for mvar in get_type_members(tb).values():
                     ctype = _get_member_ctype(mvar)
-                    if ctype in ('float _Complex', 'double _Complex'):
-                        ret.setdefault('need', []).append('complex.h')
+                    if ctype in ('npy_cfloat', 'npy_cdouble'):
+                        ret.setdefault('need', []).append('npy_math.h')
                         break
-                if 'need' in ret:
+                if 'need' in ret and 'npy_math.h' in ret.get('need', []):
                     break
-            if 'need' in ret:
+            if 'need' in ret and 'npy_math.h' in ret.get('need', []):
                 break
 
     return ret
@@ -422,6 +430,10 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
     For types with extends(parent), only child-specific members are
     added to getset (parent members inherited via tp_base). The Fortran
     wrappers and tp_init cover all members (parent + child).
+
+    For parameterized types with KIND parameters, generates multi-kind
+    dispatch: separate Fortran functions per kind value, Python type
+    dispatches based on kind_value stored in the object.
     """
     own_members = {
         name: var for name, var in get_type_members(typeblock).items()
@@ -430,8 +442,6 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
     parent_name = _get_extends_parent(typeblock)
 
     # For inheritance: all_members = parent + own for extern/init/repr/getset
-    # Each getset entry uses the child's capsule name and child's Fortran
-    # accessors, so parent getset cannot be inherited via tp_base.
     if parent_name and type_map:
         parent_members, own = _get_all_members(typeblock, type_map)
         from collections import OrderedDict
@@ -442,17 +452,70 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
         all_members = own_members
         parent_name = None
 
+    # Build specialization list for parameterized types
+    specs = _enumerate_specializations(typeblock)
+    kind_info = _get_kind_param_info(typeblock)
+    len_info = _get_len_param_info(typeblock)
+
+    # Build per-specialization resolved member dicts
+    specializations = []
+    if specs:
+        for kind_dict, suffix in specs:
+            resolved_tb = _resolve_type_for_kind(typeblock, kind_dict)
+            if parent_name and type_map:
+                pm, om = _get_all_members(resolved_tb, type_map)
+                resolved_members = OrderedDict()
+                resolved_members.update(pm)
+                resolved_members.update(om)
+            else:
+                resolved_members = {
+                    n: v for n, v
+                    in get_type_members(resolved_tb).items()
+                    if not _is_type_parameter(v)
+                }
+            specializations.append((suffix, kind_dict, resolved_members))
+
     code_parts = []
-    code_parts.append(_gen_opaque_extern_decls(typename, all_members))
-    code_parts.append(_gen_pytype_struct(typename))
-    code_parts.append(_gen_opaque_capsule_destructor(typename))
-    code_parts.append(_gen_tp_new(typename))
-    code_parts.append(_gen_opaque_tp_init(typename, all_members))
-    code_parts.append(_gen_tp_dealloc(typename))
-    # All members in getset (capsule names differ per type, so parent
-    # getset cannot be reused directly)
-    code_parts.append(_gen_opaque_getset(typename, all_members))
-    code_parts.append(_gen_opaque_tp_repr(typename, all_members))
+    if specializations:
+        # Multi-kind: generate dispatch-aware code
+        code_parts.append(
+            _gen_opaque_extern_decls(typename, all_members,
+                                     specializations=specializations))
+        code_parts.append(_gen_pytype_struct(
+            typename, has_kind=True))
+        code_parts.append(
+            _gen_opaque_capsule_destructor(
+                typename, specializations=specializations))
+        code_parts.append(_gen_tp_new(typename))
+        code_parts.append(
+            _gen_opaque_tp_init(typename, all_members,
+                                specializations=specializations,
+                                kind_info=kind_info,
+                                len_info=len_info))
+        code_parts.append(_gen_tp_dealloc(typename))
+        code_parts.append(
+            _gen_opaque_getset(typename, all_members,
+                               specializations=specializations,
+                               kind_info=kind_info))
+        code_parts.append(
+            _gen_opaque_tp_repr(typename, all_members,
+                                specializations=specializations,
+                                kind_info=kind_info))
+    else:
+        code_parts.append(_gen_opaque_extern_decls(typename, all_members,
+                                                    len_info=len_info))
+        code_parts.append(_gen_pytype_struct(typename,
+                                              len_info=len_info))
+        code_parts.append(_gen_opaque_capsule_destructor(
+            typename, len_info=len_info))
+        code_parts.append(_gen_tp_new(typename))
+        code_parts.append(_gen_opaque_tp_init(typename, all_members,
+                                              len_info=len_info))
+        code_parts.append(_gen_tp_dealloc(typename))
+        code_parts.append(_gen_opaque_getset(typename, all_members,
+                                              len_info=len_info))
+        code_parts.append(_gen_opaque_tp_repr(typename, all_members,
+                                               len_info=len_info))
 
     # Type-bound procedures
     has_methods = False

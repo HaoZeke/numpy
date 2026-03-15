@@ -35,12 +35,12 @@ _FORTRAN_TO_C = {
     ('integer', 'c_long_long'): 'long long',
     ('logical', None): 'int',
     ('logical', 'c_bool'): 'unsigned char',
-    ('complex', None): 'float _Complex',
-    ('complex', '8'): 'float _Complex',
-    ('complex', '16'): 'double _Complex',
-    ('complex', 'c_float_complex'): 'float _Complex',
-    ('complex', 'c_double_complex'): 'double _Complex',
-    ('double complex', None): 'double _Complex',
+    ('complex', None): 'npy_cfloat',
+    ('complex', '8'): 'npy_cfloat',
+    ('complex', '16'): 'npy_cdouble',
+    ('complex', 'c_float_complex'): 'npy_cfloat',
+    ('complex', 'c_double_complex'): 'npy_cdouble',
+    ('double complex', None): 'npy_cdouble',
 }
 
 # Map C type to Python format code for Py_BuildValue / PyArg_Parse
@@ -51,8 +51,8 @@ _C_TO_PYFORMAT = {
     'long': 'l',
     'long long': 'L',
     'unsigned char': 'b',
-    'float _Complex': 'D',
-    'double _Complex': 'D',
+    'npy_cfloat': 'D',
+    'npy_cdouble': 'D',
 }
 
 # Map C type to PyObject conversion for getters
@@ -84,8 +84,8 @@ _C_TO_NPY_ENUM = {
     'long': 'NPY_LONG',
     'long long': 'NPY_LONGLONG',
     'unsigned char': 'NPY_UBYTE',
-    'float _Complex': 'NPY_CFLOAT',
-    'double _Complex': 'NPY_CDOUBLE',
+    'npy_cfloat': 'NPY_CFLOAT',
+    'npy_cdouble': 'NPY_CDOUBLE',
 }
 
 
@@ -218,21 +218,34 @@ def _has_len_params(typeblock):
 
 
 def _has_unresolved_kind_params(typeblock):
-    """Check if a type has KIND parameters that cannot be resolved.
+    """Check if a type has KIND parameters that cannot be enumerated.
 
-    Returns True if there are KIND type parameters without resolvable
-    defaults. Such types cannot be wrapped because the member types
-    cannot be determined at compile time.
+    Returns True if there are KIND type parameters whose dependent
+    member typespecs have no enumerable kind values in _FORTRAN_TO_C.
+    Types with KIND params (even without defaults) are wrappable as
+    long as all kind-parameterized members have enumerable typespecs.
     """
+    kind_param_names = set()
     for mname, mvar in get_type_members(typeblock).items():
         attrspec = mvar.get('attrspec', [])
-        if 'kind' not in attrspec:
+        if 'kind' in attrspec:
+            kind_param_names.add(mname.lower())
+
+    if not kind_param_names:
+        return False
+
+    # Check that all members referencing kind params have enumerable types
+    for mname, mvar in get_type_members(typeblock).items():
+        if _is_type_parameter(mvar):
             continue
-        default = mvar.get('=')
-        if default is None:
-            return True
-        if _eval_kind_expr(default) is None:
-            return True
+        if 'kindselector' not in mvar:
+            continue
+        ks = mvar['kindselector']
+        kind_val = ks.get('kind') or ks.get('*')
+        if kind_val and str(kind_val).strip().lower() in kind_param_names:
+            typespec = mvar.get('typespec', '').lower()
+            if not _enumerate_kind_values(typespec):
+                return True
     return False
 
 
@@ -269,19 +282,232 @@ def _resolve_parameterized_type(typeblock):
     return kind_params
 
 
-def _get_fortran_type_spec(typeblock):
+def _enumerate_kind_values(typespec):
+    """Return supported kind integers for a Fortran typespec.
+
+    Scans _FORTRAN_TO_C for integer kind keys associated with the
+    given typespec. Returns sorted list of ints.
+    """
+    values = set()
+    for (ts, k), _ in _FORTRAN_TO_C.items():
+        if ts == typespec and k is not None:
+            try:
+                values.add(int(k))
+            except (ValueError, TypeError):
+                pass
+    return sorted(values)
+
+
+def _get_kind_param_info(typeblock):
+    """Return info about KIND type parameters.
+
+    Returns list of dicts:
+        [{'name': 'k', 'default': 8, 'has_default': True}]
+    """
+    result = []
+    for mname, mvar in get_type_members(typeblock).items():
+        attrspec = mvar.get('attrspec', [])
+        if 'kind' not in attrspec:
+            continue
+        default_expr = mvar.get('=')
+        default_val = None
+        has_default = False
+        if default_expr is not None:
+            resolved = _eval_kind_expr(default_expr)
+            if resolved is not None:
+                default_val = resolved
+                has_default = True
+        result.append({
+            'name': mname.lower(),
+            'default': default_val,
+            'has_default': has_default,
+        })
+    return result
+
+
+def _get_len_param_info(typeblock):
+    """Return info about LEN type parameters.
+
+    Returns list of dicts:
+        [{'name': 'n', 'default': None, 'has_default': False}]
+    """
+    result = []
+    for mname, mvar in get_type_members(typeblock).items():
+        attrspec = mvar.get('attrspec', [])
+        if 'len' not in attrspec:
+            continue
+        default_expr = mvar.get('=')
+        default_val = None
+        has_default = default_expr is not None
+        if has_default:
+            try:
+                default_val = int(default_expr)
+            except (ValueError, TypeError):
+                default_val = None
+                has_default = False
+        result.append({
+            'name': mname.lower(),
+            'default': default_val,
+            'has_default': has_default,
+        })
+    return result
+
+
+def _enumerate_specializations(typeblock):
+    """Return all kind specializations to generate for a PDT.
+
+    Returns list of (kind_dict, suffix) tuples. For RealVec(k) with
+    default k=8 and real(k) members: [({'k': 4}, '_k4'), ({'k': 8}, '_k8')].
+
+    Returns empty list for non-parameterized types.
+    """
+    kind_info = _get_kind_param_info(typeblock)
+    if not kind_info:
+        return []
+
+    # Find which typespecs are parameterized by each KIND param
+    param_typespecs = {}
+    for mname, mvar in get_type_members(typeblock).items():
+        if _is_type_parameter(mvar):
+            continue
+        if 'kindselector' not in mvar:
+            continue
+        ks = mvar['kindselector']
+        kind_ref = ks.get('kind') or ks.get('*')
+        if not kind_ref:
+            continue
+        kind_key = str(kind_ref).strip().lower()
+        for ki in kind_info:
+            if ki['name'] == kind_key:
+                typespec = mvar.get('typespec', '').lower()
+                if typespec not in param_typespecs.get(kind_key, set()):
+                    param_typespecs.setdefault(kind_key, set()).add(typespec)
+
+    # For single KIND param, enumerate kind values from the typespecs
+    # For now, support single KIND param only (most common case)
+    if len(kind_info) == 1:
+        ki = kind_info[0]
+        pname = ki['name']
+        typespecs = param_typespecs.get(pname, set())
+        if not typespecs:
+            # KIND param not referenced by any member -- just use default
+            if ki['has_default']:
+                return [({pname: ki['default']},
+                         f'_k{ki["default"]}')]
+            return []
+        # Intersect supported kind values across all parameterized typespecs
+        kind_sets = [set(_enumerate_kind_values(ts)) for ts in typespecs]
+        common_kinds = kind_sets[0]
+        for ks in kind_sets[1:]:
+            common_kinds &= ks
+        if not common_kinds:
+            return []
+        specs = []
+        for kv in sorted(common_kinds):
+            specs.append(({pname: kv}, f'_{pname}{kv}'))
+        return specs
+
+    # Multiple KIND params: generate cross-product
+    import itertools
+    param_values = []
+    param_names = []
+    for ki in kind_info:
+        pname = ki['name']
+        param_names.append(pname)
+        typespecs = param_typespecs.get(pname, set())
+        if typespecs:
+            kind_sets = [set(_enumerate_kind_values(ts))
+                         for ts in typespecs]
+            common = kind_sets[0]
+            for ks in kind_sets[1:]:
+                common &= ks
+            param_values.append(sorted(common))
+        elif ki['has_default']:
+            param_values.append([ki['default']])
+        else:
+            return []  # unreferenced param without default
+
+    specs = []
+    for combo in itertools.product(*param_values):
+        kind_dict = dict(zip(param_names, combo))
+        suffix = '_' + '_'.join(f'{n}{v}' for n, v in
+                                zip(param_names, combo))
+        specs.append((kind_dict, suffix))
+    return specs
+
+
+def _resolve_type_for_kind(typeblock, kind_dict):
+    """Resolve a typeblock copy for specific KIND values.
+
+    Deep-copies the typeblock and resolves kindselector references
+    using kind_dict values instead of defaults. Returns the copy.
+    """
+    import copy
+    tb = copy.deepcopy(typeblock)
+    for mname, mvar in get_type_members(tb).items():
+        if _is_type_parameter(mvar):
+            continue
+        if 'kindselector' not in mvar:
+            continue
+        ks = mvar['kindselector']
+        kind_val = ks.get('kind') or ks.get('*')
+        if kind_val:
+            kind_key = str(kind_val).strip().lower()
+            if kind_key in kind_dict:
+                resolved = str(kind_dict[kind_key])
+                if 'kind' in ks:
+                    ks['kind'] = resolved
+                elif '*' in ks:
+                    ks['*'] = resolved
+    return tb
+
+
+def _get_fortran_type_spec(typeblock, kind_override=None):
     """Return the Fortran type specifier string for wrapper generation.
 
     For non-parameterized types, returns just the type name, e.g.
     'Point'. For parameterized types with resolved KIND parameters,
     returns the name with kind values, e.g. 'RealVec(8)'.
 
-    The kind_params must have been resolved already (via
-    _resolve_parameterized_type).
+    If kind_override is provided (dict of param_name -> int), uses
+    those values instead of defaults.
     """
     typename = typeblock['name']
+    if kind_override:
+        # Use override values
+        param_values = []
+        for mname, mvar in get_type_members(typeblock).items():
+            if not _is_type_parameter(mvar):
+                continue
+            attrspec = mvar.get('attrspec', [])
+            if 'kind' in attrspec:
+                val = kind_override.get(mname.lower())
+                if val is not None:
+                    param_values.append(str(val))
+            elif 'len' in attrspec:
+                # LEN params use variable name in Fortran spec
+                param_values.append(f'{mname.lower()}={mname.lower()}')
+        if param_values:
+            return f'{typename}({", ".join(param_values)})'
+        return typename
+
     kind_params = _resolve_kind_params(typeblock)
     if not kind_params:
+        # Check for kinds without defaults -- use first specialization
+        kind_info = _get_kind_param_info(typeblock)
+        if kind_info:
+            specs = _enumerate_specializations(typeblock)
+            if specs:
+                # Use the largest kind (last entry, typically double)
+                kind_dict = specs[-1][0]
+                return _get_fortran_type_spec(typeblock,
+                                              kind_override=kind_dict)
+        # Check for LEN params
+        len_info = _get_len_param_info(typeblock)
+        if len_info:
+            param_values = [f'{li["name"]}={li["name"]}'
+                            for li in len_info]
+            return f'{typename}({", ".join(param_values)})'
         return typename
     # Build parameter list in declaration order
     param_values = []
@@ -307,8 +533,17 @@ def _get_member_ctype(var):
         kind = ks.get('kind') or ks.get('*')
         if kind:
             kind = str(kind).lower()
-    return _FORTRAN_TO_C.get((typespec, kind),
-                             _FORTRAN_TO_C.get((typespec, None)))
+    result = _FORTRAN_TO_C.get((typespec, kind))
+    if result is not None:
+        return result
+    # Try resolving kind expressions (e.g. kind(0.0d0) -> '8')
+    if kind is not None:
+        resolved = _eval_kind_expr(kind)
+        if resolved is not None:
+            result = _FORTRAN_TO_C.get((typespec, str(resolved)))
+            if result is not None:
+                return result
+    return _FORTRAN_TO_C.get((typespec, None))
 
 
 def _get_array_dims(var):
@@ -467,7 +702,7 @@ def _is_deferred_char_member(var):
 def _is_complex_member(var):
     """Check if a member is a complex scalar (not array)."""
     ctype = _get_member_ctype(var)
-    return ctype in ('float _Complex', 'double _Complex') and not _is_array_member(var)
+    return ctype in ('npy_cfloat', 'npy_cdouble') and not _is_array_member(var)
 
 
 def _is_allocatable_member(var):
@@ -599,6 +834,20 @@ def _can_wrap_abstract(typeblock, type_map=None):
     return True
 
 
+def _is_len_sized_array(var, len_param_names):
+    """Check if a member is an array sized by a LEN type parameter.
+
+    E.g. real :: data(n) where n is a LEN param. These are automatic
+    arrays with runtime-determined shape, not allocatable.
+    """
+    if not isarray(var):
+        return False
+    if isallocatable(var):
+        return False
+    dims = var.get('dimension', [])
+    return any(str(d).strip().lower() in len_param_names for d in dims)
+
+
 def _can_wrap_opaque(typeblock, type_map=None):
     """Check if a non-bind(c) type can be wrapped via opaque pointers.
 
@@ -606,20 +855,28 @@ def _can_wrap_opaque(typeblock, type_map=None):
     validate nested type members and extends(parent) dependencies.
     Abstract types are excluded (handled by _can_wrap_abstract).
 
-    Parameterized types with only KIND parameters (and resolvable
-    defaults) are supported. LEN parameters are rejected since they
-    require runtime allocation.
+    Parameterized types with KIND parameters are supported (with or
+    without defaults). LEN parameters are also supported when all
+    LEN-sized members are simple numeric arrays.
     """
     if _is_abstract_type(typeblock):
         return False
     if isbindctype(typeblock):
         return False
-    if _has_len_params(typeblock):
-        return False
     if _has_unresolved_kind_params(typeblock):
         return False
     # Resolve KIND parameters before wrappability check
-    _resolve_parameterized_type(typeblock)
+    # Use default specialization if available
+    kind_info = _get_kind_param_info(typeblock)
+    specs = _enumerate_specializations(typeblock)
+    if specs:
+        # Use first specialization (default or smallest kind) for check
+        _resolve_type_for_kind(typeblock, specs[0][0])
+    elif kind_info:
+        # Has KIND params but no enumerable specializations
+        return False
+    else:
+        _resolve_parameterized_type(typeblock)
     if not is_simple_derived_type(typeblock):
         return False
     # Check extends parent is already wrappable
@@ -627,6 +884,9 @@ def _can_wrap_opaque(typeblock, type_map=None):
     if parent_name:
         if type_map is None or parent_name not in type_map:
             return False
+    # Collect LEN param names for array dimension checking
+    len_param_names = {li['name'] for li in _get_len_param_info(typeblock)}
+
     for name, var in get_type_members(typeblock).items():
         if _is_type_parameter(var):
             continue
@@ -641,6 +901,12 @@ def _can_wrap_opaque(typeblock, type_map=None):
         elif _is_allocatable_member(var):
             continue
         elif _is_pointer_member(var):
+            continue
+        elif len_param_names and _is_len_sized_array(var, len_param_names):
+            # Array sized by LEN param -- handled via dynamic accessors
+            typespec = var.get('typespec', '').lower()
+            if typespec not in _SIMPLE_SCALAR_TYPESPECS:
+                return False
             continue
         elif _get_member_ctype(var) is None:
             return False
@@ -679,8 +945,17 @@ def _get_member_isoc_type(var):
         kind = ks.get('kind') or ks.get('*')
         if kind:
             kind = str(kind).lower()
-    return _FORTRAN_TO_ISOC.get((typespec, kind),
-                                _FORTRAN_TO_ISOC.get((typespec, None)))
+    result = _FORTRAN_TO_ISOC.get((typespec, kind))
+    if result is not None:
+        return result
+    # Try resolving kind expressions (e.g. kind(0.0d0) -> '8')
+    if kind is not None:
+        resolved = _eval_kind_expr(kind)
+        if resolved is not None:
+            result = _FORTRAN_TO_ISOC.get((typespec, str(resolved)))
+            if result is not None:
+                return result
+    return _FORTRAN_TO_ISOC.get((typespec, None))
 
 
 def _get_c_return_type(ctype):
