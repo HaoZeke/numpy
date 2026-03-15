@@ -18,6 +18,7 @@ from .auxfuncs import (
     isarray,
     isbindctype,
 )
+from .crackfortran import _fortran_eval
 
 # Map Fortran typespec (+ optional kind) to C types for struct members
 _FORTRAN_TO_C = {
@@ -114,6 +115,189 @@ _FORTRAN_CMP_OPS = {
 }
 
 
+def _is_type_parameter(var):
+    """Check if a member is a type parameter (KIND or LEN).
+
+    Fortran parameterized derived types (F2018 7.5.3) declare type
+    parameters as integer components with 'kind' or 'len' in attrspec:
+        integer, kind :: k = kind(0.0d0)
+        integer, len :: n
+    These are not real data members and must be excluded from wrapping.
+    """
+    attrspec = var.get('attrspec', [])
+    return 'kind' in attrspec or 'len' in attrspec
+
+
+def _eval_kind_expr(expr):
+    """Evaluate a Fortran kind() expression to an integer.
+
+    Handles common patterns:
+        kind(0.0)    -> 4  (single precision)
+        kind(0.0d0)  -> 8  (double precision)
+        kind(0)      -> 4  (default integer)
+        integer literal -> itself
+        real64, real32 etc. from iso_fortran_env -> resolved values
+    """
+    import re
+    expr = str(expr).strip().lower()
+
+    # Already an integer literal
+    try:
+        return int(expr)
+    except (ValueError, TypeError):
+        pass
+
+    # iso_fortran_env named constants
+    _iso_fortran_kinds = {
+        'real32': 4, 'real64': 8, 'real128': 16,
+        'int8': 1, 'int16': 2, 'int32': 4, 'int64': 8,
+    }
+    if expr in _iso_fortran_kinds:
+        return _iso_fortran_kinds[expr]
+
+    # iso_c_binding named constants
+    _iso_c_kinds = {
+        'c_float': 4, 'c_double': 8, 'c_long_double': 16,
+        'c_int': 4, 'c_long': 8, 'c_long_long': 8,
+        'c_float_complex': 4, 'c_double_complex': 8,
+    }
+    if expr in _iso_c_kinds:
+        return _iso_c_kinds[expr]
+
+    # kind() goes through crackfortran's evaluator, which reads a
+    # literal's exponent or its kind suffix. The old kind() took a
+    # source string; this one takes a value, so the whole call is
+    # evaluated.
+    m = re.fullmatch(r'kind\s*\(\s*(.+?)\s*\)', expr)
+    if m:
+        try:
+            value = _fortran_eval(expr, {}, {})
+        except (NameError, SyntaxError, TypeError, ValueError, OverflowError):
+            return None
+        if isinstance(value, int) and not isinstance(value, bool):
+            return int(value)
+    return None
+
+
+def _resolve_kind_params(typeblock):
+    """Identify KIND type parameters and resolve their default values.
+
+    Returns a dict mapping parameter name -> resolved integer kind value.
+    Only parameters with resolvable defaults are included. Parameters
+    without defaults (no '=' field) or with unresolvable expressions
+    are omitted.
+    """
+    params = {}
+    for mname, mvar in get_type_members(typeblock).items():
+        if not _is_type_parameter(mvar):
+            continue
+        attrspec = mvar.get('attrspec', [])
+        if 'len' in attrspec:
+            # LEN parameters are runtime -- skip for now
+            continue
+        if 'kind' in attrspec:
+            default = mvar.get('=')
+            if default is not None:
+                resolved = _eval_kind_expr(default)
+                if resolved is not None:
+                    params[mname.lower()] = resolved
+    return params
+
+
+def _has_len_params(typeblock):
+    """Check if a type has any LEN type parameters.
+
+    LEN parameters require runtime allocation and cannot be wrapped
+    with the current opaque pointer approach.
+    """
+    for mvar in get_type_members(typeblock).values():
+        attrspec = mvar.get('attrspec', [])
+        if 'len' in attrspec:
+            return True
+    return False
+
+
+def _has_unresolved_kind_params(typeblock):
+    """Check if a type has KIND parameters that cannot be resolved.
+
+    Returns True if there are KIND type parameters without resolvable
+    defaults. Such types cannot be wrapped because the member types
+    cannot be determined at compile time.
+    """
+    for mname, mvar in get_type_members(typeblock).items():
+        attrspec = mvar.get('attrspec', [])
+        if 'kind' not in attrspec:
+            continue
+        default = mvar.get('=')
+        if default is None:
+            return True
+        if _eval_kind_expr(default) is None:
+            return True
+    return False
+
+
+def _resolve_parameterized_type(typeblock):
+    """Pre-resolve KIND parameters in a parameterized derived type.
+
+    Mutates the typeblock's vars dict in-place:
+    1. Resolves kindselector references to KIND parameters (e.g.
+       kindselector={'kind': 'k'} becomes kindselector={'kind': '8'}
+       when k has default kind(0.0d0))
+
+    Returns the kind_params dict (parameter name -> int value).
+    Does nothing if the type has no KIND parameters.
+    """
+    kind_params = _resolve_kind_params(typeblock)
+    if not kind_params:
+        return kind_params
+
+    for mname, mvar in get_type_members(typeblock).items():
+        if _is_type_parameter(mvar):
+            continue
+        # Resolve kindselector references
+        if 'kindselector' in mvar:
+            ks = mvar['kindselector']
+            kind_val = ks.get('kind') or ks.get('*')
+            if kind_val:
+                kind_key = str(kind_val).strip().lower()
+                if kind_key in kind_params:
+                    resolved = str(kind_params[kind_key])
+                    if 'kind' in ks:
+                        ks['kind'] = resolved
+                    elif '*' in ks:
+                        ks['*'] = resolved
+    return kind_params
+
+
+def _get_fortran_type_spec(typeblock):
+    """Return the Fortran type specifier string for wrapper generation.
+
+    For non-parameterized types, returns just the type name, e.g.
+    'Point'. For parameterized types with resolved KIND parameters,
+    returns the name with kind values, e.g. 'RealVec(8)'.
+
+    The kind_params must have been resolved already (via
+    _resolve_parameterized_type).
+    """
+    typename = typeblock['name']
+    kind_params = _resolve_kind_params(typeblock)
+    if not kind_params:
+        return typename
+    # Build parameter list in declaration order
+    param_values = []
+    for mname, mvar in get_type_members(typeblock).items():
+        if not _is_type_parameter(mvar):
+            continue
+        attrspec = mvar.get('attrspec', [])
+        if 'kind' in attrspec:
+            val = kind_params.get(mname.lower())
+            if val is not None:
+                param_values.append(str(val))
+    if param_values:
+        return f'{typename}({", ".join(param_values)})'
+    return typename
+
+
 def _get_member_ctype(var):
     """Get C type string for a type member variable."""
     typespec = var.get('typespec', '').lower()
@@ -184,7 +368,8 @@ def _get_all_members(typeblock, type_map):
 
     Returns (parent_members, own_members) where parent_members is an
     OrderedDict of members inherited from the parent chain and
-    own_members is the type's own members.
+    own_members is the type's own members. Type parameters (KIND/LEN)
+    are excluded from both sets.
     """
     from collections import OrderedDict
     parent_members = OrderedDict()
@@ -197,7 +382,10 @@ def _get_all_members(typeblock, type_map):
                 parent_tb, type_map)
             parent_members.update(grandparent_members)
             parent_members.update(parent_own)
-    own_members = get_type_members(typeblock)
+    own_members = {
+        name: var for name, var in get_type_members(typeblock).items()
+        if not _is_type_parameter(var)
+    }
     return parent_members, own_members
 
 
@@ -344,9 +532,17 @@ def _can_wrap_bindc(typeblock, type_map=None):
     """
     if not isbindctype(typeblock):
         return False
+    if _has_len_params(typeblock):
+        return False
+    if _has_unresolved_kind_params(typeblock):
+        return False
+    # Resolve KIND parameters before wrappability check
+    _resolve_parameterized_type(typeblock)
     if not is_simple_derived_type(typeblock):
         return False
     for name, var in get_type_members(typeblock).items():
+        if _is_type_parameter(var):
+            continue
         if _is_type_member(var) or _is_type_array_member(var):
             inner = var.get('typename', '').lower()
             if type_map is None or inner not in type_map:
@@ -376,9 +572,16 @@ def _can_wrap_abstract(typeblock, type_map=None):
         return False
     if isbindctype(typeblock):
         return False
+    if _has_len_params(typeblock):
+        return False
+    if _has_unresolved_kind_params(typeblock):
+        return False
+    _resolve_parameterized_type(typeblock)
     if not is_simple_derived_type(typeblock):
         return False
     for name, var in get_type_members(typeblock).items():
+        if _is_type_parameter(var):
+            continue
         if _is_type_member(var) or _is_type_array_member(var):
             inner = var.get('typename', '').lower()
             if type_map is None or inner not in type_map:
@@ -402,11 +605,21 @@ def _can_wrap_opaque(typeblock, type_map=None):
     type_map is a dict of already-known wrappable types, used to
     validate nested type members and extends(parent) dependencies.
     Abstract types are excluded (handled by _can_wrap_abstract).
+
+    Parameterized types with only KIND parameters (and resolvable
+    defaults) are supported. LEN parameters are rejected since they
+    require runtime allocation.
     """
     if _is_abstract_type(typeblock):
         return False
     if isbindctype(typeblock):
         return False
+    if _has_len_params(typeblock):
+        return False
+    if _has_unresolved_kind_params(typeblock):
+        return False
+    # Resolve KIND parameters before wrappability check
+    _resolve_parameterized_type(typeblock)
     if not is_simple_derived_type(typeblock):
         return False
     # Check extends parent is already wrappable
@@ -415,6 +628,8 @@ def _can_wrap_opaque(typeblock, type_map=None):
         if type_map is None or parent_name not in type_map:
             return False
     for name, var in get_type_members(typeblock).items():
+        if _is_type_parameter(var):
+            continue
         if _is_type_member(var) or _is_type_array_member(var):
             inner = var.get('typename', '').lower()
             if type_map is None or inner not in type_map:

@@ -43,9 +43,11 @@ from ._dt_helpers import (  # noqa: F401
     _can_wrap_abstract,
     _can_wrap_bindc,
     _can_wrap_opaque,
+    _eval_kind_expr,
     _find_derived_types,
     _fortran_sym,
     _get_all_members,
+    _get_fortran_type_spec,
     _get_array_dims,
     _get_c_return_type,
     _get_char_len,
@@ -54,6 +56,8 @@ from ._dt_helpers import (  # noqa: F401
     _get_member_isoc_type,
     _get_alloc_ndim,
     _get_pointer_ndim,
+    _has_len_params,
+    _has_unresolved_kind_params,
     _is_abstract_type,
     _is_allocatable_member,
     _is_array_member,
@@ -63,6 +67,9 @@ from ._dt_helpers import (  # noqa: F401
     _is_pointer_member,
     _is_type_array_member,
     _is_type_member,
+    _is_type_parameter,
+    _resolve_kind_params,
+    _resolve_parameterized_type,
     _topo_visit,
 )
 
@@ -265,7 +272,10 @@ def _generate_bindc_hooks(ret, typename, typeblock, modulename,
                           module_block, bound_procs=None, routines=None,
                           type_map=None):
     """Generate hooks for a bind(c) derived type."""
-    members = get_type_members(typeblock)
+    members = {
+        name: var for name, var in get_type_members(typeblock).items()
+        if not _is_type_parameter(var)
+    }
 
     code_parts = []
     code_parts.append(_gen_bindc_struct(typename, members))
@@ -413,7 +423,10 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
     added to getset (parent members inherited via tp_base). The Fortran
     wrappers and tp_init cover all members (parent + child).
     """
-    own_members = get_type_members(typeblock)
+    own_members = {
+        name: var for name, var in get_type_members(typeblock).items()
+        if not _is_type_parameter(var)
+    }
     parent_name = _get_extends_parent(typeblock)
 
     # For inheritance: all_members = parent + own for extern/init/repr/getset

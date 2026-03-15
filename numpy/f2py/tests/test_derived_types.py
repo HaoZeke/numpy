@@ -3291,3 +3291,187 @@ class TestAbstractTypeOpaque(util.F2PyTest):
         c = self.module.disk(area=0.0, radius=1.0)
         # self.module.baseshape is the BaseShape type object itself
         assert isinstance(c, self.module.baseshape)
+
+
+class TestParameterizedKindCodeGen:
+    """Test code generation for KIND-parameterized derived types."""
+
+    def test_kind_param_resolution(self):
+        """Test _resolve_kind_params extracts KIND defaults."""
+        from numpy.f2py._dt_helpers import _resolve_kind_params
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+
+        params = _resolve_kind_params(realvec_tb)
+        assert 'k' in params
+        # kind(0.0d0) = 8 (double precision)
+        assert params['k'] == 8
+
+    def test_type_parameter_detected(self):
+        """Test _is_type_parameter identifies KIND members."""
+        from numpy.f2py._dt_helpers import _is_type_parameter
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+
+        members = realvec_tb.get('vars', {})
+        # 'k' should be identified as a type parameter
+        assert _is_type_parameter(members['k'])
+        # 'length', 'x', 'y', 'z' are not type parameters
+        assert not _is_type_parameter(members['length'])
+        assert not _is_type_parameter(members['x'])
+
+    def test_parameterized_type_wrappable(self):
+        """Test that KIND-parameterized types pass wrappability checks."""
+        from numpy.f2py._dt_helpers import _can_wrap_opaque
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+        assert _can_wrap_opaque(realvec_tb)
+
+    def test_kind_resolved_in_members(self):
+        """Test that kind parameters are resolved in member types."""
+        from numpy.f2py._dt_helpers import (
+            _get_member_ctype, _resolve_parameterized_type
+        )
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+
+        _resolve_parameterized_type(realvec_tb)
+
+        members = realvec_tb.get('vars', {})
+        # After resolution, x should have kind='8' -> double
+        ctype = _get_member_ctype(members['x'])
+        assert ctype == 'double'
+        ctype = _get_member_ctype(members['y'])
+        assert ctype == 'double'
+        ctype = _get_member_ctype(members['z'])
+        assert ctype == 'double'
+
+    def test_buildhooks_generates_wrapper(self):
+        """Test that buildhooks generates wrapper code for parameterized type."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Should have generated code for RealVec
+        assert len(hooks['f90modhooks']) >= 1
+
+        # Check the opaque type generates correct extern declarations
+        realvec_code = hooks['f90modhooks'][0]
+        assert 'f2py_create_realvec' in realvec_code
+        assert 'f2py_destroy_realvec' in realvec_code
+        # Should have getters/setters for data members (not for k)
+        assert 'f2py_get_realvec_x' in realvec_code
+        assert 'f2py_get_realvec_y' in realvec_code
+        assert 'f2py_get_realvec_z' in realvec_code
+        assert 'f2py_get_realvec_length' in realvec_code
+        # Should NOT have getter/setter for the type parameter k
+        assert 'f2py_get_realvec_k' not in realvec_code
+        assert 'f2py_set_realvec_k' not in realvec_code
+
+    def test_type_param_not_in_getset(self):
+        """Type parameters should not appear in Python getset descriptors."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        realvec_code = hooks['f90modhooks'][0]
+        # The getset array should not mention k
+        assert 'Pyrealvec_get_k' not in realvec_code
+        assert 'Pyrealvec_set_k' not in realvec_code
+        # But data members should be present
+        assert 'Pyrealvec_get_x' in realvec_code
+        assert 'Pyrealvec_set_x' in realvec_code
+
+
+class TestEvalKindExpr:
+    """Test the _eval_kind_expr helper for various Fortran kind expressions."""
+
+    def test_integer_literal(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('4') == 4
+        assert _eval_kind_expr('8') == 8
+        assert _eval_kind_expr('16') == 16
+
+    def test_kind_double(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('kind(0.0d0)') == 8
+        assert _eval_kind_expr('kind(1.0d0)') == 8
+
+    def test_kind_single(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('kind(0.0)') == 4
+        assert _eval_kind_expr('kind(0.0e0)') == 4
+
+    def test_kind_integer(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('kind(0)') == 4
+
+    def test_iso_fortran_env(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('real64') == 8
+        assert _eval_kind_expr('real32') == 4
+        assert _eval_kind_expr('int32') == 4
+        assert _eval_kind_expr('int64') == 8
+
+    def test_iso_c_binding(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('c_double') == 8
+        assert _eval_kind_expr('c_float') == 4
+
+    def test_unknown_returns_none(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('my_custom_kind') is None
