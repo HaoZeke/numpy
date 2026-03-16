@@ -194,12 +194,26 @@ def buildhooks(pymod):
                 source_file, tb['name'])
             final_subroutine_names.update(finals)
 
+        # Track bound_procs per type for inheritance merging
+        all_bound_procs = {}
+
         for tb in gen_order:
             typename = tb['name']
 
             # Scan for type-bound procedures
             bound_procs = _scan_type_bound_procedures(
                 source_file, typename)
+
+            # Merge inherited TBPs from parent (F2018 7.5.7)
+            parent_name = _get_extends_parent(tb)
+            if parent_name:
+                parent_bp = all_bound_procs.get(parent_name, {})
+                merged = dict(parent_bp)
+                merged.update(bound_procs)  # child overrides parent
+                bound_procs = merged
+
+            all_bound_procs[typename.lower()] = bound_procs
+
             if bound_procs:
                 outmess(f'\t\tFound type-bound procedures for '
                         f'"{typename}": '
