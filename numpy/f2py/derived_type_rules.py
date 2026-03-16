@@ -79,6 +79,7 @@ from ._dt_helpers import (  # noqa: F401
 )
 
 from ._dt_codegen import (  # noqa: F401
+    _gen_array_from_any_helper,
     _gen_bindc_struct,
     _gen_capsule_destructor,
     _gen_getset,
@@ -194,12 +195,26 @@ def buildhooks(pymod):
                 source_file, tb['name'])
             final_subroutine_names.update(finals)
 
+        # Track bound_procs per type for inheritance merging
+        all_bound_procs = {}
+
         for tb in gen_order:
             typename = tb['name']
 
             # Scan for type-bound procedures
             bound_procs = _scan_type_bound_procedures(
                 source_file, typename)
+
+            # Merge inherited TBPs from parent (F2018 7.5.7)
+            parent_name = _get_extends_parent(tb)
+            if parent_name:
+                parent_bp = all_bound_procs.get(parent_name, {})
+                merged = dict(parent_bp)
+                merged.update(bound_procs)  # child overrides parent
+                bound_procs = merged
+
+            all_bound_procs[typename.lower()] = bound_procs
+
             if bound_procs:
                 outmess(f'\t\tFound type-bound procedures for '
                         f'"{typename}": '
@@ -255,6 +270,12 @@ def buildhooks(pymod):
                     _gen_routine_method_table(modulename, method_entries))
                 ret['initf90modhooks'].extend(
                     _gen_routine_init_code(modulename, method_entries))
+
+    # Prepend the Array API / DLPack helper function (used by all
+    # array setters in both bind(c) and opaque code paths).
+    if ret['f90modhooks']:
+        ret['f90modhooks'][0] = (
+            _gen_array_from_any_helper() + ret['f90modhooks'][0])
 
     # Complex members use npy_cfloat/npy_cdouble (MSVC-compatible) with
     # npy_creal/npy_cpack helpers from npy_math.h. The type definitions

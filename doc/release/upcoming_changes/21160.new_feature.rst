@@ -8,7 +8,17 @@ attribute access, constructors, and repr. Two strategies are supported:
 * **Opaque types**: arbitrary Fortran types (no ``bind(c)`` required) wrapped via
   auto-generated Fortran ``bind(c)`` accessor routines.
 
-Supported features include fixed-size and allocatable array members, nested
-types, inheritance (``extends``), type-bound procedures, operator overloading,
-character string members, complex-valued members, arrays of derived types as
-routine arguments, and functions returning derived types.
+Supported features include:
+
+* Fixed-size, allocatable, and pointer array members (1D and multi-dimensional)
+* Nested types and arrays of derived types as routine arguments
+* Inheritance (``extends``) with abstract base types and ``isinstance()`` support
+* Type-bound procedures, generic bindings with runtime dispatch, and finalizers
+* Operator overloading (arithmetic, comparison, assignment)
+* Character string members (fixed-length and deferred-length allocatable)
+* Complex-valued members (compatible with ``npy_cfloat``/``npy_cdouble``)
+* Default initialization and ``SEQUENCE`` types
+* KIND-parameterized types with multi-kind specialization
+* LEN-parameterized types
+* Functions returning derived types and assumed-shape array arguments
+* Array API compatible input for array member setters (accepts ``__dlpack__``)

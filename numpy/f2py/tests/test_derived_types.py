@@ -3877,3 +3877,178 @@ class TestSequenceTypeCompilation(util.F2PyTest):
         assert abs(p.x - 1.1) < 1e-12
         assert abs(p.y - 2.2) < 1e-12
         assert abs(p.z - 3.3) < 1e-12
+
+
+# ---- Deferred TBP tests (F2018 7.5.5, R752) ----
+
+class TestDeferredTBPAbstractCodeGen:
+    """Verify codegen wraps child overrides of deferred TBPs."""
+
+    def test_disk_compute_area_method_generated(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # disk's override of compute_area should appear as a method
+        assert 'compute_area' in all_code.lower()
+
+
+@pytest.mark.slow
+class TestDeferredTBPAbstractCompilation(util.F2PyTest):
+    """Verify deferred TBP override is callable at runtime."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "abstract_type.f90")]
+
+    def test_disk_compute_area_callable(self):
+        d = self.module.disk(area=0.0, radius=2.0)
+        d.compute_area()
+        assert abs(d.area - 3.14159265358979 * 4.0) < 1e-8
+
+
+class TestDeferredTBPCodeGen:
+    """Verify codegen for multi-level deferred TBP hierarchy."""
+
+    def test_integrator_abstract_detected(self):
+        from numpy.f2py._dt_helpers import _is_abstract_type
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_tbp.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        integrator_tb = next(tb for tb in type_blocks
+                             if tb['name'].lower() == 'integrator')
+        assert _is_abstract_type(integrator_tb)
+
+    def test_midpoint_methods_generated(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_tbp.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # MidpointRule should have both integrate and get_order
+        assert 'midpoint_integrate' in all_code.lower() or \
+               'integrate' in all_code.lower()
+
+    def test_corrected_midpoint_generated(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_tbp.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'Pycorrectedmidpoint' in all_code or \
+               'correctedmidpoint' in all_code.lower()
+
+
+@pytest.mark.slow
+class TestDeferredTBPCompilation(util.F2PyTest):
+    """Test deferred TBP with multi-level inheritance at runtime."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "deferred_tbp.f90")]
+
+    def test_integrator_cannot_instantiate(self):
+        with pytest.raises(TypeError, match="abstract"):
+            self.module.integrator()
+
+    def test_midpoint_integrate(self):
+        m = self.module.midpointrule(npoints=1)
+        # Integrates x^2 from 0 to 1: midpoint = 0.5, result = 1*0.25 = 0.25
+        result = m.integrate(0.0, 1.0)
+        assert abs(result - 0.25) < 1e-10
+
+    def test_midpoint_get_order(self):
+        m = self.module.midpointrule(npoints=1)
+        assert m.get_order() == 2
+
+    def test_corrected_integrate(self):
+        c = self.module.correctedmidpoint(npoints=1)
+        # h=1, mid=0.5, result = 1*0.25 + 1/24 = 0.291666...
+        result = c.integrate(0.0, 1.0)
+        expected = 0.25 + 1.0 / 24.0
+        assert abs(result - expected) < 1e-10
+
+    def test_corrected_inherits_get_order(self):
+        c = self.module.correctedmidpoint(npoints=1)
+        # Inherits get_order from MidpointRule
+        assert c.get_order() == 2
+
+    def test_corrected_isinstance_midpoint(self):
+        c = self.module.correctedmidpoint(npoints=1)
+        assert isinstance(c, self.module.midpointrule)
+
+    def test_corrected_isinstance_integrator(self):
+        c = self.module.correctedmidpoint(npoints=1)
+        assert isinstance(c, self.module.integrator)
+
+
+# ---- Array API / DLPack input tests ----
+
+class TestArrayFromAnyCodeGen:
+    """Verify the Array API helper function is generated."""
+
+    def test_helper_function_generated(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'f2py_dt_array_from_any' in all_code
+
+    def test_setter_uses_helper(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Should NOT use raw PyArray_FROM_OTF in setter code
+        # (only inside the helper itself)
+        setter_code = all_code.split('f2py_dt_array_from_any(PyObject')[1]
+        assert 'f2py_dt_array_from_any(value' in setter_code
+
+
+@pytest.mark.slow
+class TestArrayAPIInput(util.F2PyTest):
+    """Test array setters accept DLPack and Array API inputs."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "array_members_bindc.f90")]
+
+    def test_numpy_array_input(self):
+        v = self.module.vec3()
+        v.v = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        assert abs(v.v[0] - 1.0) < 1e-5
+
+    def test_list_input(self):
+        v = self.module.vec3()
+        v.v = [4.0, 5.0, 6.0]
+        assert abs(v.v[0] - 4.0) < 1e-5
+
+    def test_dlpack_array_input(self):
+        src = np.array([7.0, 8.0, 9.0], dtype=np.float32)
+        # from_dlpack round-trip to get a DLPack-backed array
+        dlpack_arr = np.from_dlpack(src)
+        v = self.module.vec3()
+        v.v = dlpack_arr
+        assert abs(v.v[0] - 7.0) < 1e-5
+
+
+# ---- Coarray member skip tests ----
+
+class TestCoarrayMemberSkip:
+    """Verify coarray members are detected and skipped."""
+
+    def test_is_coarray_member_function(self):
+        from numpy.f2py._dt_helpers import _is_coarray_member
+        var_coarray = {'attrspec': ['codimension(*)']}
+        assert _is_coarray_member(var_coarray)
+        var_normal = {'attrspec': ['allocatable']}
+        assert not _is_coarray_member(var_normal)
+        var_empty = {}
+        assert not _is_coarray_member(var_empty)

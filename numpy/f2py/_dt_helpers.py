@@ -729,6 +729,10 @@ def _is_pointer_member(var):
     Distinct from allocatables (F2018 7.5.4.7): the wrapper does not
     manage the target memory. Exposed as read-only (getter) from Python
     since pointer assignment from C requires careful lifetime management.
+
+    The CONTIGUOUS attribute (F2018 8.5.7, R738) on pointer components
+    is a compiler optimization hint guaranteeing contiguous storage.
+    It does not affect wrapping and is silently ignored.
     """
     attrspec = var.get('attrspec', [])
     if 'pointer' not in attrspec:
@@ -745,6 +749,22 @@ def _is_pointer_member(var):
 def _get_pointer_ndim(var):
     """Return the rank (number of dimensions) of a pointer member."""
     return len(var.get('dimension', []))
+
+
+def _is_coarray_member(var):
+    """Check if a member has the codimension (coarray) attribute.
+
+    Fortran coarray components (F2018 7.5.4.3) use CODIMENSION or
+    bracket syntax (e.g. ``integer :: x[*]``).  Coarrays require a
+    Fortran coarray runtime (OpenCoarrays or compiler-native) and
+    cannot be wrapped by f2py.  Members with this attribute are
+    detected and skipped with a warning during code generation.
+    """
+    attrspec = var.get('attrspec', [])
+    for attr in attrspec:
+        if isinstance(attr, str) and attr.lower().startswith('codimension'):
+            return True
+    return False
 
 
 def _is_type_member(var):
@@ -790,6 +810,8 @@ def _can_wrap_bindc(typeblock, type_map=None):
             continue
         elif _is_pointer_member(var):
             continue
+        elif _is_coarray_member(var):
+            continue
         elif _get_member_ctype(var) is None:
             return False
     return True
@@ -828,6 +850,8 @@ def _can_wrap_abstract(typeblock, type_map=None):
         elif _is_allocatable_member(var):
             continue
         elif _is_pointer_member(var):
+            continue
+        elif _is_coarray_member(var):
             continue
         elif _get_member_ctype(var) is None:
             return False
@@ -877,12 +901,15 @@ def _can_wrap_opaque(typeblock, type_map=None):
         return False
     else:
         _resolve_parameterized_type(typeblock)
-    if not is_simple_derived_type(typeblock):
-        return False
     # Check extends parent is already wrappable
     parent_name = _get_extends_parent(typeblock)
     if parent_name:
         if type_map is None or parent_name not in type_map:
+            return False
+    # Child types that inherit all members from a wrappable parent
+    # may have no own members -- this is valid (F2018 7.5.7).
+    if not is_simple_derived_type(typeblock):
+        if not (parent_name and parent_name in (type_map or {})):
             return False
     # Collect LEN param names for array dimension checking
     len_param_names = {li['name'] for li in _get_len_param_info(typeblock)}
@@ -901,6 +928,8 @@ def _can_wrap_opaque(typeblock, type_map=None):
         elif _is_allocatable_member(var):
             continue
         elif _is_pointer_member(var):
+            continue
+        elif _is_coarray_member(var):
             continue
         elif len_param_names and _is_len_sized_array(var, len_param_names):
             # Array sized by LEN param -- handled via dynamic accessors
