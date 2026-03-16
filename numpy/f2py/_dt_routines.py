@@ -53,6 +53,9 @@ from ._dt_helpers import (
     _resolve_type_for_kind,
     _get_kind_param_info,
     _get_len_param_info,
+    _is_polymorphic_arg,
+    _polymorphic_type_tags,
+    _get_type_extensions,
 )
 
 from ._dt_codegen import (
@@ -91,13 +94,15 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
     opaque_types = [tb for tb in type_blocks
                     if _can_wrap_opaque(tb, type_map)]
 
+    type_tags = _polymorphic_type_tags(type_blocks, type_map)
+
     # Find routines needing wrappers
     routine_wrappers = []
     if routines:
         for routine in routines:
             if _has_derived_type_args(routine):
                 wrapper_name, fortran_code = _gen_routine_fortran_wrapper(
-                    modulename, routine, type_map)
+                    modulename, routine, type_map, type_tags)
                 if fortran_code is not None:
                     routine_wrappers.append(fortran_code)
 
@@ -1086,7 +1091,8 @@ def _get_wrappable_routines(module, type_map):
     return result
 
 
-def _gen_routine_fortran_wrapper(modulename, routine, type_map):
+def _gen_routine_fortran_wrapper(modulename, routine, type_map,
+                                   type_tags):
     """Generate Fortran bind(c) wrapper for a routine with derived type args.
 
     The wrapper accepts void* (c_ptr) for each derived type argument,
@@ -1194,22 +1200,59 @@ def _gen_routine_fortran_wrapper(modulename, routine, type_map):
             tname_tb = type_map.get(tname)
             tname_spec = (_get_fortran_type_spec(tname_tb)
                           if tname_tb else tname)
-            wrapper_args.append(f'{argname}_ptr')
-            decls.append(f'    type(c_ptr), value :: {argname}_ptr')
-            local_decls.append(
-                f'    type({tname_spec}), pointer :: {argname}')
-            intent = var.get('intent', [])
-            if 'out' in intent:
-                # For intent(out), allocate a new one, call, return ptr
-                pre_call.append(f'    allocate({argname})')
-                post_call.append(
-                    f'    {argname}_ptr = c_loc({argname})')
-                # Rewrite decl: _ptr is inout (returns updated ptr)
-                decls[-1] = f'    type(c_ptr) :: {argname}_ptr'
+            is_poly = _is_polymorphic_arg(var)
+            if is_poly:
+                # F2018 7.3.2.3: polymorphic arg needs type tag
+                # for SELECT CASE dispatch
+                wrapper_args.append(f'{argname}_ptr')
+                wrapper_args.append(f'{argname}_type_tag')
+                decls.append(f'    type(c_ptr), value :: {argname}_ptr')
+                decls.append(
+                    f'    integer(c_int), value :: {argname}_type_tag')
+                # Find all types extending the base type
+                extensions = _get_type_extensions(tname, type_map)
+                if len(extensions) > 1:
+                    # Multiple types: generate SELECT CASE dispatch
+                    # Each extension gets its own local pointer
+                    for i, (ext_name, ext_tb) in enumerate(extensions):
+                        ext_spec = _get_fortran_type_spec(ext_tb)
+                        local_decls.append(
+                            f'    type({ext_spec}), pointer '
+                            f':: {argname}_v{i+1}')
+                    # The call_args entry is a placeholder; actual call
+                    # is generated via polymorphic_dispatch below
+                    call_args.append(argname)
+                    # Store dispatch info for later
+                    if not hasattr(routine, '_f2py_poly_dispatch'):
+                        routine['_f2py_poly_dispatch'] = {}
+                    routine['_f2py_poly_dispatch'][argname] = {
+                        'extensions': extensions,
+                        'tag_arg': f'{argname}_type_tag',
+                    }
+                else:
+                    # Only base type: no dispatch needed
+                    local_decls.append(
+                        f'    type({tname_spec}), pointer :: {argname}')
+                    pre_call.append(
+                        f'    call c_f_pointer({argname}_ptr, {argname})')
+                    call_args.append(argname)
             else:
-                pre_call.append(
-                    f'    call c_f_pointer({argname}_ptr, {argname})')
-            call_args.append(argname)
+                wrapper_args.append(f'{argname}_ptr')
+                decls.append(f'    type(c_ptr), value :: {argname}_ptr')
+                local_decls.append(
+                    f'    type({tname_spec}), pointer :: {argname}')
+                intent = var.get('intent', [])
+                if 'out' in intent:
+                    # For intent(out), allocate a new one, call, return ptr
+                    pre_call.append(f'    allocate({argname})')
+                    post_call.append(
+                        f'    {argname}_ptr = c_loc({argname})')
+                    # Rewrite decl: _ptr is inout (returns updated ptr)
+                    decls[-1] = f'    type(c_ptr) :: {argname}_ptr'
+                else:
+                    pre_call.append(
+                        f'    call c_f_pointer({argname}_ptr, {argname})')
+                call_args.append(argname)
         else:
             # Scalar arg -- pass through
             isoc_type = _get_member_isoc_type(var)
@@ -1257,17 +1300,55 @@ def _gen_routine_fortran_wrapper(modulename, routine, type_map):
     if pre_call_str:
         lines.append(pre_call_str)
 
-    if is_func:
-        if returns_type:
-            lines.append(f'    allocate(f2py_temp_result)')
+    # Check for polymorphic dispatch (F2018 7.3.2.3)
+    poly_dispatch = routine.get('_f2py_poly_dispatch', {})
+    if poly_dispatch:
+        # Generate SELECT CASE dispatch for polymorphic args.
+        # For simplicity, handle one polymorphic arg at a time.
+        poly_arg = list(poly_dispatch.keys())[0]
+        info = poly_dispatch[poly_arg]
+        extensions = info['extensions']
+        tag_arg = info['tag_arg']
+
+        lines.append(f'    select case ({tag_arg})')
+        for i, (ext_name, ext_tb) in enumerate(extensions):
+            ext_spec = _get_fortran_type_spec(ext_tb)
+            local_var = f'{poly_arg}_v{i+1}'
+            # Build call_args with the correct local variable
+            dispatch_call_args = []
+            for ca in call_args:
+                if ca == poly_arg:
+                    dispatch_call_args.append(local_var)
+                else:
+                    dispatch_call_args.append(ca)
+            dca_str = ', '.join(dispatch_call_args)
+            lines.append(f'    case ({type_tags[ext_name]})')
             lines.append(
-                f'    f2py_temp_result = {rname}({call_args_str})')
-            lines.append(f'    retval = c_loc(f2py_temp_result)')
-        else:
-            lines.append(
-                f'    retval = {rname}({call_args_str})')
+                f'      call c_f_pointer({poly_arg}_ptr, {local_var})')
+            if is_func:
+                if returns_type:
+                    lines.append(f'      allocate(f2py_temp_result)')
+                    lines.append(
+                        f'      f2py_temp_result = {rname}({dca_str})')
+                    lines.append(
+                        f'      retval = c_loc(f2py_temp_result)')
+                else:
+                    lines.append(f'      retval = {rname}({dca_str})')
+            else:
+                lines.append(f'      call {rname}({dca_str})')
+        lines.append(f'    end select')
     else:
-        lines.append(f'    call {rname}({call_args_str})')
+        if is_func:
+            if returns_type:
+                lines.append(f'    allocate(f2py_temp_result)')
+                lines.append(
+                    f'    f2py_temp_result = {rname}({call_args_str})')
+                lines.append(f'    retval = c_loc(f2py_temp_result)')
+            else:
+                lines.append(
+                    f'    retval = {rname}({call_args_str})')
+        else:
+            lines.append(f'    call {rname}({call_args_str})')
 
     if post_call_str:
         lines.append(post_call_str)
@@ -1320,6 +1401,8 @@ def _gen_routine_c_wrapper(modulename, routine, type_map):
                 extern_args.append('void **')
             else:
                 extern_args.append('void *')
+            if _is_polymorphic_arg(var):
+                extern_args.append('int')  # type_tag
         elif argname.lower() in array_size_args:
             # Size arg consumed by array-of-type; still passed to Fortran
             ctype = _get_member_ctype(var)
@@ -1531,6 +1614,7 @@ def _gen_routine_c_wrapper(modulename, routine, type_map):
             tname = var.get('typename', '').lower()
             intent = var.get('intent', [])
             capsule_name = f'f2py.{tname}'
+            is_poly = _is_polymorphic_arg(var)
             if 'out' in intent:
                 lines.append(f'    void *{argname}_ptr = NULL;')
             else:
@@ -1541,10 +1625,16 @@ def _gen_routine_c_wrapper(modulename, routine, type_map):
                     f'"{argname} is required");')
                 lines.append('        return NULL;')
                 lines.append('    }')
-                # Check it's the right type
-                lines.append(
-                    f'    if (!Py_IS_TYPE({argname}_obj, '
-                    f'&Py{tname}_Type)) {{')
+                if is_poly:
+                    # F2018 7.3.2.3: polymorphic -- use isinstance
+                    # to allow child types
+                    lines.append(
+                        f'    if (!PyObject_IsInstance({argname}_obj, '
+                        f'(PyObject *)&Py{tname}_Type)) {{')
+                else:
+                    lines.append(
+                        f'    if (!Py_IS_TYPE({argname}_obj, '
+                        f'&Py{tname}_Type)) {{')
                 lines.append(
                     f'        PyErr_SetString(PyExc_TypeError, '
                     f'"{argname} must be a {tname} instance");')
@@ -1565,6 +1655,10 @@ def _gen_routine_c_wrapper(modulename, routine, type_map):
                     f'{argname}_typed->capsule, "{capsule_name}");')
                 lines.append(
                     f'    if ({argname}_ptr == NULL) return NULL;')
+                if is_poly:
+                    lines.append(
+                        f'    int {argname}_type_tag = '
+                        f'{argname}_typed->type_tag;')
     lines.append('')
 
     # Build call
@@ -1587,6 +1681,8 @@ def _gen_routine_c_wrapper(modulename, routine, type_map):
                 call_args.append(f'&{argname}_ptr')
             else:
                 call_args.append(f'{argname}_ptr')
+            if _is_polymorphic_arg(var):
+                call_args.append(f'{argname}_type_tag')
         elif argname.lower() in array_size_args:
             # Size arg -- pass the value derived from list length
             call_args.append(argname)
@@ -2360,6 +2456,8 @@ def _gen_generic_dispatch_method(typename, method_name, binding_list,
                     extern_args.append('void **')
                 else:
                     extern_args.append('void *')
+                    if _is_polymorphic_arg(var):
+                        extern_args.append('int')
             else:
                 ctype = _get_member_ctype(var)
                 if ctype:
@@ -2396,6 +2494,10 @@ def _gen_generic_dispatch_method(typename, method_name, binding_list,
 
         # Parse args for this candidate
         call_args = ['self_ptr']
+        _self_var = routine['vars'].get(routine['args'][0], {})
+        if (_is_polymorphic_arg(_self_var)
+                and 'out' not in _self_var.get('intent', [])):
+            call_args.append('self->type_tag')
         for j, argname in enumerate(other_args):
             var = routine['vars'].get(argname, {})
             if var.get('typespec') == 'type':
@@ -2410,6 +2512,9 @@ def _gen_generic_dispatch_method(typename, method_name, binding_list,
                 lines.append(
                     f'        if (arg{j}_ptr == NULL) goto dispatch_fail;')
                 call_args.append(f'arg{j}_ptr')
+                if _is_polymorphic_arg(var):
+                    call_args.append(
+                        f'((Py{tname}Object *)arg{j}_obj)->type_tag')
             else:
                 ctype = _get_member_ctype(var)
                 fmt = _C_TO_PYFORMAT.get(ctype, 'd')
@@ -2555,6 +2660,8 @@ def _gen_type_methods(typename, bound_procs, routines, type_map):
                     extern_args.append('void **')
                 else:
                     extern_args.append('void *')
+                    if _is_polymorphic_arg(var):
+                        extern_args.append('int')
             else:
                 ctype = _get_member_ctype(var)
                 if ctype is None:
@@ -2610,6 +2717,9 @@ def _gen_type_methods(typename, bound_procs, routines, type_map):
         parse_decls = []
         parse_refs = []
         call_args = ['self_ptr']
+        if (_is_polymorphic_arg(self_var)
+                and 'out' not in self_var.get('intent', [])):
+            call_args.append('self->type_tag')
 
         for argname in other_args:
             var = routine['vars'].get(argname, {})
@@ -2687,6 +2797,9 @@ def _gen_type_methods(typename, bound_procs, routines, type_map):
                 lines.append(
                     f'    if ({argname}_ptr == NULL) return NULL;')
                 call_args.append(f'{argname}_ptr')
+                if _is_polymorphic_arg(var):
+                    call_args.append(
+                        f'((Py{tname}Object *){argname}_obj)->type_tag')
 
         call_args_str = ', '.join(call_args)
 

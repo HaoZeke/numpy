@@ -76,6 +76,7 @@ from ._dt_helpers import (  # noqa: F401
     _get_kind_param_info,
     _get_len_param_info,
     _is_len_sized_array,
+    _polymorphic_type_tags,
     _topo_visit,
 )
 
@@ -190,6 +191,11 @@ def buildhooks(pymod):
             _topo_visit(tb, type_blocks, type_map,
                         generated, gen_order)
 
+        # Assign type tags for polymorphic dispatch (F2018 7.3.2.3).
+        # Each wrappable type gets a unique integer tag. Tags are
+        # ordered so parent types have lower tags than children.
+        type_tags = _polymorphic_type_tags(type_blocks, type_map)
+
         # Collect all final subroutine names across types.
         # These must be excluded from routine wrapping since they
         # are called automatically during deallocation (F2018 7.5.6.3)
@@ -256,7 +262,8 @@ def buildhooks(pymod):
                     ret, typename, tb, modulename, m,
                     bound_procs=bound_procs,
                     routines=all_routines,
-                    type_map=type_map)
+                    type_map=type_map,
+                    type_tag=type_tags.get(typename.lower(), 0))
             elif _can_wrap_opaque(tb, type_map):
                 outmess(f'\t\tGenerating opaque pointer type wrapper '
                         f'for "{typename}"...\n')
@@ -265,7 +272,8 @@ def buildhooks(pymod):
                     bound_procs=bound_procs,
                     routines=all_routines,
                     type_map=type_map,
-                    proc_ptrs=proc_ptrs)
+                    proc_ptrs=proc_ptrs,
+                    type_tag=type_tags.get(typename.lower(), 0))
             else:
                 outmess(f'\t\tSkipping derived type "{typename}" '
                         f'(not wrappable yet)...\n')
@@ -324,7 +332,7 @@ def buildhooks(pymod):
 
 def _generate_bindc_hooks(ret, typename, typeblock, modulename,
                           module_block, bound_procs=None, routines=None,
-                          type_map=None):
+                          type_map=None, type_tag=0):
     """Generate hooks for a bind(c) derived type."""
     members = {
         name: var for name, var in get_type_members(typeblock).items()
@@ -335,7 +343,7 @@ def _generate_bindc_hooks(ret, typename, typeblock, modulename,
     code_parts.append(_gen_bindc_struct(typename, members))
     code_parts.append(_gen_pytype_struct(typename))
     code_parts.append(_gen_capsule_destructor(typename))
-    code_parts.append(_gen_tp_new(typename))
+    code_parts.append(_gen_tp_new(typename, type_tag=type_tag))
     code_parts.append(_gen_tp_init(typename, members))
     code_parts.append(_gen_tp_dealloc(typename))
     code_parts.append(_gen_getset(typename, members))
@@ -465,7 +473,7 @@ static PyTypeObject Py{typename}_Type = {{
 
 def _generate_opaque_hooks(ret, typename, typeblock, modulename,
                            module_block, bound_procs=None, routines=None,
-                           type_map=None, proc_ptrs=None):
+                           type_map=None, proc_ptrs=None, type_tag=0):
     """Generate hooks for a non-bind(c) derived type via opaque pointers.
 
     Uses the 3-layer approach: Python -> C wrapper -> Fortran accessor.
@@ -541,7 +549,7 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
         code_parts.append(
             _gen_opaque_capsule_destructor(
                 typename, specializations=specializations))
-        code_parts.append(_gen_tp_new(typename))
+        code_parts.append(_gen_tp_new(typename, type_tag=type_tag))
         code_parts.append(
             _gen_opaque_tp_init(typename, all_members,
                                 specializations=specializations,
@@ -563,7 +571,7 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
                                               len_info=len_info))
         code_parts.append(_gen_opaque_capsule_destructor(
             typename, len_info=len_info))
-        code_parts.append(_gen_tp_new(typename))
+        code_parts.append(_gen_tp_new(typename, type_tag=type_tag))
         code_parts.append(_gen_opaque_tp_init(typename, all_members,
                                               len_info=len_info))
         code_parts.append(_gen_tp_dealloc(typename))
