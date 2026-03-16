@@ -1803,9 +1803,10 @@ def _scan_type_bound_procedures(source_file, typename):
                     impl_name = (m.group(2) or m.group(1)).lower()
                     result[method_name] = impl_name
                     continue
-                # Generic bindings (F2018 R751): use first specific
-                # binding as implementation. Type dispatch from Python
-                # is not supported -- the first implementation is used.
+                # Generic bindings (F2018 R751): store all specific
+                # bindings for runtime dispatch.  The result dict maps
+                # generic_name -> impl_name (single binding) or
+                # generic_name -> [impl1, impl2, ...] (multiple).
                 generic_match = generic_pat.match(stripped)
                 if generic_match:
                     generic_name = generic_match.group(1).lower()
@@ -1813,9 +1814,10 @@ def _scan_type_bound_procedures(source_file, typename):
                         binding.strip().lower()
                         for binding in generic_match.group(2).split(',')
                     ]
-                    if bindings:
-                        # Map generic name to first specific binding
+                    if len(bindings) == 1:
                         result[generic_name] = bindings[0]
+                    elif len(bindings) > 1:
+                        result[generic_name] = bindings
 
     return result
 
@@ -1871,6 +1873,235 @@ def _scan_final_subroutines(source_file, typename):
     return result
 
 
+def _resolve_binding_to_routine(binding_name, bound_procs, routine_map):
+    """Resolve a binding name to its module routine through the chain."""
+    resolved = binding_name
+    for _ in range(5):
+        if resolved in routine_map:
+            return routine_map[resolved]
+        next_name = bound_procs.get(resolved)
+        if next_name is None or next_name == resolved:
+            break
+        if isinstance(next_name, list):
+            # Multi-binding generic; take first
+            next_name = next_name[0]
+        resolved = next_name
+    return routine_map.get(resolved)
+
+
+def _get_non_self_arg_types(routine):
+    """Get (argname, ctype_or_typename) pairs for non-self args."""
+    args = routine.get('args', [])
+    if not args:
+        return []
+    result = []
+    for argname in args[1:]:
+        var = routine['vars'].get(argname, {})
+        if var.get('typespec') == 'type':
+            result.append((argname, 'type:' + var.get('typename', '')))
+        else:
+            ctype = _get_member_ctype(var)
+            result.append((argname, ctype))
+    return result
+
+
+def _gen_generic_dispatch_method(typename, method_name, binding_list,
+                                 bound_procs, routine_map, type_map):
+    """Generate a dispatch method for a generic TBP with multiple bindings.
+
+    The generated C function tries each binding's argument signature in
+    order and calls the first one that matches the Python argument types.
+    """
+    # Resolve each binding to its routine
+    candidates = []
+    for binding_name in binding_list:
+        routine = _resolve_binding_to_routine(
+            binding_name, bound_procs, routine_map)
+        if routine is None:
+            continue
+        args = routine.get('args', [])
+        if not args:
+            continue
+        self_var = routine['vars'].get(args[0], {})
+        if self_var.get('typespec') != 'type':
+            continue
+        candidates.append((binding_name, routine))
+
+    if not candidates:
+        return None
+
+    # If only one candidate resolves, fall through to single dispatch
+    if len(candidates) == 1:
+        return None
+
+    mfunc_name = f'Py{typename}_method_{method_name}'
+    capsule_name = f'f2py.{typename.lower()}'
+
+    lines = []
+    lines.append(f'static PyObject *')
+    lines.append(
+        f'{mfunc_name}(PyObject *selfobj, PyObject *args, '
+        f'PyObject *kwds)')
+    lines.append('{')
+    lines.append(
+        f'    Py{typename}Object *self = '
+        f'(Py{typename}Object *)selfobj;')
+    lines.append(f'    if (self->capsule == NULL) {{')
+    lines.append(
+        f'        PyErr_SetString(PyExc_RuntimeError, '
+        f'"{typename} not initialized");')
+    lines.append('        return NULL;')
+    lines.append('    }')
+    lines.append(
+        f'    void *self_ptr = PyCapsule_GetPointer('
+        f'self->capsule, "{capsule_name}");')
+    lines.append('    if (self_ptr == NULL) return NULL;')
+    lines.append('')
+    lines.append('    Py_ssize_t nargs = PyTuple_Size(args);')
+    lines.append('')
+
+    # Generate a try-block for each candidate based on argument count
+    # and types. Order by number of args (most specific first).
+    candidates.sort(key=lambda c: len(c[1].get('args', [])), reverse=True)
+
+    for i, (binding_name, routine) in enumerate(candidates):
+        other_args = routine.get('args', [])[1:]
+        resolved_name = binding_name
+        # Resolve to actual routine name
+        r = routine
+        wrapper_sym = f'f2py_wrap_{r["name"].lower()}'
+        is_func = isfunction(routine)
+
+        # Build extern declaration
+        all_args = routine.get('args', [])
+        extern_args = []
+        for argname in all_args:
+            var = routine['vars'].get(argname, {})
+            if var.get('typespec') == 'type':
+                intent = var.get('intent', [])
+                if 'out' in intent:
+                    extern_args.append('void **')
+                else:
+                    extern_args.append('void *')
+            else:
+                ctype = _get_member_ctype(var)
+                if ctype:
+                    intent = var.get('intent', [])
+                    if 'out' in intent or 'inout' in intent:
+                        extern_args.append(f'{ctype} *')
+                    else:
+                        extern_args.append(ctype)
+
+        if is_func:
+            result_var = routine.get('result', binding_name)
+            rvar = routine['vars'].get(result_var, {})
+            result_ctype = _get_member_ctype(rvar)
+            extern_ret = result_ctype if result_ctype else 'void'
+        else:
+            extern_ret = 'void'
+
+        extern_args_str = ', '.join(extern_args) if extern_args else 'void'
+        lines.append(
+            f'    extern {extern_ret} {wrapper_sym}({extern_args_str});')
+
+    lines.append('')
+
+    # Dispatch logic: check nargs to select candidate
+    for i, (binding_name, routine) in enumerate(candidates):
+        other_args = routine.get('args', [])[1:]
+        n_required = len(other_args)
+        wrapper_sym = f'f2py_wrap_{routine["name"].lower()}'
+        is_func = isfunction(routine)
+
+        cond = f'nargs == {n_required}'
+        prefix = 'if' if i == 0 else '} else if'
+        lines.append(f'    {prefix} ({cond}) {{')
+
+        # Parse args for this candidate
+        call_args = ['self_ptr']
+        for j, argname in enumerate(other_args):
+            var = routine['vars'].get(argname, {})
+            if var.get('typespec') == 'type':
+                tname = var.get('typename', '').lower()
+                cap_name = f'f2py.{tname}'
+                lines.append(
+                    f'        PyObject *arg{j}_obj = '
+                    f'PyTuple_GetItem(args, {j});')
+                lines.append(
+                    f'        void *arg{j}_ptr = '
+                    f'PyCapsule_GetPointer(arg{j}_obj, "{cap_name}");')
+                lines.append(
+                    f'        if (arg{j}_ptr == NULL) goto dispatch_fail;')
+                call_args.append(f'arg{j}_ptr')
+            else:
+                ctype = _get_member_ctype(var)
+                fmt = _C_TO_PYFORMAT.get(ctype, 'd')
+                lines.append(f'        {ctype} arg{j} = 0;')
+                lines.append(
+                    f'        PyObject *arg{j}_obj = '
+                    f'PyTuple_GetItem(args, {j});')
+                if ctype in ('int', 'long', 'long long'):
+                    lines.append(
+                        f'        arg{j} = ({ctype})PyLong_AsLong('
+                        f'arg{j}_obj);')
+                elif ctype in ('float',):
+                    lines.append(
+                        f'        arg{j} = (float)PyFloat_AsDouble('
+                        f'arg{j}_obj);')
+                else:
+                    lines.append(
+                        f'        arg{j} = PyFloat_AsDouble(arg{j}_obj);')
+                lines.append(
+                    f'        if (PyErr_Occurred()) goto dispatch_fail;')
+                call_args.append(f'arg{j}')
+
+        call_str = ', '.join(call_args)
+        if is_func:
+            result_var = routine.get('result', binding_name)
+            rvar = routine['vars'].get(result_var, {})
+            result_ctype = _get_member_ctype(rvar)
+            lines.append(
+                f'        {result_ctype} result = '
+                f'{wrapper_sym}({call_str});')
+            if result_ctype in ('int', 'long', 'long long'):
+                lines.append(
+                    '        return PyLong_FromLong((long)result);')
+            else:
+                lines.append(
+                    '        return PyFloat_FromDouble((double)result);')
+        else:
+            lines.append(f'        {wrapper_sym}({call_str});')
+            lines.append('        Py_RETURN_NONE;')
+
+    lines.append('    } else {')
+    lines.append(
+        f'        PyErr_Format(PyExc_TypeError, '
+        f'"{method_name}() takes {{expected}} args, got %zd", nargs);')
+    # Build expected string from candidates
+    expected = ' or '.join(str(len(c[1].get('args', [])[1:]))
+                          for c in candidates)
+    lines[-1] = lines[-1].replace('{expected}', expected)
+    lines.append('        return NULL;')
+    lines.append('    }')
+    lines.append('')
+    lines.append('dispatch_fail:')
+    lines.append('    PyErr_Clear();')
+    lines.append(
+        f'    PyErr_SetString(PyExc_TypeError, '
+        f'"{method_name}(): argument type mismatch");')
+    lines.append('    return NULL;')
+    lines.append('}')
+
+    func_code = '\n'.join(lines)
+    method_entry = (
+        f'    {{"{method_name}", '
+        f'(PyCFunction){mfunc_name}, '
+        f'METH_VARARGS | METH_KEYWORDS, '
+        f'"{method_name} (generic dispatch)"}},')
+
+    return func_code, method_entry
+
+
 def _gen_type_methods(typename, bound_procs, routines, type_map):
     """Generate PyMethodDef entries and C method functions for type-bound
     procedures.
@@ -1888,6 +2119,17 @@ def _gen_type_methods(typename, bound_procs, routines, type_map):
         routine_map[r['name'].lower()] = r
 
     for method_name, impl_name in bound_procs.items():
+        # For generic bindings with multiple implementations, generate
+        # a dispatch method that tries each binding's signature.
+        if isinstance(impl_name, list):
+            dispatch_code = _gen_generic_dispatch_method(
+                typename, method_name, impl_name,
+                bound_procs, routine_map, type_map)
+            if dispatch_code:
+                funcs.append(dispatch_code[0])
+                method_entries.append(dispatch_code[1])
+            continue
+
         # Resolve binding chain: generic bindings map to specific
         # binding names (F2018 7.5.5 R751), which in turn map to
         # implementation names. Follow the chain until we find an

@@ -2339,9 +2339,9 @@ class TestGenericTBPCodeGen:
         fpath = str(util.getpath("tests", "src", "derived_types",
                                  "generic_tbp.f90"))
         procs = _scan_type_bound_procedures(fpath, 'scaler')
-        # Generic binding 'scale' maps to first specific 'scale_int'
+        # Generic binding 'scale' maps to all specific bindings
         assert 'scale' in procs
-        assert procs['scale'] == 'scale_int'
+        assert procs['scale'] == ['scale_int', 'scale_real']
 
     def test_specific_bindings_also_scanned(self):
         """Specific procedures should still be individually available."""
@@ -2391,6 +2391,16 @@ class TestGenericTBP(util.F2PyTest):
         scl = self.module.scaler(value=10.0)
         scl.scale(2)  # calls scale_int (first specific)
         assert abs(scl.value - 20.0) < 1e-10
+
+    def test_scale_generic_dispatches_on_type(self):
+        """A float argument selects scale_real (F2018 15.4.3.4.5)."""
+        scl = self.module.scaler(value=10.0)
+        scl.scale(2.5)
+        assert scl.value == 25.0
+        scl.scale(factor=2)
+        assert scl.value == 50.0
+        with pytest.raises(TypeError):
+            scl.scale("2")
 
 
 class TestFinalizerCodeGen:
