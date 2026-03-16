@@ -3640,6 +3640,8 @@ class TestEvalKindExpr:
         assert _eval_kind_expr('real32') == 4
         assert _eval_kind_expr('int32') == 4
         assert _eval_kind_expr('int64') == 8
+        assert _eval_kind_expr('real128') is None
+        assert _eval_kind_expr('iostat_end') is None
 
     def test_iso_c_binding(self):
         from numpy.f2py._dt_helpers import _eval_kind_expr

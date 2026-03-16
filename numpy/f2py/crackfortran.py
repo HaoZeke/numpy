@@ -190,6 +190,32 @@ expectbegin = 1
 f90moduleparams = {}
 f90modulevars = {}
 filepositiontext = ''
+
+# Kind names from iso_fortran_env.
+# f2py's kind maps already use the byte size as the kind number:
+# integer 1, 2, 4 and 8, and real 4 and 8.
+# The standard names the bit width and leaves the kind number to the compiler.
+# real128 is left unresolved, as c_long_double is.
+# Unit numbers and IOSTAT values are left to the compiler.
+# The generated Fortran uses the compiler's symbols for those.
+
+
+def _make_param(typespec, value):
+    return {'typespec': typespec, 'attrspec': ['parameter'], '=': str(value)}
+
+
+_ISO_FORTRAN_ENV_VARS = {
+    'int8': _make_param('integer', 1),
+    'int16': _make_param('integer', 2),
+    'int32': _make_param('integer', 4),
+    'int64': _make_param('integer', 8),
+    'real32': _make_param('integer', 4),
+    'real64': _make_param('integer', 8),
+}
+
+_INTRINSIC_MODULE_VARS = {
+    'iso_fortran_env': _ISO_FORTRAN_ENV_VARS,
+}
 gotnextfile = 1
 groupcache = None
 groupcounter = 0
@@ -2039,15 +2065,39 @@ def get_useparameters(block, param_map=None):
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
         if usename not in f90modulevars:
-            outmess(f'get_useparameters: no module {usename} info used by '
-                    f'{block.get("name")}\n')
-            continue
+            # Inject kind names from an intrinsic module when that module is used.
+            if usename in _INTRINSIC_MODULE_VARS:
+                f90modulevars[usename] = _INTRINSIC_MODULE_VARS[usename]
+                f90moduleparams[usename] = get_parameters(
+                    f90modulevars[usename])
+            else:
+                outmess(f'get_useparameters: no module {usename} info used by '
+                        f'{block.get("name")}\n')
+                continue
         params = f90moduleparams[usename]
         if not params:
             continue
-        # XXX: apply mapping
+        # Apply use...only / renaming mapping (F2018 11.2.2)
         if mapping:
-            errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
+            only = mapping.get('only', 0)
+            name_map = mapping.get('map', {})
+            if only and name_map:
+                # use module, only: a, b => c
+                # Only import listed names, applying renames
+                filtered = {}
+                for local_name, mod_name in name_map.items():
+                    mod_name_l = mod_name.lower()
+                    if mod_name_l in params:
+                        filtered[local_name.lower()] = params[mod_name_l]
+                params = filtered
+            elif name_map:
+                # use module, a => b (rename without only)
+                renamed = dict(params)
+                for local_name, mod_name in name_map.items():
+                    mod_name_l = mod_name.lower()
+                    if mod_name_l in renamed:
+                        renamed[local_name.lower()] = renamed.pop(mod_name_l)
+                params = renamed
         for k, v in list(params.items()):
             if k in param_map:
                 outmess(f'get_useparameters: overriding parameter {k!r} with'
@@ -2057,10 +2107,24 @@ def get_useparameters(block, param_map=None):
     return param_map
 
 
+def _block_uses_intrinsic_module(block):
+    """Check if block or children use an intrinsic module."""
+    if isinstance(block, list):
+        return any(_block_uses_intrinsic_module(b) for b in block)
+    usedict = block.get('use', {})
+    for modname in usedict:
+        if modname.lower() in _INTRINSIC_MODULE_VARS:
+            return True
+    for child in block.get('body', []):
+        if _block_uses_intrinsic_module(child):
+            return True
+    return False
+
+
 def postcrack2(block, tab='', param_map=None):
     global f90modulevars
 
-    if not f90modulevars:
+    if not f90modulevars and not _block_uses_intrinsic_module(block):
         return block
     if isinstance(block, list):
         ret = [postcrack2(g, tab=tab + '\t', param_map=param_map)
