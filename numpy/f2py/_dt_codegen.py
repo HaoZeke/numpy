@@ -31,6 +31,7 @@ from ._dt_helpers import (
     _get_pointer_ndim,
     _is_allocatable_member,
     _is_array_member,
+    _is_coarray_member,
     _is_deferred_char_member,
     _is_len_sized_array,
     _is_pointer_member,
@@ -279,6 +280,8 @@ def _gen_getset(typename, members):
     getset_entries = []
 
     for mname, mvar in members.items():
+        if _is_coarray_member(mvar):
+            continue  # coarrays unsupported (F2018 7.5.4.3)
         if _is_type_array_member(mvar):
             # Array of derived types -- getter returns list, setter
             # accepts list
