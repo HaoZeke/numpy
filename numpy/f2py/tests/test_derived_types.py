@@ -4018,3 +4018,53 @@ class TestDeferredTBPCompilation(util.F2PyTest):
     def test_corrected_isinstance_integrator(self):
         c = self.module.correctedmidpoint(npoints=1)
         assert isinstance(c, self.module.integrator)
+# ---- Array API / DLPack input tests ----
+
+class TestArrayFromAnyCodeGen:
+    """Verify the Array API helper function is generated."""
+
+    def test_helper_function_generated(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'f2py_dt_array_from_any' in all_code
+
+    def test_setter_uses_helper(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Should NOT use raw PyArray_FROM_OTF in setter code
+        # (only inside the helper itself)
+        setter_code = all_code.split('f2py_dt_array_from_any(PyObject')[1]
+        assert 'f2py_dt_array_from_any(value' in setter_code
+
+
+@pytest.mark.slow
+class TestArrayAPIInput(util.F2PyTest):
+    """Test array setters accept DLPack and Array API inputs."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "array_members_bindc.f90")]
+
+    def test_numpy_array_input(self):
+        v = self.module.vec3()
+        v.v = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        assert abs(v.v[0] - 1.0) < 1e-5
+
+    def test_list_input(self):
+        v = self.module.vec3()
+        v.v = [4.0, 5.0, 6.0]
+        assert abs(v.v[0] - 4.0) < 1e-5
+
+    def test_dlpack_array_input(self):
+        src = np.array([7.0, 8.0, 9.0], dtype=np.float32)
+        # from_dlpack round-trip to get a DLPack-backed array
+        dlpack_arr = np.from_dlpack(src)
+        v = self.module.vec3()
+        v.v = dlpack_arr
+        assert abs(v.v[0] - 7.0) < 1e-5
