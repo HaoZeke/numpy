@@ -41,6 +41,51 @@ from ._dt_helpers import (
 )
 
 
+def _gen_array_from_any_helper():
+    """Generate a C helper that accepts Array API / DLPack objects.
+
+    Returns a string containing a static C function
+    ``f2py_dt_array_from_any`` that tries:
+    1. Fast-path: input is already a numpy array
+    2. DLPack: input has ``__dlpack__``, convert via numpy.from_dlpack
+    3. Fallback: PyArray_FROM_OTF (handles lists, __array__, etc.)
+    """
+    return """\
+/* Array API / DLPack helper for derived type array setters.
+ * Accepts numpy arrays, DLPack objects, and generic array-likes. */
+static PyObject *
+f2py_dt_array_from_any(PyObject *value, int typenum, int requirements)
+{
+    /* Fast path: already a numpy array */
+    if (PyArray_Check(value)) {
+        return PyArray_FROM_OTF(value, typenum, requirements);
+    }
+    /* DLPack path: check for __dlpack__ attribute */
+    if (PyObject_HasAttrString(value, "__dlpack__")) {
+        PyObject *np_mod = PyImport_ImportModule("numpy");
+        if (np_mod != NULL) {
+            PyObject *arr = PyObject_CallMethod(np_mod, "from_dlpack", "O",
+                                                value);
+            Py_DECREF(np_mod);
+            if (arr != NULL) {
+                /* Ensure correct dtype and contiguity */
+                PyObject *result = PyArray_FROM_OTF(arr, typenum,
+                                                    requirements);
+                Py_DECREF(arr);
+                return result;
+            }
+            /* from_dlpack failed; clear error and fall through */
+            PyErr_Clear();
+        } else {
+            PyErr_Clear();
+        }
+    }
+    /* Fallback: lists, __array__ protocol, etc. */
+    return PyArray_FROM_OTF(value, typenum, requirements);
+}
+"""
+
+
 def _gen_bindc_struct(typename, members):
     """Generate C typedef struct for a bind(c) type."""
     lines = [f'typedef struct {{']
@@ -609,8 +654,8 @@ static int
     f2py_{typename}_t *data = (f2py_{typename}_t *)PyCapsule_GetPointer(
         self->capsule, "{capsule_name}");
     if (data == NULL) return -1;
-    PyObject *arr = PyArray_FROM_OTF(value, {npy_enum},
-                                      NPY_ARRAY_IN_ARRAY);
+    PyObject *arr = f2py_dt_array_from_any(value, {npy_enum},
+                                            NPY_ARRAY_IN_ARRAY);
     if (arr == NULL) return -1;
     if (PyArray_SIZE((PyArrayObject *)arr) != {total}) {{
         PyErr_SetString(PyExc_ValueError,
@@ -2176,8 +2221,8 @@ static int
         f2py_set_{sym}_{mname}(ptr, {dealloc_args});
         return 0;
     }}
-    PyObject *arr = PyArray_FROM_OTF(value, {npy_enum},
-                                      NPY_ARRAY_F_CONTIGUOUS);
+    PyObject *arr = f2py_dt_array_from_any(value, {npy_enum},
+                                            NPY_ARRAY_F_CONTIGUOUS);
     if (arr == NULL) return -1;
     if (PyArray_NDIM((PyArrayObject *)arr) != {ndim}) {{
         PyErr_Format(PyExc_ValueError,
@@ -2425,8 +2470,8 @@ static int
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return -1;
-    PyObject *arr = PyArray_FROM_OTF(value, {npy_enum},
-                                      NPY_ARRAY_IN_ARRAY);
+    PyObject *arr = f2py_dt_array_from_any(value, {npy_enum},
+                                            NPY_ARRAY_IN_ARRAY);
     if (arr == NULL) return -1;
     f2py_set_{sym}_{mname}(ptr{len_call_extra}, {set_dim_args},
                             PyArray_DATA((PyArrayObject *)arr));
@@ -2501,8 +2546,8 @@ static int
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return -1;
-    PyObject *arr = PyArray_FROM_OTF(value, {npy_enum},
-                                      NPY_ARRAY_IN_ARRAY);
+    PyObject *arr = f2py_dt_array_from_any(value, {npy_enum},
+                                            NPY_ARRAY_IN_ARRAY);
     if (arr == NULL) return -1;
     if (PyArray_SIZE((PyArrayObject *)arr) != {total}) {{
         PyErr_SetString(PyExc_ValueError,
