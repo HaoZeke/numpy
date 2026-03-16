@@ -65,6 +65,7 @@ from ._dt_helpers import (  # noqa: F401
     _is_complex_member,
     _is_deferred_char_member,
     _is_pointer_member,
+    _is_private_member,
     _is_type_array_member,
     _is_type_member,
     _is_type_parameter,
@@ -495,6 +496,15 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
                     if not _is_type_parameter(v)
                 }
             specializations.append((suffix, kind_dict, resolved_members))
+
+    # F2018 7.5.4.8: the Fortran wrappers have no accessors for private
+    # components, so neither getters, setters, tp_init nor tp_repr use them
+    def public(members):
+        return {n: v for n, v in members.items()
+                if not _is_private_member(v)}
+    all_members = public(all_members)
+    specializations = [(suffix, kind_dict, public(members))
+                       for suffix, kind_dict, members in specializations]
 
     code_parts = []
     if specializations:
