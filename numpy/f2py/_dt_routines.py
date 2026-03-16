@@ -985,6 +985,21 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
     # Add operator wrappers
     lines.extend(operator_wrappers)
 
+    # Add procedure pointer component wrappers (F2018 7.5.4.4)
+    if module_block:
+        source_file = module_block.get('from', '')
+        for tb in opaque_types:
+            typename = tb['name']
+            proc_ptrs = _scan_proc_pointer_components(source_file, typename)
+            if proc_ptrs:
+                pp_fortran = _gen_proc_pointer_fortran_wrappers(
+                    typename, proc_ptrs, module_block.get('body', []))
+                if pp_fortran:
+                    lines.append('')
+                    lines.append(
+                        f'  ! Procedure pointer wrappers for {typename}')
+                    lines.append(pp_fortran)
+
     lines.append(f'end module f2py_{modulename}_derived_wrappers')
     lines.append('')
 
@@ -1884,6 +1899,354 @@ def _scan_final_subroutines(source_file, typename):
                             result.add(name)
 
     return result
+
+
+def _scan_proc_pointer_components(source_file, typename):
+    """Scan Fortran source for procedure pointer components in a type.
+
+    Returns a list of dicts, each with:
+        'name': component name (lowercased)
+        'interface': interface name from PROCEDURE(interface)
+        'nopass': True if NOPASS attribute present
+        'init_null': True if initialized with => null()
+
+    Scans the component-part (before CONTAINS) for lines like:
+        procedure(real_func), pointer, nopass :: func => null()
+        procedure(sub_iface), pointer :: action
+
+    F2018 7.5.4.4 (R741): proc-component-def-stmt
+    """
+    import re
+    result = []
+    if not source_file or not os.path.isfile(source_file):
+        return result
+
+    in_type = False
+    type_pat = re.compile(
+        r'^\s*type\b(?:\s*,\s*[\w()]+)*\s*::\s*' + re.escape(typename),
+        re.I)
+    end_type_pat = re.compile(
+        r'^\s*end\s+type\b', re.I)
+    contains_pat = re.compile(r'^\s*contains\b', re.I)
+    # Match: procedure(interface), pointer [, nopass] [, pass(arg)] :: name [=> null()]
+    proc_ptr_pat = re.compile(
+        r'^\s*procedure\s*\(\s*(\w+)\s*\)\s*,'  # procedure(interface),
+        r'\s*(.*?)'                               # attributes
+        r'\s*::\s*(\w+)'                          # :: name
+        r'(?:\s*=>\s*null\s*\(\s*\))?'            # optional => null()
+        r'\s*$',
+        re.I)
+
+    with open(source_file) as f:
+        for line in f:
+            stripped = line.split('!')[0].strip()
+            if not stripped:
+                continue
+            if not in_type:
+                if type_pat.match(stripped):
+                    in_type = True
+                continue
+            if end_type_pat.match(stripped):
+                break
+            if contains_pat.match(stripped):
+                break  # stop at CONTAINS -- proc ptrs are before it
+            m = proc_ptr_pat.match(stripped)
+            if m:
+                interface = m.group(1).lower()
+                attrs_str = m.group(2).lower()
+                comp_name = m.group(3).lower()
+                attrs = [a.strip() for a in attrs_str.split(',')]
+                if 'pointer' not in attrs:
+                    continue  # must have POINTER attribute
+                nopass = 'nopass' in attrs
+                init_null = '=>' in stripped.lower() and 'null' in stripped.lower()
+                result.append({
+                    'name': comp_name,
+                    'interface': interface,
+                    'nopass': nopass,
+                    'init_null': init_null,
+                })
+
+    return result
+
+
+def _find_interface_block(module_body, interface_name):
+    """Find an abstract interface or interface block by name in the module.
+
+    Searches for a function or subroutine named ``interface_name`` inside
+    interface or abstract interface blocks.  Returns the block dict
+    (with 'args', 'vars', 'block' keys) or None if not found.
+    """
+    for block in module_body:
+        if block.get('block') in ('interface', 'abstract interface'):
+            for sub in block.get('body', []):
+                if sub.get('name', '').lower() == interface_name.lower():
+                    return sub
+    return None
+
+
+def _gen_proc_pointer_fortran_wrappers(typename, proc_ptrs, module_body):
+    """Generate Fortran bind(c) wrappers for procedure pointer components.
+
+    For each procedure pointer component, generates a wrapper like:
+        subroutine f2py_call_TYPE_COMP(self_ptr, arg1, ...) bind(c)
+            type(c_ptr), value :: self_ptr
+            type(TYPE), pointer :: self
+            call c_f_pointer(self_ptr, self)
+            call self%comp(arg1, ...)     ! or result = self%comp(arg1, ...)
+        end subroutine
+    """
+    lines = []
+
+    for pp in proc_ptrs:
+        iface = _find_interface_block(module_body, pp['interface'])
+        if iface is None:
+            outmess(f'  Skipping proc pointer {pp["name"]}: '
+                    f'interface {pp["interface"]} not found\n')
+            continue
+
+        is_func = iface.get('block') == 'function'
+        iface_args = iface.get('args', [])
+        iface_vars = iface.get('vars', {})
+        comp_name = pp['name']
+        wrapper_name = f'f2py_call_{typename}_{comp_name}'
+
+        # Build argument declarations
+        arg_decls = []
+        arg_names = []
+        call_args = []
+        for argname in iface_args:
+            var = iface_vars.get(argname, {})
+            typespec = var.get('typespec', 'real')
+            kind = var.get('kindselector', {}).get('kind', '')
+            intent = var.get('intent', ['in'])
+
+            # Map to iso_c_binding type
+            if typespec == 'integer':
+                ctype = 'integer(c_int)'
+                if kind in ('8', 'c_long_long', 'int64'):
+                    ctype = 'integer(c_long_long)'
+            elif typespec == 'real':
+                ctype = 'real(c_float)'
+                if kind in ('8', 'c_double', 'real64'):
+                    ctype = 'real(c_double)'
+            elif typespec == 'double precision':
+                ctype = 'real(c_double)'
+            else:
+                ctype = f'{typespec}'
+
+            intent_str = f'intent({",".join(intent)})' if intent else 'intent(in)'
+            arg_decls.append(
+                f'    {ctype}, {intent_str}, value :: {argname}')
+            arg_names.append(argname)
+            call_args.append(argname)
+
+        # Build the wrapper
+        all_args = ['self_ptr'] + arg_names
+        args_str = ', '.join(all_args)
+
+        if is_func:
+            # Function: need return value
+            result_var = iface.get('result', iface.get('name', comp_name))
+            result_type_var = iface_vars.get(result_var, {})
+            result_typespec = result_type_var.get('typespec', 'real')
+            result_kind = result_type_var.get(
+                'kindselector', {}).get('kind', '')
+            if result_typespec == 'real':
+                result_ctype = 'real(c_float)'
+                if result_kind in ('8', 'c_double', 'real64'):
+                    result_ctype = 'real(c_double)'
+            elif result_typespec == 'integer':
+                result_ctype = 'integer(c_int)'
+                if result_kind in ('8', 'c_long_long', 'int64'):
+                    result_ctype = 'integer(c_long_long)'
+            elif result_typespec == 'double precision':
+                result_ctype = 'real(c_double)'
+            else:
+                result_ctype = result_typespec
+
+            all_args_with_result = all_args + ['f2py_result']
+            args_str_with_result = ', '.join(all_args_with_result)
+            call_str = ', '.join(call_args) if call_args else ''
+
+            lines.append(
+                f'  subroutine {wrapper_name}'
+                f'({args_str_with_result}) bind(c)')
+            lines.append('    use iso_c_binding')
+            lines.append(f'    type(c_ptr), value :: self_ptr')
+            for decl in arg_decls:
+                lines.append(decl)
+            lines.append(
+                f'    {result_ctype}, intent(out) :: f2py_result')
+            lines.append(f'    type({typename}), pointer :: self')
+            lines.append(f'    call c_f_pointer(self_ptr, self)')
+            if pp['nopass']:
+                lines.append(
+                    f'    f2py_result = self%{comp_name}({call_str})')
+            else:
+                # PASS: first arg is self, already handled by the
+                # Fortran call (self%comp passes self implicitly)
+                lines.append(
+                    f'    f2py_result = self%{comp_name}({call_str})')
+            lines.append(f'  end subroutine {wrapper_name}')
+            lines.append('')
+        else:
+            # Subroutine
+            call_str = ', '.join(call_args) if call_args else ''
+            lines.append(
+                f'  subroutine {wrapper_name}({args_str}) bind(c)')
+            lines.append('    use iso_c_binding')
+            lines.append(f'    type(c_ptr), value :: self_ptr')
+            for decl in arg_decls:
+                lines.append(decl)
+            lines.append(f'    type({typename}), pointer :: self')
+            lines.append(f'    call c_f_pointer(self_ptr, self)')
+            if pp['nopass']:
+                lines.append(f'    call self%{comp_name}({call_str})')
+            else:
+                lines.append(f'    call self%{comp_name}({call_str})')
+            lines.append(f'  end subroutine {wrapper_name}')
+            lines.append('')
+
+    return '\n'.join(lines) if lines else ''
+
+
+def _gen_proc_pointer_c_methods(typename, proc_ptrs, module_body):
+    """Generate C method wrappers and PyMethodDef entries for proc ptrs."""
+    from ._dt_helpers import _fortran_sym, _get_member_ctype
+
+    funcs = []
+    method_entries = []
+    capsule_name = f'f2py.{typename}'
+
+    for pp in proc_ptrs:
+        iface = _find_interface_block(module_body, pp['interface'])
+        if iface is None:
+            continue
+
+        is_func = iface.get('block') == 'function'
+        iface_args = iface.get('args', [])
+        iface_vars = iface.get('vars', {})
+        comp_name = pp['name']
+        wrapper_name = f'f2py_call_{typename}_{comp_name}'
+        method_name = f'Py{typename}_method_{comp_name}'
+
+        # Build extern declaration
+        extern_args = ['void *']  # self_ptr
+        for argname in iface_args:
+            var = iface_vars.get(argname, {})
+            ctype = _get_member_ctype(var)
+            if ctype is None:
+                ctype = 'double'  # fallback
+            extern_args.append(ctype)
+        if is_func:
+            result_var = iface.get('result', iface.get('name', comp_name))
+            result_type_var = iface_vars.get(result_var, {})
+            result_ctype = _get_member_ctype(result_type_var)
+            if result_ctype is None:
+                result_ctype = 'double'
+            extern_args.append(f'{result_ctype} *')
+
+        extern_str = ', '.join(extern_args)
+
+        # Build kwlist
+        kwlist_items = [f'"{a}"' for a in iface_args]
+        kwlist_str = ', '.join(kwlist_items + ['NULL'])
+
+        # Build format string and parse args
+        format_parts = []
+        parse_decls = []
+        call_args = ['ptr']
+        for argname in iface_args:
+            var = iface_vars.get(argname, {})
+            ctype = _get_member_ctype(var)
+            if ctype in ('float',):
+                format_parts.append('f')
+                parse_decls.append(f'    float {argname} = 0;')
+            elif ctype in ('double',):
+                format_parts.append('d')
+                parse_decls.append(f'    double {argname} = 0;')
+            elif ctype in ('int',):
+                format_parts.append('i')
+                parse_decls.append(f'    int {argname} = 0;')
+            elif ctype in ('long long',):
+                format_parts.append('L')
+                parse_decls.append(f'    long long {argname} = 0;')
+            else:
+                format_parts.append('d')
+                parse_decls.append(f'    double {argname} = 0;')
+            call_args.append(argname)
+
+        format_str = ''.join(format_parts)
+
+        if is_func:
+            result_var = iface.get('result', iface.get('name', comp_name))
+            result_type_var = iface_vars.get(result_var, {})
+            result_ctype = _get_member_ctype(result_type_var)
+            if result_ctype is None:
+                result_ctype = 'double'
+
+            funcs.append(f"""\
+extern void {wrapper_name}({extern_str});
+
+static PyObject *
+{method_name}(PyObject *selfobj, PyObject *args, PyObject *kwds)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return NULL;
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return NULL;
+
+{chr(10).join(parse_decls)}
+
+    static char *kwlist[] = {{{kwlist_str}}};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "{format_str}", kwlist,
+                                     {', '.join('&' + a for a in iface_args)}))
+        return NULL;
+
+    {result_ctype} result;
+    {wrapper_name}({', '.join(call_args)}, &result);
+    return {'PyFloat_FromDouble((double)result)' if result_ctype in ('float', 'double') else 'PyLong_FromLongLong((long long)result)'};
+}}
+""")
+        else:
+            funcs.append(f"""\
+extern void {wrapper_name}({extern_str});
+
+static PyObject *
+{method_name}(PyObject *selfobj, PyObject *args, PyObject *kwds)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return NULL;
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return NULL;
+
+{chr(10).join(parse_decls)}
+
+    static char *kwlist[] = {{{kwlist_str}}};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "{format_str}", kwlist,
+                                     {', '.join('&' + a for a in iface_args)}))
+        return NULL;
+
+    {wrapper_name}({', '.join(call_args)});
+    Py_RETURN_NONE;
+}}
+""")
+
+        method_entries.append(
+            f'    {{"{comp_name}", (PyCFunction){method_name}, '
+            f'METH_VARARGS | METH_KEYWORDS, '
+            f'"Procedure pointer component {comp_name}"}}')
+
+    return funcs, method_entries
 
 
 def _resolve_binding_to_routine(binding_name, bound_procs, routine_map):

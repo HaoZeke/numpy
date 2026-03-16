@@ -110,6 +110,10 @@ from ._dt_routines import (  # noqa: F401
     _has_derived_type_args,
     _is_array_type_arg,
     _scan_final_subroutines,
+    _scan_proc_pointer_components,
+    _gen_proc_pointer_fortran_wrappers,
+    _gen_proc_pointer_c_methods,
+    _find_interface_block,
     _scan_type_bound_procedures,
     generate_fortran_wrappers,
     write_fortran_wrappers,
@@ -195,14 +199,19 @@ def buildhooks(pymod):
                 source_file, tb['name'])
             final_subroutine_names.update(finals)
 
-        # Track bound_procs per type for inheritance merging
+        # Track bound_procs and proc_ptrs per type for inheritance merging
         all_bound_procs = {}
+        all_proc_ptrs = {}
 
         for tb in gen_order:
             typename = tb['name']
 
             # Scan for type-bound procedures
             bound_procs = _scan_type_bound_procedures(
+                source_file, typename)
+
+            # Scan for procedure pointer components (F2018 7.5.4.4)
+            proc_ptrs = _scan_proc_pointer_components(
                 source_file, typename)
 
             # Merge inherited TBPs from parent (F2018 7.5.7)
@@ -212,13 +221,27 @@ def buildhooks(pymod):
                 merged = dict(parent_bp)
                 merged.update(bound_procs)  # child overrides parent
                 bound_procs = merged
+                # Inherit proc ptrs from parent
+                parent_pp = all_proc_ptrs.get(parent_name, [])
+                if parent_pp:
+                    parent_names = {p['name'] for p in parent_pp}
+                    own_names = {p['name'] for p in proc_ptrs}
+                    inherited = [p for p in parent_pp
+                                 if p['name'] not in own_names]
+                    proc_ptrs = inherited + proc_ptrs
 
             all_bound_procs[typename.lower()] = bound_procs
+            all_proc_ptrs[typename.lower()] = proc_ptrs
 
             if bound_procs:
                 outmess(f'\t\tFound type-bound procedures for '
                         f'"{typename}": '
                         f'{", ".join(bound_procs.keys())}\n')
+
+            if proc_ptrs:
+                outmess(f'\t\tFound procedure pointer components for '
+                        f'"{typename}": '
+                        f'{", ".join(p["name"] for p in proc_ptrs)}\n')
 
             if _can_wrap_abstract(tb, type_map):
                 outmess(f'\t\tGenerating abstract type skeleton '
@@ -240,7 +263,8 @@ def buildhooks(pymod):
                     ret, typename, tb, modulename, m,
                     bound_procs=bound_procs,
                     routines=all_routines,
-                    type_map=type_map)
+                    type_map=type_map,
+                    proc_ptrs=proc_ptrs)
             else:
                 outmess(f'\t\tSkipping derived type "{typename}" '
                         f'(not wrappable yet)...\n')
@@ -440,7 +464,7 @@ static PyTypeObject Py{typename}_Type = {{
 
 def _generate_opaque_hooks(ret, typename, typeblock, modulename,
                            module_block, bound_procs=None, routines=None,
-                           type_map=None):
+                           type_map=None, proc_ptrs=None):
     """Generate hooks for a non-bind(c) derived type via opaque pointers.
 
     Uses the 3-layer approach: Python -> C wrapper -> Fortran accessor.
@@ -538,20 +562,30 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
         code_parts.append(_gen_opaque_tp_repr(typename, all_members,
                                                len_info=len_info))
 
-    # Type-bound procedures
+    # Type-bound procedures and procedure pointer components
     has_methods = False
+    all_method_funcs = []
+    all_method_entries = []
     if bound_procs and routines and type_map:
         method_funcs, method_entries = _gen_type_methods(
             typename, bound_procs, routines, type_map)
-        if method_funcs:
-            code_parts.extend(method_funcs)
-            methods_table = (
-                f'static PyMethodDef Py{typename}_methods[] = {{\n'
-                + '\n'.join(method_entries) + '\n'
-                + '    {NULL}  /* sentinel */\n'
-                + '};\n')
-            code_parts.append(methods_table)
-            has_methods = True
+        all_method_funcs.extend(method_funcs)
+        all_method_entries.extend(method_entries)
+    # Procedure pointer components (F2018 7.5.4.4)
+    if proc_ptrs and module_block:
+        pp_funcs, pp_entries = _gen_proc_pointer_c_methods(
+            typename, proc_ptrs, module_block.get('body', []))
+        all_method_funcs.extend(pp_funcs)
+        all_method_entries.extend(pp_entries)
+    if all_method_funcs:
+        code_parts.extend(all_method_funcs)
+        methods_table = (
+            f'static PyMethodDef Py{typename}_methods[] = {{\n'
+            + '\n'.join(all_method_entries) + '\n'
+            + '    {NULL}  /* sentinel */\n'
+            + '};\n')
+        code_parts.append(methods_table)
+        has_methods = True
 
     # Operator overloading
     has_number = False
