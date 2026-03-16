@@ -620,6 +620,34 @@ def isbindctype(block):
     return False
 
 
+def issequencetype(block):
+    """Check if a type block has the SEQUENCE attribute.
+
+    SEQUENCE types (F2018 7.5.2.3) have a defined storage order. Unlike
+    bind(c) types they do not guarantee C layout, but their members are
+    stored contiguously and in declaration order. crackfortran records the
+    attribute in the type block's attrspec when it encounters a bare
+    ``sequence`` statement inside a type body.
+    """
+    attrspec = block.get('attrspec', [])
+    if isinstance(attrspec, dict):
+        attrspec = list(attrspec.keys())
+    for attr in attrspec:
+        if isinstance(attr, str) and attr.lower() == 'sequence':
+            return True
+    if block.get('parent_block'):
+        parent = block['parent_block']
+        tname = block.get('name', '')
+        parent_var = parent.get('vars', {}).get(tname, {})
+        parent_attrspec = parent_var.get('attrspec', [])
+        if isinstance(parent_attrspec, dict):
+            parent_attrspec = list(parent_attrspec.keys())
+        for attr in parent_attrspec:
+            if isinstance(attr, str) and attr.lower() == 'sequence':
+                return True
+    return False
+
+
 # Known scalar numeric types for simple derived type detection
 _SIMPLE_SCALAR_TYPESPECS = {'integer', 'real', 'double precision',
                             'logical', 'complex', 'double complex'}

@@ -249,6 +249,48 @@ class TestMixedScalarTypes(util.F2PyTest):
         assert abs(v.vz - 0.3) < 1e-12
 
 
+class TestSequenceTypeCodeGen:
+    """Test code generation for SEQUENCE types (no compilation)."""
+
+    def test_sequence_type_parsed(self):
+        """SEQUENCE attribute should be detected by crackfortran."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "sequence_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        # The SEQUENCE attribute should be stored in the type's attrspec
+        seq_point_var = module['vars'].get('seq_point', {})
+        attrspec = seq_point_var.get('attrspec', [])
+        assert 'sequence' in attrspec, (
+            f"Expected 'sequence' in attrspec, got {attrspec}")
+
+    def test_sequence_type_wraps_opaque(self):
+        """SEQUENCE types should be wrappable via the opaque pointer path."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "sequence_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # SEQUENCE types use the opaque path (not bind(c))
+        assert len(hooks['f90modhooks']) >= 1
+        code = hooks['f90modhooks'][0]
+        # Should have PyCapsule-based wrapping
+        assert 'PyCapsule' in code
+        assert 'Pyseq_point' in code or 'Pyseqpoint' in code
+
+    def test_sequence_with_array_wraps(self):
+        """SEQUENCE types with fixed-size array members should wrap."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "sequence_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Both seq_point and seq_with_array should be wrapped
+        assert len(hooks['f90modhooks']) >= 2
+
+
 class TestArrayMemberCodeGen:
     """Test code generation for array member support (no compilation)."""
 
@@ -3800,3 +3842,38 @@ class TestParameterizedLenCompilation(util.F2PyTest):
         assert v.n == 5
         with pytest.raises(AttributeError):
             v.n = 10
+
+
+@pytest.mark.slow
+class TestSequenceTypeCompilation(util.F2PyTest):
+    """Test compilation of SEQUENCE types."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "sequence_type.f90")]
+
+    def test_seq_point_exists(self):
+        assert hasattr(self.module, 'seq_point')
+
+    def test_seq_point_members(self):
+        p = self.module.seq_point(x=1.0, y=2.0, z=3.0)
+        assert abs(p.x - 1.0) < 1e-12
+        assert abs(p.y - 2.0) < 1e-12
+        assert abs(p.z - 3.0) < 1e-12
+
+    def test_seq_point_setter(self):
+        p = self.module.seq_point(x=0.0, y=0.0, z=0.0)
+        p.x = 5.0
+        assert abs(p.x - 5.0) < 1e-12
+
+    def test_seq_with_array_exists(self):
+        assert hasattr(self.module, 'seq_with_array')
+
+    def test_seq_with_array_members(self):
+        s = self.module.seq_with_array(n=42)
+        assert s.n == 42
+
+    def test_translate_subroutine(self):
+        p = self.module.seq_point(x=1.0, y=2.0, z=3.0)
+        self.module.translate(p, 0.1, 0.2, 0.3)
+        assert abs(p.x - 1.1) < 1e-12
+        assert abs(p.y - 2.2) < 1e-12
+        assert abs(p.z - 3.3) < 1e-12

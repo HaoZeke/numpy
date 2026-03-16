@@ -650,6 +650,8 @@ usepattern = re.compile(
     beforethisafter % ('', 'use', 'use', '.*'), re.I), 'use'
 containspattern = re.compile(
     beforethisafter % ('', 'contains', 'contains', ''), re.I), 'contains'
+sequencepattern = re.compile(
+    beforethisafter % ('', 'sequence', 'sequence', ''), re.I), 'sequence'
 formatpattern = re.compile(
     beforethisafter % ('', 'format', 'format', '.*'), re.I), 'format'
 # Non-fortran and f2py-specific statements
@@ -762,7 +764,7 @@ def crackline(line, reset=0):
                 formatpattern,
                 beginpattern, functionpattern, subroutinepattern,
                 implicitpattern, typespattern, commonpattern,
-                callpattern, usepattern, containspattern,
+                callpattern, usepattern, containspattern, sequencepattern,
                 entrypattern,
                 f2pyenhancementspattern,
                 multilinepattern,
@@ -841,6 +843,21 @@ def crackline(line, reset=0):
         if 0 <= skipblocksuntil <= groupcounter:
             return
         skipblocksuntil = groupcounter
+    elif pat[1] == 'sequence':
+        # SEQUENCE statement inside a type block (F2018 7.5.2.3).
+        # Add 'sequence' to the type's attrspec so wrapping code can
+        # detect it via issequencetype().
+        if groupcache[groupcounter].get('block') == 'type':
+            tname = groupcache[groupcounter].get('name', '')
+            # The parent block stores type attributes in vars[typename]
+            if groupcounter > 0:
+                parent = groupcache[groupcounter - 1]
+                if tname in parent.get('vars', {}):
+                    attrs = parent['vars'][tname].get('attrspec', [])
+                    if 'sequence' not in attrs:
+                        attrs.append('sequence')
+                    parent['vars'][tname]['attrspec'] = attrs
+        return
     else:
         if 0 <= skipblocksuntil <= groupcounter:
             return
