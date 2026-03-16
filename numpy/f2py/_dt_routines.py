@@ -1760,13 +1760,17 @@ def _scan_type_bound_procedures(source_file, typename):
     in_type = False
     in_contains = False
     type_pat = re.compile(
-        r'^\s*type\b(?:\s*,\s*\w+)*\s*::\s*' + re.escape(typename),
+        r'^\s*type\b(?:\s*,\s*[\w()]+)*\s*::\s*' + re.escape(typename),
         re.I)
     end_type_pat = re.compile(
         r'^\s*end\s+type\b', re.I)
     contains_pat = re.compile(r'^\s*contains\b', re.I)
     proc_pat = re.compile(
         r'^\s*procedure\s*::\s*(\w+)\s*(?:=>\s*(\w+))?\s*$', re.I)
+    # F2018 R752: procedure(interface), deferred :: name
+    # Deferred TBPs have no implementation; skip them.
+    deferred_pat = re.compile(
+        r'^\s*procedure\s*\([^)]*\)\s*,\s*deferred\b', re.I)
     # F2018 7.5.5 paragraph 3, R751:
     # GENERIC [ , access-spec ] :: generic-spec => binding-name-list
     # Maps a generic name to multiple specific procedures.
@@ -1790,6 +1794,9 @@ def _scan_type_bound_procedures(source_file, typename):
                 in_contains = True
                 continue
             if in_contains:
+                # Skip deferred TBPs (no implementation to wrap)
+                if deferred_pat.match(stripped):
+                    continue
                 m = proc_pat.match(stripped)
                 if m:
                     method_name = m.group(1).lower()
@@ -1830,7 +1837,7 @@ def _scan_final_subroutines(source_file, typename):
     in_type = False
     in_contains = False
     type_pat = re.compile(
-        r'^\s*type\b(?:\s*,\s*\w+)*\s*::\s*' + re.escape(typename),
+        r'^\s*type\b(?:\s*,\s*[\w()]+)*\s*::\s*' + re.escape(typename),
         re.I)
     end_type_pat = re.compile(
         r'^\s*end\s+type\b', re.I)
