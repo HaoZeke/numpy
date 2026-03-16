@@ -130,6 +130,7 @@ def _gen_pytype_struct(typename, has_kind=False, len_info=None):
 typedef struct {{
     PyObject_HEAD
     PyObject *capsule;  /* PyCapsule wrapping Fortran {typename} data */{kind_field}{len_fields}
+    int type_tag;  /* F2018 7.3.2.3: type discriminator for polymorphic dispatch */
 }} Py{typename}Object;
 """
 
@@ -149,7 +150,7 @@ f2py_{typename}_capsule_destructor(PyObject *capsule)
 """
 
 
-def _gen_tp_new(typename):
+def _gen_tp_new(typename, type_tag=0):
     """Generate tp_new for the Python type."""
     return f"""\
 static PyObject *
@@ -159,6 +160,7 @@ Py{typename}_tp_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     self = (Py{typename}Object *)type->tp_alloc(type, 0);
     if (self != NULL) {{
         self->capsule = NULL;
+        self->type_tag = {type_tag};  /* F2018 7.3.2.3: polymorphic dispatch tag */
     }}
     return (PyObject *)self;
 }}

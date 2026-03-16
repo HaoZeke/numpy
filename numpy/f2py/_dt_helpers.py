@@ -751,6 +751,43 @@ def _get_pointer_ndim(var):
     return len(var.get('dimension', []))
 
 
+def _get_type_extensions(base_name, type_map):
+    """Find all types that extend base_name (directly or transitively).
+
+    Returns a list of (typename, typeblock) pairs for all types in
+    type_map that are extensions of base_name, including base_name
+    itself.  Ordered with base type first, then children.
+    """
+    base_name = base_name.lower()
+    result = []
+    if base_name in type_map:
+        result.append((base_name, type_map[base_name]))
+    for tname, tb in type_map.items():
+        if tname == base_name:
+            continue
+        # Walk up the parent chain to see if this type extends base_name
+        current = tname
+        for _ in range(10):  # prevent infinite loops
+            parent = _get_extends_parent(type_map.get(current, {}))
+            if parent is None:
+                break
+            if parent.lower() == base_name:
+                result.append((tname, tb))
+                break
+            current = parent.lower()
+    return result
+
+
+def _is_polymorphic_arg(var):
+    """Check if a variable was declared with CLASS(T) (polymorphic).
+
+    Per F2018 7.3.2.3, CLASS declares polymorphic entities that can
+    hold any extension type.  crackfortran normalizes class(T) to
+    type(T) but adds 'polymorphic' to attrspec.
+    """
+    return 'polymorphic' in var.get('attrspec', [])
+
+
 def _is_private_member(var):
     """Check if a component has the PRIVATE accessibility attribute.
 

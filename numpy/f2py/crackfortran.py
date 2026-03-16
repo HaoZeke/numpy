@@ -1672,13 +1672,22 @@ def cracktypespec0(typespec, ll):
     if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type', 'class']:
         selector = d['this']
         ll = d['after']
-    # Normalize class(T) to type(T) -- dynamic dispatch is lost in f2py
+    # Normalize class(T) to type(T) but preserve polymorphic marker
+    # (F2018 7.3.2.3: CLASS type specifier for polymorphic entities)
+    is_polymorphic = False
     if typespec == 'class':
         typespec = 'type'
+        is_polymorphic = True
     i = ll.find('::')
     if i >= 0:
         attr = ll[:i].strip()
         ll = ll[i + 2:]
+    # Inject polymorphic attribute so downstream code can detect it
+    if is_polymorphic:
+        if attr:
+            attr = attr + ', polymorphic'
+        else:
+            attr = 'polymorphic'
     return typespec, selector, attr, ll
 
 
