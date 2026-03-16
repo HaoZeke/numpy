@@ -877,12 +877,15 @@ def _can_wrap_opaque(typeblock, type_map=None):
         return False
     else:
         _resolve_parameterized_type(typeblock)
-    if not is_simple_derived_type(typeblock):
-        return False
     # Check extends parent is already wrappable
     parent_name = _get_extends_parent(typeblock)
     if parent_name:
         if type_map is None or parent_name not in type_map:
+            return False
+    # Child types that inherit all members from a wrappable parent
+    # may have no own members -- this is valid (F2018 7.5.7).
+    if not is_simple_derived_type(typeblock):
+        if not (parent_name and parent_name in (type_map or {})):
             return False
     # Collect LEN param names for array dimension checking
     len_param_names = {li['name'] for li in _get_len_param_info(typeblock)}
