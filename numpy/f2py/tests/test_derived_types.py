@@ -3912,6 +3912,8 @@ class TestSequenceTypeCompilation(util.F2PyTest):
         assert abs(p.x - 1.1) < 1e-12
         assert abs(p.y - 2.2) < 1e-12
         assert abs(p.z - 3.3) < 1e-12
+
+
 # ---- Deferred TBP tests (F2018 7.5.5, R752) ----
 
 class TestDeferredTBPAbstractCodeGen:
@@ -4018,6 +4020,8 @@ class TestDeferredTBPCompilation(util.F2PyTest):
     def test_corrected_isinstance_integrator(self):
         c = self.module.correctedmidpoint(npoints=1)
         assert isinstance(c, self.module.integrator)
+
+
 # ---- Array API / DLPack input tests ----
 
 class TestArrayFromAnyCodeGen:
@@ -4068,3 +4072,18 @@ class TestArrayAPIInput(util.F2PyTest):
         v = self.module.vec3()
         v.v = dlpack_arr
         assert abs(v.v[0] - 7.0) < 1e-5
+
+
+# ---- Coarray member skip tests ----
+
+class TestCoarrayMemberSkip:
+    """Verify coarray members are detected and skipped."""
+
+    def test_is_coarray_member_function(self):
+        from numpy.f2py._dt_helpers import _is_coarray_member
+        var_coarray = {'attrspec': ['codimension(*)']}
+        assert _is_coarray_member(var_coarray)
+        var_normal = {'attrspec': ['allocatable']}
+        assert not _is_coarray_member(var_normal)
+        var_empty = {}
+        assert not _is_coarray_member(var_empty)
