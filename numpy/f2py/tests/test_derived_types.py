@@ -2191,6 +2191,23 @@ class TestHostParameters(util.F2PyTest):
         np.testing.assert_array_equal(s.pts, np.array([1, 2, 3]) / 3)
 
 
+@pytest.mark.slow
+class TestPrivateComponents(util.F2PyTest):
+    """PRIVATE components get no accessors (F2018 7.5.4.8)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "private_member.f90")]
+
+    def test_private(self):
+        w = self.module.with_private()
+        assert w.visible_z == 42
+        assert not hasattr(w, "hidden_x")
+        self.module.set_hidden(w, 3, 1.5)
+        assert self.module.get_hidden(w) == (3, 1.5)
+        m = self.module.mixed_access()
+        assert not hasattr(m, "priv_b")
+        assert self.module.sum_mixed(m) == 6
+
+
 class TestDefaultInitCodeGen:
     """Test that component defaults are applied in constructors (F2018 R739)."""
 

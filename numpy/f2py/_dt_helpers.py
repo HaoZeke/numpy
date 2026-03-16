@@ -751,6 +751,17 @@ def _get_pointer_ndim(var):
     return len(var.get('dimension', []))
 
 
+def _is_private_member(var):
+    """Check if a component has the PRIVATE accessibility attribute.
+
+    Per F2018 7.5.4.8, components declared in a type with a
+    ``PRIVATE`` statement default to private unless individually
+    marked ``PUBLIC``.  Private components are not exposed as
+    Python properties.
+    """
+    return 'private' in var.get('attrspec', [])
+
+
 def _is_coarray_member(var):
     """Check if a member has the codimension (coarray) attribute.
 
