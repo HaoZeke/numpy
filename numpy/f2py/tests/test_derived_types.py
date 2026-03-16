@@ -2323,9 +2323,9 @@ class TestGenericTBPCodeGen:
         fpath = str(util.getpath("tests", "src", "derived_types",
                                  "generic_tbp.f90"))
         procs = _scan_type_bound_procedures(fpath, 'scaler')
-        # Generic binding 'scale' maps to first specific 'scale_int'
+        # Generic binding 'scale' maps to all specific bindings
         assert 'scale' in procs
-        assert procs['scale'] == 'scale_int'
+        assert procs['scale'] == ['scale_int', 'scale_real']
 
     def test_specific_bindings_also_scanned(self):
         """Specific procedures should still be individually available."""
