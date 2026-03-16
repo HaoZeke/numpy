@@ -36,8 +36,8 @@ _FORTRAN_TO_C = {
     ('logical', None): 'int',
     ('logical', 'c_bool'): 'unsigned char',
     ('complex', None): 'npy_cfloat',
-    ('complex', '8'): 'npy_cfloat',
-    ('complex', '16'): 'npy_cdouble',
+    ('complex', '4'): 'npy_cfloat',
+    ('complex', '8'): 'npy_cdouble',
     ('complex', 'c_float_complex'): 'npy_cfloat',
     ('complex', 'c_double_complex'): 'npy_cdouble',
     ('double complex', None): 'npy_cdouble',
@@ -751,6 +751,17 @@ def _get_pointer_ndim(var):
     return len(var.get('dimension', []))
 
 
+def _is_private_member(var):
+    """Check if a component has the PRIVATE accessibility attribute.
+
+    Per F2018 7.5.4.8, components declared in a type with a
+    ``PRIVATE`` statement default to private unless individually
+    marked ``PUBLIC``.  Private components are not exposed as
+    Python properties.
+    """
+    return 'private' in var.get('attrspec', [])
+
+
 def _is_coarray_member(var):
     """Check if a member has the codimension (coarray) attribute.
 
@@ -957,8 +968,8 @@ _FORTRAN_TO_ISOC = {
     ('integer', 'c_long_long'): 'integer(c_long_long)',
     ('logical', None): 'integer(c_int)',
     ('complex', None): 'complex(c_float_complex)',
-    ('complex', '8'): 'complex(c_float_complex)',
-    ('complex', '16'): 'complex(c_double_complex)',
+    ('complex', '4'): 'complex(c_float_complex)',
+    ('complex', '8'): 'complex(c_double_complex)',
     ('complex', 'c_float_complex'): 'complex(c_float_complex)',
     ('complex', 'c_double_complex'): 'complex(c_double_complex)',
     ('double complex', None): 'complex(c_double_complex)',

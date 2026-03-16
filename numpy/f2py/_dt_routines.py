@@ -40,6 +40,7 @@ from ._dt_helpers import (
     _is_allocatable_member,
     _is_array_member,
     _is_coarray_member,
+    _is_private_member,
     _is_pointer_member,
     _is_char_member,
     _is_deferred_char_member,
@@ -194,6 +195,8 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 outmess(f'  Skipping coarray member {mname} '
                         f'(unsupported)\n')
                 continue
+            if _is_private_member(mvar):
+                continue  # F2018 7.5.4.8: no accessor for private
             if (_is_array_member(mvar) or _is_type_member(mvar)
                     or _is_type_array_member(mvar) or _is_char_member(mvar)
                     or _is_allocatable_member(mvar)
@@ -319,6 +322,8 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
         for mname, mvar in members.items():
             if _is_coarray_member(mvar):
                 continue  # coarrays unsupported (F2018 7.5.4.3)
+            if _is_private_member(mvar):
+                continue  # F2018 7.5.4.8: no accessor for private
             if _is_type_array_member(mvar):
                 inner = mvar.get('typename', '').lower()
                 # Array of types: indexed getter (1-based)

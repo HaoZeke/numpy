@@ -179,6 +179,82 @@ currentfilename = ''
 expectbegin = 1
 f90modulevars = {}
 filepositiontext = ''
+
+# F2018 16.10.2, 18.2: Intrinsic module parameter definitions.
+# These are injected into f90modulevars on first use so that
+# get_useparameters() can resolve kind constants like int32, real64,
+# c_int, c_double etc. without needing the intrinsic module source.
+# Values follow standard platform conventions (LP64/LLP64).
+
+
+def _make_param(typespec, value):
+    return {'typespec': typespec, 'attrspec': ['parameter'], '=': str(value)}
+
+
+_ISO_FORTRAN_ENV_VARS = {
+    # 16.10.2.14: INT8, INT16, INT32, INT64
+    'int8': _make_param('integer', 1),
+    'int16': _make_param('integer', 2),
+    'int32': _make_param('integer', 4),
+    'int64': _make_param('integer', 8),
+    # 16.10.2.25: REAL32, REAL64, REAL128
+    'real32': _make_param('integer', 4),
+    'real64': _make_param('integer', 8),
+    'real128': _make_param('integer', 16),
+    # 16.10.2.9, 16.10.2.13, 16.10.2.22: I/O units
+    'input_unit': _make_param('integer', 5),
+    'output_unit': _make_param('integer', 6),
+    'error_unit': _make_param('integer', 0),
+    # 16.10.2.16, 16.10.2.17: IOSTAT constants
+    'iostat_end': _make_param('integer', -1),
+    'iostat_eor': _make_param('integer', -2),
+    # 16.10.2.5, 16.10.2.11, 16.10.2.21: Storage sizes
+    'character_storage_size': _make_param('integer', 8),
+    'file_storage_size': _make_param('integer', 8),
+    'numeric_storage_size': _make_param('integer', 32),
+}
+
+_ISO_C_BINDING_VARS = {
+    # Table 18.2: INTEGER kinds
+    'c_int': _make_param('integer', 4),
+    'c_short': _make_param('integer', 2),
+    'c_long': _make_param('integer', 8),
+    'c_long_long': _make_param('integer', 8),
+    'c_signed_char': _make_param('integer', 1),
+    'c_size_t': _make_param('integer', 8),
+    'c_int8_t': _make_param('integer', 1),
+    'c_int16_t': _make_param('integer', 2),
+    'c_int32_t': _make_param('integer', 4),
+    'c_int64_t': _make_param('integer', 8),
+    'c_int_least8_t': _make_param('integer', 1),
+    'c_int_least16_t': _make_param('integer', 2),
+    'c_int_least32_t': _make_param('integer', 4),
+    'c_int_least64_t': _make_param('integer', 8),
+    'c_int_fast8_t': _make_param('integer', 1),
+    'c_int_fast16_t': _make_param('integer', 2),
+    'c_int_fast32_t': _make_param('integer', 4),
+    'c_int_fast64_t': _make_param('integer', 8),
+    'c_intmax_t': _make_param('integer', 8),
+    'c_intptr_t': _make_param('integer', 8),
+    'c_ptrdiff_t': _make_param('integer', 8),
+    # Table 18.2: REAL kinds
+    'c_float': _make_param('integer', 4),
+    'c_double': _make_param('integer', 8),
+    'c_long_double': _make_param('integer', 16),
+    # Table 18.2: COMPLEX kinds (same as corresponding real)
+    'c_float_complex': _make_param('integer', 4),
+    'c_double_complex': _make_param('integer', 8),
+    'c_long_double_complex': _make_param('integer', 16),
+    # LOGICAL kind
+    'c_bool': _make_param('integer', 1),
+    # CHARACTER kind
+    'c_char': _make_param('integer', 1),
+}
+
+_INTRINSIC_MODULE_VARS = {
+    'iso_fortran_env': _ISO_FORTRAN_ENV_VARS,
+    'iso_c_binding': _ISO_C_BINDING_VARS,
+}
 gotnextfile = 1
 groupcache = None
 groupcounter = 0
@@ -2009,16 +2085,38 @@ def get_useparameters(block, param_map=None):
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
         if usename not in f90modulevars:
-            outmess(f'get_useparameters: no module {usename} info used by '
-                    f'{block.get("name")}\n')
-            continue
+            # F2018 16.10, 18.2: inject intrinsic module definitions
+            if usename in _INTRINSIC_MODULE_VARS:
+                f90modulevars[usename] = _INTRINSIC_MODULE_VARS[usename]
+            else:
+                outmess(f'get_useparameters: no module {usename} info used by '
+                        f'{block.get("name")}\n')
+                continue
         mvars = f90modulevars[usename]
         params = get_parameters(mvars)
         if not params:
             continue
-        # XXX: apply mapping
+        # Apply use...only / renaming mapping (F2018 11.2.2)
         if mapping:
-            errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
+            only = mapping.get('only', 0)
+            name_map = mapping.get('map', {})
+            if only and name_map:
+                # use module, only: a, b => c
+                # Only import listed names, applying renames
+                filtered = {}
+                for local_name, mod_name in name_map.items():
+                    mod_name_l = mod_name.lower()
+                    if mod_name_l in params:
+                        filtered[local_name.lower()] = params[mod_name_l]
+                params = filtered
+            elif name_map:
+                # use module, a => b (rename without only)
+                renamed = dict(params)
+                for local_name, mod_name in name_map.items():
+                    mod_name_l = mod_name.lower()
+                    if mod_name_l in renamed:
+                        renamed[local_name.lower()] = renamed.pop(mod_name_l)
+                params = renamed
         for k, v in list(params.items()):
             if k in param_map:
                 outmess(f'get_useparameters: overriding parameter {k!r} with'
@@ -2028,10 +2126,24 @@ def get_useparameters(block, param_map=None):
     return param_map
 
 
+def _block_uses_intrinsic_module(block):
+    """Check if block or children use an intrinsic module."""
+    if isinstance(block, list):
+        return any(_block_uses_intrinsic_module(b) for b in block)
+    usedict = block.get('use', {})
+    for modname in usedict:
+        if modname.lower() in _INTRINSIC_MODULE_VARS:
+            return True
+    for child in block.get('body', []):
+        if _block_uses_intrinsic_module(child):
+            return True
+    return False
+
+
 def postcrack2(block, tab='', param_map=None):
     global f90modulevars
 
-    if not f90modulevars:
+    if not f90modulevars and not _block_uses_intrinsic_module(block):
         return block
     if isinstance(block, list):
         ret = [postcrack2(g, tab=tab + '\t', param_map=param_map)
