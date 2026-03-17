@@ -62,6 +62,8 @@ from ._dt_helpers import (  # noqa: F401
     _is_allocatable_member,
     _is_array_member,
     _is_char_member,
+    _is_coarray_member,
+    _coarray_as_local,
     _is_complex_member,
     _is_deferred_char_member,
     _is_pointer_member,
