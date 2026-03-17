@@ -778,6 +778,26 @@ def _get_type_extensions(base_name, type_map):
     return result
 
 
+# F2018 7.3.2.3: type tags for unlimited polymorphic dispatch.
+# Intrinsic types get fixed tags; derived types get 100 + type_tag.
+_UNLIMITED_POLY_TAGS = {
+    'integer_4': 1, 'integer_8': 2,
+    'real_4': 3, 'real_8': 4,
+    'complex_4': 5, 'complex_8': 6,
+    'logical_4': 7,
+    'character': 8,
+}
+
+
+def _is_unlimited_polymorphic_arg(var):
+    """Check if a variable was declared with CLASS(*) (unlimited polymorphic).
+
+    Per F2018 7.3.2.3 paragraph 4, CLASS(*) accepts any type including
+    intrinsic types. crackfortran adds 'unlimited_polymorphic' to attrspec.
+    """
+    return 'unlimited_polymorphic' in var.get('attrspec', [])
+
+
 def _is_polymorphic_arg(var):
     """Check if a variable was declared with CLASS(T) (polymorphic).
 

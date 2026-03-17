@@ -55,6 +55,8 @@ from ._dt_helpers import (
     _get_kind_param_info,
     _get_len_param_info,
     _is_polymorphic_arg,
+    _is_unlimited_polymorphic_arg,
+    _UNLIMITED_POLY_TAGS,
     _get_type_extensions,
 )
 
@@ -1209,6 +1211,23 @@ def _gen_routine_fortran_wrapper(modulename, routine, type_map):
             # by noting the dimension expression
         elif var.get('typespec') == 'type':
             tname = var.get('typename', '').lower()
+            # Check for CLASS(*) -- unlimited polymorphism
+            if _is_unlimited_polymorphic_arg(var):
+                # F2018 7.3.2.3 p4: accept any type via tag dispatch
+                wrapper_args.append(f'{argname}_ptr')
+                wrapper_args.append(f'{argname}_tag')
+                decls.append(f'    type(c_ptr), value :: {argname}_ptr')
+                decls.append(
+                    f'    integer(c_int), value :: {argname}_tag')
+                call_args.append(argname)
+                # Store trampoline info
+                if '_f2py_unlimited_poly' not in routine:
+                    routine['_f2py_unlimited_poly'] = {}
+                routine['_f2py_unlimited_poly'][argname] = {
+                    'tag_arg': f'{argname}_tag',
+                    'ptr_arg': f'{argname}_ptr',
+                }
+                continue
             # Use parameterized type spec if available
             tname_tb = type_map.get(tname)
             tname_spec = (_get_fortran_type_spec(tname_tb)
@@ -1350,6 +1369,60 @@ def _gen_routine_fortran_wrapper(modulename, routine, type_map):
             else:
                 lines.append(f'      call {rname}({dca_str})')
         lines.append(f'    end select')
+    elif routine.get('_f2py_unlimited_poly'):
+        # F2018 7.3.2.3 p4: unlimited polymorphic dispatch
+        # Use SELECT CASE on tag to dispatch with correct intrinsic type
+        upoly = routine['_f2py_unlimited_poly']
+        upoly_arg = list(upoly.keys())[0]
+        info = upoly[upoly_arg]
+        tag_arg = info['tag_arg']
+        ptr_arg = info['ptr_arg']
+
+        # Local typed pointers for each intrinsic type
+        local_decls_extra = [
+            f'    integer, pointer :: {upoly_arg}_int',
+            f'    integer(8), pointer :: {upoly_arg}_int8',
+            f'    real, pointer :: {upoly_arg}_real',
+            f'    real(8), pointer :: {upoly_arg}_real8',
+        ]
+        # Insert before the call
+        for ld in local_decls_extra:
+            lines.insert(lines.index(decls_str) + 1, ld)
+
+        lines.append(f'    select case ({tag_arg})')
+        # integer(4): tag 1
+        int_call = ', '.join(
+            f'{upoly_arg}_int' if ca == upoly_arg else ca
+            for ca in call_args)
+        lines.append(f'    case (1)')
+        lines.append(
+            f'      call c_f_pointer({ptr_arg}, {upoly_arg}_int)')
+        lines.append(f'      call {rname}({int_call})')
+        # integer(8): tag 2
+        int8_call = ', '.join(
+            f'{upoly_arg}_int8' if ca == upoly_arg else ca
+            for ca in call_args)
+        lines.append(f'    case (2)')
+        lines.append(
+            f'      call c_f_pointer({ptr_arg}, {upoly_arg}_int8)')
+        lines.append(f'      call {rname}({int8_call})')
+        # real(4): tag 3
+        real_call = ', '.join(
+            f'{upoly_arg}_real' if ca == upoly_arg else ca
+            for ca in call_args)
+        lines.append(f'    case (3)')
+        lines.append(
+            f'      call c_f_pointer({ptr_arg}, {upoly_arg}_real)')
+        lines.append(f'      call {rname}({real_call})')
+        # real(8): tag 4
+        real8_call = ', '.join(
+            f'{upoly_arg}_real8' if ca == upoly_arg else ca
+            for ca in call_args)
+        lines.append(f'    case (4)')
+        lines.append(
+            f'      call c_f_pointer({ptr_arg}, {upoly_arg}_real8)')
+        lines.append(f'      call {rname}({real8_call})')
+        lines.append(f'    end select')
     else:
         if is_func:
             if returns_type:
@@ -1409,13 +1482,17 @@ def _gen_routine_c_wrapper(modulename, routine, type_map):
             else:
                 extern_args.append('int')
         elif var.get('typespec') == 'type':
-            intent = var.get('intent', [])
-            if 'out' in intent:
-                extern_args.append('void **')
+            if _is_unlimited_polymorphic_arg(var):
+                extern_args.append('void *')  # data ptr
+                extern_args.append('int')     # type tag
             else:
-                extern_args.append('void *')
-            if _is_polymorphic_arg(var):
-                extern_args.append('int')  # type_tag
+                intent = var.get('intent', [])
+                if 'out' in intent:
+                    extern_args.append('void **')
+                else:
+                    extern_args.append('void *')
+                if _is_polymorphic_arg(var):
+                    extern_args.append('int')  # type_tag
         elif argname.lower() in array_size_args:
             # Size arg consumed by array-of-type; still passed to Fortran
             ctype = _get_member_ctype(var)
@@ -1488,6 +1565,14 @@ def _gen_routine_c_wrapper(modulename, routine, type_map):
         elif var.get('typespec') == 'type':
             tname = var.get('typename', '').lower()
             intent = var.get('intent', [])
+            if _is_unlimited_polymorphic_arg(var):
+                # F2018 7.3.2.3 p4: accept any Python object
+                kwlist.append(argname)
+                fmt_parts.append('O')
+                parse_args_decl.append(
+                    f'    PyObject *{argname}_obj = NULL;')
+                parse_args_ref.append(f'&{argname}_obj')
+                continue
             kwlist.append(argname)
             if 'out' in intent:
                 # intent(out) type arg: not passed from Python
@@ -1623,6 +1708,45 @@ def _gen_routine_c_wrapper(modulename, routine, type_map):
                 lines.append('        }')
                 lines.append('    }')
                 array_type_cleanup.append(f'{argname}_ptrs')
+        elif var.get('typespec') == 'type' and _is_unlimited_polymorphic_arg(var):
+            # F2018 7.3.2.3 p4: unlimited polymorphic -- inspect Python type
+            lines.append(
+                f'    void *{argname}_ptr = NULL;')
+            lines.append(
+                f'    int {argname}_tag = 0;')
+            lines.append(
+                f'    int {argname}_int_tmp = 0;')
+            lines.append(
+                f'    long long {argname}_int8_tmp = 0;')
+            lines.append(
+                f'    float {argname}_real_tmp = 0;')
+            lines.append(
+                f'    double {argname}_real8_tmp = 0;')
+            lines.append(
+                f'    if (PyLong_Check({argname}_obj)) {{')
+            lines.append(
+                f'        {argname}_int_tmp = (int)PyLong_AsLong({argname}_obj);')
+            lines.append(
+                f'        {argname}_ptr = &{argname}_int_tmp;')
+            lines.append(
+                f'        {argname}_tag = 1;')
+            lines.append(
+                f'    }} else if (PyFloat_Check({argname}_obj)) {{')
+            lines.append(
+                f'        {argname}_real8_tmp = PyFloat_AsDouble({argname}_obj);')
+            lines.append(
+                f'        {argname}_ptr = &{argname}_real8_tmp;')
+            lines.append(
+                f'        {argname}_tag = 4;')
+            lines.append(
+                f'    }} else {{')
+            lines.append(
+                f'        PyErr_SetString(PyExc_TypeError,')
+            lines.append(
+                f'            "{argname}: unsupported type for class(*)");')
+            lines.append(
+                f'        return NULL;')
+            lines.append(f'    }}')
         elif var.get('typespec') == 'type':
             tname = var.get('typename', '').lower()
             intent = var.get('intent', [])
@@ -1689,13 +1813,17 @@ def _gen_routine_c_wrapper(modulename, routine, type_map):
                 call_args.append(f'{argname}_ptrs')
                 call_args.append(f'(int){argname}_len')
         elif var.get('typespec') == 'type':
-            intent = var.get('intent', [])
-            if 'out' in intent:
-                call_args.append(f'&{argname}_ptr')
-            else:
+            if _is_unlimited_polymorphic_arg(var):
                 call_args.append(f'{argname}_ptr')
-            if _is_polymorphic_arg(var):
-                call_args.append(f'{argname}_type_tag')
+                call_args.append(f'{argname}_tag')
+            else:
+                intent = var.get('intent', [])
+                if 'out' in intent:
+                    call_args.append(f'&{argname}_ptr')
+                else:
+                    call_args.append(f'{argname}_ptr')
+                if _is_polymorphic_arg(var):
+                    call_args.append(f'{argname}_type_tag')
         elif argname.lower() in array_size_args:
             # Size arg -- pass the value derived from list length
             call_args.append(argname)

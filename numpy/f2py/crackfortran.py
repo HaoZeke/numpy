@@ -1675,9 +1675,14 @@ def cracktypespec0(typespec, ll):
     # Normalize class(T) to type(T) but preserve polymorphic marker
     # (F2018 7.3.2.3: CLASS type specifier for polymorphic entities)
     is_polymorphic = False
+    is_unlimited_poly = False
     if typespec == 'class':
         typespec = 'type'
-        is_polymorphic = True
+        # Check for CLASS(*) -- unlimited polymorphism
+        if selector and selector.strip() == '(*)':
+            is_unlimited_poly = True
+        else:
+            is_polymorphic = True
     i = ll.find('::')
     if i >= 0:
         attr = ll[:i].strip()
@@ -1688,6 +1693,11 @@ def cracktypespec0(typespec, ll):
             attr = attr + ', polymorphic'
         else:
             attr = 'polymorphic'
+    elif is_unlimited_poly:
+        if attr:
+            attr = attr + ', unlimited_polymorphic'
+        else:
+            attr = 'unlimited_polymorphic'
     return typespec, selector, attr, ll
 
 
