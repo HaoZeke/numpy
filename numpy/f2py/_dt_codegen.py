@@ -1154,7 +1154,8 @@ Py{typename}_tp_richcompare(PyObject *left, PyObject *right, int op)
 
 
 def _gen_typeobject(typename, has_methods=False, parent_typename=None,
-                    has_number=False, has_richcompare=False):
+                    has_number=False, has_richcompare=False,
+                    has_tp_str=False):
     """Generate PyTypeObject definition."""
     methods_line = ''
     if has_methods:
@@ -1169,6 +1170,9 @@ def _gen_typeobject(typename, has_methods=False, parent_typename=None,
     if has_richcompare:
         richcmp_line = (f'\n    .tp_richcompare = '
                         f'Py{typename}_tp_richcompare,')
+    str_line = ''
+    if has_tp_str:
+        str_line = f'\n    .tp_str = Py{typename}_tp_str,'
     return f"""\
 static PyTypeObject Py{typename}_Type = {{
     PyVarObject_HEAD_INIT(NULL, 0)
@@ -1179,7 +1183,7 @@ static PyTypeObject Py{typename}_Type = {{
     .tp_new = Py{typename}_tp_new,
     .tp_init = Py{typename}_tp_init,
     .tp_dealloc = Py{typename}_tp_dealloc,
-    .tp_repr = Py{typename}_tp_repr,
+    .tp_repr = Py{typename}_tp_repr,{str_line}
     .tp_getset = Py{typename}_getset,{methods_line}{base_line}{number_line}{richcmp_line}
 }};
 """
