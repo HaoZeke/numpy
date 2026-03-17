@@ -41,6 +41,7 @@ from ._dt_helpers import (
     _is_array_member,
     _is_coarray_member,
     _coarray_as_local,
+    _has_coarray_members,
     _is_private_member,
     _is_pointer_member,
     _is_char_member,
