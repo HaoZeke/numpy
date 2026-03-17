@@ -1002,6 +1002,25 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                         f'  ! Procedure pointer wrappers for {typename}')
                     lines.append(pp_fortran)
 
+    # Add defined I/O wrappers (F2018 12.6.4.8)
+    if module_block:
+        source_file = module_block.get('from', '')
+        for tb in opaque_types:
+            typename = tb['name']
+            bound_procs = _scan_type_bound_procedures(source_file, typename)
+            if '__write_formatted__' in bound_procs:
+                lines.append('')
+                lines.append(
+                    f'  ! Defined I/O write wrapper for {typename}')
+                lines.append(
+                    _gen_defined_io_fortran_wrapper(typename))
+            if '__read_formatted__' in bound_procs:
+                lines.append('')
+                lines.append(
+                    f'  ! Defined I/O read wrapper for {typename}')
+                lines.append(
+                    _gen_defined_io_read_fortran_wrapper(typename))
+
     lines.append(f'end module f2py_{modulename}_derived_wrappers')
     lines.append('')
 
@@ -1898,6 +1917,13 @@ def _scan_type_bound_procedures(source_file, typename):
     generic_pat = re.compile(
         r'^\s*generic\s*(?:,\s*\w+)?\s*::\s*(\w+)\s*=>\s*(.+)\s*$',
         re.I)
+    # F2018 12.6.4.8: Defined I/O generics
+    # GENERIC :: WRITE(FORMATTED) => impl_name
+    # GENERIC :: READ(FORMATTED) => impl_name
+    dio_pat = re.compile(
+        r'^\s*generic\s*(?:,\s*\w+)?\s*::\s*'
+        r'(write|read)\s*\(\s*(formatted|unformatted)\s*\)\s*=>\s*(.+)\s*$',
+        re.I)
 
     with open(source_file) as f:
         for line in f:
@@ -1938,6 +1964,15 @@ def _scan_type_bound_procedures(source_file, typename):
                         result[generic_name] = bindings[0]
                     elif len(bindings) > 1:
                         result[generic_name] = bindings
+                    continue
+                # Defined I/O generics (F2018 12.6.4.8)
+                dio_match = dio_pat.match(stripped)
+                if dio_match:
+                    direction = dio_match.group(1).lower()
+                    formatting = dio_match.group(2).lower()
+                    impl = dio_match.group(3).strip().lower()
+                    key = f'__{direction}_{formatting}__'
+                    result[key] = impl
 
     return result
 
@@ -2339,6 +2374,117 @@ static PyObject *
             f'"Procedure pointer component {comp_name}"}}')
 
     return funcs, method_entries
+
+
+def _gen_defined_io_fortran_wrapper(typename):
+    """Generate Fortran bind(c) wrapper that invokes defined I/O.
+
+    Uses the DT edit descriptor (F2018 13.7.6) to call the type's
+    write(formatted) routine via internal file WRITE.
+    """
+    wrapper_name = f'f2py_str_{typename}'
+    return f"""\
+  subroutine {wrapper_name}(cptr, buf, buflen, actual_len) bind(c)
+    use iso_c_binding
+    type(c_ptr), value :: cptr
+    character(kind=c_char), intent(out) :: buf(*)
+    integer(c_int), value :: buflen
+    integer(c_int), intent(out) :: actual_len
+    type({typename}), pointer :: obj
+    character(len=buflen) :: tmp
+    integer :: iostat, i
+    call c_f_pointer(cptr, obj)
+    write(tmp, '(DT)', iostat=iostat) obj
+    actual_len = len_trim(tmp)
+    do i = 1, min(actual_len, buflen)
+      buf(i) = tmp(i:i)
+    end do
+  end subroutine {wrapper_name}
+"""
+
+
+def _gen_defined_io_read_fortran_wrapper(typename):
+    """Generate Fortran bind(c) wrapper for read(formatted) -> from_string."""
+    wrapper_name = f'f2py_from_str_{typename}'
+    return f"""\
+  subroutine {wrapper_name}(buf, buflen, cptr) bind(c)
+    use iso_c_binding
+    character(kind=c_char), intent(in) :: buf(*)
+    integer(c_int), value :: buflen
+    type(c_ptr) :: cptr
+    type({typename}), pointer :: obj
+    character(len=buflen) :: tmp
+    integer :: iostat, i
+    allocate(obj)
+    do i = 1, buflen
+      tmp(i:i) = buf(i)
+    end do
+    read(tmp, '(DT)', iostat=iostat) obj
+    cptr = c_loc(obj)
+  end subroutine {wrapper_name}
+"""
+
+
+def _gen_defined_io_tp_str(typename):
+    """Generate C tp_str function using Fortran defined I/O."""
+    capsule_name = f'f2py.{typename}'
+    wrapper_name = f'f2py_str_{typename}'
+    return f"""\
+extern void {wrapper_name}(void *, char *, int, int *);
+
+static PyObject *
+Py{typename}_tp_str(PyObject *selfobj)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    if (self->capsule == NULL) {{
+        return PyUnicode_FromString("{typename}(<uninitialized>)");
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return NULL;
+    char buf[4096];
+    int actual_len = 0;
+    {wrapper_name}(ptr, buf, 4096, &actual_len);
+    if (actual_len <= 0) {{
+        return PyUnicode_FromString("{typename}()");
+    }}
+    /* Trim trailing spaces */
+    while (actual_len > 0 && buf[actual_len-1] == ' ') actual_len--;
+    return PyUnicode_FromStringAndSize(buf, actual_len);
+}}
+"""
+
+
+def _gen_defined_io_from_string(typename):
+    """Generate C class method from_string() using Fortran defined I/O read."""
+    capsule_name = f'f2py.{typename}'
+    wrapper_name = f'f2py_from_str_{typename}'
+    return f"""\
+extern void {wrapper_name}(const char *, int, void **);
+
+static PyObject *
+Py{typename}_from_string(PyObject *cls, PyObject *args)
+{{
+    const char *text;
+    Py_ssize_t text_len;
+    if (!PyArg_ParseTuple(args, "s#", &text, &text_len))
+        return NULL;
+    void *ptr = NULL;
+    {wrapper_name}(text, (int)text_len, &ptr);
+    if (ptr == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Failed to parse {typename} from string");
+        return NULL;
+    }}
+    /* Create new Python object wrapping the Fortran-allocated data */
+    Py{typename}Object *self = (Py{typename}Object *)
+        ((PyTypeObject *)cls)->tp_alloc((PyTypeObject *)cls, 0);
+    if (self == NULL) return NULL;
+    self->capsule = PyCapsule_New(ptr, "{capsule_name}",
+                                  Py{typename}_capsule_destructor);
+    self->type_tag = 0;
+    return (PyObject *)self;
+}}
+"""
 
 
 def _resolve_binding_to_routine(binding_name, bound_procs, routine_map):

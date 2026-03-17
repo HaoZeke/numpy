@@ -115,6 +115,10 @@ from ._dt_routines import (  # noqa: F401
     _gen_proc_pointer_c_methods,
     _find_interface_block,
     _scan_type_bound_procedures,
+    _gen_defined_io_fortran_wrapper,
+    _gen_defined_io_read_fortran_wrapper,
+    _gen_defined_io_tp_str,
+    _gen_defined_io_from_string,
     generate_fortran_wrappers,
     write_fortran_wrappers,
 )
@@ -612,10 +616,27 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
         if parent_tb:
             parent_typename = parent_tb['name']
 
+    # Defined I/O: __str__ via write(formatted) (F2018 12.6.4.8)
+    has_tp_str = False
+    if bound_procs:
+        if '__write_formatted__' in bound_procs:
+            code_parts.append(_gen_defined_io_tp_str(typename))
+            has_tp_str = True
+        if '__read_formatted__' in bound_procs:
+            code_parts.append(_gen_defined_io_from_string(typename))
+            # Add from_string as a class method
+            if all_method_entries is not None:
+                all_method_entries.append(
+                    f'    {{"from_string", (PyCFunction)'
+                    f'Py{typename}_from_string, '
+                    f'METH_VARARGS | METH_CLASS, '
+                    f'"Create {typename} from formatted string"}}')
+
     code_parts.append(_gen_typeobject(
         typename, has_methods=has_methods,
         parent_typename=parent_typename,
-        has_number=has_number, has_richcompare=has_richcompare))
+        has_number=has_number, has_richcompare=has_richcompare,
+        has_tp_str=has_tp_str))
 
     ret['f90modhooks'].append('\n'.join(code_parts))
     ret['initf90modhooks'].extend(_gen_init_code(typename, modulename))
