@@ -40,6 +40,7 @@ from ._dt_helpers import (
     _is_allocatable_member,
     _is_array_member,
     _is_coarray_member,
+    _coarray_as_local,
     _is_private_member,
     _is_pointer_member,
     _is_char_member,
@@ -194,9 +195,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 f'    integer(c_int), intent(in), value :: {li["name"]}')
         for mname, mvar in members.items():
             if _is_coarray_member(mvar):
-                outmess(f'  Skipping coarray member {mname} '
-                        f'(unsupported)\n')
-                continue
+                mvar = _coarray_as_local(mvar)  # F2018 7.5.4.3: local data
             if _is_private_member(mvar):
                 continue  # F2018 7.5.4.8: no accessor for private
             if (_is_array_member(mvar) or _is_type_member(mvar)
@@ -323,7 +322,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
         # `len_arg_str_prefix` is ', n' or '' (set above).
         for mname, mvar in members.items():
             if _is_coarray_member(mvar):
-                continue  # coarrays unsupported (F2018 7.5.4.3)
+                mvar = _coarray_as_local(mvar)  # F2018 7.5.4.3: local data
             if _is_private_member(mvar):
                 continue  # F2018 7.5.4.8: no accessor for private
             if _is_type_array_member(mvar):

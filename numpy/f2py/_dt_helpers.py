@@ -803,16 +803,67 @@ def _is_coarray_member(var):
     """Check if a member has the codimension (coarray) attribute.
 
     Fortran coarray components (F2018 7.5.4.3) use CODIMENSION or
-    bracket syntax (e.g. ``integer :: x[*]``).  Coarrays require a
-    Fortran coarray runtime (OpenCoarrays or compiler-native) and
-    cannot be wrapped by f2py.  Members with this attribute are
-    detected and skipped with a warning during code generation.
+    bracket syntax (e.g. ``integer :: x[*]``).
     """
     attrspec = var.get('attrspec', [])
     for attr in attrspec:
         if isinstance(attr, str) and attr.lower().startswith('codimension'):
             return True
     return False
+
+
+_coarray_support_cache = None
+
+
+def _has_coarray_support():
+    """Check if the Fortran compiler supports coarrays.
+
+    Tries compiling a minimal coarray program with -fcoarray=single
+    (gfortran) or equivalent.  Result is cached.
+    """
+    global _coarray_support_cache
+    if _coarray_support_cache is not None:
+        return _coarray_support_cache
+
+    import subprocess
+    import tempfile
+    test_src = """\
+program test_caf
+  implicit none
+  integer :: x[*]
+  x = this_image()
+end program
+"""
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.f90', mode='w',
+                                         delete=False) as f:
+            f.write(test_src)
+            f.flush()
+            # Try gfortran first
+            result = subprocess.run(
+                ['gfortran', '-fcoarray=single', '-fsyntax-only', f.name],
+                capture_output=True, timeout=10)
+            _coarray_support_cache = result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        _coarray_support_cache = False
+    return _coarray_support_cache
+
+
+def _coarray_as_local(var):
+    """Create a copy of a coarray member with codimension stripped.
+
+    On any single Fortran image, a coarray's local data is an ordinary
+    array.  Accessing ``obj%grid`` without cosubscripts ``[...]`` gives
+    the local partition.  This function returns a modified variable dict
+    that can be processed by the regular allocatable/array code paths.
+    """
+    import copy
+    local = copy.deepcopy(var)
+    local['attrspec'] = [
+        a for a in local.get('attrspec', [])
+        if not (isinstance(a, str) and a.lower().startswith('codimension'))
+    ]
+    return local
 
 
 def _is_type_member(var):

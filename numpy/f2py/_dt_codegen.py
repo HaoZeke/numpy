@@ -32,6 +32,7 @@ from ._dt_helpers import (
     _is_allocatable_member,
     _is_array_member,
     _is_coarray_member,
+    _coarray_as_local,
     _is_deferred_char_member,
     _is_len_sized_array,
     _is_pointer_member,
@@ -284,7 +285,7 @@ def _gen_getset(typename, members):
 
     for mname, mvar in members.items():
         if _is_coarray_member(mvar):
-            continue  # coarrays unsupported (F2018 7.5.4.3)
+            mvar = _coarray_as_local(mvar)  # F2018 7.5.4.3: local data
         if _is_private_member(mvar):
             continue  # F2018 7.5.4.8: private components not exposed
         if _is_type_array_member(mvar):
@@ -1844,7 +1845,7 @@ static PyObject *
 
     for mname, mvar in members.items():
         if _is_coarray_member(mvar):
-            continue  # coarrays unsupported (F2018 7.5.4.3)
+            mvar = _coarray_as_local(mvar)  # F2018 7.5.4.3: local data
         if _is_private_member(mvar):
             continue  # F2018 7.5.4.8: private components not exposed
         if _is_type_array_member(mvar):
@@ -2668,7 +2669,7 @@ static PyObject *
 
     for mname, mvar in members.items():
         if _is_coarray_member(mvar):
-            continue
+            mvar = _coarray_as_local(mvar)  # F2018 7.5.4.3: local data
         if _is_private_member(mvar):
             continue  # F2018 7.5.4.8
         # Skip complex member types for now (array-of-types, nested, etc.)
