@@ -832,41 +832,52 @@ def _is_coarray_member(var):
     return False
 
 
-_coarray_support_cache = None
+def _get_coarray_compile_flag():
+    """Return the Fortran compiler flag needed for coarray support.
 
+    Uses -fcoarray=single (gfortran) which is a zero-dependency mode
+    making all coarray syntax valid.  In single-image mode,
+    this_image()=1 and num_images()=1.  For multi-image execution,
+    the user provides their own runtime flags.
 
-def _has_coarray_support():
-    """Check if the Fortran compiler supports coarrays.
-
-    Tries compiling a minimal coarray program with -fcoarray=single
-    (gfortran) or equivalent.  Result is cached.
+    Returns the flag string, or empty string if detection fails.
     """
-    global _coarray_support_cache
-    if _coarray_support_cache is not None:
-        return _coarray_support_cache
-
     import subprocess
     import tempfile
-    test_src = """\
-program test_caf
-  implicit none
-  integer :: x[*]
-  x = this_image()
-end program
-"""
+    test_src = "program t; integer :: x[*]; x = this_image(); end\n"
+    # Try gfortran -fcoarray=single
     try:
         with tempfile.NamedTemporaryFile(suffix='.f90', mode='w',
                                          delete=False) as f:
             f.write(test_src)
             f.flush()
-            # Try gfortran first
             result = subprocess.run(
                 ['gfortran', '-fcoarray=single', '-fsyntax-only', f.name],
                 capture_output=True, timeout=10)
-            _coarray_support_cache = result.returncode == 0
+            if result.returncode == 0:
+                return '-fcoarray=single'
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        _coarray_support_cache = False
-    return _coarray_support_cache
+        pass
+    # ifort/ifx have built-in coarray support (no flag needed for single)
+    for compiler in ['ifort', 'ifx']:
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.f90', mode='w',
+                                             delete=False) as f:
+                f.write(test_src)
+                f.flush()
+                result = subprocess.run(
+                    [compiler, '-coarray=single', '-syntax-only', f.name],
+                    capture_output=True, timeout=10)
+                if result.returncode == 0:
+                    return '-coarray=single'
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+    return ''
+
+
+def _has_coarray_members(members):
+    """Check if any member in the dict is a coarray component."""
+    return any(_is_coarray_member(v) for v in members.values())
 
 
 def _coarray_as_local(var):

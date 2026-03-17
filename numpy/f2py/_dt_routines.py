@@ -41,6 +41,7 @@ from ._dt_helpers import (
     _is_array_member,
     _is_coarray_member,
     _coarray_as_local,
+    _has_coarray_members,
     _is_private_member,
     _is_pointer_member,
     _is_char_member,
@@ -1021,6 +1022,33 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  ! Defined I/O read wrapper for {typename}')
                 lines.append(
                     _gen_defined_io_read_fortran_wrapper(typename))
+
+    # Add coarray remote access wrappers and intrinsics
+    has_coarray = False
+    if module_block:
+        source_file = module_block.get('from', '')
+        for tb in opaque_types:
+            members = {
+                n: v for n, v
+                in get_type_members(tb).items()
+                if not _is_type_parameter(v)
+            }
+            for mname, mvar in members.items():
+                if _is_coarray_member(mvar):
+                    has_coarray = True
+                    local_var = _coarray_as_local(mvar)
+                    remote_code = _gen_coarray_remote_getter(
+                        tb['name'], mname, local_var)
+                    if remote_code:
+                        lines.append('')
+                        lines.append(
+                            f'  ! Coarray remote getter for '
+                            f'{tb["name"]}%{mname}')
+                        lines.append(remote_code)
+    if has_coarray:
+        lines.append('')
+        lines.append('  ! Coarray intrinsic wrappers')
+        lines.append(_gen_coarray_intrinsic_wrappers())
 
     lines.append(f'end module f2py_{modulename}_derived_wrappers')
     lines.append('')
@@ -2501,6 +2529,94 @@ static PyObject *
             f'"Procedure pointer component {comp_name}"}}')
 
     return funcs, method_entries
+
+
+def _gen_coarray_intrinsic_wrappers():
+    """Generate bind(c) wrappers for coarray intrinsics."""
+    return """\
+  function f2py_this_image() result(img) bind(c)
+    use iso_c_binding
+    integer(c_int) :: img
+    img = this_image()
+  end function f2py_this_image
+
+  function f2py_num_images() result(n) bind(c)
+    use iso_c_binding
+    integer(c_int) :: n
+    n = num_images()
+  end function f2py_num_images
+"""
+
+
+def _gen_coarray_remote_getter(typename, mname, mvar):
+    """Generate Fortran bind(c) wrapper for remote coarray access.
+
+    Generates a subroutine that accesses obj%member[image] and copies
+    the remote data into a buffer.
+    """
+    from ._dt_helpers import _get_member_isoc_type
+    isoc_type = _get_member_isoc_type(mvar)
+    if isoc_type is None:
+        return ''
+    wrapper_name = f'f2py_get_{typename}_{mname}_remote'
+    return f"""\
+  subroutine {wrapper_name}(cptr, image, buf, n) bind(c)
+    use iso_c_binding
+    type(c_ptr), value :: cptr
+    integer(c_int), value :: image
+    {isoc_type}, intent(out) :: buf(*)
+    integer(c_int), intent(out) :: n
+    type({typename}), pointer :: obj
+    call c_f_pointer(cptr, obj)
+    n = size(obj%{mname})
+    buf(1:n) = obj%{mname}(:)[image]
+  end subroutine {wrapper_name}
+"""
+
+
+def _gen_coarray_remote_c_method(typename, mname, mvar):
+    """Generate C method for remote coarray member access."""
+    from ._dt_helpers import _get_member_ctype
+    ctype = _get_member_ctype(mvar)
+    if ctype is None:
+        ctype = 'float'
+    capsule_name = f'f2py.{typename}'
+    wrapper_name = f'f2py_get_{typename}_{mname}_remote'
+    method_name = f'Py{typename}_get_{mname}_remote'
+    npy_type = 'NPY_FLOAT' if ctype == 'float' else 'NPY_DOUBLE'
+
+    return f"""\
+extern void {wrapper_name}(void *, int, {ctype} *, int *);
+
+static PyObject *
+{method_name}(PyObject *selfobj, PyObject *args)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)selfobj;
+    int image;
+    if (!PyArg_ParseTuple(args, "i", &image))
+        return NULL;
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError,
+                        "{typename} object not initialized");
+        return NULL;
+    }}
+    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) return NULL;
+
+    {ctype} buf[65536];
+    int n = 0;
+    {wrapper_name}(ptr, image, buf, &n);
+    if (n <= 0) Py_RETURN_NONE;
+
+    npy_intp dims[1] = {{n}};
+    PyObject *arr = PyArray_SimpleNew(1, dims, {npy_type});
+    if (arr == NULL) return NULL;
+    memcpy(PyArray_DATA((PyArrayObject *)arr), buf, n * sizeof({ctype}));
+    return arr;
+}}
+""", (f'    {{"{mname}_remote", (PyCFunction){method_name}, '
+      f'METH_VARARGS, '
+      f'"Get {mname} from remote coarray image"}}')
 
 
 def _gen_defined_io_fortran_wrapper(typename):

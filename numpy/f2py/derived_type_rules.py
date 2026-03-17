@@ -62,6 +62,8 @@ from ._dt_helpers import (  # noqa: F401
     _is_allocatable_member,
     _is_array_member,
     _is_char_member,
+    _is_coarray_member,
+    _coarray_as_local,
     _is_complex_member,
     _is_deferred_char_member,
     _is_pointer_member,
@@ -115,6 +117,7 @@ from ._dt_routines import (  # noqa: F401
     _gen_proc_pointer_c_methods,
     _find_interface_block,
     _scan_type_bound_procedures,
+    _gen_coarray_remote_c_method,
     _gen_defined_io_fortran_wrapper,
     _gen_defined_io_read_fortran_wrapper,
     _gen_defined_io_tp_str,
@@ -590,6 +593,16 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
             typename, proc_ptrs, module_block.get('body', []))
         all_method_funcs.extend(pp_funcs)
         all_method_entries.extend(pp_entries)
+    # Coarray remote access methods (F2018 7.5.4.3)
+    for mname, mvar in all_members.items():
+        if _is_coarray_member(mvar):
+            local_var = _coarray_as_local(mvar)
+            result = _gen_coarray_remote_c_method(
+                typename, mname, local_var)
+            if result:
+                c_func, method_entry = result
+                all_method_funcs.append(c_func)
+                all_method_entries.append(method_entry)
     if all_method_funcs:
         code_parts.extend(all_method_funcs)
         methods_table = (
