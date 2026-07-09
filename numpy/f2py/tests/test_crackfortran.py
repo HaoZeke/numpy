@@ -274,9 +274,6 @@ class TestEval(util.F2PyTest):
         assert eval_scalar('"123"', {}) == "'123'"
 
 
-@pytest.mark.slow
-
-
 class TestParamParseNestedParens:
     """Regression for gh-28095: grouping parens vs array indexing in param_parse."""
 
@@ -314,6 +311,7 @@ class TestParamParseNestedParens:
         assert out.replace(" ", "") == "3+4"
 
 
+@pytest.mark.slow
 class TestFortranReader(util.F2PyTest):
     @pytest.mark.parametrize("encoding",
                              ['ascii', 'utf-8', 'utf-16', 'utf-32'])
