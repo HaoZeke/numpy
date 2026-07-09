@@ -275,6 +275,45 @@ class TestEval(util.F2PyTest):
 
 
 @pytest.mark.slow
+
+
+class TestParamParseNestedParens:
+    """Regression for gh-28095: grouping parens vs array indexing in param_parse."""
+
+    def test_grouping_parens_arithmetic(self):
+        from numpy.f2py.crackfortran import param_parse
+        params = {
+            "mx_supply_curves": 14,
+            "mx_intl_curves": 12,
+            "mx_units": 1800,
+        }
+        # Grouping: strip outer parens, substitute parameters
+        out = param_parse("(mx_supply_curves + mx_intl_curves)", params)
+        assert out.replace(" ", "") == "14+12"
+
+    def test_array_index_still_works(self):
+        from numpy.f2py.crackfortran import param_parse
+        params = {"pa": {1: 3, 2: 5}}
+        assert param_parse("pa(1)", params) == "3"
+        assert param_parse("pa(2)", params) == "5"
+
+    def test_nested_array_index(self):
+        from numpy.f2py.crackfortran import param_parse
+        # myparamarray(nested(dim)) pattern used elsewhere in the suite
+        params = {
+            "dim": 2,
+            "nested": {1: 1, 2: 2, 3: 3},
+            "myparamarray": {1: 10, 2: 20, 3: 30},
+        }
+        assert param_parse("myparamarray(nested(dim))", params) == "20"
+
+    def test_double_grouping(self):
+        from numpy.f2py.crackfortran import param_parse
+        params = {"a": 3, "b": 4}
+        out = param_parse("((a + b))", params)
+        assert out.replace(" ", "") == "3+4"
+
+
 class TestFortranReader(util.F2PyTest):
     @pytest.mark.parametrize("encoding",
                              ['ascii', 'utf-8', 'utf-16', 'utf-32'])

@@ -3083,13 +3083,18 @@ def param_parse(d, params):
     3
     """
     if "(" in d:
-        # this dimension expression is an array
+        # Text before the first "(" is the parameter/array name.
+        # Empty dname means grouping parentheses, e.g. (a + b), not
+        # array indexing like pa(1).
         dname = d[:d.find("(")]
-        ddims = d[d.find("(") + 1:d.rfind(")")]
-        # this dimension expression is also a parameter;
-        # parse it recursively
-        index = int(param_parse(ddims, params))
-        return str(params[dname][index])
+        if dname:
+            # Array parameter indexing, e.g. pa(1) or nested(dim)
+            ddims = d[d.find("(") + 1:d.rfind(")")]
+            index = int(param_parse(ddims, params))
+            return str(params[dname][index])
+        # Grouping parentheses: strip outer pair and recurse
+        d = d[d.find("(") + 1:d.rfind(")")]
+        return param_parse(d, params)
     elif d in params:
         return str(params[d])
     else:
