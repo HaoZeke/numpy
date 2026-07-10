@@ -187,7 +187,44 @@ def buildhooks(pymod):
                 fargs.append(n)
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
-                iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
+                if isparameter(var):
+                    # gh-22511: PARAMETER is a compile-time constant. Some
+                    # compilers (LLVM flang) materialize it as a stack temp
+                    # of f2pyinit*, so aliasing that address in
+                    # FortranDataDef.data dangles after init returns.
+                    # Copy into static storage owned by this module so
+                    # Python can keep reading <mod>.<param>.
+                    safe_n = undo_rmbadname1(n)
+                    storage = f"f2py_{m['name']}_{safe_n}_data"
+                    if isstring(var) or isstringarray(var) or \
+                       ischaracter(var) or ischaracterarray(var):
+                        if isarray(var):
+                            nbytes = f"({dm['size']})*({elsize})"
+                        else:
+                            nbytes = f"({elsize})"
+                    else:
+                        if isarray(var):
+                            nbytes = f"({dm['size']})*sizeof({ct})"
+                        else:
+                            nbytes = f"sizeof({ct})"
+                        # Ensure non-builtin C types (complex_*, long_long, ...)
+                        # have a typedef before sizeof is used.
+                        if ct not in (
+                                'char', 'short', 'int', 'long', 'float',
+                                'double', 'unsigned', 'unsigned_char',
+                                'unsigned_short', 'unsigned_long'):
+                            if ct not in ret['need']:
+                                ret['need'].append(ct)
+                    if 'string.h' not in ret['need']:
+                        ret['need'].append('string.h')
+                    iadd('\t{')
+                    iadd(f'\t\tstatic char {storage}[{nbytes}];')
+                    iadd(f'\t\tmemcpy({storage}, {n}, {nbytes});')
+                    iadd(f"\t\tf2py_{m['name']}_def[i_f2py++].data = "
+                         f"{storage};")
+                    iadd('\t}')
+                else:
+                    iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
         if onlyvars:
             dadd('\\end{description}')
         if hasbody(m):
