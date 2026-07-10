@@ -562,6 +562,77 @@ class TestParamParseNestedParens:
         vs = mod[0]["vars"]["cmm_cl_btus"]
         assert vs["dimension"] == ["26", "1800"]
 
+class TestUseModuleVars:
+    """gh-3562: symbols from a USEd module must land in the using module."""
+
+    def test_bare_use_imports_parameters(self, tmp_path):
+        # Reproducer from gh-3562: test2 USEs test; a must appear in test2.
+        f_path = tmp_path / "use_params.f90"
+        f_path.write_text(textwrap.dedent("""\
+            module test
+                integer, parameter :: a = 1
+            end module test
+
+            module test2
+                use test
+                integer, parameter :: b = 2
+            end module test2
+        """))
+        mod = crackfortran.crackfortran([str(f_path)])
+        by_name = {m["name"]: m for m in mod}
+        assert "a" in by_name["test"]["vars"]
+        assert "a" in by_name["test2"]["vars"]
+        assert by_name["test2"]["vars"]["a"]["="] == "1"
+        assert by_name["test2"]["vars"]["b"]["="] == "2"
+
+    def test_use_only_and_private(self, tmp_path):
+        f_path = tmp_path / "use_only.f90"
+        f_path.write_text(textwrap.dedent("""\
+            module m1
+                integer, parameter :: a = 1, b = 2
+                integer :: c
+                private :: b
+            end module m1
+
+            module only_a
+                use m1, only: a
+            end module only_a
+
+            module bare
+                use m1
+            end module bare
+
+            module renamed
+                use m1, only: aa => a
+            end module renamed
+        """))
+        mod = crackfortran.crackfortran([str(f_path)])
+        by_name = {m["name"]: m for m in mod}
+        assert set(by_name["only_a"]["vars"]) == {"a"}
+        # private b stays out; public a and c come through bare use
+        assert "a" in by_name["bare"]["vars"]
+        assert "c" in by_name["bare"]["vars"]
+        assert "b" not in by_name["bare"]["vars"]
+        assert "aa" in by_name["renamed"]["vars"]
+        assert "a" not in by_name["renamed"]["vars"]
+        assert by_name["renamed"]["vars"]["aa"]["="] == "1"
+
+    def test_local_definition_wins(self, tmp_path):
+        f_path = tmp_path / "use_local.f90"
+        f_path.write_text(textwrap.dedent("""\
+            module m1
+                integer, parameter :: a = 1
+            end module m1
+
+            module m2
+                use m1
+                integer, parameter :: a = 99
+            end module m2
+        """))
+        mod = crackfortran.crackfortran([str(f_path)])
+        by_name = {m["name"]: m for m in mod}
+        assert by_name["m2"]["vars"]["a"]["="] == "99"
+
 
 @pytest.mark.slow
 class TestLowerF2PYDirective(util.F2PyTest):
