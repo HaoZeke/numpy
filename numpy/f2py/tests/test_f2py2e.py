@@ -714,6 +714,69 @@ def test_cli_obj(capfd, hello_world_f90, monkeypatch):
             assert f"'''{obj}'''" in mbld
 
 
+def test_format_meson_dependency():
+    """Unit :: --dep kwarg syntax for Meson dependency() (gh-28902)."""
+    from numpy.f2py._backends._meson import format_meson_dependency
+
+    assert format_meson_dependency("lapack") == "dependency('lapack')"
+    assert (
+        format_meson_dependency("mpi[language=fortran]")
+        == "dependency('mpi', language: 'fortran')"
+    )
+    assert (
+        format_meson_dependency("mpi[language: 'fortran']")
+        == "dependency('mpi', language: 'fortran')"
+    )
+    assert (
+        format_meson_dependency("foo[static=true, method=pkg-config]")
+        == "dependency('foo', static: true, method: 'pkg-config')"
+    )
+    assert (
+        format_meson_dependency("x[modules=['thread']]")
+        == "dependency('x', modules: ['thread'])"
+    )
+    # bare name must not invent a language=
+    assert "language" not in format_meson_dependency("openmp")
+
+
+def test_cli_meson_dep_kwargs(hello_world_f90, monkeypatch):
+    """CLI :: --dep mpi[language=fortran] lands in meson.build (gh-28902)
+
+    Compiler-free: stub out meson setup/compile.
+    """
+    from numpy.f2py._backends._meson import MesonBackend
+
+    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
+    monkeypatch.setattr(MesonBackend, "_move_exec_to_root", lambda self, build_dir: None)
+
+    ipath = Path(hello_world_f90)
+    mname = "blah"
+    odir = "build_depkw"
+    # shlex-style: keep bracket form as one argv token
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "f2py",
+            "--backend", "meson",
+            "--build-dir", odir,
+            "--dep", "lapack",
+            "--dep", "mpi[language=fortran]",
+            "-m", mname,
+            "-c",
+            str(ipath),
+        ],
+    )
+
+    with util.switchdir(ipath.parent):
+        f2pycli()
+        mbld = Path(f"{odir}/meson.build").read_text()
+        assert "dependency('lapack')" in mbld
+        assert "dependency('mpi', language: 'fortran')" in mbld
+        # must not hardcode language on bare deps
+        assert "dependency('lapack', language" not in mbld
+
+
 def test_inclpath(monkeypatch):
     """Add to the include directories
 
