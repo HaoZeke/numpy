@@ -378,9 +378,48 @@ def callcrackfortran(files, options):
     return postlist
 
 
+def _propagate_callback_intents(lst):
+    """Stamp intent(callback[, hide]) from consuming routines onto the
+    matching interface blocks of explicit ``__user__`` modules.
+
+    A hidden callback is invoked by Fortran through its plain external
+    symbol, so its trampoline needs the Fortran-linkable F_FUNC name --
+    which ``cb_routsign2map`` only emits when the callback block itself
+    carries intent(callback). Signature files declare that intent on the
+    consuming routines' variables instead (gh-18385).
+    """
+    cb_intents = {}
+
+    def scan(block):
+        for b in block.get('body') or []:
+            scan(b)
+        if block.get('block') in ('function', 'subroutine'):
+            for vname, var in (block.get('vars') or {}).items():
+                intents = var.get('intent') or []
+                if 'callback' in intents:
+                    cb_intents.setdefault(vname, set()).update(intents)
+
+    for item in lst:
+        if '__user__' not in item['name']:
+            scan(item)
+    if not cb_intents:
+        return
+    for item in lst:
+        if '__user__' not in item['name']:
+            continue
+        for bi in item.get('body') or []:
+            if bi.get('block') != 'interface':
+                continue
+            for b in bi.get('body') or []:
+                if b and b.get('name') in cb_intents:
+                    cur = set(b.get('intent') or [])
+                    b['intent'] = sorted(cur | cb_intents[b['name']])
+
+
 def buildmodules(lst):
     cfuncs.buildcfuncs()
     outmess('Building modules...\n')
+    _propagate_callback_intents(lst)
     modules, mnames, isusedby = [], [], {}
     for item in lst:
         if '__user__' in item['name']:
