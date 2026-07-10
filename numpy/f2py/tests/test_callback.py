@@ -260,3 +260,17 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestSharedHiddenCallback(util.F2PyTest):
+    # gh-18385: a hidden callback shared between routines through an
+    # explicit __user__ module must link and dispatch for both
+    sources = [util.getpath("tests", "src", "callback", "gh18385.pyf"),
+               util.getpath("tests", "src", "callback", "gh18385.f90")]
+    module_name = "gh18385"
+
+    def test_shared_hidden_callback(self):
+        self.module.cb = lambda i: i + 100
+        assert self.module.one() == 101
+        assert self.module.two() == 1020
