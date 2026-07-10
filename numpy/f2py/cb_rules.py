@@ -157,7 +157,7 @@ f2py_cb_stop_call_clock();
 #endif
     CFUNCSMESSPY(\"cb:capi_return=\",capi_return);
     if (capi_return == NULL) {
-        fprintf(stderr,\"capi_return is NULL\\n\");
+        CFUNCSMESS(\"cb:capi_return is NULL\\n\");
         goto capi_fail;
     }
     if (capi_return == Py_None) {
@@ -177,7 +177,10 @@ f2py_cb_stop_clock();
 #endif
     goto capi_return_pt;
 capi_fail:
-    fprintf(stderr,\"Call-back #name# failed.\\n\");
+    CFUNCSMESS(\"cb:Call-back #name# failed.\\n\");
+    if (!PyErr_Occurred()) {
+        PyErr_SetString(#modulename#_error, \"Call-back #name# failed.\");
+    }
     Py_XDECREF(capi_return);
     Py_XDECREF(capi_arglist_list);
     if (capi_longjmp_ok) {
@@ -490,7 +493,7 @@ cb_arg_rules = [
                       {isintent_c: '|F2PY_INTENT_C'},
                       """,capi_tmp);
         if (rv_cb_arr == NULL) {
-            fprintf(stderr,\"rv_cb_arr is NULL\\n\");
+            CFUNCSMESS(\"cb:rv_cb_arr is NULL\\n\");
             goto capi_fail;
         }
         MEMCOPY(#varname_i#,PyArray_DATA(rv_cb_arr),PyArray_NBYTES(rv_cb_arr));
