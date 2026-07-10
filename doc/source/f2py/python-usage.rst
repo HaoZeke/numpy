@@ -149,6 +149,108 @@ In Python:
 .. literalinclude:: ./code/results/array_session.dat
   :language: python
 
+.. _Fortran vs Python argument lists:
+
+Fortran vs Python argument lists
+================================
+
+The Python signature that F2PY generates is rarely a one-to-one copy of the
+Fortran argument list. F2PY drops or reorders some arguments and folds others
+into the return value, so the number and order of arguments you pass from
+Python can differ from what the Fortran subroutine declares. Two rules cover
+almost every case:
+
+* every ``intent(out)`` argument is removed from the argument list and returned
+  instead; if there is more than one, the results come back as a tuple,
+* an array size that F2PY can infer from an array argument becomes an optional
+  argument placed *after* that array, and can usually be omitted.
+
+Consider a subroutine that takes an array, its size, and two output integers.
+The size ``j_size`` is used as the dimension of ``j_array``, and ``m_result``
+and ``mplus9`` are marked ``intent(out)``:
+
+.. code-block:: fortran
+
+   subroutine get_fact(k, j_size, j_array, m_result, mplus9)
+     !f2py intent(in) :: k, j_size
+     !f2py intent(in) :: j_array
+     !f2py intent(out) :: m_result, mplus9
+     integer :: k, j_size
+     integer, dimension(j_size) :: j_array
+     integer :: m_result, mplus9
+     integer :: i, nine
+     m_result = 1
+     do i = 1, 6
+        m_result = m_result * i
+     end do
+     nine = (k + j_array(2)) / 100
+     mplus9 = m_result + nine
+   end subroutine get_fact
+
+Wrap it with ``python -m numpy.f2py -c fact.f90 -m fact``. The generated
+docstring shows how the five Fortran arguments map to the Python call:
+
+.. code-block:: python
+
+   >>> import fact
+   >>> print(fact.get_fact.__doc__)
+   get_fact(k,j_array,[j_size])
+
+   Wrapper for ``get_fact``.
+
+   Parameters
+   ----------
+   k : input int
+   j_array : input rank-1 array('i') with bounds (j_size)
+
+   Other Parameters
+   ----------------
+   j_size : input int, optional
+       Default: shape(j_array, 0)
+
+   Returns
+   -------
+   m_result : int
+   mplus9 : int
+
+The two ``intent(out)`` integers are gone from the argument list and come back
+as a tuple, and ``j_size`` has moved to the end as an optional argument because
+F2PY can read it from ``shape(j_array, 0)``. The natural call passes only the
+required arguments:
+
+.. code-block:: python
+
+   >>> import numpy as np
+   >>> k = 55
+   >>> j_array = np.array([45, 845, 1845], dtype=np.int32)
+   >>> fact.get_fact(k, j_array)
+   (720, 729)
+
+You may still pass the size explicitly, as long as it follows the array:
+
+.. code-block:: python
+
+   >>> fact.get_fact(k, j_array, j_array.size)
+   (720, 729)
+
+What you must not do is mirror the Fortran order and pass the size *before* the
+array. F2PY binds arguments positionally against the Python signature, so the
+size lands in the array slot and the array in the size slot, and the consistency
+check between them fails:
+
+.. code-block:: python
+
+   >>> fact.get_fact(k, j_array.size, j_array)
+   Traceback (most recent call last):
+     ...
+   fact.error: (shape(j_array, 0) == j_size) failed for 1st keyword j_size: get_fact:j_size=45
+
+The error message names ``j_size``, which is confusing because the mistake was
+the argument order, not the size value. The size argument must always come
+after the array it describes, even though Fortran declares it earlier. See
+:ref:`Call-back arguments` for the related case where a call-back's return
+tuple is spread across several Fortran arguments.
+
 .. _Call-back arguments:
 
 Call-back arguments
@@ -295,6 +397,44 @@ following rules are applied:
 
 * If ``k < l``, then ``y_{k + 1}, ..., y_l`` are ignored.
 * If ``k > l``, then only ``x_1, ..., x_l`` are set.
+
+Returning multiple values from a call-back
+------------------------------------------
+
+The rules above rest on a feature that is easy to trigger by accident: F2PY
+treats a ``tuple`` returned by a call-back as *several* return values, one per
+tuple element, not as a single sequence. When the Fortran side expects one
+array-like value, returning a bare tuple spreads it across the return slots and
+leaves the expected array empty.
+
+A common way to hit this is a right-hand-side function for an ODE solver that
+returns the derivatives as a tuple:
+
+.. code-block:: python
+
+   def f(t, y):
+       x, y, z = y
+       return (sigma * (y - x), x * (rho - z) - y, x * y - beta * z)
+
+Fortran expects a single rank-1 array of length 3 here, so F2PY reads the
+3-tuple as three separate return values and the array comes back with length 0:
+
+.. code-block:: python
+
+   ValueError: 0-th dimension must be 3 but got 0 (not defined).
+
+The fix is to return a ``list`` or a NumPy array, which F2PY passes through as
+one array value:
+
+.. code-block:: python
+
+   def f(t, y):
+       x, y, z = y
+       return [sigma * (y - x), x * (rho - z) - y, x * y - beta * z]
+
+This behavior is intentional (see gh-2981); a tuple is the syntax for "return
+these as separate outputs," so reserve it for call-backs that genuinely feed
+several distinct Fortran arguments.
 
 
 Common blocks
