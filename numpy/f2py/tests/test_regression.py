@@ -285,3 +285,24 @@ class TestBoolLogicalNoCopy(util.F2PyTest):
         b = np.array([1, 0, 1], dtype=np.int8)
         self.module.bool_flip_first(b, b.size)
         npt.assert_array_equal(b, [0, 0, 1])
+
+
+@pytest.mark.slow
+class TestPickleFortranFunction(util.F2PyTest):
+    # gh-21767: function wrappers pickle by reference; data-carrying
+    # fortran objects refuse with a clear message
+    sources = [util.getpath("tests", "src", "regression", "gh21767.f90")]
+
+    def test_pickle_roundtrip(self):
+        import pickle
+
+        fn = self.module.double_it
+        restored = pickle.loads(pickle.dumps(fn))
+        assert restored is fn
+        assert restored(21.0) == 42.0
+
+    def test_deepcopy(self):
+        import copy
+
+        fn = self.module.double_it
+        assert copy.deepcopy(fn) is fn

@@ -396,6 +396,30 @@ fortran_getattr(PyFortranObject *fp, char *name)
     return ret;
 }
 
+static PyObject *
+fortran_reduce(PyFortranObject *fp, PyObject *Py_UNUSED(noargs))
+{
+    /* Function wrappers pickle by reference (module + attribute name,
+     * resolved via pickle.whichmodule at dump time).  Objects carrying
+     * module data wrap a raw pointer and cannot be reconstructed by
+     * reference, so they refuse (gh-21767). */
+    if (fp->len == 1 && fp->defs[0].rank == -1) {
+        PyObject *f2py, *ret;
+        f2py = PyImport_ImportModule("numpy.f2py");
+        if (f2py == NULL)
+            return NULL;
+        ret = PyObject_CallMethod(f2py, "_fortran_reduce", "sO",
+                                  fp->defs[0].name, (PyObject *)fp);
+        Py_DECREF(f2py);
+        return ret;
+    }
+    PyErr_SetString(PyExc_TypeError,
+                    "cannot pickle 'fortran' object: it wraps module or "
+                    "common-block data (a raw pointer); only named function "
+                    "wrappers pickle, by reference");
+    return NULL;
+}
+
 static int
 fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
 {
@@ -555,6 +579,7 @@ fortran_dir(PyFortranObject *fp, PyObject *Py_UNUSED(args))
 
 static PyMethodDef fortran_methods[] = {
         {"__dir__", (PyCFunction)fortran_dir, METH_NOARGS, NULL},
+        {"__reduce__", (PyCFunction)fortran_reduce, METH_NOARGS, NULL},
         {NULL, NULL, 0, NULL}
 };
 
