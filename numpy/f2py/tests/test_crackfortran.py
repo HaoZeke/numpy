@@ -425,3 +425,106 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+
+class TestPyfInterfaceAttrs:
+    """gh-13553: f2py-only attrs must not leak into Fortran wrapper interfaces.
+
+    When a .pyf already carries ``depend``/``check``/``required`` (as written by
+    ``f2py -h``), re-cracking it and emitting ``saved_interface`` used to copy
+    those attributes into ``*-f2pywrappers*.f90``, which gfortran rejects.
+    ``as_interface=True`` must strip them while leaving them in .pyf output.
+
+    Note: ``saved_interface`` is snapshotted *before* ``analyzevars`` peels
+    ``check``/``depend`` out of ``attrspec``, so the strip must also filter
+    those strings while they still live in ``attrspec``.
+    """
+
+    def test_as_interface_strips_f2py_only_attrs(self):
+        fpath = util.getpath("tests", "src", "crackfortran", "gh13553.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert len(mod) == 1
+        # Free-function source cracks to a top-level function block.
+        rout = mod[0]
+        assert rout["block"] == "function"
+        assert rout["name"] == "trapz"
+
+        # .pyf emission keeps f2py-only metadata (as_interface=False).
+        pyf = crackfortran.crack2fortrangen(rout, as_interface=False)
+        assert "depend(" in pyf
+        assert "check(" in pyf
+        assert "required" in pyf
+
+        # Fortran interface embedded in wrappers must be clean.
+        iface = crackfortran.crack2fortrangen(rout, as_interface=True)
+        assert "depend(" not in iface
+        assert "check(" not in iface
+        assert "required" not in iface
+        assert "intent(in)" in iface
+        assert "dimension(size(x))" in iface
+
+    def test_as_interface_strips_attrspec_f2py_strings(self):
+        # Pre-analyzevars shape of saved_interface input: check/depend still
+        # live in attrspec as literal strings (not separate keys yet).
+        block = {
+            "block": "function",
+            "name": "trapz",
+            "args": ["x", "y"],
+            "vars": {},
+            "body": [],
+        }
+        vars_ = {
+            "x": {
+                "typespec": "real",
+                "kindselector": {"*": "8"},
+                "attrspec": ["required", "dimension(:)", "intent(in)"],
+            },
+            "y": {
+                "typespec": "real",
+                "kindselector": {"*": "8"},
+                "attrspec": [
+                    "dimension(size(x))",
+                    "intent(in)",
+                    "check(shape(y, 0) == size(x))",
+                    "depend(x)",
+                ],
+            },
+        }
+        block["vars"] = vars_
+        out = crackfortran.vars2fortran(
+            block, vars_, ["x", "y"], tab="\n    ", as_interface=True
+        )
+        assert "required" not in out
+        assert "check(" not in out
+        assert "depend(" not in out
+        assert "dimension(size(x))" in out
+        assert "intent(in)" in out
+
+    def test_pyf_roundtrip_wrapper_interface_clean(self, tmp_path):
+        # Full codegen path: .f90 -> .pyf -> wrappers; inspect wrapper text.
+        from numpy.f2py.f2py2e import run_main
+
+        src = util.getpath("tests", "src", "crackfortran", "gh13553.f90")
+        work = tmp_path / "gh13553"
+        work.mkdir()
+        f90 = work / "sub.f90"
+        f90.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        pyf = work / "sub.pyf"
+
+        with util.switchdir(work):
+            run_main([str(f90.name), "-m", "sub", "-h", str(pyf.name),
+                      "--overwrite-signature"])
+            pyf_text = pyf.read_text(encoding="utf-8")
+            assert "depend(" in pyf_text
+            assert "check(" in pyf_text
+            assert "required" in pyf_text
+
+            run_main([str(pyf.name)])
+            wrap = (work / "sub-f2pywrappers2.f90").read_text(encoding="utf-8")
+
+        assert "depend(" not in wrap
+        assert "check(" not in wrap
+        assert "required" not in wrap
+        # Declared dummies still carry valid Fortran shape/intent.
+        assert "dimension(size(x))" in wrap
+        assert "intent(in)" in wrap

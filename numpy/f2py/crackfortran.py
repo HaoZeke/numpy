@@ -3439,6 +3439,22 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         if 'attrspec' in vars[a]:
             attr = [l for l in vars[a]['attrspec']
                     if l not in ['external']]
+            if as_interface:
+                # Drop f2py-only attributes that are not valid Fortran.
+                # `saved_interface` is snapshotted before analyzevars peels
+                # check/depend/intent/dimension out of attrspec, so those
+                # strings still live here when emitting -f2pywrappers
+                # interfaces from a re-cracked .pyf (gh-13553).
+                # `required` is f2py-only; `optional` is valid Fortran 90.
+                cleaned = []
+                for l in attr:
+                    al = l.lower()
+                    if al == 'required':
+                        continue
+                    if al.startswith(('check', 'depend', 'note')):
+                        continue
+                    cleaned.append(l)
+                attr = cleaned
             if as_interface and 'intent(in)' in attr and 'intent(out)' in attr:
                 # In Fortran, intent(in, out) are conflicting while
                 # intent(in, out) can be specified only via
@@ -3454,13 +3470,18 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             c = ','
         if 'intent' in vars[a]:
             lst = true_intent_list(vars[a])
+            if as_interface:
+                # Only standard Fortran intents in emitted interfaces.
+                lst = [i for i in lst if i in ('in', 'out', 'inout')]
             if lst:
                 vardef = f"{vardef}{c}intent({','.join(lst)})"
             c = ','
-        if 'check' in vars[a]:
+        if 'check' in vars[a] and not as_interface:
+            # check(...) is f2py-only; keep it in .pyf, not Fortran wrappers.
             vardef = f"{vardef}{c}check({','.join(vars[a]['check'])})"
             c = ','
-        if 'depend' in vars[a]:
+        if 'depend' in vars[a] and not as_interface:
+            # depend(...) is f2py-only; keep it in .pyf, not Fortran wrappers.
             vardef = f"{vardef}{c}depend({','.join(vars[a]['depend'])})"
             c = ','
         if '=' in vars[a]:
