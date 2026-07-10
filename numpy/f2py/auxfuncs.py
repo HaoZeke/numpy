@@ -698,13 +698,17 @@ def getcallstatement(rout):
 
 
 def getcallprotoargument(rout, cb_map={}):
+    # Always return a non-empty prototype list.  Leaving #callprotoargument#
+    # empty produces K&R ``()``, which is ``(void)`` under C23 and rejects any
+    # call with arguments (gh-30167).  Derive from the signature when
+    # callprotoargument is absent; custom callstatements that rewrite the
+    # argument list should still set callprotoargument explicitly.
     r = getmultilineblock(rout, 'callprotoargument', comment=0)
     if r:
         return r
     if hascallstatement(rout):
         outmess(
             'warning: callstatement is defined without callprotoargument\n')
-        return
     from .capi_maps import getctype
     arg_types, arg_types2 = [], []
     if l_and(isstringfunction, l_not(isfunction_wrap))(rout):
