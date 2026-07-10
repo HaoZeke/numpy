@@ -1989,6 +1989,43 @@ def get_usedict(block):
     return usedict
 
 
+# Named kind constants exported by the intrinsic module iso_fortran_env
+# (Fortran 2018, 16.10.2). The standard fixes each to the storage size in
+# bytes, which is the default kind numbering used by gfortran, ifort, ifx,
+# and flang, so real64 resolves to the same kind as an explicit kind=8.
+iso_fortran_env_kind_map = {
+    'int8': '1', 'int16': '2', 'int32': '4', 'int64': '8',
+    'real32': '4', 'real64': '8', 'real128': '16',
+}
+
+# Intrinsic modules whose kind parameters f2py resolves from a builtin table
+# instead of parsing a module source. Keyed by the lowercased module name.
+intrinsic_module_kind_maps = {
+    'iso_fortran_env': iso_fortran_env_kind_map,
+}
+
+
+def _resolve_intrinsic_use(usename, mapping, param_map):
+    """Fold an intrinsic module's kind constants into param_map.
+
+    Honours only-list scoping (``use, only: real64``) and renames
+    (``use, only: dp => real64``). A kind name absent from an only-list stays
+    unresolved, matching Fortran's visibility rules; a bare ``use`` makes every
+    kind constant of the module visible.
+    """
+    table = intrinsic_module_kind_maps[usename]
+    only = mapping.get('only', 0) if mapping else 0
+    renames = mapping.get('map', {}) if mapping else {}
+    if not only:
+        for name, value in table.items():
+            param_map.setdefault(name, value)
+    for local, remote in renames.items():
+        remote = remote.lower()
+        if remote in table:
+            param_map[local.lower()] = table[remote]
+    return param_map
+
+
 def get_useparameters(block, param_map=None):
     global f90modulevars
 
@@ -1999,6 +2036,9 @@ def get_useparameters(block, param_map=None):
         return param_map
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
+        if usename in intrinsic_module_kind_maps:
+            _resolve_intrinsic_use(usename, mapping, param_map)
+            continue
         if usename not in f90modulevars:
             outmess(f'get_useparameters: no module {usename} info used by '
                     f'{block.get("name")}\n')
