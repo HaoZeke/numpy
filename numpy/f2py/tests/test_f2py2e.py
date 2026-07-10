@@ -1035,3 +1035,28 @@ def test_npd_linker():
     """
     # TODO: populate
     pass
+
+
+def test_unknown_option_nonzero_exit():
+    """gh-31409: unknown CLI options must fail the process (nonzero exit)."""
+    import subprocess
+    import sys
+    r = subprocess.run(
+        [sys.executable, '-m', 'numpy.f2py', '--definitely-not-an-f2py-flag'],
+        capture_output=True, text=True,
+    )
+    assert r.returncode != 0, (r.returncode, r.stdout, r.stderr)
+    assert 'Unknown option' in (r.stderr + r.stdout)
+
+
+def test_unknown_option_with_compile_nonzero_exit():
+    """gh-31409: -c path must not report success on unknown options."""
+    import subprocess
+    import sys
+    r = subprocess.run(
+        [sys.executable, '-m', 'numpy.f2py', '-c', 'lost-file.f90', '--unknown-option'],
+        capture_output=True, text=True,
+    )
+    assert r.returncode != 0, (r.returncode, r.stdout, r.stderr)
+    assert 'Unknown option' in (r.stderr + r.stdout)
+
