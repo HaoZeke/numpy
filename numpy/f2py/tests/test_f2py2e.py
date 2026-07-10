@@ -813,6 +813,57 @@ def test_cli_meson_dep_kwargs(hello_world_f90, monkeypatch):
         # must not hardcode language on bare deps
         assert "dependency('lapack', language" not in mbld
 
+def _meson_template(deps, fortran_args=None):
+    """Build a MesonTemplate for pure-Python meson.build inspection."""
+    from numpy.f2py._backends._meson import MesonTemplate
+    return MesonTemplate(
+        "testmod",
+        [Path("src.f90")],
+        deps,
+        [],
+        [],
+        [],
+        [],
+        [],
+        fortran_args or [],
+        "release",
+        sys.executable,
+    )
+
+
+def test_meson_openmp_dep_gh27163():
+    """--dep openmp must apply to C and Fortran and set the Fortran linker.
+
+    CLI :: --dep openmp
+    Regression for gh-27163 / gh-30804: bare dependency('openmp') only
+    supplies C OpenMP flags, so Fortran sources miss -fopenmp/-qopenmp and
+    the C linker leaves omp_* undefined (Intel ifx).
+    """
+    src = _meson_template(["openmp"]).generate_meson_build()
+    assert "dependency('openmp', language: 'c')" in src
+    assert "dependency('openmp', language: 'fortran')" in src
+    # bare form defaults to C-only and must not appear
+    assert re.search(r"dependency\('openmp'\)", src) is None
+    assert "link_language: 'fortran'" in src
+
+
+def test_meson_openmp_dep_case_and_mixed():
+    """OpenMP special-case is case-insensitive and coexists with other deps."""
+    src = _meson_template(["lapack", "OpenMP", "blas"]).generate_meson_build()
+    assert "dependency('lapack')" in src
+    assert "dependency('blas')" in src
+    assert "dependency('openmp', language: 'c')" in src
+    assert "dependency('openmp', language: 'fortran')" in src
+    assert "link_language: 'fortran'" in src
+
+
+def test_meson_non_openmp_dep_no_link_language():
+    """Non-OpenMP --dep values keep the previous single-language form."""
+    src = _meson_template(["lapack"]).generate_meson_build()
+    assert "dependency('lapack')" in src
+    assert "link_language" not in src
+    assert "openmp" not in src
+
 
 def test_inclpath(monkeypatch):
     """Add to the include directories
