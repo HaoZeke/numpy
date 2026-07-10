@@ -332,6 +332,26 @@ class TestISOFortranEnvKinds:
             "iso_fortran_env", {"only": 1, "map": {"int32": "int32"}}, {}
         ) == {"int32": "4"}
 
+class TestNonLinearDimSpec:
+    # gh-5506: a dimension bound that f2py's C-flavoured expression parser
+    # cannot put over a common denominator (here `2**n`, parsed as the
+    # pointer product `2 * *n`) must not abort signature generation. The
+    # bound is carried through as an opaque expression instead.
+    def test_pointer_deref_bound_does_not_crash(self, tmp_path):
+        fpath = tmp_path / "gh5506.f90"
+        fpath.write_text(textwrap.dedent("""\
+            subroutine blah(list, n)
+                integer, intent(in) :: n
+                real, intent(out) :: list(2*n,0:2**n)
+                list = 1.0
+            end subroutine
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])
+        (var,) = (mod[0]["vars"][k] for k in ["list"])
+        # linear first extent resolves, non-linear second extent is opaque
+        assert var["dimension"] == ["2 * n", "1 + 2 * *n"]
+        assert var["depend"] == ["n"]
+
 
 @pytest.mark.slow
 class TestEval(util.F2PyTest):

@@ -779,7 +779,16 @@ class Expr:
         ax = self - b
         a = ax.substitute({symbol: as_number(1)})
 
-        zero, _ = as_numer_denom(a * symbol - ax)
+        # as_numer_denom only handles the arithmetic ops it can put over a
+        # common denominator. An expression carrying, say, a pointer deref
+        # (Op.DEREF, from C-parsed `2**n` -> `2 * *n`) is outside that set and
+        # signals non-linearity, so translate the OpError into the RuntimeError
+        # that this method contracts to raise and that callers expect.
+        try:
+            zero, _ = as_numer_denom(a * symbol - ax)
+        except OpError as msg:
+            raise RuntimeError(f'not a {symbol}-linear equation:'
+                               f' {a} * {symbol} + {b} == {self}') from msg
 
         if zero != as_number(0):
             raise RuntimeError(f'not a {symbol}-linear equation:'
