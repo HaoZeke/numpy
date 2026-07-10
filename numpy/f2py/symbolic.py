@@ -21,7 +21,6 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 # contain C expressions that support here is implemented as well.
 #
 # TODO: support logical constants (Op.BOOLEAN)
-# TODO: support logical operators (.AND., ...)
 # TODO: support defined operators (.MYOP., ...)
 #
 __all__ = ['Expr']
@@ -57,6 +56,7 @@ class Op(Enum):
     INDEXING = 210
     CONCAT = 220
     RELATIONAL = 300
+    LOGICAL = 400
     TERMS = 1000
     FACTORS = 2000
     REF = 3000
@@ -91,6 +91,25 @@ class RelOp(Enum):
         return {RelOp.EQ: '==', RelOp.NE: '!=',
                 RelOp.LT: '<', RelOp.LE: '<=',
                 RelOp.GT: '>', RelOp.GE: '>='}[self]
+
+
+class LogicalOp(Enum):
+    """
+    Used in Op.LOGICAL expression to specify the function part.
+    """
+    AND = 1
+    OR = 2
+
+    @classmethod
+    def fromstring(cls, s, language=Language.C):
+        if language is Language.Fortran:
+            return {'.and.': LogicalOp.AND, '.or.': LogicalOp.OR}[s.lower()]
+        return {'&&': LogicalOp.AND, '||': LogicalOp.OR}[s]
+
+    def tostring(self, language=Language.C):
+        if language is Language.Fortran:
+            return {LogicalOp.AND: '.and.', LogicalOp.OR: '.or.'}[self]
+        return {LogicalOp.AND: '&&', LogicalOp.OR: '||'}[self]
 
 
 class ArithOp(Enum):
@@ -224,6 +243,9 @@ class Expr:
             assert isinstance(data, Expr)
         elif op is Op.RELATIONAL:
             # data is (<relop>, <left>, <right>)
+            assert isinstance(data, tuple) and len(data) == 3
+        elif op is Op.LOGICAL:
+            # data is (<logicalop>, <left>, <right>)
             assert isinstance(data, tuple) and len(data) == 3
         else:
             raise NotImplementedError(
@@ -410,6 +432,14 @@ class Expr:
             right = right.tostring(precedence, language=language)
             rop = rop.tostring(language=language)
             r = f'{left} {rop} {right}'
+        elif self.op is Op.LOGICAL:
+            lop, left, right = self.data
+            precedence = (Precedence.LAND if lop is LogicalOp.AND
+                          else Precedence.LOR)
+            left = left.tostring(precedence, language=language)
+            right = right.tostring(precedence, language=language)
+            lop = lop.tostring(language=language)
+            r = f'{left} {lop} {right}'
         else:
             raise NotImplementedError(f'tostring for op {self.op}')
         if parent_precedence.value < precedence.value:
@@ -654,6 +684,11 @@ class Expr:
             left = left.substitute(symbols_map)
             right = right.substitute(symbols_map)
             return normalize(Expr(self.op, (rop, left, right)))
+        if self.op is Op.LOGICAL:
+            lop, left, right = self.data
+            left = left.substitute(symbols_map)
+            right = right.substitute(symbols_map)
+            return normalize(Expr(self.op, (lop, left, right)))
         raise NotImplementedError(f'substitute method for {self.op}: {self!r}')
 
     def traverse(self, visit, *args, **kwargs):
@@ -710,6 +745,11 @@ class Expr:
             left = left.traverse(visit, *args, **kwargs)
             right = right.traverse(visit, *args, **kwargs)
             return normalize(Expr(self.op, (rop, left, right)))
+        elif self.op is Op.LOGICAL:
+            lop, left, right = self.data
+            left = left.traverse(visit, *args, **kwargs)
+            right = right.traverse(visit, *args, **kwargs)
+            return normalize(Expr(self.op, (lop, left, right)))
         raise NotImplementedError(f'traverse method for {self.op}')
 
     def contains(self, other):
@@ -1055,6 +1095,14 @@ def as_ge(left, right):
     return Expr(Op.RELATIONAL, (RelOp.GE, left, right))
 
 
+def as_and(left, right):
+    return Expr(Op.LOGICAL, (LogicalOp.AND, left, right))
+
+
+def as_or(left, right):
+    return Expr(Op.LOGICAL, (LogicalOp.OR, left, right))
+
+
 def as_terms(obj):
     """Return expression as TERMS expression.
     """
@@ -1362,6 +1410,27 @@ class _FromStringWorker:
             expr2 = self.process(expr2)
             return as_ternary(oper, expr1, expr2)
 
+        # logical operations (C: && ||, Fortran: .and. .or.). Split at the
+        # loosest operator first so that || sits above && in the tree, which
+        # matches C/Fortran operator precedence. A greedy leading group makes
+        # the split fall on the rightmost operator, giving left associativity.
+        for lop_name in ('OR', 'AND'):
+            if self.language is Language.Fortran:
+                pat = (r'\A(.+)[.](or)[.](.+)\Z' if lop_name == 'OR'
+                       else r'\A(.+)[.](and)[.](.+)\Z')
+                m = re.match(pat, r, re.I)
+            else:
+                pat = (r'\A(.+)(\|\|)(.+)\Z' if lop_name == 'OR'
+                       else r'\A(.+)(&&)(.+)\Z')
+                m = re.match(pat, r)
+            if m:
+                left, lop, right = m.groups()
+                if self.language is Language.Fortran:
+                    lop = '.' + lop + '.'
+                left, right = self.process(restore((left, right)))
+                lop = LogicalOp.fromstring(lop, language=self.language)
+                return Expr(Op.LOGICAL, (lop, left, right))
+
         # relational expression
         if self.language is Language.Fortran:
             m = re.match(
@@ -1505,6 +1574,17 @@ class _FromStringWorker:
                 # (e.g. used in .pyf files)
                 assert paren == 'SQUARE'
                 return target[args]
+
+        # C type cast, e.g. `(int)v`: a parenthesized type name juxtaposed
+        # with an operand. f2py has no cast node, but the whole subexpression
+        # is a valid opaque C symbol that round-trips to the same string, so
+        # pass it through instead of emitting a spurious "treating ... as
+        # symbol" warning (gh-20771).
+        m = re.match(r'\A(@__f2py_PARENTHESIS_ROUND_\d+@)(.+)\Z', r)
+        if m and m.group(1) in raw_symbols_map:
+            typename = raw_symbols_map[m.group(1)].strip()
+            if re.match(r'\A[A-Za-z_][\w *]*\Z', typename):
+                return as_symbol(self.finalize_string(restore(r)))
 
         # Fortran standard conforming identifier
         m = re.match(r'\A\w[\w\d_]*\Z', r)
