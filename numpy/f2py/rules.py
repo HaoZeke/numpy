@@ -56,6 +56,7 @@ from pathlib import Path
 from . import (
     __version__,
     capi_maps,
+    cb_rules,
     cfuncs,
     common_rules,
     f90mod_rules,
@@ -1429,6 +1430,13 @@ def buildmodule(m, um):
     for u in um:
         ar = use_rules.buildusevars(u, m['use'][u['name']])
         rd = dictappend(rd, ar)
+
+    if cb_rules.cb_returncomplex_needed:
+        if 'F2PY_CB_RETURNCOMPLEX' not in cfuncs.outneeds['includes0']:
+            cfuncs.outneeds['includes0'].insert(0, 'F2PY_CB_RETURNCOMPLEX')
+        # consume the flag so a later module built in the same process
+        # only gets the define from its own callbacks
+        cb_rules.cb_returncomplex_needed = False
 
     needs = cfuncs.get_needs()
     # Add mapped definitions
