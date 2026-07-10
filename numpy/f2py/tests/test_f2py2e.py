@@ -93,6 +93,15 @@ def gh23598_warn(tmpdir_factory):
 
 
 @pytest.fixture(scope="session")
+def gh13356_entry(tmpdir_factory):
+    """F77 file with ENTRY point missing return typespec (gh-13356)."""
+    fdat = util.getpath("tests", "src", "crackfortran", "gh13356.f").read_text()
+    fn = tmpdir_factory.getbasetemp() / "test.for"
+    fn.write_text(fdat, encoding="ascii")
+    return fn
+
+
+@pytest.fixture(scope="session")
 def gh22819_cli(tmpdir_factory):
     """F90 file for testing disallowed CLI arguments in ghff819"""
     fdat = util.getpath("tests", "src", "cli", "gh_22819.pyf").read_text()
@@ -175,6 +184,17 @@ def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
         f2pycli()  # Generate files
         wrapper = foutl.wrap90.read_text()
         assert "intproductf2pywrap, intpr" not in wrapper
+
+
+def test_gh13356_missing_return_typespec(capfd, gh13356_entry, monkeypatch):
+    """ENTRY-derived function without return typespec must not raise KeyError."""
+    ipath = Path(gh13356_entry)
+    monkeypatch.setattr(sys, "argv", f"f2py -m test {ipath}".split())
+    with util.switchdir(ipath.parent):
+        f2pycli()
+    out, err = capfd.readouterr()
+    assert 'vars2fortran: No typespec for argument "ETA1".' in err
+    assert (ipath.parent / "testmodule.c").is_file()
 
 
 def test_gen_pyf(capfd, hello_world_f90, monkeypatch):

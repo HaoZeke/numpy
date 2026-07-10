@@ -1,0 +1,9 @@
+      DOUBLE PRECISION FUNCTION ETA0(TK,X)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION X(*)
+      ETA0 = TK + X(1)
+      RETURN
+      ENTRY ETA1(TK,KK)
+      ETA1 = TK + KK
+      RETURN
+      END

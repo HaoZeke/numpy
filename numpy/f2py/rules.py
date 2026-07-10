@@ -1559,6 +1559,8 @@ stnd = {1: 'st', 2: 'nd', 3: 'rd', 4: 'th', 5: 'th',
 
 def buildapi(rout):
     rout, wrap = func2subr.assubr(rout)
+    if func2subr.missing_function_return_typespec(rout):
+        return {}, wrap
     args, depargs = getargs2(rout)
     capi_maps.depargs = depargs
     var = rout['vars']
