@@ -1474,3 +1474,33 @@ def test_gh9727_binary128_warn(capfd, gh9727_quad, monkeypatch):
     assert 'quadruple precision (binary128) is not supported' in err
     csrc = foutl.cmodf.read_text()
     assert 'WARNING: quadruple precision (binary128) is not supported' in csrc
+
+
+@pytest.fixture(scope="session")
+def gh25728_fortran(tmpdir_factory):
+    """Fortran source for gh-25728 array-size check message."""
+    fdat = util.getpath("tests", "src", "cli", "gh25728.f").read_text()
+    fn = tmpdir_factory.getbasetemp() / "gh25728.f"
+    fn.write_text(fdat, encoding="ascii")
+    return fn
+
+
+def test_gh25728_shape_check_message(capfd, gh25728_fortran, monkeypatch):
+    """Shape equality checks include a calling-convention hint.
+
+    gh-25728
+    CLI :: generated CHECKSCALAR macro for shape() checks
+    """
+    ipath = Path(gh25728_fortran)
+    mname = "param_order"
+    monkeypatch.setattr(sys, "argv", f"f2py -m {mname} {ipath}".split())
+
+    with util.switchdir(ipath.parent):
+        f2pycli()
+        csrc = Path(f"./{mname}module.c").read_text()
+        assert "strstr(tcheck, \"shape(\")" in csrc
+        assert (
+            "Size arguments are hidden or optional and must not be passed "
+            "positionally before their array" in csrc
+        )
+        assert "shape(j_array" in csrc
