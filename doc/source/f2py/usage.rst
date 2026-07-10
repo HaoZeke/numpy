@@ -164,6 +164,18 @@ Common build flags:
   "lapack" and "scalapack" as dependencies and remove them from argv, leaving a
   dependencies list containing ["lapack", "scalapack"].
 
+  Optional keyword arguments for Meson's ``dependency()`` function may be given
+  in brackets. Language is **not** hardcoded for all dependencies (C deps are
+  common for the generated wrappers); request the Fortran variant explicitly
+  when needed::
+
+      --dep "mpi[language=fortran]"
+      --dep "foo[static=true, method=pkg-config]"
+
+  These map to ``dependency('mpi', language: 'fortran')`` and
+  ``dependency('foo', static: true, method: 'pkg-config')`` in the generated
+  ``meson.build``.
+
 .. note::
   
   The ``f2py -c`` option must be applied either to an existing ``.pyf`` file

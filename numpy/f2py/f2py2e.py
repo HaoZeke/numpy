@@ -153,6 +153,15 @@ with the meson backend or above Python 3.12:
                        and remove them from argv, leaving a dependencies list
                        containing ["lapack", "scalapack"].
 
+                       Optional Meson dependency() kwargs may be given in
+                       brackets (language is NOT hardcoded for all deps):
+
+                         --dep "mpi[language=fortran]"
+                         --dep "foo[static=true, method=pkg-config]"
+
+                       map to dependency('mpi', language: 'fortran') and
+                       dependency('foo', static: true, method: 'pkg-config').
+
   --backend            <backend_type>
                        Specify the build backend for the compilation process.
                        The supported backends are 'meson' and 'distutils'.

@@ -11,6 +11,107 @@ from string import Template
 from ._backend import Backend
 
 
+# Match key=value or key: value pairs inside --dep name[...] brackets.
+# Values may be bare words, true/false, quoted strings, or simple lists.
+_DEP_KWARG_RE = re.compile(
+    r"""
+    (\w+)                  # key
+    \s*[:=]\s*             # = or :
+    (
+        true|false|        # booleans
+        '(?:[^'\\]|\\.)*'| # single-quoted string
+        "(?:[^"\\]|\\.)*"| # double-quoted string
+        \[[^\]]*\]|        # simple list literal
+        [^\s,\]]+          # bare token
+    )
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def _meson_format_kwarg_value(raw: str) -> str:
+    """Format a CLI dependency kwarg value as Meson syntax."""
+    val = raw.strip()
+    low = val.lower()
+    if low in ("true", "false"):
+        return low
+    if (val.startswith("'") and val.endswith("'")) or (
+        val.startswith('"') and val.endswith('"')
+    ):
+        # normalize to single quotes
+        return f"'{val[1:-1]}'"
+    if val.startswith("[") and val.endswith("]"):
+        # list of strings/bools/numbers: re-quote string elements lightly
+        inner = val[1:-1].strip()
+        if not inner:
+            return "[]"
+        parts = []
+        for item in re.split(r"\s*,\s*", inner):
+            if not item:
+                continue
+            parts.append(_meson_format_kwarg_value(item))
+        return "[" + ", ".join(parts) + "]"
+    # bare word / number → string if not a plain integer/float
+    if re.fullmatch(r"-?\d+(\.\d+)?", val):
+        return val
+    return f"'{val}'"
+
+
+def format_meson_dependency(dep: str) -> str:
+    """Turn a ``--dep`` token into a Meson ``dependency(...)`` call.
+
+    Bare names::
+
+        lapack  ->  dependency('lapack')
+
+    Optional kwargs (do not hardcode language for all deps; gh-28902)::
+
+        mpi[language=fortran]           -> dependency('mpi', language: 'fortran')
+        mpi[language: 'fortran']        -> dependency('mpi', language: 'fortran')
+        foo[static=true, method=pkg-config]
+            -> dependency('foo', static: true, method: 'pkg-config')
+    """
+    dep = dep.strip()
+    if not dep:
+        raise ValueError("empty --dep value")
+    if "[" not in dep:
+        return f"dependency('{dep}')"
+    if not dep.endswith("]"):
+        raise ValueError(
+            f"invalid --dep syntax {dep!r}: expected name[key=value, ...]"
+        )
+    name, rest = dep.split("[", 1)
+    name = name.strip()
+    if not name:
+        raise ValueError(f"invalid --dep syntax {dep!r}: missing dependency name")
+    kwargs_body = rest[:-1].strip()
+    if not kwargs_body:
+        return f"dependency('{name}')"
+    kwargs = []
+    pos = 0
+    for m in _DEP_KWARG_RE.finditer(kwargs_body):
+        # allow commas/whitespace between pairs
+        gap = kwargs_body[pos:m.start()].strip().strip(",")
+        if gap:
+            raise ValueError(
+                f"invalid --dep syntax {dep!r}: unexpected {gap!r}"
+            )
+        key = m.group(1)
+        val = _meson_format_kwarg_value(m.group(2))
+        kwargs.append(f"{key}: {val}")
+        pos = m.end()
+    trailing = kwargs_body[pos:].strip().strip(",")
+    if trailing:
+        raise ValueError(
+            f"invalid --dep syntax {dep!r}: unexpected {trailing!r}"
+        )
+    if not kwargs:
+        raise ValueError(
+            f"invalid --dep syntax {dep!r}: expected key=value pairs in brackets"
+        )
+    return f"dependency('{name}', {', '.join(kwargs)})"
+
+
 class MesonTemplate:
     """Template meson build file generation class."""
 
@@ -86,8 +187,9 @@ class MesonTemplate:
         )
 
     def deps_substitution(self) -> None:
+        # gh-28902: allow --dep "mpi[language=fortran]" etc.
         self.substitutions["dep_list"] = f",\n{self.indent}".join(
-            [f"{self.indent}dependency('{dep}')," for dep in self.deps]
+            [f"{self.indent}{format_meson_dependency(dep)}," for dep in self.deps]
         )
 
     def libraries_substitution(self) -> None:
