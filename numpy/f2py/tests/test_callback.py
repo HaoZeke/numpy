@@ -260,3 +260,29 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestCBVarargs(util.F2PyTest):
+    # gh-16357: callbacks with *args must receive every argument the
+    # Fortran side provides, not co_argcount's undercount
+    sources = [util.getpath("tests", "src", "callback", "foo.f")]
+
+    def test_varargs_only(self):
+        def cb(*args):
+            return args[0] if args else 42
+
+        r = self.module.t(cb, fun_extra_args=(5,))
+        assert r == 5
+
+    def test_named_plus_varargs(self):
+        # pv's reproducer: the leading named argument must keep its value
+        def cb(a, *args):
+            return a
+
+        r = self.module.t(cb, fun_extra_args=(7,))
+        assert r == 7
+
+    def test_fixed_signature_unchanged(self):
+        r = self.module.t(lambda a: a + 1, fun_extra_args=(9,))
+        assert r == 10
