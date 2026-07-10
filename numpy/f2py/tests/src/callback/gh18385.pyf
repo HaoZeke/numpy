@@ -1,0 +1,25 @@
+python module gh18385__user__routines
+    interface gh18385_user_interface
+        function cb(i) result (r)
+            integer, intent(in) :: i
+            integer :: r
+        end function cb
+    end interface gh18385_user_interface
+end python module gh18385__user__routines
+
+python module gh18385
+    interface
+        subroutine one(r)
+            use gh18385__user__routines
+            intent(callback, hide) cb
+            external cb
+            integer, intent(out) :: r
+        end subroutine one
+        subroutine two(r)
+            use gh18385__user__routines
+            intent(callback, hide) cb
+            external cb
+            integer, intent(out) :: r
+        end subroutine two
+    end interface
+end python module gh18385

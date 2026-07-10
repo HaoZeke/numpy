@@ -650,3 +650,17 @@ class TestCBVarargs(util.F2PyTest):
     def test_fixed_signature_unchanged(self):
         r = self.module.t(lambda a: a + 1, fun_extra_args=(9,))
         assert r == 10
+
+
+@pytest.mark.slow
+class TestSharedHiddenCallback(util.F2PyTest):
+    # gh-18385: a hidden callback shared between routines through an
+    # explicit __user__ module must link and dispatch for both
+    sources = [util.getpath("tests", "src", "callback", "gh18385.pyf"),
+               util.getpath("tests", "src", "callback", "gh18385.f90")]
+    module_name = "gh18385"
+
+    def test_shared_hidden_callback(self):
+        self.module.cb = lambda i: i + 100
+        assert self.module.one() == 101
+        assert self.module.two() == 1020
