@@ -93,6 +93,15 @@ def gh23598_warn(tmpdir_factory):
 
 
 @pytest.fixture(scope="session")
+def gh9727_quad(tmpdir_factory):
+    """F90 with real(kind=16) mapped to C long double (gh-9727)."""
+    fdat = util.getpath("tests", "src", "kind", "gh9727.f90").read_text()
+    fn = tmpdir_factory.getbasetemp() / "gh9727.f90"
+    fn.write_text(fdat, encoding="ascii")
+    return fn
+
+
+@pytest.fixture(scope="session")
 def gh22819_cli(tmpdir_factory):
     """F90 file for testing disallowed CLI arguments in ghff819"""
     fdat = util.getpath("tests", "src", "cli", "gh_22819.pyf").read_text()
@@ -175,6 +184,19 @@ def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
         f2pycli()  # Generate files
         wrapper = foutl.wrap90.read_text()
         assert "intproductf2pywrap, intpr" not in wrapper
+
+
+def test_gh9727_binary128_warn(capfd, gh9727_quad, monkeypatch):
+    """real(kind=16) must warn at wrapper generation, not only at runtime."""
+    foutl = get_io_paths(gh9727_quad, mname="quad")
+    ipath = foutl.f90inp
+    monkeypatch.setattr(sys, "argv", f"f2py -m quad {ipath}".split())
+    with util.switchdir(ipath.parent):
+        f2pycli()
+    _, err = capfd.readouterr()
+    assert 'quadruple precision (binary128) is not supported' in err
+    csrc = foutl.cmodf.read_text()
+    assert 'WARNING: quadruple precision (binary128) is not supported' in csrc
 
 
 def test_gen_pyf(capfd, hello_world_f90, monkeypatch):
