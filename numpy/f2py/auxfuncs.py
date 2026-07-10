@@ -23,7 +23,7 @@ __all__ = [
     'getfortranname', 'getpymethoddef', 'getrestdoc', 'getusercode',
     'getusercode1', 'getdimension', 'hasbody', 'hascallstatement', 'hascommon',
     'hasexternals', 'hasinitvalue', 'hasnote', 'hasresultnote',
-    'isallocatable', 'isarray', 'isarrayofstrings',
+    'isallocatable', 'isarray', 'isarrayofstrings', 'isparameter',
     'ischaracter', 'ischaracterarray', 'ischaracter_or_characterarray',
     'iscomplex', 'iscstyledirective',
     'iscomplexarray', 'iscomplexfunction', 'iscomplexfunction_warn',
@@ -259,6 +259,10 @@ def issigned_long_longarray(var):
 
 def isallocatable(var):
     return 'attrspec' in var and 'allocatable' in var['attrspec']
+
+
+def isparameter(var):
+    return 'attrspec' in var and 'parameter' in var['attrspec']
 
 
 def ismutable(var):

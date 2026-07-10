@@ -200,3 +200,67 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.n_max == 16)
         assert (self.module.f_globals.i_max == 18)
         assert (self.module.f_globals.j_max == 72)
+
+
+def test_gh22511_parameter_attr_parse():
+    # Pure-Python: crackfortran must mark module PARAMETER attrs (gh-22511).
+    from numpy.f2py import crackfortran
+    from numpy.f2py.auxfuncs import isparameter
+
+    fpath = util.getpath("tests", "src", "regression", "gh22511.f90")
+    mod = crackfortran.crackfortran([str(fpath)])
+    assert len(mod) == 1
+    vars_ = mod[0]["vars"]
+    assert isparameter(vars_["my_const"])
+    assert isparameter(vars_["my_real"])
+    assert not isparameter(vars_["mutable_var"])
+
+
+def test_gh22511_parameter_copy_codegen(tmp_path):
+    # Codegen inspection only (no compile): PARAMETER values must be copied
+    # into static module-owned storage, not aliased by address (gh-22511).
+    import shutil
+
+    from numpy.f2py.f2py2e import run_main
+
+    src = util.getpath("tests", "src", "regression", "gh22511.f90")
+    work = tmp_path / "gh22511"
+    work.mkdir()
+    f90 = work / "gh22511.f90"
+    shutil.copy(src, f90)
+
+    with util.switchdir(work):
+        run_main(["-m", "gh22511_test", str(f90.name)])
+
+    c_path = work / "gh22511_testmodule.c"
+    assert c_path.is_file()
+    text = c_path.read_text(encoding="utf-8")
+
+    # PARAMETER scalars: static buffer + memcpy, then .data points at the copy.
+    assert "static char f2py_gh22511_mod_my_const_data[sizeof(int)];" in text
+    assert "memcpy(f2py_gh22511_mod_my_const_data, my_const, sizeof(int));" in text
+    assert (
+        "f2py_gh22511_mod_def[i_f2py++].data = f2py_gh22511_mod_my_const_data;"
+        in text
+    )
+    assert "static char f2py_gh22511_mod_my_real_data[sizeof(float)];" in text
+    assert "memcpy(f2py_gh22511_mod_my_real_data, my_real, sizeof(float));" in text
+
+    # Must not alias the Fortran PARAMETER address directly.
+    assert "f2py_gh22511_mod_def[i_f2py++].data = my_const;" not in text
+    assert "f2py_gh22511_mod_def[i_f2py++].data = my_real;" not in text
+
+    # Mutable module variables keep direct pointer wrapping.
+    assert "f2py_gh22511_mod_def[i_f2py++].data = mutable_var;" in text
+
+
+@pytest.mark.slow
+class TestParameterConstants(util.F2PyTest):
+    # gh-22511: PARAMETER constants must survive init (value copy, not alias).
+    sources = [util.getpath("tests", "src", "regression", "gh22511.f90")]
+
+    def test_parameter_constant_values(self):
+        mod = self.module.gh22511_mod
+        assert int(mod.my_const) == 1234
+        assert abs(float(mod.my_real) - 3.14) < 0.01
+        assert int(mod.mutable_var) == 42
