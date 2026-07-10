@@ -986,6 +986,50 @@ def _resolvenameargspattern(line):
     return None, [], None, None
 
 
+def _data_place_element(var, index_expr, value):
+    """Place a single DATA element into an array's init constructor.
+
+    Handles the form ``data d(i)/value/`` (gh-7189). Only constant 1-based
+    indices into a 1-D constant-extent array are folded into ``var['=']`` as
+    ``(/.../)``. Partial fills are held in ``var['__data_init_parts']`` until
+    every slot is known (or dropped later by analyzevars). Returns the new
+    ``=`` string when complete, else None.
+    """
+    if not re.match(r'\A\d+\Z', index_expr):
+        return None
+    idx1 = int(index_expr)
+    dim = getdimension(var)
+    # getdimension returns e.g. ['2'] from attrspec 'dimension(2)', or None
+    if not dim:
+        return None
+    # 1-D only for constructor rebuild; multi-D element DATA still must not
+    # invent a phantom var name (caller already rewrote to the base name).
+    if len(dim) != 1:
+        return None
+    try:
+        n = int(dim[0])
+    except (TypeError, ValueError):
+        return None
+    if not 1 <= idx1 <= n:
+        return None
+    parts = var.get('__data_init_parts')
+    if parts is None or len(parts) != n:
+        parts = [None] * n
+        current = var.get('=')
+        if (isinstance(current, str) and current.startswith('(/')
+                and current.rstrip().endswith('/)')):
+            parsed = [p.strip() for p in markoutercomma(
+                current.strip()[2:-2]).split('@,@')]
+            if len(parsed) == n:
+                parts = parsed
+    parts[idx1 - 1] = value
+    if all(p is not None for p in parts):
+        var.pop('__data_init_parts', None)
+        return f"(/{', '.join(parts)}/)"
+    var['__data_init_parts'] = parts
+    return None
+
+
 def analyzeline(m, case, line):
     """
     Reads each line in the input file in sequence and updates global vars.
@@ -1443,10 +1487,47 @@ def analyzeline(m, case, line):
                     # Since in any case it is initialized in the Fortran code
                     outmess(f'Comment line in declaration "{l[1]}" is not supported. Skipping.\n')
                     continue
+                # gh-7189: `data d(1)/1/` is an array-element init, not a new
+                # variable named "d(1)". Rewrite to the base name and place the
+                # value into that array's constructor when possible.
+                element_index = None
+                m_el = re.match(r'\A(?P<name>\w+)\s*\((?P<sub>.+)\)\s*\Z', v)
+                if m_el:
+                    v = m_el.group('name')
+                    element_index = m_el.group('sub').strip()
                 vars.setdefault(v, {})
                 vtype = vars[v].get('typespec')
                 vdim = getdimension(vars[v])
                 matches = re.findall(r"\(.*?\)", l[1]) if vtype == 'complex' else l[1].split(',')
+                if element_index is not None:
+                    try:
+                        elem_val = matches[idx]
+                    except IndexError:
+                        if any("*" in m for m in matches):
+                            expanded_list = []
+                            for match in matches:
+                                if "*" in match:
+                                    try:
+                                        multiplier, value = match.split("*")
+                                        expanded_list.extend(
+                                            [value.strip()] * int(multiplier))
+                                    except ValueError:
+                                        expanded_list.append(match.strip())
+                                else:
+                                    expanded_list.append(match.strip())
+                            matches = expanded_list
+                        elem_val = matches[idx]
+                    elem_val = elem_val.strip()
+                    new_val = _data_place_element(vars[v], element_index, elem_val)
+                    if new_val is not None:
+                        current_val = vars[v].get('=')
+                        if current_val and (current_val != new_val):
+                            outmess(
+                                f'analyzeline: changing init expression of "{v}" '
+                                f'("{current_val}") to "{new_val}\"\n')
+                        vars[v]['='] = new_val
+                    last_name = v
+                    continue
                 try:
                     new_val = f"(/{', '.join(matches)}/)" if vdim else matches[idx]
                 except IndexError:
@@ -2589,6 +2670,10 @@ def analyzevars(block):
                 for k in ['public', 'private']:
                     if k in gen:
                         vars[n] = setattrspec(vars.get(n, {}), k)
+    # Drop scratch state left by element-wise DATA folding (gh-7189).
+    for n in list(vars.keys()):
+        if isinstance(vars[n], dict):
+            vars[n].pop('__data_init_parts', None)
     svars = []
     args = block['args']
     for a in args:

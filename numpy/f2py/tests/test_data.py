@@ -1,9 +1,77 @@
+import textwrap
+
 import pytest
 
 import numpy as np
 from numpy.f2py.crackfortran import crackfortran
 
 from . import util
+
+
+class TestModuleIndexedData:
+    """gh-7189: element-indexed DATA in modules must not invent phantom vars."""
+
+    def test_element_indexed_data(self, tmp_path):
+        f_path = tmp_path / "indexed_data.f90"
+        f_path.write_text(textwrap.dedent("""\
+            module minimal
+              integer, dimension(2) :: d
+              data d(1) / 1 /
+              data d(2) / 2 /
+            end module
+        """))
+        mod = crackfortran([str(f_path)])
+        assert len(mod) == 1
+        vars_ = mod[0]["vars"]
+        assert "d" in vars_
+        assert "d(1)" not in vars_
+        assert "d(2)" not in vars_
+        assert vars_["d"]["typespec"] == "integer"
+        assert vars_["d"]["dimension"] == ["2"]
+        assert vars_["d"]["="] == "(/1, 2/)"
+
+    def test_element_indexed_data_implicit_none(self, tmp_path):
+        f_path = tmp_path / "indexed_data_none.f90"
+        f_path.write_text(textwrap.dedent("""\
+            module minimal
+              implicit none
+              integer, dimension(2) :: d
+              data d(1) / 1 /
+              data d(2) / 2 /
+            end module
+        """))
+        mod = crackfortran([str(f_path)])
+        vars_ = mod[0]["vars"]
+        assert set(vars_) == {"d"}
+        assert vars_["d"]["typespec"] == "integer"
+        assert vars_["d"]["="] == "(/1, 2/)"
+
+    def test_whole_array_data_unchanged(self, tmp_path):
+        f_path = tmp_path / "whole_array_data.f90"
+        f_path.write_text(textwrap.dedent("""\
+            module minimal
+              integer, dimension(2) :: d
+              data d / 1, 2 /
+            end module
+        """))
+        mod = crackfortran([str(f_path)])
+        vars_ = mod[0]["vars"]
+        assert set(vars_) == {"d"}
+        # Preserves the historical whole-array constructor spacing.
+        assert vars_["d"]["="] == "(/1,  2/)"
+
+    def test_combined_element_list(self, tmp_path):
+        f_path = tmp_path / "combined_data.f90"
+        f_path.write_text(textwrap.dedent("""\
+            module minimal
+              integer, dimension(2) :: d
+              data d(1), d(2) / 1, 2 /
+            end module
+        """))
+        mod = crackfortran([str(f_path)])
+        vars_ = mod[0]["vars"]
+        assert set(vars_) == {"d"}
+        assert vars_["d"]["="] == "(/1, 2/)"
 
 
 @pytest.mark.slow
