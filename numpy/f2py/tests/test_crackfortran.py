@@ -263,6 +263,51 @@ class TestModuleDeclaration:
         assert mod[0]["vars"]["abar"]["="] == "bar('abar')"
 
 
+class TestISOFortranEnvKinds:
+    # gh-30352: resolve iso_fortran_env named kind parameters (real64, int32,
+    # ...) and their use-renames so kindselectors map to numeric kinds.
+    @staticmethod
+    def _kindselector(mods, modname, subname, varname):
+        for block in mods:
+            if block["name"] != modname:
+                continue
+            for sub in block["body"]:
+                if sub["name"] == subname:
+                    return sub["vars"][varname].get("kindselector")
+        raise AssertionError(f"{modname}:{subname}:{varname} not found")
+
+    def test_iso_fortran_env_kinds(self):
+        fpath = util.getpath("tests", "src", "crackfortran", "gh30352.f90")
+        mods = crackfortran.crackfortran([str(fpath)])
+        ks = self._kindselector
+        # only-list rename: complex(kind=dp), dp => real64  ->  kind 8
+        assert ks(mods, "test_only_rename", "s_complex", "arr") == {"kind": "8"}
+        # bare use imports every kind constant
+        assert ks(mods, "test_bare_use", "s_real", "x") == {"kind": "8"}
+        assert ks(mods, "test_bare_use", "s_int", "y") == {"kind": "4"}
+        # a kind absent from the only-list stays unresolved
+        assert ks(mods, "test_only_missing", "s_unresolved", "x") == {
+            "kind": "real64"
+        }
+
+    def test_resolve_intrinsic_use_scoping(self):
+        # bare use: all constants visible
+        assert crackfortran._resolve_intrinsic_use(
+            "iso_fortran_env", {}, {}
+        ) == {
+            "int8": "1", "int16": "2", "int32": "4", "int64": "8",
+            "real32": "4", "real64": "8", "real128": "16",
+        }
+        # only-list rename maps the local name to the numeric kind
+        assert crackfortran._resolve_intrinsic_use(
+            "iso_fortran_env", {"only": 1, "map": {"dp": "real64"}}, {}
+        ) == {"dp": "8"}
+        # only-list without the requested kind resolves nothing
+        assert crackfortran._resolve_intrinsic_use(
+            "iso_fortran_env", {"only": 1, "map": {"int32": "int32"}}, {}
+        ) == {"int32": "4"}
+
+
 @pytest.mark.slow
 class TestEval(util.F2PyTest):
     def test_eval_scalar(self):
