@@ -468,6 +468,8 @@ def run_main(comline_list):
         comline_list += ['-m', modname]  # needed for the rest of scaninputline
     # gh-22819 -- end
     files, options = scaninputline(comline_list)
+    if 'signsfile' not in options:
+        warn_mixed_pyf_fortran_sources(pyf_files, files)
     auxfuncs.options = options
     capi_maps.load_f2cmap_file(options['f2cmap_file'])
     postlist = callcrackfortran(files, options)
@@ -509,6 +511,36 @@ def run_main(comline_list):
     for mn in ret.keys():
         dict_append(ret[mn], {'csrc': fobjcsrc, 'h': fobjhsrc})
     return ret
+
+
+_FORTRAN_SOURCE_EXTENSIONS = frozenset({
+    '.f', '.for', '.ftn', '.f77',
+    '.f90', '.f95', '.f03', '.f08',
+})
+
+
+def _is_fortran_source(path):
+    return os.path.splitext(path)[1].lower() in _FORTRAN_SOURCE_EXTENSIONS
+
+
+def warn_mixed_pyf_fortran_sources(pyf_files, source_files):
+    """Warn when signature and Fortran sources are passed together."""
+    if not pyf_files:
+        return
+    fortran_sources = [
+        f for f in source_files
+        if f not in pyf_files and _is_fortran_source(f)
+    ]
+    if not fortran_sources:
+        return
+    pyf_list = ', '.join(f'"{p}"' for p in pyf_files)
+    ftn_list = ', '.join(f'"{f}"' for f in fortran_sources)
+    outmess(
+        f'Warning: Signature file(s) {pyf_list} and Fortran source(s) '
+        f'{ftn_list} were specified together. The .pyf directives are '
+        f'ignored because f2py re-derives the signature from the Fortran '
+        f'sources. Pass only the .pyf file(s) to use their signatures.\n'
+    )
 
 
 def filter_files(prefix, suffix, files, remove_prefix=None):

@@ -57,8 +57,14 @@ To construct an extension module, use
 The constructed extension module is saved as ``<modulename>module.c`` to the
 current directory.
 
-Here ``<fortran files>`` may also contain signature files. Among other options
-(see below), the following options can be used in this mode:
+To generate a C wrapper from an edited signature file, pass only the
+``.pyf`` file (the module name is taken from the signature file; ``-m`` is
+not needed). Do not pass Fortran sources together with a ``.pyf`` file:
+f2py re-derives the signature from the Fortran and ignores the ``.pyf``
+directives.
+
+Among other options (see below), the following options can be used in this
+mode:
 
 ``--debug-capi``
   Adds debugging hooks to the extension module. When using this extension
@@ -213,7 +219,11 @@ Other options
   Name of an extension module. Default is ``untitled``.
 
 .. warning::
-   Don't use this option if a signature file (``*.pyf``) is used.
+   When a signature file (``.pyf``) is passed, the module name is read from
+   that file and ``-m`` is ignored. Do not pass Fortran sources together with
+   a ``.pyf`` file: f2py regenerates the signature from the Fortran and the
+   ``.pyf`` directives are silently ignored. Pass only the ``.pyf`` file to
+   generate a wrapper from your edited signatures.
 
    .. versionchanged:: 1.26.3
       Will ignore ``-m`` if a ``pyf`` file is provided.
