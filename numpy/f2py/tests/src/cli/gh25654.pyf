@@ -1,0 +1,8 @@
+python module fibx ! in
+    interface  ! in :fibx
+        subroutine fib(a,n) ! in :fibx:gh25654.f
+            integer intent(out) :: a
+            integer :: n
+        end subroutine fib
+    end interface
+end python module fibx

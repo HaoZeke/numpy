@@ -102,6 +102,19 @@ def gh22819_cli(tmpdir_factory):
 
 
 @pytest.fixture(scope="session")
+def gh25654_mix(tmpdir_factory):
+    """Signature + Fortran sources for gh-25654 mixed-input warning."""
+    fdat = util.getpath("tests", "src", "cli", "gh25654.f").read_text()
+    pdat = util.getpath("tests", "src", "cli", "gh25654.pyf").read_text()
+    base = tmpdir_factory.getbasetemp()
+    fpath = base / "gh25654.f"
+    ppath = base / "gh25654.pyf"
+    fpath.write_text(fdat, encoding="ascii")
+    ppath.write_text(pdat, encoding="ascii")
+    return ppath, fpath
+
+
+@pytest.fixture(scope="session")
 def hello_world_f77(tmpdir_factory):
     """Generates a single f77 file for testing"""
     fdat = util.getpath("tests", "src", "cli", "hi77.f").read_text()
@@ -162,6 +175,24 @@ def test_gh22819_many_pyf(capfd, gh22819_cli, monkeypatch):
     with util.switchdir(ipath.parent):
         with pytest.raises(ValueError, match="Only one .pyf file per call"):
             f2pycli()
+
+
+def test_gh25654_pyf_fortran_mix_warn(capfd, gh25654_mix, monkeypatch):
+    """Warn when .pyf and Fortran sources are passed together.
+
+    gh-25654
+    CLI :: -m with mixed signature and Fortran inputs
+    """
+    ppath, fpath = gh25654_mix
+    monkeypatch.setattr(
+        sys, "argv", f"f2py -m fibx --lower {ppath} {fpath}".split())
+    with util.switchdir(ppath.parent):
+        f2pycli()
+        out, _ = capfd.readouterr()
+        assert "Warning:" in out
+        assert ".pyf directives are ignored" in out
+        assert str(ppath.name) in out
+        assert str(fpath.name) in out
 
 
 def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
