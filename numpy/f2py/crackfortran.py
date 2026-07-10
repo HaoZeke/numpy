@@ -1990,16 +1990,82 @@ def get_useparameters(block, param_map=None):
         params = get_parameters(mvars)
         if not params:
             continue
-        # XXX: apply mapping
-        if mapping:
-            errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
+        only = mapping.get('only', 0) if mapping else 0
+        renames = dict(mapping.get('map', {}) or {}) if mapping else {}
+        if only:
+            # only-list (and renames local => remote): expose listed names only
+            for local, remote in renames.items():
+                remote_l = remote.lower()
+                local_l = local.lower()
+                if remote_l in params:
+                    param_map[local_l] = params[remote_l]
+            continue
         for k, v in list(params.items()):
             if k in param_map:
                 outmess(f'get_useparameters: overriding parameter {k!r} with'
                         f' value from module {usename!r}\n')
             param_map[k] = v
+        for local, remote in renames.items():
+            remote_l = remote.lower()
+            local_l = local.lower()
+            if remote_l in params:
+                param_map[local_l] = params[remote_l]
 
     return param_map
+
+
+def get_use_variables(block):
+    """Return variables made visible by USE of other f90 modules.
+
+    Modules are resolved from ``f90modulevars``, which is filled as each
+    module finishes ``postcrack``. That matches f2py's existing constraint
+    that used modules must appear before their users in the input file list.
+
+    Bare ``use m`` imports every non-private symbol. ``use m, only: ...``
+    (with optional renames ``local => remote``) imports only the listed
+    names. Intrinsic modules that never land in ``f90modulevars`` (for
+    example ``iso_fortran_env``) are skipped here; their kind constants are
+    handled separately by ``get_useparameters``.
+
+    The returned dict is a candidate set: callers should not overwrite
+    names already defined in the using module.
+    """
+    global f90modulevars
+
+    result = {}
+    usedict = get_usedict(block)
+    if not usedict:
+        return result
+    for usename, mapping in list(usedict.items()):
+        usename = usename.lower()
+        if usename not in f90modulevars:
+            continue
+        mvars = f90modulevars[usename]
+        only = 0
+        renames = {}
+        if mapping:
+            only = mapping.get('only', 0)
+            renames = dict(mapping.get('map', {}) or {})
+        if only:
+            for local, remote in renames.items():
+                local_l = local.lower()
+                remote_l = remote.lower()
+                if remote_l not in mvars:
+                    continue
+                if isprivate(mvars[remote_l]):
+                    continue
+                result[local_l] = copy.deepcopy(mvars[remote_l])
+        else:
+            for k, v in mvars.items():
+                if isprivate(v):
+                    continue
+                result.setdefault(k, copy.deepcopy(v))
+            for local, remote in renames.items():
+                local_l = local.lower()
+                remote_l = remote.lower()
+                if remote_l in mvars and not isprivate(mvars[remote_l]):
+                    result[local_l] = copy.deepcopy(mvars[remote_l])
+    return result
 
 
 def postcrack2(block, tab='', param_map=None):
@@ -2040,7 +2106,7 @@ def postcrack(block, args=None, tab=''):
           function return values
           determine expression types if in argument list
     """
-    global usermodules, onlyfunctions
+    global usermodules, onlyfunctions, f90modulevars
 
     if isinstance(block, list):
         gret = []
@@ -2063,6 +2129,15 @@ def postcrack(block, args=None, tab=''):
     block = analyzeargs(block)
     block = analyzecommon(block)
     block['vars'] = analyzevars(block)
+    # gh-3562: fold USE-imported symbols into this module's namespace so
+    # f90mod_rules (and the .pyf) expose them under the using module. Local
+    # definitions win. Register f90modulevars here (not only in analyzebody)
+    # so top-level sibling modules see each other in dependency order.
+    if block.get('block') == 'module' and block.get('name'):
+        for name, var in get_use_variables(block).items():
+            if name not in block['vars']:
+                block['vars'][name] = var
+        f90modulevars[block['name']] = block['vars']
     block['sortvars'] = sortvarnames(block['vars'])
     if block.get('args'):
         args = block['args']
