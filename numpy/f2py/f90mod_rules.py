@@ -110,7 +110,11 @@ def buildhooks(pymod):
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
                 onlyvars.append(n)
-                mfargs.append(n)
+                # Allocatable vars are accessed via getdims helpers, not passed
+                # directly to f2pysetupfunc; listing them in mfargs would emit a
+                # dead `use mod, only : var` (gh-25777 second warning).
+                if not isallocatable(var):
+                    mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
         if len(onlyvars) == 0 and len(notvars) == 1 and m['name'] in notvars:
             outmess(f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n")
