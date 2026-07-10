@@ -1,6 +1,7 @@
 import math
 import platform
 import re
+import subprocess
 import sys
 import textwrap
 import threading
@@ -10,7 +11,7 @@ import traceback
 import pytest
 
 import numpy as np
-from numpy.f2py import crackfortran, f2py2e
+from numpy.f2py import crackfortran
 
 from . import util
 
@@ -265,12 +266,11 @@ class TestCBFortranCallstatement(util.F2PyTest):
 
 
 def _generate_module_c(tmp_path, source, mname):
-    """Run f2py to emit module.c only (no compile)."""
+    """Run f2py via subprocess to emit module.c only (no compile)."""
     fpath = tmp_path / f"{mname}.f90"
     fpath.write_text(textwrap.dedent(source), encoding="ascii")
-    # Prefer in-process generation; fall back to subprocess for isolation.
-    with util.switchdir(tmp_path):
-        f2py2e.run_main(["-m", mname, str(fpath.name)])
+    cmd = [sys.executable, "-m", "numpy.f2py", "-m", mname, str(fpath)]
+    subprocess.check_call(cmd, cwd=tmp_path)
     cpath = tmp_path / f"{mname}module.c"
     assert cpath.is_file(), f"expected generated C wrapper at {cpath}"
     return cpath.read_text(encoding="utf-8")
