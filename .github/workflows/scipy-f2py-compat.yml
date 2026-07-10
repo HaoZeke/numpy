@@ -1,0 +1,171 @@
+# Maintainer-fork gate: build SciPy against this numpy (f2py) and run
+# f2py-heavy SciPy modules. Mirrors the rg.terra harness
+# (Software/NumPy/f2py_campaign_workflow.org + terra_scipy_compat.sh).
+#
+# Runs only on HaoZeke/numpy — never on numpy/numpy (upstream).
+
+name: SciPy f2py compat
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'fix/f2py-**'
+      - 'fix/f2py-*'
+    paths:
+      - 'numpy/f2py/**'
+      - '.github/workflows/scipy-f2py-compat.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'numpy/f2py/**'
+      - '.github/workflows/scipy-f2py-compat.yml'
+
+concurrency:
+  group: scipy-f2py-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scipy-compat:
+    if: github.repository == 'HaoZeke/numpy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # Keep BLAS deterministic without a system OpenBLAS (same idea as terra)
+      UV_SYSTEM_PYTHON: 0
+
+    steps:
+      - name: Checkout numpy (this ref)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+          path: numpy
+          persist-credentials: false
+
+      - name: Checkout scipy main
+        uses: actions/checkout@v4
+        with:
+          repository: scipy/scipy
+          ref: main
+          submodules: recursive
+          fetch-depth: 1
+          path: scipy
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system compilers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gfortran gcc g++ pkg-config
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Create venv + build deps
+        run: |
+          uv venv .venv --python 3.12
+          source .venv/bin/activate
+          uv pip install meson meson-python ninja cython pythran pybind11 \
+            pytest pytest-xdist hypothesis charset-normalizer scipy-openblas32 pooch
+
+      - name: Wire scipy-openblas32 pkg-config
+        run: |
+          source .venv/bin/activate
+          mkdir -p openblas-pc
+          python -c "import scipy_openblas32, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(scipy_openblas32.get_pkg_config())" \
+            openblas-pc/scipy-openblas.pc
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/openblas-pc" >> "$GITHUB_ENV"
+
+      - name: Build and install numpy (this branch)
+        run: |
+          source .venv/bin/activate
+          cd numpy
+          echo "numpy at $(git log --oneline -1)"
+          uv pip install --no-build-isolation . 2>&1 | tee ../numpy-build.log
+          cd ..
+          python -c "import numpy; print('numpy', numpy.__version__)"
+
+      - name: Run numpy.f2py test suite
+        run: |
+          source .venv/bin/activate
+          # Leave source tree to avoid import shadowing
+          python -m pytest --pyargs numpy.f2py -q -n auto --tb=short 2>&1 | tee f2py-tests.log
+          # fail the step if pytest failed
+          python -m pytest --pyargs numpy.f2py -q -n auto --tb=line >/dev/null
+
+      - name: Build and install scipy
+        run: |
+          source .venv/bin/activate
+          cd scipy
+          uv pip install --no-build-isolation . \
+            -Csetup-args=-Dblas=scipy-openblas \
+            -Csetup-args=-Dlapack=scipy-openblas 2>&1 | tee ../scipy-build.log
+          cd ..
+          python -c "import scipy; print('scipy', scipy.__version__)"
+
+      - name: SciPy f2py-heavy modules
+        run: |
+          source .venv/bin/activate
+          set -o pipefail
+          FAIL=0
+          : > scipy-modules.log
+          for MOD in linalg interpolate integrate sparse.linalg; do
+            echo "=== scipy.$MOD ===" | tee -a scipy-modules.log
+            if ! python -m pytest --pyargs "scipy.$MOD" -q -x --tb=short 2>&1 | tee -a scipy-modules.log; then
+              echo "FAIL scipy.$MOD" | tee -a scipy-modules.log
+              FAIL=1
+            else
+              echo "PASS scipy.$MOD" | tee -a scipy-modules.log
+            fi
+          done
+          if [ "$FAIL" -ne 0 ]; then
+            echo "SciPy f2py-heavy modules FAILED" | tee -a scipy-modules.log
+            exit 1
+          fi
+          echo "PASS all scipy f2py-heavy modules" | tee -a scipy-modules.log
+
+      - name: Write summary
+        if: always()
+        run: |
+          source .venv/bin/activate || true
+          {
+            echo "## SciPy f2py compat"
+            echo
+            echo "- repository: \`${{ github.repository }}\`"
+            echo "- ref: \`${{ github.ref }}\`"
+            echo "- sha: \`${{ github.sha }}\`"
+            echo "- numpy: \`$(python -c 'import numpy; print(numpy.__version__)' 2>/dev/null || echo n/a)\`"
+            echo "- scipy: \`$(python -c 'import scipy; print(scipy.__version__)' 2>/dev/null || echo n/a)\`"
+            echo
+            echo "### numpy.f2py (tail)"
+            echo '```'
+            tail -n 20 f2py-tests.log 2>/dev/null || echo "(no f2py log)"
+            echo '```'
+            echo "### scipy modules (tail)"
+            echo '```'
+            tail -n 40 scipy-modules.log 2>/dev/null || echo "(no scipy modules log)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scipy-f2py-compat-${{ github.sha }}
+          path: |
+            numpy-build.log
+            scipy-build.log
+            f2py-tests.log
+            scipy-modules.log
+          if-no-files-found: ignore
+          retention-days: 14
