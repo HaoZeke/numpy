@@ -177,6 +177,43 @@ def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
         assert "intproductf2pywrap, intpr" not in wrapper
 
 
+def test_gh25777_allocatable_accessor_intp(tmpdir_factory, monkeypatch):
+    """Module allocatable accessors must match f2py_init_func (npy_intp dims).
+
+    gh-25777: generated accessors must declare dimensions as ``npy_intp*``,
+    matching ``f2py_init_func`` / ``f2py_set_data_func`` (an ``int*`` there
+    is -Wincompatible-pointer-types and truncates on LP64). The init
+    wrapper must also carry no dead ``use mod, only : <allocatable>``; the
+    getdims helper has its own use-association.
+    """
+    fdat = util.getpath(
+        "tests", "src", "modules", "module_data_docstring.f90"
+    ).read_text()
+    fn = tmpdir_factory.mktemp("gh25777") / "moddata.f90"
+    fn.write_text(fdat, encoding="ascii")
+    mname = "moddata"
+    foutl = get_io_paths(fn, mname=mname)
+    monkeypatch.setattr(sys, "argv", f"f2py -m {mname} {fn}".split())
+
+    with util.switchdir(fn.parent):
+        f2pycli()
+        cmod = foutl.cmodf.read_text()
+        wrapper = foutl.wrap90.read_text()
+
+    # Accessor / setup signatures use npy_intp, not plain int (LP64 width).
+    assert (
+        "void (*b)(int*,npy_intp*,void(*)(char*,npy_intp*),int*)" in cmod
+    )
+    assert "void (*b)(int*,int*,void(*)(char*,int*),int*)" not in cmod
+    assert "void (*)(int*,npy_intp*,void(*)(char*,npy_intp*),int*)" in cmod
+
+    # getdims binds the allocatable; f2pyinit must not also `use` it unused.
+    assert "use mod, only: d => b" in wrapper
+    assert "use mod, only : b" not in wrapper
+    # Non-allocatable module vars still need an explicit use.
+    assert "use mod, only : i" in wrapper
+
+
 def test_gen_pyf(capfd, hello_world_f90, monkeypatch):
     """Ensures that a signature file is generated via the CLI
     CLI :: -h
