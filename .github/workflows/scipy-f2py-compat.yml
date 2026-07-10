@@ -8,21 +8,28 @@ name: SciPy f2py compat
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: >
+          Git ref of HaoZeke/numpy to build (branch or full SHA). Empty uses the
+          workflow ref (the branch you ran the dispatch on).
+        required: false
+        default: ""
   push:
     branches:
-      - 'fix/f2py-**'
-      - 'fix/f2py-*'
+      - "fix/f2py-**"
+      - "fix/f2py-*"
     paths:
-      - 'numpy/f2py/**'
-      - '.github/workflows/scipy-f2py-compat.yml'
+      - "numpy/f2py/**"
+      - ".github/workflows/scipy-f2py-compat.yml"
   pull_request:
     branches: [main]
     paths:
-      - 'numpy/f2py/**'
-      - '.github/workflows/scipy-f2py-compat.yml'
+      - "numpy/f2py/**"
+      - ".github/workflows/scipy-f2py-compat.yml"
 
 concurrency:
-  group: scipy-f2py-compat-${{ github.ref }}
+  group: scipy-f2py-compat-${{ github.ref }}-${{ inputs.ref || github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -33,14 +40,22 @@ jobs:
     if: github.repository == 'HaoZeke/numpy'
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      # Keep BLAS deterministic without a system OpenBLAS (same idea as terra)
-      UV_SYSTEM_PYTHON: 0
 
     steps:
-      - name: Checkout numpy (this ref)
+      - name: Resolve numpy ref
+        id: ref
+        run: |
+          if [ -n "${{ inputs.ref }}" ]; then
+            echo "value=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout numpy (requested ref)
         uses: actions/checkout@v4
         with:
+          repository: HaoZeke/numpy
+          ref: ${{ steps.ref.outputs.value }}
           submodules: recursive
           fetch-depth: 1
           path: numpy
@@ -59,7 +74,7 @@ jobs:
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install system compilers
         run: |
@@ -74,12 +89,14 @@ jobs:
       - name: Create venv + build deps
         run: |
           uv venv .venv --python 3.12
+          # shellcheck disable=SC1091
           source .venv/bin/activate
           uv pip install meson meson-python ninja cython pythran pybind11 \
             pytest pytest-xdist hypothesis charset-normalizer scipy-openblas32 pooch
 
       - name: Wire scipy-openblas32 pkg-config
         run: |
+          # shellcheck disable=SC1091
           source .venv/bin/activate
           mkdir -p openblas-pc
           python -c "import scipy_openblas32, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(scipy_openblas32.get_pkg_config())" \
@@ -88,6 +105,7 @@ jobs:
 
       - name: Build and install numpy (this branch)
         run: |
+          # shellcheck disable=SC1091
           source .venv/bin/activate
           cd numpy
           echo "numpy at $(git log --oneline -1)"
@@ -97,14 +115,14 @@ jobs:
 
       - name: Run numpy.f2py test suite
         run: |
+          # shellcheck disable=SC1091
           source .venv/bin/activate
-          # Leave source tree to avoid import shadowing
+          set -o pipefail
           python -m pytest --pyargs numpy.f2py -q -n auto --tb=short 2>&1 | tee f2py-tests.log
-          # fail the step if pytest failed
-          python -m pytest --pyargs numpy.f2py -q -n auto --tb=line >/dev/null
 
       - name: Build and install scipy
         run: |
+          # shellcheck disable=SC1091
           source .venv/bin/activate
           cd scipy
           uv pip install --no-build-isolation . \
@@ -115,6 +133,7 @@ jobs:
 
       - name: SciPy f2py-heavy modules
         run: |
+          # shellcheck disable=SC1091
           source .venv/bin/activate
           set -o pipefail
           FAIL=0
@@ -137,13 +156,14 @@ jobs:
       - name: Write summary
         if: always()
         run: |
+          # shellcheck disable=SC1091
           source .venv/bin/activate || true
           {
             echo "## SciPy f2py compat"
             echo
             echo "- repository: \`${{ github.repository }}\`"
-            echo "- ref: \`${{ github.ref }}\`"
-            echo "- sha: \`${{ github.sha }}\`"
+            echo "- workflow ref: \`${{ github.ref }}\`"
+            echo "- numpy ref: \`${{ steps.ref.outputs.value }}\`"
             echo "- numpy: \`$(python -c 'import numpy; print(numpy.__version__)' 2>/dev/null || echo n/a)\`"
             echo "- scipy: \`$(python -c 'import scipy; print(scipy.__version__)' 2>/dev/null || echo n/a)\`"
             echo
@@ -161,7 +181,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scipy-f2py-compat-${{ github.sha }}
+          name: scipy-f2py-compat-${{ github.run_id }}
           path: |
             numpy-build.log
             scipy-build.log
