@@ -1,10 +1,14 @@
+import warnings
+
 import pytest
 
 from numpy.f2py.symbolic import (
     ArithOp,
     Expr,
+    ExprWarning,
     Language,
     Op,
+    as_and,
     as_apply,
     as_array,
     as_complex,
@@ -19,6 +23,7 @@ from numpy.f2py.symbolic import (
     as_ne,
     as_number,
     as_numer_denom,
+    as_or,
     as_ref,
     as_string,
     as_symbol,
@@ -182,6 +187,8 @@ class TestSymbolic(util.F2PyTest):
         assert str(as_le(x, y)) == "x .le. y"
         assert str(as_gt(x, y)) == "x .gt. y"
         assert str(as_ge(x, y)) == "x .ge. y"
+        assert str(as_and(x, y)) == "x .and. y"
+        assert str(as_or(x, y)) == "x .or. y"
 
     def test_tostring_c(self):
         language = Language.C
@@ -214,6 +221,13 @@ class TestSymbolic(util.F2PyTest):
         assert as_le(x, y).tostring(language=language) == "x <= y"
         assert as_gt(x, y).tostring(language=language) == "x > y"
         assert as_ge(x, y).tostring(language=language) == "x >= y"
+        assert as_and(x, y).tostring(language=language) == "x && y"
+        assert as_or(x, y).tostring(language=language) == "x || y"
+        # && binds tighter than ||, so || operands need parentheses under &&
+        assert (as_and(as_or(x, y), z).tostring(language=language)
+                == "(x || y) && z")
+        assert (as_or(as_and(x, y), z).tostring(language=language)
+                == "x && y || z")
 
     def test_operations(self):
         x = as_symbol("x")
@@ -390,6 +404,40 @@ class TestSymbolic(util.F2PyTest):
         assert fromstring("x .gt. y", language=Language.Fortran) == as_gt(x, y)
         assert fromstring("x .le. y", language=Language.Fortran) == as_le(x, y)
         assert fromstring("x .ge. y", language=Language.Fortran) == as_ge(x, y)
+
+        assert fromstring("x && y") == as_and(x, y)
+        assert fromstring("x || y") == as_or(x, y)
+        # || binds looser than && and both loosen against relational operators
+        assert fromstring("x && y || z") == as_or(as_and(x, y), z)
+        assert fromstring("x || y && z") == as_or(x, as_and(y, z))
+        assert fromstring("x == 1 && y == 2") == as_and(as_eq(x, as_number(1)),
+                                                        as_eq(y, as_number(2)))
+        assert fromstring("x .and. y", language=Language.Fortran) == \
+            as_and(x, y)
+        assert fromstring("x .or. y", language=Language.Fortran) == as_or(x, y)
+
+    def test_fromstring_c_dimension_exprs_gh20771(self):
+        # gh-20771: SciPy flapack/specfun .pyf files carry C dimension
+        # expressions mixing comparisons, logical operators, ternaries and
+        # casts. These must parse without emitting ExprWarning and round-trip
+        # to equivalent C.
+        exprs = [
+            "(compute_v?(2*(*range=='A'||"
+            "(*range=='I' && iu-il+1==n)?n:0)):0)",
+            "((jobt == 0)&&(jobu == 3)?0:m)",
+            "((jobt == 0)&&(jobu == 3)?0:(jobu == 1?m:n))",
+            "((jobt == 0)&&(jobv == 3)?0:ldv)",
+            "((jobt == 0)&&(jobv == 3)?0:n)",
+            "(int)v+1",
+            "abs((int)v)+2",
+        ]
+        for expr in exprs:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", ExprWarning)
+                parsed = fromstring(expr, language=Language.C)
+                back = parsed.tostring(language=Language.C)
+                # reparsing the emitted C yields the same tree
+                assert fromstring(back, language=Language.C) == parsed, expr
 
     def test_traverse(self):
         x = as_symbol("x")
