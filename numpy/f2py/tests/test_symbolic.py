@@ -469,6 +469,14 @@ class TestSymbolic(util.F2PyTest):
 
         pytest.raises(RuntimeError, lambda: (x * x).linear_solve(x))
 
+        # gh-5506: an expression that as_numer_denom cannot reduce (here the
+        # C parse of `2**n`, i.e. `2 * *n`, carrying an Op.DEREF) is not linear
+        # in n and must surface as RuntimeError, not the raw OpError from
+        # as_numer_denom, so crackfortran's `except RuntimeError` handles it.
+        n = as_symbol("n")
+        deref_bound = fromstring("2**n", language=Language.C)
+        pytest.raises(RuntimeError, lambda: deref_bound.linear_solve(n))
+
     def test_as_numer_denom(self):
         x = as_symbol("x")
         y = as_symbol("y")
