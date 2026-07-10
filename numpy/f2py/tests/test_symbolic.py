@@ -171,6 +171,10 @@ class TestSymbolic(util.F2PyTest):
         assert str(Expr(Op.APPLY, ("f", (x, y), {}))) == "f(x, y)"
         assert str(Expr(Op.INDEXING, ("f", x))) == "f[x]"
 
+        # gh-28628: kind may be an int or a str
+        assert str(as_string('"ABC"', 2)) == '2_"ABC"'
+        assert str(as_string('"ABC"', "MYSTRKIND")) == 'MYSTRKIND_"ABC"'
+
         assert str(as_ternary(x, y, z)) == "merge(y, z, x)"
         assert str(as_eq(x, y)) == "x .eq. y"
         assert str(as_ne(x, y)) == "x .ne. y"
