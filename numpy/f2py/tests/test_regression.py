@@ -200,3 +200,11 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.n_max == 16)
         assert (self.module.f_globals.i_max == 18)
         assert (self.module.f_globals.j_max == 72)
+
+
+class TestGh28605External(util.F2PyTest):
+    """gh-28605: typed external dummy must not break module build."""
+    sources = [util.getpath("tests", "src", "regression", "gh28605_external.f90")]
+
+    def test_build_and_call(self):
+        assert abs(self.module.tcb(lambda: 0.0) - 1.0) < 1e-12

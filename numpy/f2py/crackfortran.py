@@ -1749,7 +1749,8 @@ def updatevars(typespec, selector, attrspec, entitydecl):
         if 'external' in (edecl.get('attrspec') or []) and e in groupcache[groupcounter]['args']:
             if 'externals' not in groupcache[groupcounter]:
                 groupcache[groupcounter]['externals'] = []
-            groupcache[groupcounter]['externals'].append(e)
+            if e not in groupcache[groupcounter]['externals']:
+                groupcache[groupcounter]['externals'].append(e)
         if m.group('after'):
             m1 = lenarraypattern.match(markouterparen(m.group('after')))
             if m1:
@@ -2118,6 +2119,33 @@ def postcrack(block, args=None, tab=''):
                 interface['body'].append(edef)
             elif e in mvars and not isexternal(mvars[e]):
                 interface['vars'][e] = mvars[e]
+            elif (
+                e in mvars
+                and isexternal(mvars[e])
+                and e in (block.get('args') or [])
+                and mvars[e].get('typespec') in {
+                    'real', 'integer', 'complex', 'logical',
+                    'double precision', 'double complex', 'character',
+                }
+            ):
+                # Typed EXTERNAL dummy without interface/call site (gh-28605):
+                # invent a zero-arg function using the declared type as result.
+                fvar = copy.deepcopy(mvars[e])
+                attrs = [a for a in (fvar.get('attrspec') or []) if a != 'external']
+                if attrs:
+                    fvar['attrspec'] = attrs
+                elif 'attrspec' in fvar:
+                    del fvar['attrspec']
+                fblock = {
+                    'block': 'function',
+                    'name': e,
+                    'args': [],
+                    'vars': {e: fvar},
+                    'body': [],
+                    'externals': [],
+                    'interfaced': [],
+                }
+                interface['body'].append(fblock)
         if interface['vars'] or interface['body']:
             block['interfaced'] = interfaced
             mblock = {'block': 'python module', 'body': [
