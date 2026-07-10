@@ -890,6 +890,61 @@ def test_freethreading_compatible(hello_world_f90, monkeypatch):
         assert rout.returncode == 0
 
 
+def test_gh30167_c23_no_empty_prototypes(tmp_path, monkeypatch):
+    """callstatement without callprotoargument must not emit K&R ().
+
+    Under C23, ``()`` means ``(void)``, so calls that pass arguments are
+    constraint violations (gcc 15+).  Codegen-only: run f2py, inspect module.c.
+    """
+    pyf = tmp_path / "gh30167.pyf"
+    pyf.write_text(textwrap.dedent("""\
+        python module gh30167
+            interface
+                subroutine foo(a, b)
+                    !f2py callstatement (*f2py_func)(&a, &b)
+                    integer intent(in) :: a
+                    integer intent(out) :: b
+                end subroutine foo
+            end interface
+        end python module gh30167
+        """), encoding="ascii")
+    monkeypatch.setattr(sys, "argv", f"f2py {pyf}".split())
+    with util.switchdir(tmp_path):
+        f2pycli()
+        text = (tmp_path / "gh30167module.c").read_text(encoding="utf-8")
+
+    # K&R empty parameter list must never appear on f2py_func or the extern.
+    assert "void (*f2py_func)()" not in text
+    assert re.search(r"F_FUNC\s*\(\s*foo\s*,\s*FOO\s*\)\s*\(\s*\)", text) is None
+    # Derived prototype from the signature (int in/out → int*).
+    assert re.search(r"void\s*\(\*f2py_func\)\s*\(\s*int\s*\*\s*,\s*int\s*\*\s*\)", text)
+    assert "(*f2py_func)(&a, &b)" in text
+
+
+def test_gh30167_explicit_callprotoargument(tmp_path, monkeypatch):
+    """Explicit callprotoargument is still honoured over derived types."""
+    pyf = tmp_path / "gh30167_explicit.pyf"
+    pyf.write_text(textwrap.dedent("""\
+        python module gh30167_explicit
+            interface
+                subroutine foo(a, b)
+                    !f2py callstatement (*f2py_func)(&a, &b)
+                    !f2py callprotoargument char*, size_t
+                    integer intent(in) :: a
+                    integer intent(out) :: b
+                end subroutine foo
+            end interface
+        end python module gh30167_explicit
+        """), encoding="ascii")
+    monkeypatch.setattr(sys, "argv", f"f2py {pyf}".split())
+    with util.switchdir(tmp_path):
+        f2pycli()
+        text = (tmp_path / "gh30167_explicitmodule.c").read_text(encoding="utf-8")
+
+    assert "void (*f2py_func)()" not in text
+    assert re.search(r"void\s*\(\*f2py_func\)\s*\(\s*char\s*\*\s*,\s*size_t\s*\)", text)
+
+
 # Numpy distutils flags
 # TODO: These should be tested separately
 
