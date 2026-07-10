@@ -191,6 +191,7 @@ class TestDimSpec(util.F2PyTest):
         integer, intent(in) :: n
         integer, dimension({dimspec}), intent(out) :: a
         integer length
+        a = 0
         length = size(a)
       end function
 
