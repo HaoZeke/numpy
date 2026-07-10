@@ -1450,3 +1450,27 @@ def test_gh13356_missing_return_typespec(capfd, gh13356_entry, monkeypatch):
     out, err = capfd.readouterr()
     assert 'vars2fortran: No typespec for argument "ETA1".' in err
     assert (ipath.parent / "testmodule.c").is_file()
+
+
+    fn.write_text(fdat, encoding="ascii")
+    return fn
+
+
+@pytest.fixture(scope="session")
+def gh9727_quad(tmpdir_factory):
+    """F90 with real(kind=16) mapped to C long double (gh-9727)."""
+    fdat = util.getpath("tests", "src", "kind", "gh9727.f90").read_text()
+    fn = tmpdir_factory.getbasetemp() / "gh9727.f90"
+
+
+def test_gh9727_binary128_warn(capfd, gh9727_quad, monkeypatch):
+    """real(kind=16) must warn at wrapper generation, not only at runtime."""
+    foutl = get_io_paths(gh9727_quad, mname="quad")
+    ipath = foutl.f90inp
+    monkeypatch.setattr(sys, "argv", f"f2py -m quad {ipath}".split())
+    with util.switchdir(ipath.parent):
+        f2pycli()
+    _, err = capfd.readouterr()
+    assert 'quadruple precision (binary128) is not supported' in err
+    csrc = foutl.cmodf.read_text()
+    assert 'WARNING: quadruple precision (binary128) is not supported' in csrc

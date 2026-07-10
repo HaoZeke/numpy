@@ -257,7 +257,7 @@ static int f2py_module_exec(PyObject *m) {
     PyDict_SetItemString(d, \"__version__\", s);
     Py_DECREF(s);
     s = PyUnicode_FromString(
-        \"This module '#modulename#' is auto-generated with f2py (version:#f2py_version#).\\nFunctions:\\n\"\n#docs#\".\");
+        \"This module '#modulename#' is auto-generated with f2py (version:#f2py_version#).\\n#module_doc_warning#Functions:\\n\"\n#docs#\".\");
     PyDict_SetItemString(d, \"__doc__\", s);
     Py_DECREF(s);
     s = PyUnicode_FromString(\"""" + numpy_version + """\");
@@ -1354,6 +1354,7 @@ def buildmodule(m, um):
     """
     Return
     """
+    capi_maps.reset_binary128_warning()
     outmess(f"    Building module \"{m['name']}\"...\n")
     ret = {}
     mod_rules = defmod_rules[:]
@@ -1476,6 +1477,7 @@ def buildmodule(m, um):
         if ('_check' in r and r['_check'](m)) or ('_check' not in r):
             ar = applyrules(r, vrd, m)
             rd = dictappend(rd, ar)
+    rd['module_doc_warning'] = capi_maps.binary128_module_doc_notice()
     ar = applyrules(module_rules, rd)
 
     fn = os.path.join(options['buildpath'], vrd['coutput'])

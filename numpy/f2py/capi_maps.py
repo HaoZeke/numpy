@@ -185,6 +185,44 @@ cformat_map = {'double': '%g',
 
 # Auxiliary functions
 
+_BINARY128_CTYPES = frozenset({'long_double', 'complex_long_double'})
+_BINARY128_WARNING = (
+    'quadruple precision (binary128) is not supported: NumPy has no matching '
+    'dtype; values will be passed as C long double'
+)
+_binary128_seen = False
+
+
+def reset_binary128_warning():
+    global _binary128_seen
+    _binary128_seen = False
+
+
+def binary128_module_doc_notice():
+    if _binary128_seen:
+        return f'WARNING: {_BINARY128_WARNING}.\\n\\n'
+    return ''
+
+
+def _fortran_kind16(var):
+    if 'kindselector' not in var:
+        return False
+    kindselector = var['kindselector']
+    if '*' in kindselector and str(kindselector['*']) == '16':
+        return True
+    if 'kind' in kindselector and str(kindselector['kind']) == '16':
+        return True
+    return False
+
+
+def _warn_binary128_if_needed(var, ctype):
+    global _binary128_seen
+    if ctype not in _BINARY128_CTYPES or not _fortran_kind16(var):
+        return
+    if not _binary128_seen:
+        _binary128_seen = True
+        errmess(f'capi_maps: {_BINARY128_WARNING}\n')
+
 
 def getctype(var):
     """
@@ -236,6 +274,8 @@ def getctype(var):
                                 f'in {os.getcwd()}/.f2py_f2cmap file).\n')
     elif not isexternal(var):
         errmess(f'getctype: No C-type found in "{var}", assuming void.\n')
+    if not (isfunction(var) or issubroutine(var)):
+        _warn_binary128_if_needed(var, ctype)
     return ctype
 
 
