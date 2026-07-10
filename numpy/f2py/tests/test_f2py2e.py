@@ -1035,3 +1035,29 @@ def test_npd_linker():
     """
     # TODO: populate
     pass
+
+
+def test_meson_prepare_sources_in_source_dir(tmp_path, monkeypatch):
+    """Building with --build-dir pointing at the source directory must
+    not raise shutil.SameFileError nor delete the generated sources.
+
+    gh-29762
+    """
+    from numpy.f2py._backends._meson import _prepare_objects, _prepare_sources
+
+    mname = "blah"
+    src = tmp_path / "hi.f90"
+    src.write_text("subroutine hi\nend subroutine\n")
+    genc = tmp_path / f"{mname}module.c"
+    genc.write_text("/* generated */\n")
+    obj = tmp_path / "extra.o"
+    obj.write_text("")
+
+    monkeypatch.chdir(tmp_path)
+    extended = _prepare_sources(mname, [str(src)], str(tmp_path))
+    _prepare_objects(mname, [str(obj)], str(tmp_path))
+
+    assert src.exists()
+    assert genc.exists(), "generated source removed when bdir == source dir"
+    assert obj.exists()
+    assert set(extended) == {"hi.f90", f"{mname}module.c"}
