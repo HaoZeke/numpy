@@ -399,6 +399,7 @@ def callcrackfortran(files, options):
 
 def buildmodules(lst):
     cfuncs.buildcfuncs()
+    cb_rules.cb_returncomplex_needed = False
     outmess('Building modules...\n')
     modules, mnames, isusedby = [], [], {}
     for item in lst:

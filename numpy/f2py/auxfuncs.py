@@ -373,9 +373,8 @@ def iscomplexfunction_warn(rout):
     **************************************************************
         Warning: code with a function returning complex value
         may not work correctly with your Fortran compiler.
-        When using GNU gcc/g77 compilers, codes should work
-        correctly for callbacks with:
-        f2py -c -DF2PY_CB_RETURNCOMPLEX
+        Complex-returning call-back functions define
+        F2PY_CB_RETURNCOMPLEX automatically in generated C.
     **************************************************************\n""")
         return 1
     return 0

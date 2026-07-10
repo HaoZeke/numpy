@@ -513,6 +513,7 @@ cb_arg_rules = [
 
 ################## Build call-back module #############
 cb_map = {}
+cb_returncomplex_needed = False
 
 
 def buildcallbacks(m):
@@ -528,6 +529,10 @@ def buildcallbacks(m):
 
 def buildcallback(rout, um):
     from . import capi_maps
+
+    global cb_returncomplex_needed
+    if iscomplexfunction(rout):
+        cb_returncomplex_needed = True
 
     outmess(f"    Constructing call-back function \"cb_{rout['name']}_in_{um}\"\n")
     args, depargs = getargs(rout)
