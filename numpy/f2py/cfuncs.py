@@ -544,7 +544,7 @@ cppmacros['CHECKSCALAR'] = """
         if (strstr(tcheck, \"shape(\") != NULL) {\\
             PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show \". Size arguments are hidden or optional and must not be passed positionally before their array; see f2py docs on argument lists.\", var);\\
         } else {\\
-            PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show \", var);\\
+            PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, var);\\
         }\\
         /*goto capi_fail;*/\\
     } else """
