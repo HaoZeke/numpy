@@ -2146,6 +2146,30 @@ def postcrack(block, args=None, tab=''):
     return block
 
 
+def _sort_cyclic_dependents(dep, vars):
+    """Order variables in a dependency cycle for initialization.
+
+    When a cycle cannot be resolved topologically, prefer intent(in)
+    arguments (and variables without hide initializers) ahead of hide
+    variables defined via ``=`` expressions.  This keeps input arrays
+    such as ``a`` ahead of ``n = shape(a, 1)`` even when literal masking
+    no longer injects accidental edges (e.g. ``diag = 'N'`` matching
+    ``n`` inside the quotes).
+    """
+    def sort_key(name):
+        var = vars[name]
+        order = 0
+        if isintent_in(var):
+            order -= 100
+        if '=' not in var:
+            order -= 10
+        if isintent_hide(var) and '=' in var:
+            order += 1
+        return (order, dep.index(name))
+
+    return sorted(dep, key=sort_key)
+
+
 def sortvarnames(vars):
     indep = []
     dep = []
@@ -2170,7 +2194,7 @@ def sortvarnames(vars):
                 errmess('sortvarnames: failed to compute dependencies because'
                         ' of cyclic dependencies between '
                         + ', '.join(dep) + '\n')
-                indep = indep + dep
+                indep = indep + _sort_cyclic_dependents(dep, vars)
                 break
         else:
             indep.append(v)
