@@ -1346,6 +1346,7 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
     PyObject *tmp = NULL;
     PyObject *tmp_fun = NULL;
     Py_ssize_t tot, opt, ext, siz, i, di = 0;
+    int has_varargs = 0;
     CFUNCSMESS(\"create_cb_arglist\\n\");
     tot=opt=ext=siz=0;
     /* Get the total number of arguments */
@@ -1425,12 +1426,27 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
     if (PyObject_HasAttrString(tmp_fun,\"__code__\")) {
         if (PyObject_HasAttrString(tmp = PyObject_GetAttrString(tmp_fun,\"__code__\"),\"co_argcount\")) {
             PyObject *tmp_argcount = PyObject_GetAttrString(tmp,\"co_argcount\");
-            Py_DECREF(tmp);
             if (tmp_argcount == NULL) {
+                Py_DECREF(tmp);
                 goto capi_fail;
             }
             tot = PyLong_AsSsize_t(tmp_argcount) - di;
             Py_DECREF(tmp_argcount);
+            /* CO_VARARGS (0x04): the callback accepts *args, so
+               co_argcount undercounts -- pass every argument the
+               Fortran side provides (gh-16357) */
+            if (PyObject_HasAttrString(tmp,\"co_flags\")) {
+                PyObject *tmp_flags = PyObject_GetAttrString(tmp,\"co_flags\");
+                if (tmp_flags == NULL) {
+                    Py_DECREF(tmp);
+                    goto capi_fail;
+                }
+                if (PyLong_AsLong(tmp_flags) & 0x04) {
+                    has_varargs = 1;
+                }
+                Py_DECREF(tmp_flags);
+            }
+            Py_DECREF(tmp);
         }
     }
     /* Get the number of optional arguments */
@@ -1442,6 +1458,9 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
     /* Get the number of extra arguments */
     if (xa != NULL)
         ext = PyTuple_Size((PyObject *)xa);
+    if (has_varargs) {
+        tot = maxnofargs + ext;
+    }
     /* Calculate the size of call-backs argument list */
     siz = MIN(maxnofargs+ext,tot);
     *nofargs = MAX(0,siz-ext);
