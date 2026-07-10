@@ -295,6 +295,7 @@ class MesonBackend(Backend):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dependencies = self.extra_dat.get("dependencies", [])
+        self.cross_files = self.extra_dat.get("cross_files", [])
         self.meson_build_dir = "bbdir"
         self.build_type = (
             "debug" if any("debug" in flag for flag in self.fc_flags) else "release"
@@ -348,6 +349,9 @@ class MesonBackend(Backend):
 
     def run_meson(self, build_dir: Path):
         setup_command = ["meson", "setup", self.meson_build_dir]
+        # gh-28352: first-class --cross-file only (no MESON_ARGS env passthrough)
+        for cross_file in self.cross_files:
+            setup_command.extend(["--cross-file", cross_file])
         self._run_subprocess_command(setup_command, build_dir)
         compile_command = ["meson", "compile", "-C", self.meson_build_dir]
         self._run_subprocess_command(compile_command, build_dir)

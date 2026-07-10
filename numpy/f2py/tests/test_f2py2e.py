@@ -1211,12 +1211,6 @@ def test_npd_lib():
     pass
 
 
-def test_npd_define():
-    """
-    CLI :: -D<define>
-    """
-    # TODO: populate
-    pass
 
 
 def test_npd_undefine():
@@ -1331,3 +1325,75 @@ def test_npd_define(hello_world_f90, monkeypatch):
         f2pycli()
         mbld = Path(f"{odir}/meson.build").read_text()
         assert "'-DPREPEND_FORTRAN'" in mbld
+
+
+def test_cli_meson_cross_file(hello_world_f90, monkeypatch, tmp_path):
+    """CLI :: --cross-file is forwarded to meson setup (gh-28352)
+
+    Compiler-free: capture the meson setup command instead of running it.
+    """
+    from numpy.f2py._backends._meson import MesonBackend
+
+    captured = []
+
+    def fake_run(self, command, cwd):
+        captured.append(list(command))
+
+    monkeypatch.setattr(MesonBackend, "_run_subprocess_command", fake_run)
+    monkeypatch.setattr(MesonBackend, "_move_exec_to_root", lambda self, build_dir: None)
+
+    ipath = Path(hello_world_f90)
+    mname = "blah"
+    odir = "build_cross"
+    # Use absolute paths so meson would accept them if run; we only inspect argv
+    cf1 = str(tmp_path / "cross1.ini")
+    cf2 = str(tmp_path / "cross2.ini")
+    Path(cf1).write_text("[binaries]\n")
+    Path(cf2).write_text("[binaries]\n")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        (
+            f"f2py --backend meson --build-dir {odir} "
+            f"--cross-file {cf1} --cross-file {cf2} "
+            f"-m {mname} -c {ipath}"
+        ).split(),
+    )
+
+    with util.switchdir(ipath.parent):
+        f2pycli()
+        assert captured, "expected meson setup/compile commands"
+        setup_cmd = captured[0]
+        assert setup_cmd[0:3] == ["meson", "setup", "bbdir"]
+        # --cross-file pairs inserted before or after bbdir is fine; meson
+        # accepts either. We append after bbdir in implementation.
+        assert "--cross-file" in setup_cmd
+        # both files present, order preserved
+        idxs = [i for i, x in enumerate(setup_cmd) if x == "--cross-file"]
+        assert len(idxs) == 2
+        assert setup_cmd[idxs[0] + 1] == cf1
+        assert setup_cmd[idxs[1] + 1] == cf2
+        # meson.build still written
+        assert Path(f"{odir}/meson.build").is_file()
+
+
+def test_meson_run_meson_cross_files(tmp_path):
+    """Unit :: run_meson appends --cross-file for each path."""
+    from numpy.f2py._backends._meson import MesonBackend
+
+    commands = []
+    b = object.__new__(MesonBackend)
+    b.meson_build_dir = "bbdir"
+    b.cross_files = ["a.ini", "b.ini"]
+
+    def fake_run(command, cwd):
+        commands.append(list(command))
+
+    b._run_subprocess_command = fake_run
+    b.run_meson(tmp_path)
+    assert commands[0] == [
+        "meson", "setup", "bbdir",
+        "--cross-file", "a.ini",
+        "--cross-file", "b.ini",
+    ]
+    assert commands[1] == ["meson", "compile", "-C", "bbdir"]

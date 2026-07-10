@@ -162,6 +162,12 @@ with the meson backend or above Python 3.12:
                        map to dependency('mpi', language: 'fortran') and
                        dependency('foo', static: true, method: 'pkg-config').
 
+  --cross-file         <path>
+                       Pass a Meson cross file to ``meson setup --cross-file``.
+                       May be given multiple times. First-class flag only;
+                       generic MESON_ARGS env-var passthrough is intentionally
+                       not supported.
+
   --backend            <backend_type>
                        Specify the build backend for the compilation process.
                        The supported backends are 'meson' and 'distutils'.
@@ -578,6 +584,7 @@ def get_newer_options(iline):
 def make_f2py_compile_parser():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--dep", action="append", dest="dependencies")
+    parser.add_argument("--cross-file", action="append", dest="cross_files")
     parser.add_argument("--backend", choices=['meson', 'distutils'], default='distutils')
     parser.add_argument("-m", dest="module_name")
     return parser
@@ -598,6 +605,7 @@ def preparse_sysargv():
 
     return {
         "dependencies": args.dependencies or [],
+        "cross_files": args.cross_files or [],
         "backend": backend_key,
         "modulename": args.module_name,
     }
@@ -614,6 +622,7 @@ def run_compile():
     if modulename is None:
         modulename = 'untitled'
     dependencies = argy["dependencies"]
+    cross_files = argy["cross_files"]
     backend_key = argy["backend"]
     build_backend = f2py_build_generator(backend_key)
 
@@ -741,7 +750,7 @@ def run_compile():
         flib_flags,
         setup_flags,
         remove_build_dir,
-        {"dependencies": dependencies},
+        {"dependencies": dependencies, "cross_files": cross_files},
     )
 
     builder.compile()

@@ -179,6 +179,11 @@ Common build flags:
   ``dependency('foo', static: true, method: 'pkg-config')`` in the generated
   ``meson.build``.
 
+``--cross-file <path>``
+  Pass a Meson cross file to ``meson setup --cross-file``. May be given
+  multiple times. This is a first-class CLI flag only; generic
+  ``MESON_ARGS`` environment-variable passthrough is not supported.
+
 .. note::
   
   The ``f2py -c`` option must be applied either to an existing ``.pyf`` file
