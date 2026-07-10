@@ -11,6 +11,29 @@ from string import Template
 from ._backend import Backend
 
 
+def _quote_meson_arg(arg: str) -> str:
+    """Wrap a compile arg in single quotes for meson if not already quoted."""
+    if arg.startswith("'") and arg.endswith("'"):
+        return arg
+    return f"'{arg}'"
+
+
+def _macros_to_flags(define_macros: list) -> list[str]:
+    """Convert (name, value|None) define_macros to -D compiler flags."""
+    flags = []
+    for item in define_macros:
+        if isinstance(item, tuple):
+            name, value = item
+            if value is None:
+                flags.append(f"-D{name}")
+            else:
+                flags.append(f"-D{name}={value}")
+        else:
+            # bare name or already-formed -D...
+            flags.append(item if str(item).startswith("-D") else f"-D{item}")
+    return flags
+
+
 class MesonTemplate:
     """Template meson build file generation class."""
 
@@ -27,6 +50,7 @@ class MesonTemplate:
         fortran_args: list[str],
         build_type: str,
         python_exe: str,
+        c_args: list[str] | None = None,
     ):
         self.modulename = modulename
         self.build_template_path = (
@@ -43,10 +67,8 @@ class MesonTemplate:
         self.substitutions = {}
         self.objects = object_files
         # Convert args to '' wrapped variant for meson
-        self.fortran_args = [
-            f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
-            for x in fortran_args
-        ]
+        self.fortran_args = [_quote_meson_arg(x) for x in fortran_args]
+        self.c_args = [_quote_meson_arg(x) for x in (c_args or [])]
         self.pipeline = [
             self.initialize_template,
             self.sources_substitution,
@@ -54,6 +76,7 @@ class MesonTemplate:
             self.deps_substitution,
             self.include_substitution,
             self.libraries_substitution,
+            self.c_args_substitution,
             self.fortran_args_substitution,
         ]
         self.build_type = build_type
@@ -117,6 +140,14 @@ class MesonTemplate:
             [f"{self.indent}'''{inc}'''," for inc in self.include_dirs]
         )
 
+    def c_args_substitution(self) -> None:
+        if self.c_args:
+            self.substitutions["c_args"] = (
+                f"{self.indent}c_args: [{', '.join(list(self.c_args))}],"
+            )
+        else:
+            self.substitutions["c_args"] = ""
+
     def fortran_args_substitution(self) -> None:
         if self.fortran_args:
             self.substitutions["fortran_args"] = (
@@ -143,6 +174,8 @@ class MesonBackend(Backend):
             "debug" if any("debug" in flag for flag in self.fc_flags) else "release"
         )
         self.fc_flags = _get_flags(self.fc_flags)
+        # -D macros: forward into both C and Fortran compile args (gh-28648)
+        self.macro_flags = _macros_to_flags(self.define_macros)
 
     def _move_exec_to_root(self, build_dir: Path):
         walk_dir = Path(build_dir) / self.meson_build_dir
@@ -162,6 +195,8 @@ class MesonBackend(Backend):
 
     def write_meson_build(self, build_dir: Path) -> None:
         """Writes the meson build file at specified location"""
+        # Merge -D flags into fortran_args; also emit c_args for C wrappers
+        fortran_args = list(self.fc_flags) + list(self.macro_flags)
         meson_template = MesonTemplate(
             self.modulename,
             self.sources,
@@ -171,9 +206,10 @@ class MesonBackend(Backend):
             self.include_dirs,
             self.extra_objects,
             self.flib_flags,
-            self.fc_flags,
+            fortran_args,
             self.build_type,
             sys.executable,
+            c_args=list(self.macro_flags),
         )
         src = meson_template.generate_meson_build()
         Path(build_dir).mkdir(parents=True, exist_ok=True)

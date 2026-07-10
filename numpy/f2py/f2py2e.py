@@ -168,7 +168,11 @@ Extra options (only effective with -c):
                        See also --help-link switch. [NO_MESON]
 
   -L/path/to/lib/ -l<libname>
-  -D<define> -U<name>
+  -D<macro>[=<value>]  Define preprocessor macro <macro> as <value>
+                       (or as 1 if value is omitted). Under the meson
+                       backend these are passed as -D flags to both the
+                       C and Fortran compilers (c_args / fortran_args).
+  -U<name>             Undefine preprocessor macro <name>
   -I/path/to/include/
   <filename>.o <filename>.so <filename>.a
 
