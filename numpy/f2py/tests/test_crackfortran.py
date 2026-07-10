@@ -287,6 +287,26 @@ class TestStringLiteralDepend:
         # while the one inside the literal is dropped
         assert vs["realdep"]["depend"] == ["badvar2"]
 
+    def test_trcon_literal_masking_and_sort_order(self):
+        # SciPy flapack ?trcon regression: masking ``diag = 'N'`` must not
+        # harvest ``n`` from the literal, yet ``a`` must still precede
+        # ``n = shape(a, 1)`` in sortvars so ``work`` gets ``3*n``.
+        fpath = util.getpath("tests", "src", "crackfortran", "gh28700_trcon.pyf")
+        mod = crackfortran.crackfortran([str(fpath)])
+        iface = next(b for b in mod if b.get("name") == "gh28700_trcon")["body"][0]
+        trcon = next(b for b in iface["body"] if b.get("name") == "trcon")
+        vs = trcon["vars"]
+        assert "depend" not in vs["diag"]
+        assert vs["work"]["dimension"] == ["3 * n"]
+        assert vs["work"]["depend"] == ["n"]
+        assert trcon["sortvars"].index("a") < trcon["sortvars"].index("n")
+
+        lwork_case = next(b for b in iface["body"] if b.get("name") == "trcon_lwork")
+        lvs = lwork_case["vars"]
+        assert lvs["lwork"]["depend"] == ["norm", "n"]
+        assert lvs["lwork"]["="] == "(*norm=='i'?3*n:n)"
+        assert lvs["work"]["dimension"] == ["lwork"]
+
 
 class TestISOFortranEnvKinds:
     # gh-30352: resolve iso_fortran_env named kind parameters (real64, int32,
