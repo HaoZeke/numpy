@@ -14,6 +14,7 @@ import re
 
 from ._isocbind import isoc_kindmap
 from .auxfuncs import (
+    errmess,
     getfortranname,
     isexternal,
     isfunction,
@@ -28,6 +29,20 @@ from .auxfuncs import (
     outmess,
     show,
 )
+
+
+def missing_function_return_typespec(rout):
+    """Return True when a function return variable has no usable typespec."""
+    if not isfunction(rout):
+        return False
+    fname = rout['name']
+    rname = rout.get('result', fname)
+    vars = rout.get('vars', {})
+    if rname in vars and 'typespec' in vars[rname]:
+        return False
+    if fname in vars and 'typespec' in vars[fname]:
+        return False
+    return True
 
 
 def var2fixfortran(vars, a, fa=None, f90mode=None):
@@ -426,6 +441,9 @@ def assubr(rout):
                 f'"{name}"("{fortranname}")...\n')
         rout = copy.copy(rout)
         fname = name
+        if missing_function_return_typespec(rout):
+            errmess(f'vars2fortran: No typespec for argument "{fname}".\n')
+            return rout, ''
         rname = fname
         if 'result' in rout:
             rname = rout['result']

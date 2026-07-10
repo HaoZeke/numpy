@@ -1397,3 +1397,25 @@ def test_meson_run_meson_cross_files(tmp_path):
         "--cross-file", "b.ini",
     ]
     assert commands[1] == ["meson", "compile", "-C", "bbdir"]
+
+
+    fn.write_text(fdat, encoding="ascii")
+    return fn
+
+
+@pytest.fixture(scope="session")
+def gh13356_entry(tmpdir_factory):
+    """F77 file with ENTRY point missing return typespec (gh-13356)."""
+    fdat = util.getpath("tests", "src", "crackfortran", "gh13356.f").read_text()
+    fn = tmpdir_factory.getbasetemp() / "test.for"
+
+
+def test_gh13356_missing_return_typespec(capfd, gh13356_entry, monkeypatch):
+    """ENTRY-derived function without return typespec must not raise KeyError."""
+    ipath = Path(gh13356_entry)
+    monkeypatch.setattr(sys, "argv", f"f2py -m test {ipath}".split())
+    with util.switchdir(ipath.parent):
+        f2pycli()
+    out, err = capfd.readouterr()
+    assert 'vars2fortran: No typespec for argument "ETA1".' in err
+    assert (ipath.parent / "testmodule.c").is_file()
