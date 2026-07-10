@@ -1267,3 +1267,67 @@ def test_meson_prepare_sources_in_source_dir(tmp_path, monkeypatch):
     assert genc.exists(), "generated source removed when bdir == source dir"
     assert obj.exists()
     assert set(extended) == {"hi.f90", f"{mname}module.c"}
+
+
+def test_cli_meson_define_passthrough(hello_world_f90, monkeypatch):
+    """CLI :: -D macros land in meson.build c_args/fortran_args (gh-28648)
+
+    Compiler-free: stub out meson setup/compile so only codegen +
+    meson.build generation run.
+    """
+    from numpy.f2py._backends._meson import MesonBackend
+
+    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
+    monkeypatch.setattr(MesonBackend, "_move_exec_to_root", lambda self, build_dir: None)
+
+    ipath = Path(hello_world_f90)
+    mname = "blah"
+    odir = "build_defines"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        (
+            f"f2py --backend meson --build-dir {odir} -m {mname} "
+            f"-c -DNEW_MODEL_PARM -DFOO=bar {ipath}"
+        ).split(),
+    )
+
+    with util.switchdir(ipath.parent):
+        f2pycli()
+        mbld = Path(f"{odir}/meson.build").read_text()
+        assert "c_args:" in mbld
+        assert "fortran_args:" in mbld
+        assert "'-DNEW_MODEL_PARM'" in mbld
+        assert "'-DFOO=bar'" in mbld
+
+
+def test_meson_macros_to_flags():
+    """Unit :: _macros_to_flags converts define_macros tuples."""
+    from numpy.f2py._backends._meson import _macros_to_flags
+
+    assert _macros_to_flags([("NEW_MODEL_PARM", None), ("FOO", "bar")]) == [
+        "-DNEW_MODEL_PARM",
+        "-DFOO=bar",
+    ]
+
+
+def test_npd_define(hello_world_f90, monkeypatch):
+    """
+    CLI :: -D<define> (meson backend, gh-28648)
+    """
+    from numpy.f2py._backends._meson import MesonBackend
+
+    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
+    monkeypatch.setattr(MesonBackend, "_move_exec_to_root", lambda self, build_dir: None)
+
+    ipath = Path(hello_world_f90)
+    odir = "build_npd_define"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        f"f2py --backend meson --build-dir {odir} -m blah -c -DPREPEND_FORTRAN {ipath}".split(),
+    )
+    with util.switchdir(ipath.parent):
+        f2pycli()
+        mbld = Path(f"{odir}/meson.build").read_text()
+        assert "'-DPREPEND_FORTRAN'" in mbld

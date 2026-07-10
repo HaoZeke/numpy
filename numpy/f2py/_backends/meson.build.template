@@ -59,6 +59,7 @@ ${dep_list}
 ${lib_list}
 ${lib_dir_list}
                      ],
+${c_args}
 ${fortran_args}
 ${link_language}
                      install : true)

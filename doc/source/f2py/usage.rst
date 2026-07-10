@@ -147,9 +147,12 @@ Common build flags:
 ``-l<libname>``
   Use the library ``<libname>`` when linking.
 ``-D<macro>[=<defn=1>]``
-  Define macro ``<macro>`` as ``<defn>``.
+  Define preprocessor macro ``<macro>`` as ``<defn>`` (defaults to ``1``
+  when the value is omitted). With the meson backend these become
+  ``-D`` flags on both C and Fortran compile lines
+  (``c_args`` / ``fortran_args`` in the generated ``meson.build``).
 ``-U<macro>``
-  Define macro ``<macro>``
+  Undefine preprocessor macro ``<macro>``.
 ``-I<dir>``
   Append directory ``<dir>`` to the list of directories searched for include
   files.
