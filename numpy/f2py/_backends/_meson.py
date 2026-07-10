@@ -86,9 +86,31 @@ class MesonTemplate:
         )
 
     def deps_substitution(self) -> None:
-        self.substitutions["dep_list"] = f",\n{self.indent}".join(
-            [f"{self.indent}dependency('{dep}')," for dep in self.deps]
-        )
+        # dependency('openmp') defaults to the C compiler only (gh-27163,
+        # gh-30804). Emit both languages and force the Fortran linker so the
+        # Fortran OpenMP runtime is pulled in (Intel ifx, etc.).
+        deps_list = []
+        has_openmp = False
+        for dep in self.deps:
+            if dep.lower() == "openmp":
+                has_openmp = True
+                deps_list.append(
+                    f"{self.indent}dependency('openmp', language: 'c'),"
+                )
+                deps_list.append(
+                    f"{self.indent}dependency('openmp', language: 'fortran'),"
+                )
+            else:
+                deps_list.append(f"{self.indent}dependency('{dep}'),")
+        # Items already carry self.indent; join with ",\n" only (same pattern as
+        # sources_substitution) so multi-dep lines stay single-indented.
+        self.substitutions["dep_list"] = ",\n".join(deps_list)
+        if has_openmp:
+            self.substitutions["link_language"] = (
+                f"{self.indent}link_language: 'fortran',"
+            )
+        else:
+            self.substitutions["link_language"] = ""
 
     def libraries_substitution(self) -> None:
         self.substitutions["lib_dir_declarations"] = "\n".join(
