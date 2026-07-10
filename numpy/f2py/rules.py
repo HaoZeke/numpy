@@ -1434,6 +1434,9 @@ def buildmodule(m, um):
     if cb_rules.cb_returncomplex_needed:
         if 'F2PY_CB_RETURNCOMPLEX' not in cfuncs.outneeds['includes0']:
             cfuncs.outneeds['includes0'].insert(0, 'F2PY_CB_RETURNCOMPLEX')
+        # consume the flag so a later module built in the same process
+        # only gets the define from its own callbacks
+        cb_rules.cb_returncomplex_needed = False
 
     needs = cfuncs.get_needs()
     # Add mapped definitions
