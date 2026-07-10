@@ -63,6 +63,31 @@ def get_include():
     return os.path.join(os.path.dirname(__file__), 'src')
 
 
+def _fortran_reduce(func_name, obj):
+    """Build the ``__reduce__`` tuple for a ``fortran`` function wrapper.
+
+    Called from ``fortranobject.c``. Function wrappers pickle by
+    reference, like plain Python functions: locate the module exposing
+    ``obj`` under ``func_name`` (gh-21767).
+    """
+    import pickle
+
+    modname = pickle.whichmodule(obj, func_name)
+    mod = sys.modules.get(modname)
+    if mod is None or getattr(mod, func_name, None) is not obj:
+        raise TypeError(
+            f"cannot pickle 'fortran' function {func_name!r}: it is not "
+            f"accessible as a module attribute"
+        )
+    return (_unpickle_fortran_function, (modname, func_name))
+
+
+def _unpickle_fortran_function(modname, func_name):
+    import importlib
+
+    return getattr(importlib.import_module(modname), func_name)
+
+
 def __getattr__(attr):
 
     # Avoid importing things that aren't needed for building
