@@ -264,3 +264,24 @@ class TestParameterConstants(util.F2PyTest):
         assert int(mod.my_const) == 1234
         assert abs(float(mod.my_real) - 3.14) < 0.01
         assert int(mod.mutable_var) == 42
+
+
+@pytest.mark.slow
+class TestBoolLogicalNoCopy(util.F2PyTest):
+    # gh-10117: bool arrays pass to logical(kind=1) dummies without a copy
+    sources = [util.getpath("tests", "src", "regression", "gh10117.f90")]
+
+    def test_bool_inout_no_copy(self):
+        # mutation through intent(inout) is only visible without a copy
+        m = np.array([True, False, True])
+        self.module.bool_flip_first(m, m.size)
+        npt.assert_array_equal(m, [False, False, True])
+
+    def test_bool_intent_in(self):
+        m = np.array([True, False, True, True])
+        assert self.module.bool_count_true(m, m.size) == 3
+
+    def test_int8_still_works(self):
+        b = np.array([1, 0, 1], dtype=np.int8)
+        self.module.bool_flip_first(b, b.size)
+        npt.assert_array_equal(b, [0, 0, 1])
