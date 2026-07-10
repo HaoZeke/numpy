@@ -17,7 +17,7 @@ iso_c_binding_map = {
         'c_long': 'long',  # 'long' <=> 'int' for now
         'c_long_long': 'long_long',
         'c_signed_char': 'signed_char',
-        'c_size_t': 'unsigned',  # size_t <=> 'unsigned' for now
+        'c_size_t': 'npy_uintp',
         'c_int8_t': 'signed_char',  # int8_t <=> 'signed_char' for now
         'c_int16_t': 'short',  # int16_t <=> 'short' for now
         'c_int32_t': 'int',  # int32_t <=> 'int' for now
@@ -31,8 +31,8 @@ iso_c_binding_map = {
         'c_int_fast32_t': 'int',  # int_fast32_t <=> 'int' for now
         'c_int_fast64_t': 'long_long',
         'c_intmax_t': 'long_long',  # intmax_t <=> 'long_long' for now
-        'c_intptr_t': 'long',  # intptr_t <=> 'long' for now
-        'c_ptrdiff_t': 'long',  # ptrdiff_t <=> 'long' for now
+        'c_intptr_t': 'npy_intp',
+        'c_ptrdiff_t': 'npy_intp',
     },
     'real': {
         'c_float': 'float',
