@@ -55,6 +55,7 @@ commonhooks = {'commonhooks': '/*need_commonhooks*/',
 includes0['math.h'] = '#include <math.h>'
 includes0['string.h'] = '#include <string.h>'
 includes0['setjmp.h'] = '#include <setjmp.h>'
+includes0['F2PY_CB_RETURNCOMPLEX'] = '#define F2PY_CB_RETURNCOMPLEX'
 
 includes['arrayobject.h'] = '''#define PY_ARRAY_UNIQUE_SYMBOL PyArray_API
 #include "arrayobject.h"'''

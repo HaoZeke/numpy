@@ -1,14 +1,17 @@
 import math
 import platform
+import re
 import sys
 import textwrap
 import threading
 import time
 import traceback
+from pathlib import Path
 
 import pytest
 
 import numpy as np
+from numpy.f2py.f2py2e import main as f2pycli
 
 from . import util
 
@@ -260,3 +263,36 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+def test_gh7577_complex_callback_codegen(tmp_path, monkeypatch):
+    """Compiler-free check that complex-returning callbacks enable struct ABI."""
+    fpath = util.getpath("tests", "src", "callback", "gh7577.f")
+    mname = "gh7577codegen"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", f"f2py -m {mname} {fpath}".split())
+    f2pycli()
+    csrc = Path(f"{mname}module.c").read_text()
+    define_at = csrc.index("#define F2PY_CB_RETURNCOMPLEX")
+    callback_at = csrc.index("cb_callback_in_complex_cb_test__user__routines")
+    assert define_at < callback_at
+    assert re.search(
+        r"#ifdef F2PY_CB_RETURNCOMPLEX\ncomplex_float\n#else\nvoid\n#endif\n"
+        r" F_FUNC\(callback,CALLBACK\) \(\n"
+        r"#ifndef F2PY_CB_RETURNCOMPLEX\n"
+        r"complex_float \*return_value\n#endif",
+        csrc,
+    )
+    assert "#ifdef F2PY_CB_RETURNCOMPLEX\n    return return_value;" in csrc
+
+
+@pytest.mark.slow
+class TestGH7577ComplexCallback(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh7577.f")]
+
+    def test_complex_callback_return(self):
+        def square(z):
+            return z * z
+
+        r = self.module.complex_cb_test(square, 1j)
+        assert r == -1 + 0j
