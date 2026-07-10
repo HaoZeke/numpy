@@ -31,4 +31,18 @@
             C(j) = A(j)+B(j)
          end do
       end subroutine
+      ! gh-25229
+      subroutine c_add_sizes(a, b, c) bind(c)
+        use iso_c_binding, only: c_size_t
+        integer(c_size_t), intent(in) :: a, b
+        integer(c_size_t), intent(out) :: c
+        c = a + b
+      end subroutine c_add_sizes
+      ! gh-25229
+      subroutine c_diff_ptrs(a, b, c) bind(c)
+        use iso_c_binding, only: c_intptr_t
+        integer(c_intptr_t), intent(in) :: a, b
+        integer(c_intptr_t), intent(out) :: c
+        c = a - b
+      end subroutine c_diff_ptrs
   end module coddity

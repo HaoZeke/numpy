@@ -1005,6 +1005,73 @@ long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
 """
 
 
+cfuncs['npy_intp_from_pyobj'] = """
+static int
+npy_intp_from_pyobj(npy_intp* v, PyObject *obj, const char *errmess)
+{
+    PyObject* tmp = NULL;
+
+    if (PyLong_Check(obj)) {
+        *v = PyLong_AsSsize_t(obj);
+        return !(*v == -1 && PyErr_Occurred());
+    }
+
+    tmp = PyNumber_Long(obj);
+    if (tmp) {
+        *v = PyLong_AsSsize_t(tmp);
+        Py_DECREF(tmp);
+        return !(*v == -1 && PyErr_Occurred());
+    }
+
+    if (PyComplex_Check(obj)) {
+        PyErr_Clear();
+        tmp = PyObject_GetAttrString(obj,\"real\");
+    }
+    else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
+        /*pass*/;
+    }
+    else if (PySequence_Check(obj)) {
+        PyErr_Clear();
+        tmp = PySequence_GetItem(obj, 0);
+    }
+
+    if (tmp) {
+        if (npy_intp_from_pyobj(v, tmp, errmess)) {
+            Py_DECREF(tmp);
+            return 1;
+        }
+        Py_DECREF(tmp);
+    }
+    {
+        PyObject* err = PyErr_Occurred();
+        if (err == NULL) {
+            err = #modulename#_error;
+        }
+        PyErr_SetString(err,errmess);
+    }
+    return 0;
+}
+"""
+
+needs['npy_uintp_from_pyobj'] = ['npy_intp_from_pyobj']
+cfuncs['npy_uintp_from_pyobj'] = """
+static int
+npy_uintp_from_pyobj(npy_uintp* v, PyObject *obj, const char *errmess)
+{
+    npy_intp i = 0;
+    if (npy_intp_from_pyobj(&i, obj, errmess)) {
+        if (i < 0) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "negative value for size_t argument");
+            return 0;
+        }
+        *v = (npy_uintp)i;
+        return 1;
+    }
+    return 0;
+}
+"""
+
 needs['long_long_from_pyobj'] = ['long_long']
 cfuncs['long_long_from_pyobj'] = """
 static int

@@ -54,3 +54,24 @@ def test_process_f2cmap_dict():
     # Assert the result is as expected
     assert res_map == exp_map
     assert res_maptyp == exp_maptyp
+
+
+@pytest.mark.slow
+class TestISOCPointerWidths(util.F2PyTest):
+    # gh-25229: c_size_t/c_intptr_t map to pointer-width npy types, not
+    # to 4-byte 'unsigned'/'long' aliases that truncate on LP64/LLP64
+    sources = [
+        util.getpath("tests", "src", "isocintrin", "isoCtests.f90"),
+    ]
+
+    def test_c_size_t(self):
+        big = 2**33 + 7
+        assert self.module.coddity.c_add_sizes(big, 1) == big + 1
+
+    def test_c_size_t_rejects_negative(self):
+        with pytest.raises(OverflowError):
+            self.module.coddity.c_add_sizes(-1, 1)
+
+    def test_c_intptr_t(self):
+        big = 2**33 + 7
+        assert self.module.coddity.c_diff_ptrs(big, 7) == 2**33

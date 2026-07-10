@@ -47,6 +47,8 @@ c2py_map = {'double': 'float',
             'long': 'int',
             'long_long': 'long',
             'unsigned': 'int',                         # forced casting
+            'npy_intp': 'int',                         # forced casting
+            'npy_uintp': 'int',                        # forced casting
             'complex_float': 'complex',                # forced casting
             'complex_double': 'complex',
             'complex_long_double': 'complex',          # forced casting
@@ -68,6 +70,8 @@ c2capi_map = {'double': 'NPY_DOUBLE',
                 'unsigned_long': 'NPY_ULONG',
                 'long_long': 'NPY_LONGLONG',
                 'unsigned_long_long': 'NPY_ULONGLONG',
+                'npy_intp': 'NPY_INTP',
+                'npy_uintp': 'NPY_UINTP',
                 'complex_float': 'NPY_CFLOAT',
                 'complex_double': 'NPY_CDOUBLE',
                 'complex_long_double': 'NPY_CLONGDOUBLE',
@@ -84,6 +88,8 @@ c2pycode_map = {'double': 'd',
                 'unsigned_short': 'H',
                 'int': 'i',
                 'unsigned': 'I',
+                'npy_intp': 'p',
+                'npy_uintp': 'P',
                 'long': 'l',
                 'unsigned_long': 'L',
                 'long_long': 'q',
@@ -103,6 +109,8 @@ c2buildvalue_map = {'double': 'd',
                     'int': 'i',
                     'long': 'l',
                     'long_long': 'L',
+                    'npy_intp': 'n',
+                    'npy_uintp': 'n',
                     'complex_float': 'N',
                     'complex_double': 'N',
                     'complex_long_double': 'N',
@@ -132,6 +140,20 @@ f2cmap_all = {'real': {'': 'float', '4': 'float', '8': 'double',
 c2pycode_map.update(isoc_c2pycode_map)
 c2py_map.update(iso_c2py_map)
 f2cmap_all, _ = process_f2cmap_dict(f2cmap_all, iso_c_binding_map, c2py_map)
+
+# int_fast16_t/int_fast32_t widths differ between C libraries (glibc uses
+# 8 bytes, MSVC 4), so no static alias is correct everywhere; warn instead
+# of silently using the wrong width (gh-25229).
+_isoc_fast_kinds = frozenset({'c_int_fast16_t', 'c_int_fast32_t'})
+
+
+def _warn_isoc_fast_kind(kind):
+    if kind in _isoc_fast_kinds:
+        errmess(
+            f'getctype: {kind} has a platform-dependent width that f2py '
+            'cannot match statically; the wrapper assumes the exact-width '
+            'kind. Use c_int16_t/c_int32_t (or c_int64_t) instead.\n'
+        )
 # End ISO_C handling
 f2cmap_default = copy.deepcopy(f2cmap_all)
 
@@ -176,6 +198,8 @@ cformat_map = {'double': '%g',
                'long': '%ld',
                'unsigned_long': '%lu',
                'long_long': '%ld',
+               'npy_intp': '%zd',
+               'npy_uintp': '%zu',
                'complex_float': '(%g,%g)',
                'complex_double': '(%g,%g)',
                'complex_long_double': '(%Lg,%Lg)',
@@ -257,6 +281,7 @@ def getctype(var):
                     star = var['kindselector']['*']
                     errmess(f'getctype: "{raw_typespec} * {star}" not supported.\n')
             elif 'kind' in var['kindselector']:
+                _warn_isoc_fast_kind(var['kindselector']['kind'])
                 if typespec + 'kind' in f2cmap_all:
                     f2cmap = f2cmap_all[typespec + 'kind']
                 try:
