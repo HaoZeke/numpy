@@ -768,11 +768,18 @@ dump_attrs(const PyArrayObject *obj)
 }
 #endif
 
+/* A bool input is compatible with integer targets: Fortran LOGICAL maps
+ * onto integer C types (kind=1 -> NPY_BYTE, ...), bool values {0,1} are
+ * valid for every integer width, and for kind=1 the memory layout is
+ * identical so intent(in)/intent(inout) need no copy (gh-10117).  The
+ * elsize checks at the call sites still gate width mismatches.
+ */
 #define ARRAY_ISCOMPATIBLE(arr,type_num)                                \
     ((PyArray_ISINTEGER(arr) && PyTypeNum_ISINTEGER(type_num)) ||     \
      (PyArray_ISFLOAT(arr) && PyTypeNum_ISFLOAT(type_num)) ||         \
      (PyArray_ISCOMPLEX(arr) && PyTypeNum_ISCOMPLEX(type_num)) ||     \
-     (PyArray_ISBOOL(arr) && PyTypeNum_ISBOOL(type_num)) ||           \
+     (PyArray_ISBOOL(arr) &&                                          \
+      (PyTypeNum_ISBOOL(type_num) || PyTypeNum_ISINTEGER(type_num))) || \
      (PyArray_ISSTRING(arr) && PyTypeNum_ISSTRING(type_num)))
 
 static int
