@@ -646,4 +646,56 @@ def buildcallback(rout, um):
                                       'argname': rd['argname']
                                       }
     outmess(f"      {ar['docstrshort']}\n")
+    return rd['name']
+
+
+def build_external_callback(name, parent_rout):
+    """
+    Emit a minimal callback typedef/trampoline for an F77-style ``external``
+    dummy that has no interface block and was never called in the parent body.
+
+    Without this, the wrapper references ``#name#_t`` / ``#maxnofargs#`` that
+    are never defined (gh-22451, gh-24284, gh-28605).
+    """
+    import copy
+
+    um = f"{parent_rout['name']}__user__routines"
+    cbname = f"cb_{name}_in_{um}"
+    from . import capi_maps
+    if cbname in capi_maps.lcb2_map:
+        if um not in cb_map:
+            cb_map[um] = []
+        if not any(n == name for n, _ in cb_map[um]):
+            cb_map[um].append([name, cbname])
+        return cbname
+
+    var = copy.deepcopy(parent_rout.get('vars', {}).get(name, {}))
+    if 'attrspec' in var:
+        var['attrspec'] = [a for a in var['attrspec'] if a != 'external']
+    # Typed external -> function returning that type; untyped -> subroutine.
+    if var.get('typespec'):
+        syn = {
+            'block': 'function',
+            'name': name,
+            'args': [],
+            'vars': {name: var},
+            'body': [],
+            'externals': [],
+            'interfaced': [],
+        }
+    else:
+        syn = {
+            'block': 'subroutine',
+            'name': name,
+            'args': [],
+            'vars': {name: var} if var else {},
+            'body': [],
+            'externals': [],
+            'interfaced': [],
+        }
+    if um not in cb_map:
+        cb_map[um] = []
+    return buildcallback(syn, um)
+
+
 ################## Build call-back function #############

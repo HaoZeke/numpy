@@ -1284,7 +1284,8 @@ def analyzeline(m, case, line):
                     continue
                 if 'externals' not in groupcache[groupcounter]:
                     groupcache[groupcounter]['externals'] = []
-                groupcache[groupcounter]['externals'].append(k)
+                if k not in groupcache[groupcounter]['externals']:
+                    groupcache[groupcounter]['externals'].append(k)
             last_name = k
         groupcache[groupcounter]['vars'] = edecl
         if last_name is not None:
@@ -1749,7 +1750,8 @@ def updatevars(typespec, selector, attrspec, entitydecl):
         if 'external' in (edecl.get('attrspec') or []) and e in groupcache[groupcounter]['args']:
             if 'externals' not in groupcache[groupcounter]:
                 groupcache[groupcounter]['externals'] = []
-            groupcache[groupcounter]['externals'].append(e)
+            if e not in groupcache[groupcounter]['externals']:
+                groupcache[groupcounter]['externals'].append(e)
         if m.group('after'):
             m1 = lenarraypattern.match(markouterparen(m.group('after')))
             if m1:
