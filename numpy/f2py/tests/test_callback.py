@@ -120,6 +120,16 @@ class TestF77Callback(util.F2PyTest):
             res = f(callback, cu, cu.size)
             assert res == 0
 
+    def test_raising_callback_quiet_stderr(self, capfd):
+        # gh-5098: a raising callback must propagate the exception
+        # without dumping diagnostics to stderr
+        def callback():
+            raise RuntimeError("failing on purpose")
+
+        with pytest.raises(RuntimeError, match="failing on purpose"):
+            self.module.t(callback)
+        assert capfd.readouterr().err == ""
+
     def test_threadsafety(self):
         # Segfaults if the callback handling is not threadsafe
 
