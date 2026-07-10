@@ -1,5 +1,7 @@
 import math
 import platform
+import re
+import subprocess
 import sys
 import textwrap
 import threading
@@ -9,6 +11,7 @@ import traceback
 import pytest
 
 import numpy as np
+from numpy.f2py import crackfortran
 
 from . import util
 
@@ -497,3 +500,92 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+def _generate_module_c(tmp_path, source, mname):
+    """Run f2py via subprocess to emit module.c only (no compile)."""
+    fpath = tmp_path / f"{mname}.f90"
+    fpath.write_text(textwrap.dedent(source), encoding="ascii")
+    cmd = [sys.executable, "-m", "numpy.f2py", "-m", mname, str(fpath)]
+    subprocess.check_call(cmd, cwd=tmp_path)
+    cpath = tmp_path / f"{mname}module.c"
+    assert cpath.is_file(), f"expected generated C wrapper at {cpath}"
+    return cpath.read_text(encoding="utf-8")
+
+
+class TestExternalCallbackTypedefCodegen:
+    """Compiler-free codegen checks for external-without-interface callbacks.
+
+    Root cause (gh-22451 / gh-24284 / gh-28605): an F77-style ``external``
+    dummy never called in the parent body gets no ``lcb_map`` entry, so the
+    wrapper emits an undeclared ``*_t`` typedef and leaves ``#maxnofargs#`` /
+    ``#nofoptargs#`` unsubstituted.
+    """
+
+    def test_gh22451_forwarded_external_emits_callback_typedef(self, tmp_path):
+        # 15-line MWE from gh-22451: myfun2 is passed onward, never called.
+        source = """
+        function fun1(myfun1)
+            implicit none
+            real(8) :: fun1
+            real(8), external :: myfun1
+            fun1 = myfun1(1)
+            return
+        end function fun1
+
+        function fun2(b, myfun2)
+            implicit none
+            real(8) :: b, fun2
+            real(8), external :: myfun2, fun1
+            b = fun1(myfun2)
+            fun2 = b
+            return
+        end function fun2
+        """
+        csrc = _generate_module_c(tmp_path, source, "gh22451")
+        assert "#maxnofargs#" not in csrc
+        assert "#nofoptargs#" not in csrc
+        # Must not emit a bare myfun2_t; the proper cb_* name is required.
+        assert re.search(r"(?<![\w])myfun2_t\b", csrc) is None
+        assert "cb_myfun2_in_fun2__user__routines_t" in csrc
+        assert "typedef struct" in csrc
+        assert re.search(
+            r"create_cb_arglist\([^;]*myfun2[^;]*,\s*0\s*,\s*0\s*,",
+            csrc,
+        )
+
+    def test_gh28605_dup_external_emits_callback_typedef(self, tmp_path):
+        # external p + real*8 p used to yield externals=['p','p'] and bare p_t.
+        source = """
+        real*8 function tcb(p)
+          external p
+          real*8 p, a(6), c(6)
+          integer i
+          a = [(i, i = 1, 6)]
+          c = [(i, i = 1, 6)]
+          tcb = 1.0
+          return
+        end function tcb
+        """
+        csrc = _generate_module_c(tmp_path, source, "gh28605")
+        assert "#maxnofargs#" not in csrc
+        assert "#nofoptargs#" not in csrc
+        assert re.search(r"(?<![\w_])p_t\b", csrc) is None
+        assert "cb_p_in_tcb__user__routines_t" in csrc
+        assert re.search(
+            r"create_cb_arglist\([^;]*p_cb[^;]*,\s*0\s*,\s*0\s*,",
+            csrc,
+        )
+
+    def test_gh28605_externals_dedup_in_crack(self, tmp_path):
+        fpath = tmp_path / "tcb.f90"
+        fpath.write_text(textwrap.dedent("""
+        real*8 function tcb(p)
+          external p
+          real*8 p
+          tcb = 1.0
+        end function tcb
+        """), encoding="ascii")
+        post = crackfortran.crackfortran([str(fpath)])
+        tcb = next(b for b in post if b.get("name") == "tcb")
+        assert tcb["externals"] == ["p"]

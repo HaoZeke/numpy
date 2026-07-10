@@ -622,10 +622,21 @@ def routsign2map(rout):
                                 ln = k
                                 break
                     lcb_map[ln] = un[1]
-    elif rout.get('externals'):
-        externals = rout['externals']
-        errmess(f"routsign2map: Confused: function {ret['name']} has externals "
-                f'{externals!r} but no "use" statement.\n')
+    # Dedup externals (e.g. ``external p`` + ``real*8 p`` both append; gh-28605)
+    if rout.get('externals'):
+        seen = set()
+        uniq = []
+        for e in rout['externals']:
+            if e not in seen:
+                seen.add(e)
+                uniq.append(e)
+        rout['externals'] = uniq
+        # Externals without an interface/use never get an lcb entry; synthesize
+        # a minimal callback typedef so generated C is well-formed (gh-22451).
+        for e in uniq:
+            if e not in lcb_map:
+                cbname = cb_rules.build_external_callback(e, rout)
+                lcb_map[e] = cbname
     ret['callprotoargument'] = getcallprotoargument(rout, lcb_map) or ''
     if isfunction(rout):
         if 'result' in rout:
