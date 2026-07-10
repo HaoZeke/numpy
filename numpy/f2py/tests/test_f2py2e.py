@@ -177,7 +177,7 @@ def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
         assert "intproductf2pywrap, intpr" not in wrapper
 
 
-def test_gh25777_allocatable_accessor_intp(tmpdir_factory, monkeypatch):
+def test_gh25777_allocatable_accessor_intp(tmp_path_factory, monkeypatch):
     """Module allocatable accessors must match f2py_init_func (npy_intp dims).
 
     gh-25777: generated accessors must declare dimensions as ``npy_intp*``,
@@ -189,7 +189,7 @@ def test_gh25777_allocatable_accessor_intp(tmpdir_factory, monkeypatch):
     fdat = util.getpath(
         "tests", "src", "modules", "module_data_docstring.f90"
     ).read_text()
-    fn = tmpdir_factory.mktemp("gh25777") / "moddata.f90"
+    fn = tmp_path_factory.mktemp("gh25777") / "moddata.f90"
     fn.write_text(fdat, encoding="ascii")
     mname = "moddata"
     foutl = get_io_paths(fn, mname=mname)
