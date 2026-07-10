@@ -198,13 +198,26 @@ class MesonBackend(Backend):
         self._move_exec_to_root(self.build_dir)
 
 
+def _copy_to_build_dir(source, bdir):
+    """Copy ``source`` into ``bdir``; a no-op when ``source`` already
+    lives there (the build dir may be the source dir, gh-29762).
+
+    Returns True when a copy was made.
+    """
+    src = Path(source).resolve()
+    dest = (Path(bdir) / Path(source).name).resolve()
+    if src == dest:
+        return False
+    shutil.copy(source, dest)
+    return True
+
 def _prepare_sources(mname, sources, bdir):
     extended_sources = sources.copy()
     Path(bdir).mkdir(parents=True, exist_ok=True)
     # Copy sources
     for source in sources:
         if Path(source).exists() and Path(source).is_file():
-            shutil.copy(source, bdir)
+            _copy_to_build_dir(source, bdir)
     generated_sources = [
         Path(f"{mname}module.c"),
         Path(f"{mname}-f2pywrappers2.f90"),
@@ -213,9 +226,10 @@ def _prepare_sources(mname, sources, bdir):
     bdir = Path(bdir)
     for generated_source in generated_sources:
         if generated_source.exists():
-            shutil.copy(generated_source, bdir / generated_source.name)
+            # only remove the original when it was copied elsewhere
+            if _copy_to_build_dir(generated_source, bdir):
+                generated_source.unlink()
             extended_sources.append(generated_source.name)
-            generated_source.unlink()
     extended_sources = [
         Path(source).name
         for source in extended_sources
@@ -228,7 +242,7 @@ def _prepare_objects(mname, objects, bdir):
     # Copy objects
     for obj in objects:
         if Path(obj).exists() and Path(obj).is_file():
-            shutil.copy(obj, bdir)
+            _copy_to_build_dir(obj, bdir)
 
 def _get_flags(fc_flags):
     flag_values = []
