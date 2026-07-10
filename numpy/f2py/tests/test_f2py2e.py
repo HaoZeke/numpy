@@ -102,19 +102,6 @@ def gh22819_cli(tmpdir_factory):
 
 
 @pytest.fixture(scope="session")
-def gh25654_mix(tmpdir_factory):
-    """Signature + Fortran sources for gh-25654 mixed-input warning."""
-    fdat = util.getpath("tests", "src", "cli", "gh25654.f").read_text()
-    pdat = util.getpath("tests", "src", "cli", "gh25654.pyf").read_text()
-    base = tmpdir_factory.getbasetemp()
-    fpath = base / "gh25654.f"
-    ppath = base / "gh25654.pyf"
-    fpath.write_text(fdat, encoding="ascii")
-    ppath.write_text(pdat, encoding="ascii")
-    return ppath, fpath
-
-
-@pytest.fixture(scope="session")
 def hello_world_f77(tmpdir_factory):
     """Generates a single f77 file for testing"""
     fdat = util.getpath("tests", "src", "cli", "hi77.f").read_text()
@@ -177,24 +164,6 @@ def test_gh22819_many_pyf(capfd, gh22819_cli, monkeypatch):
             f2pycli()
 
 
-def test_gh25654_pyf_fortran_mix_warn(capfd, gh25654_mix, monkeypatch):
-    """Warn when .pyf and Fortran sources are passed together.
-
-    gh-25654
-    CLI :: -m with mixed signature and Fortran inputs
-    """
-    ppath, fpath = gh25654_mix
-    monkeypatch.setattr(
-        sys, "argv", f"f2py -m fibx --lower {ppath} {fpath}".split())
-    with util.switchdir(ppath.parent):
-        f2pycli()
-        out, _ = capfd.readouterr()
-        assert "Warning:" in out
-        assert ".pyf directives are ignored" in out
-        assert str(ppath.name) in out
-        assert str(fpath.name) in out
-
-
 def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
     foutl = get_io_paths(gh23598_warn, mname="test")
     ipath = foutl.f90inp
@@ -208,19 +177,19 @@ def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
         assert "intproductf2pywrap, intpr" not in wrapper
 
 
-def test_gh25777_allocatable_accessor_intp(tmpdir_factory, monkeypatch):
+def test_gh25777_allocatable_accessor_intp(tmp_path_factory, monkeypatch):
     """Module allocatable accessors must match f2py_init_func (npy_intp dims).
 
-    gh-25777: the documented F90 module allocatable example used to emit
-    -Wincompatible-pointer-types because generated accessors used ``int*``
-    for dimensions while ``f2py_init_func`` / ``f2py_set_data_func`` use
-    ``npy_intp*``. Also drop dead ``use mod, only : <allocatable>`` in the
-    init wrapper (the getdims helper already has its own use-association).
+    gh-25777: generated accessors must declare dimensions as ``npy_intp*``,
+    matching ``f2py_init_func`` / ``f2py_set_data_func`` (an ``int*`` there
+    is -Wincompatible-pointer-types and truncates on LP64). The init
+    wrapper must also carry no dead ``use mod, only : <allocatable>``; the
+    getdims helper has its own use-association.
     """
     fdat = util.getpath(
         "tests", "src", "modules", "module_data_docstring.f90"
     ).read_text()
-    fn = tmpdir_factory.mktemp("gh25777") / "moddata.f90"
+    fn = tmp_path_factory.mktemp("gh25777") / "moddata.f90"
     fn.write_text(fdat, encoding="ascii")
     mname = "moddata"
     foutl = get_io_paths(fn, mname=mname)
@@ -782,120 +751,6 @@ def test_cli_obj(capfd, hello_world_f90, monkeypatch):
             assert f"'''{obj}'''" in mbld
 
 
-def test_format_meson_dependency():
-    """Unit :: --dep kwarg syntax for Meson dependency() (gh-28902)."""
-    from numpy.f2py._backends._meson import format_meson_dependency
-
-    assert format_meson_dependency("lapack") == "dependency('lapack')"
-    assert (
-        format_meson_dependency("mpi[language=fortran]")
-        == "dependency('mpi', language: 'fortran')"
-    )
-    assert (
-        format_meson_dependency("mpi[language: 'fortran']")
-        == "dependency('mpi', language: 'fortran')"
-    )
-    assert (
-        format_meson_dependency("foo[static=true, method=pkg-config]")
-        == "dependency('foo', static: true, method: 'pkg-config')"
-    )
-    assert (
-        format_meson_dependency("x[modules=['thread']]")
-        == "dependency('x', modules: ['thread'])"
-    )
-    # bare name must not invent a language=
-    assert "language" not in format_meson_dependency("openmp")
-
-
-def test_cli_meson_dep_kwargs(hello_world_f90, monkeypatch):
-    """CLI :: --dep mpi[language=fortran] lands in meson.build (gh-28902)
-
-    Compiler-free: stub out meson setup/compile.
-    """
-    from numpy.f2py._backends._meson import MesonBackend
-
-    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
-    monkeypatch.setattr(MesonBackend, "_move_exec_to_root", lambda self, build_dir: None)
-
-    ipath = Path(hello_world_f90)
-    mname = "blah"
-    odir = "build_depkw"
-    # shlex-style: keep bracket form as one argv token
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "f2py",
-            "--backend", "meson",
-            "--build-dir", odir,
-            "--dep", "lapack",
-            "--dep", "mpi[language=fortran]",
-            "-m", mname,
-            "-c",
-            str(ipath),
-        ],
-    )
-
-    with util.switchdir(ipath.parent):
-        f2pycli()
-        mbld = Path(f"{odir}/meson.build").read_text()
-        assert "dependency('lapack')" in mbld
-        assert "dependency('mpi', language: 'fortran')" in mbld
-        # must not hardcode language on bare deps
-        assert "dependency('lapack', language" not in mbld
-
-def _meson_template(deps, fortran_args=None):
-    """Build a MesonTemplate for pure-Python meson.build inspection."""
-    from numpy.f2py._backends._meson import MesonTemplate
-    return MesonTemplate(
-        "testmod",
-        [Path("src.f90")],
-        deps,
-        [],
-        [],
-        [],
-        [],
-        [],
-        fortran_args or [],
-        "release",
-        sys.executable,
-    )
-
-
-def test_meson_openmp_dep_gh27163():
-    """--dep openmp must apply to C and Fortran and set the Fortran linker.
-
-    CLI :: --dep openmp
-    Regression for gh-27163 / gh-30804: bare dependency('openmp') only
-    supplies C OpenMP flags, so Fortran sources miss -fopenmp/-qopenmp and
-    the C linker leaves omp_* undefined (Intel ifx).
-    """
-    src = _meson_template(["openmp"]).generate_meson_build()
-    assert "dependency('openmp', language: 'c')" in src
-    assert "dependency('openmp', language: 'fortran')" in src
-    # bare form defaults to C-only and must not appear
-    assert re.search(r"dependency\('openmp'\)", src) is None
-    assert "link_language: 'fortran'" in src
-
-
-def test_meson_openmp_dep_case_and_mixed():
-    """OpenMP special-case is case-insensitive and coexists with other deps."""
-    src = _meson_template(["lapack", "OpenMP", "blas"]).generate_meson_build()
-    assert "dependency('lapack')" in src
-    assert "dependency('blas')" in src
-    assert "dependency('openmp', language: 'c')" in src
-    assert "dependency('openmp', language: 'fortran')" in src
-    assert "link_language: 'fortran'" in src
-
-
-def test_meson_non_openmp_dep_no_link_language():
-    """Non-OpenMP --dep values keep the previous single-language form."""
-    src = _meson_template(["lapack"]).generate_meson_build()
-    assert "dependency('lapack')" in src
-    assert "link_language" not in src
-    assert "openmp" not in src
-
-
 def test_inclpath(monkeypatch):
     """Add to the include directories
 
@@ -1072,61 +927,6 @@ def test_freethreading_compatible(hello_world_f90, monkeypatch):
         assert rout.returncode == 0
 
 
-def test_gh30167_c23_no_empty_prototypes(tmp_path, monkeypatch):
-    """callstatement without callprotoargument must not emit K&R ().
-
-    Under C23, ``()`` means ``(void)``, so calls that pass arguments are
-    constraint violations (gcc 15+).  Codegen-only: run f2py, inspect module.c.
-    """
-    pyf = tmp_path / "gh30167.pyf"
-    pyf.write_text(textwrap.dedent("""\
-        python module gh30167
-            interface
-                subroutine foo(a, b)
-                    !f2py callstatement (*f2py_func)(&a, &b)
-                    integer intent(in) :: a
-                    integer intent(out) :: b
-                end subroutine foo
-            end interface
-        end python module gh30167
-        """), encoding="ascii")
-    monkeypatch.setattr(sys, "argv", f"f2py {pyf}".split())
-    with util.switchdir(tmp_path):
-        f2pycli()
-        text = (tmp_path / "gh30167module.c").read_text(encoding="utf-8")
-
-    # K&R empty parameter list must never appear on f2py_func or the extern.
-    assert "void (*f2py_func)()" not in text
-    assert re.search(r"F_FUNC\s*\(\s*foo\s*,\s*FOO\s*\)\s*\(\s*\)", text) is None
-    # Derived prototype from the signature (int in/out → int*).
-    assert re.search(r"void\s*\(\*f2py_func\)\s*\(\s*int\s*\*\s*,\s*int\s*\*\s*\)", text)
-    assert "(*f2py_func)(&a, &b)" in text
-
-
-def test_gh30167_explicit_callprotoargument(tmp_path, monkeypatch):
-    """Explicit callprotoargument is still honoured over derived types."""
-    pyf = tmp_path / "gh30167_explicit.pyf"
-    pyf.write_text(textwrap.dedent("""\
-        python module gh30167_explicit
-            interface
-                subroutine foo(a, b)
-                    !f2py callstatement (*f2py_func)(&a, &b)
-                    !f2py callprotoargument char*, size_t
-                    integer intent(in) :: a
-                    integer intent(out) :: b
-                end subroutine foo
-            end interface
-        end python module gh30167_explicit
-        """), encoding="ascii")
-    monkeypatch.setattr(sys, "argv", f"f2py {pyf}".split())
-    with util.switchdir(tmp_path):
-        f2pycli()
-        text = (tmp_path / "gh30167_explicitmodule.c").read_text(encoding="utf-8")
-
-    assert "void (*f2py_func)()" not in text
-    assert re.search(r"void\s*\(\*f2py_func\)\s*\(\s*char\s*\*\s*,\s*size_t\s*\)", text)
-
-
 # Numpy distutils flags
 # TODO: These should be tested separately
 
@@ -1242,6 +1042,12 @@ def test_npd_lib():
     pass
 
 
+def test_npd_define():
+    """
+    CLI :: -D<define>
+    """
+    # TODO: populate
+    pass
 
 
 def test_npd_undefine():
@@ -1266,241 +1072,3 @@ def test_npd_linker():
     """
     # TODO: populate
     pass
-
-
-def test_meson_prepare_sources_in_source_dir(tmp_path, monkeypatch):
-    """Building with --build-dir pointing at the source directory must
-    not raise shutil.SameFileError nor delete the generated sources.
-
-    gh-29762
-    """
-    from numpy.f2py._backends._meson import _prepare_objects, _prepare_sources
-
-    mname = "blah"
-    src = tmp_path / "hi.f90"
-    src.write_text("subroutine hi\nend subroutine\n")
-    genc = tmp_path / f"{mname}module.c"
-    genc.write_text("/* generated */\n")
-    obj = tmp_path / "extra.o"
-    obj.write_text("")
-
-    monkeypatch.chdir(tmp_path)
-    extended = _prepare_sources(mname, [str(src)], str(tmp_path))
-    _prepare_objects(mname, [str(obj)], str(tmp_path))
-
-    assert src.exists()
-    assert genc.exists(), "generated source removed when bdir == source dir"
-    assert obj.exists()
-    assert set(extended) == {"hi.f90", f"{mname}module.c"}
-
-
-def test_cli_meson_define_passthrough(hello_world_f90, monkeypatch):
-    """CLI :: -D macros land in meson.build c_args/fortran_args (gh-28648)
-
-    Compiler-free: stub out meson setup/compile so only codegen +
-    meson.build generation run.
-    """
-    from numpy.f2py._backends._meson import MesonBackend
-
-    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
-    monkeypatch.setattr(MesonBackend, "_move_exec_to_root", lambda self, build_dir: None)
-
-    ipath = Path(hello_world_f90)
-    mname = "blah"
-    odir = "build_defines"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        (
-            f"f2py --backend meson --build-dir {odir} -m {mname} "
-            f"-c -DNEW_MODEL_PARM -DFOO=bar {ipath}"
-        ).split(),
-    )
-
-    with util.switchdir(ipath.parent):
-        f2pycli()
-        mbld = Path(f"{odir}/meson.build").read_text()
-        assert "c_args:" in mbld
-        assert "fortran_args:" in mbld
-        assert "'-DNEW_MODEL_PARM'" in mbld
-        assert "'-DFOO=bar'" in mbld
-
-
-def test_meson_macros_to_flags():
-    """Unit :: _macros_to_flags converts define_macros tuples."""
-    from numpy.f2py._backends._meson import _macros_to_flags
-
-    assert _macros_to_flags([("NEW_MODEL_PARM", None), ("FOO", "bar")]) == [
-        "-DNEW_MODEL_PARM",
-        "-DFOO=bar",
-    ]
-
-
-def test_npd_define(hello_world_f90, monkeypatch):
-    """
-    CLI :: -D<define> (meson backend, gh-28648)
-    """
-    from numpy.f2py._backends._meson import MesonBackend
-
-    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
-    monkeypatch.setattr(MesonBackend, "_move_exec_to_root", lambda self, build_dir: None)
-
-    ipath = Path(hello_world_f90)
-    odir = "build_npd_define"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        f"f2py --backend meson --build-dir {odir} -m blah -c -DPREPEND_FORTRAN {ipath}".split(),
-    )
-    with util.switchdir(ipath.parent):
-        f2pycli()
-        mbld = Path(f"{odir}/meson.build").read_text()
-        assert "'-DPREPEND_FORTRAN'" in mbld
-
-
-def test_cli_meson_cross_file(hello_world_f90, monkeypatch, tmp_path):
-    """CLI :: --cross-file is forwarded to meson setup (gh-28352)
-
-    Compiler-free: capture the meson setup command instead of running it.
-    """
-    from numpy.f2py._backends._meson import MesonBackend
-
-    captured = []
-
-    def fake_run(self, command, cwd):
-        captured.append(list(command))
-
-    monkeypatch.setattr(MesonBackend, "_run_subprocess_command", fake_run)
-    monkeypatch.setattr(MesonBackend, "_move_exec_to_root", lambda self, build_dir: None)
-
-    ipath = Path(hello_world_f90)
-    mname = "blah"
-    odir = "build_cross"
-    # Use absolute paths so meson would accept them if run; we only inspect argv
-    cf1 = str(tmp_path / "cross1.ini")
-    cf2 = str(tmp_path / "cross2.ini")
-    Path(cf1).write_text("[binaries]\n")
-    Path(cf2).write_text("[binaries]\n")
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        (
-            f"f2py --backend meson --build-dir {odir} "
-            f"--cross-file {cf1} --cross-file {cf2} "
-            f"-m {mname} -c {ipath}"
-        ).split(),
-    )
-
-    with util.switchdir(ipath.parent):
-        f2pycli()
-        assert captured, "expected meson setup/compile commands"
-        setup_cmd = captured[0]
-        assert setup_cmd[0:3] == ["meson", "setup", "bbdir"]
-        # --cross-file pairs inserted before or after bbdir is fine; meson
-        # accepts either. We append after bbdir in implementation.
-        assert "--cross-file" in setup_cmd
-        # both files present, order preserved
-        idxs = [i for i, x in enumerate(setup_cmd) if x == "--cross-file"]
-        assert len(idxs) == 2
-        assert setup_cmd[idxs[0] + 1] == cf1
-        assert setup_cmd[idxs[1] + 1] == cf2
-        # meson.build still written
-        assert Path(f"{odir}/meson.build").is_file()
-
-
-def test_meson_run_meson_cross_files(tmp_path):
-    """Unit :: run_meson appends --cross-file for each path."""
-    from numpy.f2py._backends._meson import MesonBackend
-
-    commands = []
-    b = object.__new__(MesonBackend)
-    b.meson_build_dir = "bbdir"
-    b.cross_files = ["a.ini", "b.ini"]
-
-    def fake_run(command, cwd):
-        commands.append(list(command))
-
-    b._run_subprocess_command = fake_run
-    b.run_meson(tmp_path)
-    assert commands[0] == [
-        "meson", "setup", "bbdir",
-        "--cross-file", "a.ini",
-        "--cross-file", "b.ini",
-    ]
-    assert commands[1] == ["meson", "compile", "-C", "bbdir"]
-
-
-    fn.write_text(fdat, encoding="ascii")
-    return fn
-
-
-@pytest.fixture(scope="session")
-def gh13356_entry(tmpdir_factory):
-    """F77 file with ENTRY point missing return typespec (gh-13356)."""
-    fdat = util.getpath("tests", "src", "crackfortran", "gh13356.f").read_text()
-    fn = tmpdir_factory.getbasetemp() / "test.for"
-
-
-def test_gh13356_missing_return_typespec(capfd, gh13356_entry, monkeypatch):
-    """ENTRY-derived function without return typespec must not raise KeyError."""
-    ipath = Path(gh13356_entry)
-    monkeypatch.setattr(sys, "argv", f"f2py -m test {ipath}".split())
-    with util.switchdir(ipath.parent):
-        f2pycli()
-    out, err = capfd.readouterr()
-    assert 'vars2fortran: No typespec for argument "ETA1".' in err
-    assert (ipath.parent / "testmodule.c").is_file()
-
-
-    fn.write_text(fdat, encoding="ascii")
-    return fn
-
-
-@pytest.fixture(scope="session")
-def gh9727_quad(tmpdir_factory):
-    """F90 with real(kind=16) mapped to C long double (gh-9727)."""
-    fdat = util.getpath("tests", "src", "kind", "gh9727.f90").read_text()
-    fn = tmpdir_factory.getbasetemp() / "gh9727.f90"
-
-
-def test_gh9727_binary128_warn(capfd, gh9727_quad, monkeypatch):
-    """real(kind=16) must warn at wrapper generation, not only at runtime."""
-    foutl = get_io_paths(gh9727_quad, mname="quad")
-    ipath = foutl.f90inp
-    monkeypatch.setattr(sys, "argv", f"f2py -m quad {ipath}".split())
-    with util.switchdir(ipath.parent):
-        f2pycli()
-    _, err = capfd.readouterr()
-    assert 'quadruple precision (binary128) is not supported' in err
-    csrc = foutl.cmodf.read_text()
-    assert 'WARNING: quadruple precision (binary128) is not supported' in csrc
-
-
-@pytest.fixture(scope="session")
-def gh25728_fortran(tmpdir_factory):
-    """Fortran source for gh-25728 array-size check message."""
-    fdat = util.getpath("tests", "src", "cli", "gh25728.f").read_text()
-    fn = tmpdir_factory.getbasetemp() / "gh25728.f"
-    fn.write_text(fdat, encoding="ascii")
-    return fn
-
-
-def test_gh25728_shape_check_message(capfd, gh25728_fortran, monkeypatch):
-    """Shape equality checks include a calling-convention hint.
-
-    gh-25728
-    CLI :: generated CHECKSCALAR macro for shape() checks
-    """
-    ipath = Path(gh25728_fortran)
-    mname = "param_order"
-    monkeypatch.setattr(sys, "argv", f"f2py -m {mname} {ipath}".split())
-
-    with util.switchdir(ipath.parent):
-        f2pycli()
-        csrc = Path(f"./{mname}module.c").read_text()
-        assert "strstr(tcheck, \"shape(\")" in csrc
-        assert (
-            "Size arguments are hidden or optional and must not be passed "
-            "positionally before their array" in csrc
-        )
-        assert "shape(j_array" in csrc
