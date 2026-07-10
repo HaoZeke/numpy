@@ -398,6 +398,44 @@ following rules are applied:
 * If ``k < l``, then ``y_{k + 1}, ..., y_l`` are ignored.
 * If ``k > l``, then only ``x_1, ..., x_l`` are set.
 
+Returning multiple values from a call-back
+------------------------------------------
+
+The rules above rest on a feature that is easy to trigger by accident: F2PY
+treats a ``tuple`` returned by a call-back as *several* return values, one per
+tuple element, not as a single sequence. When the Fortran side expects one
+array-like value, returning a bare tuple spreads it across the return slots and
+leaves the expected array empty.
+
+A common way to hit this is a right-hand-side function for an ODE solver that
+returns the derivatives as a tuple:
+
+.. code-block:: python
+
+   def f(t, y):
+       x, y, z = y
+       return (sigma * (y - x), x * (rho - z) - y, x * y - beta * z)
+
+Fortran expects a single rank-1 array of length 3 here, so F2PY reads the
+3-tuple as three separate return values and the array comes back with length 0:
+
+.. code-block:: python
+
+   ValueError: 0-th dimension must be 3 but got 0 (not defined).
+
+The fix is to return a ``list`` or a NumPy array, which F2PY passes through as
+one array value:
+
+.. code-block:: python
+
+   def f(t, y):
+       x, y, z = y
+       return [sigma * (y - x), x * (rho - z) - y, x * y - beta * z]
+
+This behavior is intentional (see gh-2981); a tuple is the syntax for "return
+these as separate outputs," so reserve it for call-backs that genuinely feed
+several distinct Fortran arguments.
+
 
 Common blocks
 ==============
