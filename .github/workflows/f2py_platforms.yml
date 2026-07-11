@@ -151,7 +151,10 @@ jobs:
           echo subroutine hi() > hi.f90
           echo   print *, "ok" >> hi.f90
           echo end subroutine >> hi.f90
-          python -m numpy.f2py -c hi.f90 -m hi_ifx || exit /b 1
+          rem ifx on Windows mangles HI (uppercase, no underscore); the
+          rem wrapper's F_FUNC needs the documented macros, delivered to
+          rem the C compile line by the define-passthrough fix.
+          python -m numpy.f2py -c hi.f90 -m hi_ifx -DUPPERCASE_FORTRAN -DNO_APPEND_FORTRAN || exit /b 1
           python -c "import hi_ifx; hi_ifx.hi()" || exit /b 1
 
   f2py_macos_corun:
