@@ -177,23 +177,25 @@ def test_gh22819_many_pyf(capfd, gh22819_cli, monkeypatch):
             f2pycli()
 
 
-def test_gh25654_pyf_fortran_mix_warn(capfd, gh25654_mix, monkeypatch):
+def test_gh25654_pyf_fortran_mix_warn(gh25654_mix):
     """Warn when .pyf and Fortran sources are passed together.
 
     gh-25654
     CLI :: -m with mixed signature and Fortran inputs
+    Runs in a subprocess: in-process f2py on a .pyf leaks do-lower=0
+    into crackfortran.options and poisons later parses on this worker.
     """
     ppath, fpath = gh25654_mix
-    monkeypatch.setattr(
-        sys, "argv", f"f2py -m fibx --lower {ppath} {fpath}".split())
-    with util.switchdir(ppath.parent):
-        f2pycli()
-        out, _ = capfd.readouterr()
-        assert "Warning:" in out
-        assert ".pyf directives are ignored" in out
-        assert str(ppath.name) in out
-        assert str(fpath.name) in out
-
+    res = subprocess.run(
+        [sys.executable, "-m", "numpy.f2py", "-m", "fibx", "--lower",
+         str(ppath), str(fpath)],
+        cwd=ppath.parent, check=True, capture_output=True, text=True,
+    )
+    out = res.stdout + res.stderr
+    assert "Warning:" in out
+    assert ".pyf directives are ignored" in out
+    assert str(ppath.name) in out
+    assert str(fpath.name) in out
 
 def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
     foutl = get_io_paths(gh23598_warn, mname="test")
