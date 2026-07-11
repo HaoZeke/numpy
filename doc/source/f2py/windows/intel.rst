@@ -6,8 +6,8 @@ F2PY and Windows Intel Fortran
 
 The supported compiler is the LLVM-based ``ifx`` from the free Intel
 oneAPI toolkits. The classic ``ifort`` compiler has been discontinued
-and is absent from recent oneAPI releases; the examples below work with
-``ifx`` by substituting the compiler name.
+and is absent from recent oneAPI releases; the examples below use
+``ifx``.
 
 .. note::
 
@@ -27,9 +27,11 @@ We will consider the classic example of the generation of Fibonnaci numbers,
 .. literalinclude:: ../code/fib1.f
    :language: fortran
 
-For ``cmd.exe`` fans, using the Intel oneAPI command prompt is the easiest approach, as
-it loads the required environment for both ``ifort`` and ``msvc``. Helper batch
-scripts are also provided.
+For ``cmd.exe`` fans, using the Intel oneAPI command prompt is the easiest
+approach: ``setvars.bat`` loads the environment for both ``ifx`` and MSVC.
+Helper batch scripts are also provided. After the environment is loaded,
+``f2py -c`` uses the default meson backend and picks up ``ifx`` from
+``PATH``:
 
 .. code-block:: bat
 
@@ -38,19 +40,20 @@ scripts are also provided.
    python -m numpy.f2py -c fib1.f -m fib1
    python -c "import fib1; import numpy as np; a=np.zeros(8); fib1.fib(a); print(a)"
 
-Powershell usage is a little less pleasant, and this configuration now works with MSVC as:
+PowerShell usage is a little less pleasant. Load the oneAPI environment
+(so ``ifx`` and the MSVC linker are on ``PATH``), then invoke ``f2py`` as
+usual:
 
 .. code-block:: powershell
 
-   # Powershell
-   python -m numpy.f2py -c fib1.f -m fib1 --f77exec='C:\Program Files (x86)\Intel\oneAPI\compiler\latest\windows\bin\intel64\ifort.exe' --f90exec='C:\Program Files (x86)\Intel\oneAPI\compiler\latest\windows\bin\intel64\ifort.exe' -L'C:\Program Files (x86)\Intel\oneAPI\compiler\latest\windows\compiler\lib\ia32'
-   python -c "import fib1; import numpy as np; a=np.zeros(8); fib1.fib(a); print(a)"
-   # Alternatively, set environment and reload Powershell in one line
+   # PowerShell: load oneAPI env then open a shell with it
    cmd.exe /k '"C:\Program Files (x86)\Intel\oneAPI\setvars.bat" && powershell'
    python -m numpy.f2py -c fib1.f -m fib1
    python -c "import fib1; import numpy as np; a=np.zeros(8); fib1.fib(a); print(a)"
 
-Note that the actual path to your local installation of `ifort` may vary, and the command above will need to be updated accordingly.
+Note that the path to your local oneAPI install may vary; adjust
+``setvars.bat`` accordingly. The ``ifx`` binary is typically under
+``C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin``.
 
 
 Importing ifx-built modules
