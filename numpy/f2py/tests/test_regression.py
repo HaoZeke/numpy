@@ -319,3 +319,24 @@ class TestOptionalPresent(util.F2PyTest):
 
     def test_absent_branch(self):
         assert self.module.gh4013.foo() == 1.0
+
+
+@pytest.mark.slow
+class TestScalarConverterDeprecation(util.F2PyTest):
+    # gh-24394: lossy scalar conversions warn before eventual removal
+    sources = [util.getpath("tests", "src", "regression", "gh24394.f90")]
+
+    def test_complex_scalar_warns(self):
+        with pytest.warns(DeprecationWarning, match="complex value"):
+            assert self.module.double_it(2.0 + 3j) == 4.0
+
+    def test_sequence_scalar_warns(self):
+        with pytest.warns(DeprecationWarning, match="sequence"):
+            assert self.module.double_it(np.array([2.0, 9.0])) == 4.0
+
+    def test_plain_scalar_does_not_warn(self):
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert self.module.double_it(2.0) == 4.0

@@ -98,6 +98,12 @@ typedefs['character'] = """typedef char character;"""
 
 
 ############### CPP macros ####################
+cppmacros['F2PY_DEPRECATE_LOSSY'] = """
+#define F2PY_DEPRECATE_LOSSY(what) \\
+    (PyErr_WarnEx(PyExc_DeprecationWarning, \\
+        \"f2py scalar argument: implicit conversion from \" what \\
+        \" is deprecated (gh-24394); pass a matching real scalar\", 1) < 0)
+"""
 cppmacros['CFUNCSMESS'] = """
 #ifdef DEBUGCFUNCS
 #define CFUNCSMESS(mess) fprintf(stderr,\"debug-capi:\"mess);
@@ -907,6 +913,7 @@ short_from_pyobj(short* v, PyObject *obj, const char *errmess) {
 """
 
 
+needs['int_from_pyobj'] = ['F2PY_DEPRECATE_LOSSY']
 cfuncs['int_from_pyobj'] = """
 static int
 int_from_pyobj(int* v, PyObject *obj, const char *errmess)
@@ -927,6 +934,9 @@ int_from_pyobj(int* v, PyObject *obj, const char *errmess)
 
     if (PyComplex_Check(obj)) {
         PyErr_Clear();
+        if (F2PY_DEPRECATE_LOSSY(\"a complex value (imaginary part discarded)\")) {
+            return 0;
+        }
         tmp = PyObject_GetAttrString(obj,\"real\");
     }
     else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
@@ -934,6 +944,9 @@ int_from_pyobj(int* v, PyObject *obj, const char *errmess)
     }
     else if (PySequence_Check(obj)) {
         PyErr_Clear();
+        if (F2PY_DEPRECATE_LOSSY(\"a sequence (only the first element is used)\")) {
+            return 0;
+        }
         tmp = PySequence_GetItem(obj, 0);
     }
 
@@ -957,6 +970,7 @@ int_from_pyobj(int* v, PyObject *obj, const char *errmess)
 """
 
 
+needs['long_from_pyobj'] = ['F2PY_DEPRECATE_LOSSY']
 cfuncs['long_from_pyobj'] = """
 static int
 long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
@@ -976,6 +990,9 @@ long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
 
     if (PyComplex_Check(obj)) {
         PyErr_Clear();
+        if (F2PY_DEPRECATE_LOSSY(\"a complex value (imaginary part discarded)\")) {
+            return 0;
+        }
         tmp = PyObject_GetAttrString(obj,\"real\");
     }
     else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
@@ -983,6 +1000,9 @@ long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
     }
     else if (PySequence_Check(obj)) {
         PyErr_Clear();
+        if (F2PY_DEPRECATE_LOSSY(\"a sequence (only the first element is used)\")) {
+            return 0;
+        }
         tmp = PySequence_GetItem(obj, 0);
     }
 
@@ -1025,6 +1045,9 @@ npy_intp_from_pyobj(npy_intp* v, PyObject *obj, const char *errmess)
 
     if (PyComplex_Check(obj)) {
         PyErr_Clear();
+        if (F2PY_DEPRECATE_LOSSY(\"a complex value (imaginary part discarded)\")) {
+            return 0;
+        }
         tmp = PyObject_GetAttrString(obj,\"real\");
     }
     else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
@@ -1032,6 +1055,9 @@ npy_intp_from_pyobj(npy_intp* v, PyObject *obj, const char *errmess)
     }
     else if (PySequence_Check(obj)) {
         PyErr_Clear();
+        if (F2PY_DEPRECATE_LOSSY(\"a sequence (only the first element is used)\")) {
+            return 0;
+        }
         tmp = PySequence_GetItem(obj, 0);
     }
 
@@ -1053,6 +1079,7 @@ npy_intp_from_pyobj(npy_intp* v, PyObject *obj, const char *errmess)
 }
 """
 
+needs['npy_intp_from_pyobj'] = ['F2PY_DEPRECATE_LOSSY']
 needs['npy_uintp_from_pyobj'] = ['npy_intp_from_pyobj']
 cfuncs['npy_uintp_from_pyobj'] = """
 static int
@@ -1072,7 +1099,7 @@ npy_uintp_from_pyobj(npy_uintp* v, PyObject *obj, const char *errmess)
 }
 """
 
-needs['long_long_from_pyobj'] = ['long_long']
+needs['long_long_from_pyobj'] = ['long_long', 'F2PY_DEPRECATE_LOSSY']
 cfuncs['long_long_from_pyobj'] = """
 static int
 long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
@@ -1093,6 +1120,9 @@ long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
 
     if (PyComplex_Check(obj)) {
         PyErr_Clear();
+        if (F2PY_DEPRECATE_LOSSY(\"a complex value (imaginary part discarded)\")) {
+            return 0;
+        }
         tmp = PyObject_GetAttrString(obj,\"real\");
     }
     else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
@@ -1100,6 +1130,9 @@ long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
     }
     else if (PySequence_Check(obj)) {
         PyErr_Clear();
+        if (F2PY_DEPRECATE_LOSSY(\"a sequence (only the first element is used)\")) {
+            return 0;
+        }
         tmp = PySequence_GetItem(obj, 0);
     }
 
@@ -1150,6 +1183,7 @@ long_double_from_pyobj(long_double* v, PyObject *obj, const char *errmess)
 """
 
 
+needs['double_from_pyobj'] = ['F2PY_DEPRECATE_LOSSY']
 cfuncs['double_from_pyobj'] = """
 static int
 double_from_pyobj(double* v, PyObject *obj, const char *errmess)
@@ -1169,6 +1203,9 @@ double_from_pyobj(double* v, PyObject *obj, const char *errmess)
 
     if (PyComplex_Check(obj)) {
         PyErr_Clear();
+        if (F2PY_DEPRECATE_LOSSY(\"a complex value (imaginary part discarded)\")) {
+            return 0;
+        }
         tmp = PyObject_GetAttrString(obj,\"real\");
     }
     else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
@@ -1176,6 +1213,9 @@ double_from_pyobj(double* v, PyObject *obj, const char *errmess)
     }
     else if (PySequence_Check(obj)) {
         PyErr_Clear();
+        if (F2PY_DEPRECATE_LOSSY(\"a sequence (only the first element is used)\")) {
+            return 0;
+        }
         tmp = PySequence_GetItem(obj, 0);
     }
 
