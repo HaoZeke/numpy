@@ -52,6 +52,7 @@ For Meson build examples, see :doc:`usage`.
 
    f2py-user
    f2py-reference
+   support-status
    windows/index
    buildtools/distutils-to-meson
 
