@@ -15,5 +15,25 @@ Follow the standard `installation instructions`_. Then, to grab the requisite Fo
    pacman -S --needed base-devel gcc-fortran
    pacman -S mingw-w64-x86_64-toolchain
 
+Importing MinGW-built modules
+=============================
+
+A module built with the MinGW ``gfortran`` links against the MinGW
+runtime libraries (``libgfortran``, ``libgcc_s``, ``libwinpthread``).
+Python 3.8 and later do not consult ``PATH`` when resolving the
+dependent DLLs of an extension module, so importing the module from a
+regular (non-MSYS2) Python fails with ``ImportError: DLL load failed``
+even when the compiler directory is on ``PATH``. Register the runtime
+directory explicitly before the import:
+
+.. code-block:: python
+
+   import os
+   os.add_dll_directory(r"C:\msys64\ucrt64\bin")  # or mingw64\bin
+   import mymodule
+
+Alternatively, link the runtimes statically by passing
+``-static-libgfortran -static-libgcc`` through ``--f90flags``, or ship
+the three DLLs next to the built module.
 
 .. _`installation instructions`: https://www.msys2.org/
