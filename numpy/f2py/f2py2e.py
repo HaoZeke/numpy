@@ -336,6 +336,14 @@ def scaninputline(inputline):
 
 
 def callcrackfortran(files, options):
+    # crackfortran's parse configuration is module-global; snapshot it so
+    # a CLI invocation cannot leak state (do-lower from a .pyf run, skip
+    # lists, module names) into later direct crackfortran() calls in the
+    # same process (gh-25179 has the unification story).
+    saved_state = (crackfortran.debug, crackfortran.verbose,
+                   crackfortran.f77modulename, crackfortran.skipfuncs,
+                   crackfortran.onlyfuncs, list(crackfortran.include_paths),
+                   crackfortran.dolowercase)
     rules.options = options
     crackfortran.debug = options['debug']
     crackfortran.verbose = options['verbose']
@@ -347,7 +355,13 @@ def callcrackfortran(files, options):
         crackfortran.onlyfuncs = options['onlyfuncs']
     crackfortran.include_paths[:] = options['include_paths']
     crackfortran.dolowercase = options['do-lower']
-    postlist = crackfortran.crackfortran(files)
+    try:
+        postlist = crackfortran.crackfortran(files)
+    finally:
+        (crackfortran.debug, crackfortran.verbose,
+         crackfortran.f77modulename, crackfortran.skipfuncs,
+         crackfortran.onlyfuncs, crackfortran.include_paths[:],
+         crackfortran.dolowercase) = saved_state
     if 'signsfile' in options:
         outmess(f"Saving signatures to file \"{options['signsfile']}\"\n")
         pyf = crackfortran.crack2fortran(postlist)
@@ -373,8 +387,6 @@ def callcrackfortran(files, options):
             mod['gil_used'] = 'Py_MOD_GIL_USED'
         else:
             mod['gil_used'] = 'Py_MOD_GIL_NOT_USED'
-    # gh-26718 Reset global
-    crackfortran.f77modulename = ''
     return postlist
 
 
