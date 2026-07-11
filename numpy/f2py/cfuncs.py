@@ -661,9 +661,9 @@ cfuncs['try_pyarr_from_string'] = """
   If the specified len==-1, str must be null-terminated.
 */
 static int try_pyarr_from_string(PyObject *obj,
-                                 const string str, const int len) {
+                                 const string str, const npy_intp len) {
 #ifdef DEBUGCFUNCS
-fprintf(stderr, "try_pyarr_from_string(str='%s', len=%d, obj=%p)\\n",
+fprintf(stderr, "try_pyarr_from_string(str='%s', len=%" NPY_INTP_FMT ", obj=%p)\\n",
         (char*)str,len, obj);
 #endif
     if (!obj) return -2; /* Object missing */
@@ -702,14 +702,14 @@ cfuncs['string_from_pyobj'] = """
   are insignificant contrary to C nulls.
  */
 static int
-string_from_pyobj(string *str, int *len, const string inistr, PyObject *obj,
+string_from_pyobj(string *str, npy_intp *len, const string inistr, PyObject *obj,
                   const char *errmess)
 {
     PyObject *tmp = NULL;
     string buf = NULL;
     npy_intp n = -1;
 #ifdef DEBUGCFUNCS
-fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
+fprintf(stderr,\"string_from_pyobj(str='%s',len=%\" NPY_INTP_FMT \",inistr='%s',obj=%p)\\n\",
                (char*)str, *len, (char *)inistr, obj);
 #endif
     if (obj == Py_None) {
@@ -751,12 +751,6 @@ fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
         buf = PyBytes_AS_STRING(tmp);
     }
     if (*len == -1) {
-        /* TODO: change the type of `len` so that we can remove this */
-        if (n > NPY_MAX_INT) {
-            PyErr_SetString(PyExc_OverflowError,
-                            "object too large for a 32-bit int");
-            goto capi_fail;
-        }
         *len = n;
     }
     else if (*len < n) {
