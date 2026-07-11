@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - ci/f2py-platform-matrix
+      - ci/f2py-platform-matrix-integration
   pull_request:
     paths:
       - '.github/workflows/f2py_platforms.yml'
@@ -51,8 +52,8 @@ jobs:
               pip install . -Csetup-args=-Dallow-noblas=true
               cd /tmp
               python -m pytest --pyargs numpy.f2py.tests.test_return_character \
-                -v -m full --no-header
-              python -m pytest --pyargs numpy.f2py.tests.test_kind -v -m full --no-header
+                -v --no-header
+              python -m pytest --pyargs numpy.f2py.tests.test_kind -v --no-header
             '
 
   f2py_windows_mingw:
@@ -71,6 +72,10 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
+      - name: Lift the blanket win32 Fortran skip (this job IS the gh-25134 leg)
+        shell: pwsh
+        run: |
+          (Get-Content numpy/f2py/tests/util.py) -replace 'if sys.platform == "win32":', 'if False:  # executor: win32 skip lifted' | Set-Content numpy/f2py/tests/util.py
       - name: Add MinGW to PATH and build
         shell: pwsh
         run: |
@@ -82,7 +87,7 @@ jobs:
         run: |
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           cd $env:TEMP
-          python -m pytest --pyargs numpy.f2py.tests.test_callback -v -m full --no-header
+          python -m pytest --pyargs numpy.f2py.tests.test_callback -v --no-header
 
   f2py_windows_ifx:
     # gh-26352: link failures with Intel ifx on Windows
@@ -97,13 +102,13 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install Intel Fortran (oneAPI)
-        shell: pwsh
-        run: |
-          winget install --id Intel.OneAPI.HPCKit --silent --accept-source-agreements --accept-package-agreements
+        uses: fortran-lang/setup-fortran@8821f57b53846d35d62632eb51c60ac6c4bff4ce # v1.6.1
+        with:
+          compiler: intel
+          version: '2025.0'
       - name: Build and run a minimal f2py module with ifx
         shell: cmd
         run: |
-          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           pip install -r requirements/build_requirements.txt meson ninja
           pip install . -Csetup-args=-Dallow-noblas=true
           cd %TEMP%
