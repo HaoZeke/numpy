@@ -34,9 +34,9 @@ directory explicitly before the import:
 
 Alternatively, try linking the runtimes statically by passing
 ``-static-libgfortran -static-libgcc -static-libwinpthread`` through
-``--f90flags``, or ship the three DLLs next to the built module.
-Static ``libwinpthread`` support is not available in every MinGW
-layout; when it is not, prefer ``os.add_dll_directory`` (or shipping
-the DLLs), which is the more reliable route.
+``--f90flags``, or copy the three runtime libraries next to the built
+module. Static ``libwinpthread`` support is not available in every
+MinGW layout; when it is not, prefer ``os.add_dll_directory`` (or copy
+the libraries next to the module).
 
 .. _`installation instructions`: https://www.msys2.org/

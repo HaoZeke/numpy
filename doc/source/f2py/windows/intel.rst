@@ -40,9 +40,8 @@ Helper batch scripts are also provided. After the environment is loaded,
    python -m numpy.f2py -c fib1.f -m fib1
    python -c "import fib1; import numpy as np; a=np.zeros(8); fib1.fib(a); print(a)"
 
-PowerShell usage is a little less pleasant. Load the oneAPI environment
-(so ``ifx`` and the MSVC linker are on ``PATH``), then invoke ``f2py`` as
-usual:
+PowerShell needs an extra step: load the oneAPI environment (so ``ifx``
+and the MSVC linker are on ``PATH``), then invoke ``f2py`` as usual:
 
 .. code-block:: powershell
 
@@ -51,18 +50,19 @@ usual:
    python -m numpy.f2py -c fib1.f -m fib1
    python -c "import fib1; import numpy as np; a=np.zeros(8); fib1.fib(a); print(a)"
 
-Note that the path to your local oneAPI install may vary; adjust
-``setvars.bat`` accordingly. The ``ifx`` binary is typically under
+The path to a local oneAPI install may vary; point ``setvars.bat`` at
+yours. The ``ifx`` binary is typically under
 ``C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin``.
 
 
 Importing ifx-built modules
 ===========================
 
-The DLL rule from :ref:`f2py-win-msys2` applies here too: a module
-built with ``ifx`` depends on the Intel runtime DLLs (``libifcoremd``,
-``svml_dispmd``, ...), and Python 3.8+ does not consult ``PATH`` when
-resolving them. Register the runtime directory before the import:
+The same dynamic-link library (DLL) resolution rule as
+:ref:`f2py-win-msys2` applies: a module built with ``ifx`` depends on the
+Intel runtime libraries (``libifcoremd``, ``svml_dispmd``, and related),
+and Python 3.8+ does not consult ``PATH`` when resolving them. Register
+the runtime directory before the import:
 
 .. code-block:: python
 
@@ -70,19 +70,18 @@ resolving them. Register the runtime directory before the import:
    os.add_dll_directory(r"C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin")
    import mymodule
 
-Additionally, ``ifx`` on Windows uses uppercase symbol names with no
-trailing underscore, so the C wrapper must be compiled with the standard
-mangling macros ``UPPERCASE_FORTRAN`` and ``NO_APPEND_FORTRAN`` (see
-:doc:`../usage`).
+On Windows, ``ifx`` exports uppercase symbol names with no trailing
+``_``. The C wrapper therefore needs the standard mangling macros
+``UPPERCASE_FORTRAN`` and ``NO_APPEND_FORTRAN`` (see :doc:`../usage`).
 
 .. note::
 
-   The default meson backend does not currently forward ``-D`` defines from
-   the ``f2py -c`` command line into the generated build. Apply those macros
+   The default meson backend does not forward ``-D`` defines from the
+   ``f2py -c`` command line into the generated build. Apply those macros
    through your build system's C compiler flags (for example meson's
-   ``c_args``) rather than expecting
-   ``python -m numpy.f2py -c ... -DUPPERCASE_FORTRAN -DNO_APPEND_FORTRAN``
-   to take effect on its own.
+   ``c_args``). Do not rely on
+   ``python -m numpy.f2py -c … -DUPPERCASE_FORTRAN -DNO_APPEND_FORTRAN``
+   alone.
 
 
 .. _disassembly of components and liability: https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html

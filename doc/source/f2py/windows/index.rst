@@ -53,7 +53,7 @@ MSYS2 (FOSS)
    toolchains can be used to natively build Windows programs.
 
 Conda (FOSS)
-   The `conda-forge`_ channel ships both ``flang`` (LLVM Flang, the
+   The `conda-forge`_ channel provides both ``flang`` (LLVM Flang, the
    compiler conda-forge itself uses to build SciPy on Windows) and
    MinGW-w64 ``gfortran`` packages.
 
