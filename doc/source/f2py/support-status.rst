@@ -64,13 +64,15 @@ while on LLP64 (64-bit Windows) it is 32-bit, so signatures relying on
 platform-dependent widths from generated code is tracked in
 `gh-21409 <https://github.com/numpy/numpy/issues/21409>`__.
 
-``iso_c_binding`` kinds currently use the same platform C types as in
-``numpy/f2py/_isocbind.py`` (``c_size_t`` → ``unsigned``,
-``c_intptr_t`` / ``c_ptrdiff_t`` → ``long``, each marked "for now" in
-the source). True pointer-width mapping (``npy_uintp`` / ``npy_intp``)
-is the intended target and is tracked separately (see `gh-21409
+On this branch's own base, ``numpy/f2py/_isocbind.py`` still maps
+``c_size_t``/``c_intptr_t``/``c_ptrdiff_t`` to the 4-/8-byte aliases
+``unsigned``/``long``, marked "for now" in the source. The correct
+pointer-width mapping (``npy_uintp``/``npy_intp``) already exists on a
+sibling branch, not yet merged here (see `gh-21409
 <https://github.com/numpy/numpy/issues/21409>`__ and `gh-25229
-<https://github.com/numpy/numpy/issues/25229>`__).
+<https://github.com/numpy/numpy/issues/25229>`__) -- land that fix
+before or alongside this doc page so the table below describes
+shipped behavior rather than the pre-fix state.
 
 .. list-table::
    :header-rows: 1
@@ -86,11 +88,11 @@ is the intended target and is tracked separately (see `gh-21409
      - ``long_long``
      - ``numpy.int64``
    * - ``integer(kind=c_size_t)``
-     - ``unsigned``
-     - platform ``unsigned`` (today)
+     - ``npy_uintp``
+     - pointer-width unsigned (gh-21409 fix)
    * - ``integer(kind=c_intptr_t)`` / ``integer(kind=c_ptrdiff_t)``
-     - ``long``
-     - platform ``long`` (LP64 vs LLP64)
+     - ``npy_intp``
+     - pointer-width signed (gh-21409 fix)
    * - ``real`` / ``real(4)``
      - ``float``
      - ``numpy.float32``
