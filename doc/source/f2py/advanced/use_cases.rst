@@ -43,6 +43,8 @@ Usage in Python:
   :language: python
 
 
+.. _f2py-kind-specifiers:
+
 Dealing with KIND specifiers
 ============================
 

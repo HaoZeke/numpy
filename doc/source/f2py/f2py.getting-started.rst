@@ -309,16 +309,18 @@ Modern Fortran and kind specifiers
 
 The examples above use Fortran 77 style sources, but F2PY wraps free
 form modern Fortran the same way. One wrinkle needs a note: named kind
-constants imported from modules, such as ``real64`` from
+constants imported from intrinsic modules, such as ``real64`` from
 ``iso_fortran_env``. Consider ``normkind.f90``:
 
 .. literalinclude:: ./code/normkind.f90
    :language: fortran
 
-F2PY does not resolve Fortran module imports, so it cannot know on its
-own that ``real(real64)`` is a double precision value. The mapping is
-supplied through a small JSON-like file named ``.f2py_f2cmap`` in the
-current directory::
+F2PY does not resolve imports from intrinsic modules such as
+``iso_fortran_env`` (there is no source for crackfortran to read); kind
+parameters from your own modules, cracked in the same invocation, are
+resolved normally. For intrinsic kinds such as ``real64``, supply a
+mapping through a small file named ``.f2py_f2cmap`` in the current
+directory::
 
   {"real": {"real64": "double"}}
 
@@ -326,10 +328,11 @@ with which the one-command build works as usual::
 
   python -m numpy.f2py -c normkind.f90 -m normkind
 
-The same mechanism covers ``selected_real_kind``-derived constants and
-any other named kinds; see :doc:`usage` for the ``--f2cmap`` flag
-that names the file explicitly. Kind constants from
-``iso_c_binding`` (``c_double``, ``c_int``, ...) map natively and need
-no mapping file.
+Without that map, unrecognized kinds fall back to C ``float`` at
+C-generation time (a ``getctype`` warning on stderr), not during
+signature-only (``-h``) runs. See :doc:`usage` for the ``--f2cmap``
+flag that names the file explicitly, and :ref:`f2py-kind-specifiers`
+for the full KIND guide. Kind constants from ``iso_c_binding``
+(``c_double``, ``c_int``, ...) map natively and need no mapping file.
 
 .. _`system dependencies panel`: https://scipy.github.io/devdocs/building/index.html#system-level-dependencies
