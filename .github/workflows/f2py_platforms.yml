@@ -159,9 +159,9 @@ jobs:
           python -c "import os; os.add_dll_directory(r'C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin'); import hi_ifx; hi_ifx.hi()" || exit /b 1
 
   f2py_macos_corun:
-    # gh-12066: the semicolon-split tests failed on macOS only when
-    # co-run with the rest of numpy/f2py/tests; this job co-runs them
-    # with the Darwin skips removed
+    # gh-12066: tests failed on macOS only when co-run with the rest of
+    # numpy/f2py/tests; this job runs the full f2py suite under that
+    # co-run condition (Darwin skips removed where applicable)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -181,9 +181,12 @@ jobs:
           pip install -r requirements/build_requirements.txt \
                       -r requirements/test_requirements.txt
           pip install . -Csetup-args=-Dallow-noblas=true
-      - name: Co-run the f2py test suite (semicolon-split unskipped)
+      - name: Co-run the full f2py test suite (gh-12066 co-run condition)
         run: |
           set -ex
           cd /tmp
-          python -m pytest --pyargs numpy.f2py.tests -m slow \
-            -v --no-header -x -k "semicolon or Multiline or Callstatement or regression or crackfortran"
+          # Full suite, no -k / -m filter: the original failure was under
+          # co-run with the rest of numpy/f2py/tests (not a named subset).
+          # Darwin-skipped classes such as TestCReturnReal are unmarked and
+          # would be deselected by -m slow.
+          python -m pytest --pyargs numpy.f2py.tests -v --no-header -x
