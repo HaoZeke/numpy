@@ -256,25 +256,40 @@ Registration and invocation are separate steps
 
 The examples above share a structure worth stating explicitly: wiring a
 Python function up as a callback and Fortran actually calling it are
-two distinct stages.
+two distinct stages. Registration itself has two different paths; they
+are not interchangeable.
 
-1. **Registration** happens in Python, either by passing the function
-   as an argument to a wrapped routine or by assigning it on the
-   module (``pfromf.fun = f`` above). This stores the Python function
-   on the *wrapped module's* callback slot; no Fortran runs yet.
+**Module-attribute registration.** Assign the Python function on the
+wrapped extension module (``pfromf.fpy = f`` above). That is an ordinary
+Python attribute assignment; no Fortran runs yet, and nothing is written
+into an internal F2PY store at assignment time. When Fortran later reaches
+the corresponding ``external`` (possibly in a later wrapped call such as
+``pfromf.f1()``, or deeper in the Fortran call stack), the generated
+trampoline looks the name up live on the module.
 
-2. **Invocation** happens later, whenever Fortran execution reaches
-   the ``external`` procedure — possibly in a different wrapped call,
-   possibly several layers down the Fortran call stack.
+**Argument-style registration.** Pass the Python function as a callback
+argument to a single wrapped call (for example ``callback.foo(f)``). For
+that call only, the wrapper installs the function into per-call state that
+is active while that wrapped entry point runs. The callback can fire while
+Fortran is still under that call (including nested Fortran routines that
+receive the procedure argument), but it is not retained for a different
+later wrapped call. Passing a callback on one call does not register it
+for the next.
 
-The consequence: the callback must be registered through the module
-that F2PY wrapped, not merely be callable from somewhere in the
-process. A Fortran routine that F2PY never saw (for example, one
-linked in from a static library without appearing in the signature
-file) has no callback slot to look up, so assigning a Python function
-cannot reach it. Wrap at least the entry-point routine that receives
-the callback, and let it forward the procedure argument to the library
-code in Fortran.
+**Invocation** is always the Fortran side: execution reaches the
+``external`` procedure and the generated trampoline calls into Python.
+Which registration path made the function available determines whether
+that can happen only under the current wrapped call (argument style) or
+also under later ones (module attribute).
+
+The consequence: the callback must be made available through a routine
+that F2PY wrapped, not merely be callable from somewhere in the process.
+A Fortran routine that F2PY never saw (for example, one linked in from a
+static library without appearing in the signature file) has no generated
+trampoline and no Python registration surface, so neither module
+assignment nor an unrelated argument can reach it. Wrap at least the
+entry-point routine that receives the callback, and let it forward the
+procedure argument to the library code in Fortran.
 
 Resolving arguments to call-back functions
 ------------------------------------------
