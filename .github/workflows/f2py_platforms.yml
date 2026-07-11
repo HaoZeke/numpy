@@ -192,7 +192,15 @@ jobs:
           set -ex
           brew install gcc || true
           GF=$( (find /opt/homebrew/bin /usr/local/bin -maxdepth 1 -name 'gfortran-*' 2>/dev/null || true) | sort -V | tail -1)
-          ln -sf "$GF" "$(dirname "$GF")/gfortran"
+          if [ -n "$GF" ]; then
+            ln -sf "$GF" "$(dirname "$GF")/gfortran"
+          elif command -v gfortran >/dev/null 2>&1; then
+            # Unversioned gfortran already on PATH (no gfortran-* found).
+            :
+          else
+            echo "No gfortran or gfortran-* found after brew install gcc" >&2
+            exit 1
+          fi
           gfortran --version
           pip install -r requirements/build_requirements.txt \
                       -r requirements/test_requirements.txt
