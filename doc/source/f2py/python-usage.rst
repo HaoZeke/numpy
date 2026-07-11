@@ -254,15 +254,15 @@ In Python:
 Registration and invocation are separate steps
 ----------------------------------------------
 
-The examples above share a structure worth stating explicitly: wiring a
-Python function up as a callback and Fortran actually calling it are
-two distinct stages. Registration itself has two different paths; they
-are not interchangeable.
+The examples above leave one structural point implicit: wiring a Python
+function up as a callback and Fortran actually calling it are two
+distinct stages. Registration itself has two different paths; they are
+not interchangeable.
 
 **Module-attribute registration.** Assign the Python function on the
-wrapped extension module (``pfromf.fpy = f`` above). That is an ordinary
-Python attribute assignment; no Fortran runs yet, and nothing is written
-into an internal F2PY store at assignment time. When Fortran later reaches
+wrapped extension module (``pfromf.fpy = f`` above). The assignment is
+ordinary Python attribute setting; no Fortran runs yet, and nothing is
+written into an internal F2PY store at assignment time. When Fortran later reaches
 the corresponding ``external`` (possibly in a later wrapped call such as
 ``pfromf.f1()``, or deeper in the Fortran call stack), the generated
 trampoline looks the name up live on the module.
@@ -270,26 +270,26 @@ trampoline looks the name up live on the module.
 **Argument-style registration.** Pass the Python function as a callback
 argument to a single wrapped call (for example ``callback.foo(f)``). For
 that call only, the wrapper installs the function into per-call state that
-is active while that wrapped entry point runs. The callback can fire while
-Fortran is still under that call (including nested Fortran routines that
-receive the procedure argument), but it is not retained for a different
-later wrapped call. Passing a callback on one call does not register it
-for the next.
+stays active while that wrapped entry point runs. The callback can fire
+while Fortran is still under that call (including nested Fortran routines
+that receive the procedure argument), but it is not retained for a
+different later wrapped call. Passing a callback on one call does not
+register it for the next.
 
-**Invocation** is always the Fortran side: execution reaches the
+**Invocation** always happens on the Fortran side: execution reaches the
 ``external`` procedure and the generated trampoline calls into Python.
 Which registration path made the function available determines whether
 that can happen only under the current wrapped call (argument style) or
 also under later ones (module attribute).
 
-The consequence: the callback must be made available through a routine
-that F2PY wrapped, not merely be callable from somewhere in the process.
-A Fortran routine that F2PY never saw (for example, one linked in from a
-static library without appearing in the signature file) has no generated
-trampoline and no Python registration surface, so neither module
-assignment nor an unrelated argument can reach it. Wrap at least the
-entry-point routine that receives the callback, and let it forward the
-procedure argument to the library code in Fortran.
+The callback must therefore be made available through a routine that
+F2PY wrapped. A Python function defined elsewhere in the process does not
+become a callback on its own. A Fortran routine that F2PY never saw (for
+example, one linked in from a static library without appearing in the
+signature file) has no generated trampoline and no Python registration
+surface, so neither module assignment nor an unrelated argument can reach
+it. Wrap at least the entry-point routine that receives the callback, and
+let it forward the procedure argument to the library code in Fortran.
 
 Resolving arguments to call-back functions
 ------------------------------------------
