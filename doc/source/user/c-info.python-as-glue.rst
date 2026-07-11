@@ -123,19 +123,15 @@ subroutine interfaces with Python by constructing an interface-definition-file
 
 See the :ref:`F2PY documentation <f2py>` for more information and examples.
 
-The f2py method of linking compiled code is currently the most
-sophisticated and integrated approach. It allows clean separation of
-Python with compiled code while still allowing for separate
-distribution of the extension module. The only draw-back is that it
-requires the existence of a Fortran compiler in order for a user to
-install the code. However, with the existence of the free-compilers
-g77, gfortran, and g95, as well as high-quality commercial compilers,
-this restriction is not particularly onerous. In our opinion, Fortran
-is still the easiest way to write fast and clear code for scientific
-computing. It handles complex numbers, and multi-dimensional indexing
-in the most straightforward way. Be aware, however, that some Fortran
-compilers will not be able to optimize code as well as good hand-
-written C-code.
+The f2py method of linking compiled code allows clean separation of
+Python from compiled code while still allowing for separate
+distribution of the extension module. Building requires a Fortran
+compiler -- gfortran, LLVM flang, or the Intel and NVIDIA compilers
+all work -- and distribution is handled through standard build
+backends (see :doc:`/f2py/buildtools/index` for Meson-based builds
+and packaging with meson-python). Fortran remains one of the clearest
+ways to write fast numerical kernels: complex numbers and
+multi-dimensional indexing are handled directly by the language.
 
 .. index::
    single: f2py
