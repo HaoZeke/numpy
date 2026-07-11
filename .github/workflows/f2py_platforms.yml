@@ -51,8 +51,8 @@ jobs:
               pip install . -Csetup-args=-Dallow-noblas=true
               cd /tmp
               python -m pytest --pyargs numpy.f2py.tests.test_return_character \
-                -v -m full --no-header
-              python -m pytest --pyargs numpy.f2py.tests.test_kind -v -m full --no-header
+                -v --no-header
+              python -m pytest --pyargs numpy.f2py.tests.test_kind -v --no-header
             '
 
   f2py_windows_mingw:
@@ -86,7 +86,7 @@ jobs:
         run: |
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           cd $env:TEMP
-          python -m pytest --pyargs numpy.f2py.tests.test_callback -v -m full --no-header
+          python -m pytest --pyargs numpy.f2py.tests.test_callback -v --no-header
 
   f2py_windows_ifx:
     # gh-26352: link failures with Intel ifx on Windows
