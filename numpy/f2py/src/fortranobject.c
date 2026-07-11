@@ -53,6 +53,11 @@ F2PySwapThreadLocalCallbackPtr(char *key, void *ptr)
 {
     PyObject *local_dict, *value;
     void *prev;
+    /* Called while an exception may be live (a raising callback unwinds
+     * through here); shield it so PyLong_AsVoidPtr's error check below
+     * sees only its own failures instead of aborting the process. */
+    PyObject *exc_type, *exc_value, *exc_tb;
+    PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
 
     local_dict = PyThreadState_GetDict();
     if (local_dict == NULL) {
@@ -86,6 +91,7 @@ F2PySwapThreadLocalCallbackPtr(char *key, void *ptr)
 
     Py_DECREF(value);
 
+    PyErr_Restore(exc_type, exc_value, exc_tb);
     return prev;
 }
 
@@ -94,6 +100,8 @@ F2PyGetThreadLocalCallbackPtr(char *key)
 {
     PyObject *local_dict, *value;
     void *prev;
+    PyObject *exc_type, *exc_value, *exc_tb;
+    PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
 
     local_dict = PyThreadState_GetDict();
     if (local_dict == NULL) {
@@ -113,6 +121,7 @@ F2PyGetThreadLocalCallbackPtr(char *key)
         prev = NULL;
     }
 
+    PyErr_Restore(exc_type, exc_value, exc_tb);
     return prev;
 }
 
