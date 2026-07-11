@@ -4,21 +4,22 @@
 F2PY and Windows Intel Fortran
 ==============================
 
-As of NumPy 1.23, only the classic Intel compilers (``ifort``) are supported.
+The supported compiler is the LLVM-based ``ifx`` from the free Intel
+oneAPI toolkits. The classic ``ifort`` compiler has been discontinued
+and is absent from recent oneAPI releases; the examples below work with
+``ifx`` by substituting the compiler name.
 
 .. note::
 
-	The licensing restrictions for beta software `have been relaxed`_ during
-	the transition to the LLVM backed ``ifx/icc`` family of compilers.
-	However this document does not endorse the usage of Intel in downstream
+	This document does not endorse the usage of Intel in downstream
 	projects due to the issues pertaining to `disassembly of components and
 	liability`_.
-	
+
 	Neither the Python Intel installation nor the `Classic Intel C/C++
 	Compiler` are required.
 
-- The `Intel Fortran Compilers`_ come in a combined installer providing both
-  Classic and Beta versions; these also take around a gigabyte and a half or so.
+- The `Intel Fortran Compilers`_ install through the oneAPI HPC toolkit,
+  which also takes around a gigabyte and a half or so.
 
 We will consider the classic example of the generation of Fibonnaci numbers,
 ``fib1.f``, given by:
@@ -51,7 +52,7 @@ Powershell usage is a little less pleasant, and this configuration now works wit
 
 Note that the actual path to your local installation of `ifort` may vary, and the command above will need to be updated accordingly.
 
-.. _have been relaxed: https://www.intel.com/content/www/us/en/developer/articles/release-notes/oneapi-fortran-compiler-release-notes.html
+
 .. _disassembly of components and liability: https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html
 .. _Intel Fortran Compilers: https://www.intel.com/content/www/us/en/developer/articles/tool/oneapi-standalone-components.html#inpage-nav-6-1
 .. _Classic Intel C/C++ Compiler: https://www.intel.com/content/www/us/en/developer/articles/tool/oneapi-standalone-components.html#inpage-nav-6-undefined
