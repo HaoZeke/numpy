@@ -164,18 +164,17 @@ Common build flags:
   "lapack" and "scalapack" as dependencies and remove them from argv, leaving a
   dependencies list containing ["lapack", "scalapack"].
 
-  The name is resolved by meson's `dependency()`_, so anything
-  discoverable through ``pkg-config``, CMake config files, or meson's
-  builtin dependency names works::
+  The name is resolved by meson's `dependency()`_, so names found via
+  ``pkg-config``, CMake config files, or meson's built-in dependency
+  database work::
 
     f2py -c solver.f90 -m solver --dep lapack
 
-  Some builtins are language-sensitive. Bare ``--dep mpi`` maps to
-  ``dependency('mpi')``, which selects the C MPI variant by default and
-  may not pull in the Fortran MPI libraries a Fortran caller needs.
-  Per-language selection for ``--dep`` is tracked separately; until then
-  use raw ``-L``/``-l`` flags or hand-edit the generated ``meson.build``
-  as described below.
+  Some Meson dependency names are language-sensitive. Bare ``--dep mpi``
+  maps to ``dependency('mpi')``, which selects the C MPI variant by
+  default and may not pull in the Fortran MPI libraries a Fortran caller
+  needs. Prefer raw ``-L``/``-l`` flags or a hand-edited ``meson.build``
+  (below) when the C variant is not enough.
 
   When a library has no ``pkg-config`` or CMake metadata, fall back to
   raw linker flags (``-L/path/to/lib -lname``), or pass
