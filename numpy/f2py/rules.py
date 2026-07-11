@@ -971,7 +971,12 @@ if (#varname#_cb.capi==Py_None) {
     {  # Common
         'decl': '    #ctype# #varname# = 0;',
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#);'},
-        'callfortran': {l_or(isintent_c, isattr_value): '#varname#,', l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
+        'callfortran': {
+            l_or(isintent_c, isattr_value): '#varname#,',
+            l_and(l_not(l_or(isintent_c, isattr_value)), isabsentcapable):
+                '(#varname#_capi == Py_None ? NULL : &#varname#),',
+            l_and(l_not(l_or(isintent_c, isattr_value)),
+                  l_not(isabsentcapable)): '&#varname#,'},
         'return': {isintent_out: ',#varname#'},
         '_check': l_and(isscalar, l_not(iscomplex))
     }, {
