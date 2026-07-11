@@ -21,24 +21,28 @@ Language standard coverage
      - Status
      - Notes
    * - Fortran 77
-     - Complete
+     - Essentially feature complete
      - Subroutines, functions, ``COMMON`` blocks, ``EXTERNAL``
        callbacks, character handling.
    * - Fortran 90/95
      - Substantially complete
      - Free form, modules (data and procedures), assumed-shape and
-       allocatable module arrays, ``optional`` arguments, kind
-       specifiers via ``.f2py_f2cmap``. See the compatibility
-       statement below (`gh-25424 <https://github.com/numpy/numpy/issues/25424>`__).
+       allocatable module arrays, ``optional`` arguments. Built-in
+       kind numbers (for example ``integer(8)``, ``real(4)``) map by
+       default; non-standard or PARAMETER-named kinds need a
+       ``.f2py_f2cmap`` file. See the compatibility statement below
+       (`gh-25424 <https://github.com/numpy/numpy/issues/25424>`__).
    * - Fortran 2003
      - Partial
-     - ``iso_c_binding`` named constants map natively; type-bound
-       procedures and derived types are not wrapped
+     - ``bind(c)`` interfaces and ``iso_c_binding`` named constants are
+       recognized, with forced casting for some kinds rather than full
+       native width mapping (`gh-25229 <https://github.com/numpy/numpy/issues/25229>`__).
+       Type-bound procedures and derived types are not wrapped
        (`gh-21160 <https://github.com/numpy/numpy/issues/21160>`__).
    * - Fortran 2008+
      - Partial
-     - ``bind(c)`` interfaces work; coarrays, submodules, and
-       assumed-rank (F2018 ``dimension(..)``) are unsupported.
+     - Coarrays, submodules, and assumed-rank (F2018
+       ``dimension(..)``) are unsupported.
 
 Fortran 95 compatibility statement
 ==================================
@@ -60,6 +64,14 @@ while on LLP64 (64-bit Windows) it is 32-bit, so signatures relying on
 platform-dependent widths from generated code is tracked in
 `gh-21409 <https://github.com/numpy/numpy/issues/21409>`__.
 
+``iso_c_binding`` kinds currently use the same platform C types as in
+``numpy/f2py/_isocbind.py`` (``c_size_t`` → ``unsigned``,
+``c_intptr_t`` / ``c_ptrdiff_t`` → ``long``, each marked "for now" in
+the source). True pointer-width mapping (``npy_uintp`` / ``npy_intp``)
+is the intended target and is tracked separately (see `gh-21409
+<https://github.com/numpy/numpy/issues/21409>`__ and `gh-25229
+<https://github.com/numpy/numpy/issues/25229>`__).
+
 .. list-table::
    :header-rows: 1
    :widths: 30 30 40
@@ -74,11 +86,11 @@ platform-dependent widths from generated code is tracked in
      - ``long_long``
      - ``numpy.int64``
    * - ``integer(kind=c_size_t)``
-     - ``npy_uintp``
-     - pointer-width unsigned
-   * - ``integer(kind=c_intptr_t)`` / ``c_ptrdiff_t``
-     - ``npy_intp``
-     - pointer-width signed
+     - ``unsigned``
+     - platform ``unsigned`` (today)
+   * - ``integer(kind=c_intptr_t)`` / ``integer(kind=c_ptrdiff_t)``
+     - ``long``
+     - platform ``long`` (LP64 vs LLP64)
    * - ``real`` / ``real(4)``
      - ``float``
      - ``numpy.float32``
@@ -89,7 +101,7 @@ platform-dependent widths from generated code is tracked in
      - ``complex_double``
      - ``numpy.complex128``
    * - ``character(len=*)``
-     - ``char *`` + ``size_t`` length
+     - ``char *`` + ``int`` length
      - ``bytes`` / ``str``
 
 Planned features and internals roadmap
@@ -112,7 +124,7 @@ issues; this table is the durable index (`gh-20202 <https://github.com/numpy/num
    * - Allocatable arrays as procedure arguments
      - `gh-19157 <https://github.com/numpy/numpy/issues/19157>`__
      - Only allocatable *module* arrays wrap today; the supported
-       pattern is documented in :ref:`f2py-getting-started`.
+       pattern is documented in :ref:`f2py-allocatable-arrays`.
    * - Interfaces for external modules and module data
      - `gh-19162 <https://github.com/numpy/numpy/issues/19162>`__
      - Re-exporting entities from third-party modules.

@@ -343,6 +343,8 @@ In Python:
   :language: python
 
 
+.. _f2py-allocatable-arrays:
+
 Allocatable arrays
 ===================
 
