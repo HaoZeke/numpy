@@ -173,3 +173,47 @@ argument ``n``, after wrapping with F2PY, in Python:
 
 .. include:: ./../code/results/asterisk2_session.dat
   :literal:
+
+Interrupting long-running Fortran calls
+=======================================
+
+``KeyboardInterrupt`` (``Ctrl-C``) does not stop a running Fortran
+routine. While execution is inside compiled Fortran code the Python
+signal handler cannot run: the interpreter only processes signals
+between bytecode instructions, and F2PY-generated wrappers do not (and
+cannot safely) inject ``PyErr_CheckSignals()`` into foreign code. The
+interrupt is delivered when control returns to Python, after the
+Fortran call completes.
+
+Two patterns make long-running Fortran interruptible:
+
+* **Callbacks.** A routine that accepts a callback re-enters Python
+  periodically; the interrupt raises inside the callback and
+  propagates out of the wrapped call. See :ref:`f2py-python-usage`
+  for callback usage.
+
+* **A stop flag.** Export a sentinel (a module variable or ``COMMON``
+  block member) that the Fortran loop checks each iteration, and set
+  it from Python — from a signal handler or another thread — to
+  request an orderly exit.
+
+Signal-checking hooks around every generated call were considered and
+rejected: the wrapper releases the GIL around the Fortran call, and a
+handler that unwinds Fortran frames with ``longjmp`` leaks resources
+and corrupts state in threaded code (see gh-20148 for the
+discussion).
+
+Fixed-form sources and compiler flags
+=====================================
+
+``f2py`` decides whether a file is fixed-form (Fortran 77 style) from
+its extension and contents, not from compiler flags: ``.f``, ``.for``,
+``.ftn``, and ``.f77`` parse as fixed form, while ``.f90`` and later
+extensions parse as free form. Compiler arguments passed through
+``--f77flags``/``--f90flags`` (for example ``-ffixed-form``) affect
+only the compilation step; the wrapper generator never sees them (see
+gh-26704).
+
+To wrap fixed-form code kept in a ``.f90`` file, either rename it to a
+fixed-form extension for the f2py step, or write a signature file with
+``f2py -h`` and hand that to the wrapper generation.
