@@ -131,6 +131,10 @@ jobs:
           rem MSVC for the C side while FC stays ifx.
           set "CC="
           set "CXX="
+          rem The exported env does not put ifx on PATH for cmd steps;
+          rem activate the oneAPI environment the documented way.
+          if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          where ifx || exit /b 1
           pip install -r requirements/build_requirements.txt meson ninja || exit /b 1
           pip install . -Csetup-args=-Dallow-noblas=true || exit /b 1
           rem /d: %TEMP% is on C: while the workspace is on D:, and a
