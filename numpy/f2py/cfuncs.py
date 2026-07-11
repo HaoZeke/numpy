@@ -723,9 +723,29 @@ fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
                             \"array object is non-contiguous.\");
             goto capi_fail;
         }
-        n = PyArray_NBYTES(arr);
-        buf = PyArray_DATA(arr);
-        n = strnlen(buf, n);
+        if (PyArray_TYPE(arr) == NPY_UNICODE) {
+            /* Raw UCS4 storage read as char* is byte-order dependent:
+               big-endian stores the NUL bytes first, so strnlen sees an
+               empty string (little-endian only works for ASCII by
+               accident). Convert through str like any other non-bytes
+               object (gh-11831). */
+            PyObject *tmp2 = PyObject_Str(obj);
+            if (tmp2) {
+                tmp = PyUnicode_AsASCIIString(tmp2);
+                Py_DECREF(tmp2);
+            }
+            else {
+                tmp = NULL;
+            }
+            if (tmp == NULL) goto capi_fail;
+            n = PyBytes_GET_SIZE(tmp);
+            buf = PyBytes_AS_STRING(tmp);
+        }
+        else {
+            n = PyArray_NBYTES(arr);
+            buf = PyArray_DATA(arr);
+            n = strnlen(buf, n);
+        }
     }
     else {
         if (PyBytes_Check(obj)) {
