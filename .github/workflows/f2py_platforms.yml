@@ -133,7 +133,9 @@ jobs:
           set "CXX="
           rem The exported env does not put ifx on PATH for cmd steps;
           rem activate the oneAPI environment the documented way.
-          if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          rem --force: setup-fortran leaks SETVARS_COMPLETED=1 without
+          rem the PATH it implies, so an unforced call skips itself.
+          if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
           where ifx || exit /b 1
           pip install -r requirements/build_requirements.txt meson ninja || exit /b 1
           pip install . -Csetup-args=-Dallow-noblas=true || exit /b 1
