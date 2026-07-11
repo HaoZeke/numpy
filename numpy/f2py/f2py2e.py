@@ -394,14 +394,15 @@ def _propagate_callback_intents(lst):
         for b in block.get('body') or []:
             scan(b)
         if block.get('block') in ('function', 'subroutine'):
-            args = block.get('args') or []
             for vname, var in (block.get('vars') or {}).items():
                 intents = var.get('intent') or []
-                if 'callback' in intents and vname not in args:
+                if 'callback' in intents and 'hide' in intents:
                     # hidden callbacks only: Fortran calls them through
                     # their plain external symbol, so the trampoline
                     # needs the F_FUNC name. Argument callbacks are
-                    # passed as pointers and keep the static form.
+                    # passed as procedure pointers and keep the static
+                    # form (crackfortran appends even hidden callbacks
+                    # to args, so intent is the discriminator).
                     cb_intents.setdefault(vname, set()).add('callback')
 
     for item in lst:
