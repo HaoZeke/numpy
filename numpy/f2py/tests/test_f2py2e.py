@@ -102,11 +102,11 @@ def gh22819_cli(tmpdir_factory):
 
 
 @pytest.fixture(scope="session")
-def gh25654_mix(tmpdir_factory):
+def gh25654_mix(tmp_path_factory):
     """Signature + Fortran sources for gh-25654 mixed-input warning."""
     fdat = util.getpath("tests", "src", "cli", "gh25654.f").read_text()
     pdat = util.getpath("tests", "src", "cli", "gh25654.pyf").read_text()
-    base = tmpdir_factory.getbasetemp()
+    base = tmp_path_factory.mktemp("gh25654")
     fpath = base / "gh25654.f"
     ppath = base / "gh25654.pyf"
     fpath.write_text(fdat, encoding="ascii")
