@@ -179,11 +179,11 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
             if (descr == NULL) {
                 goto fail;
             }
+            /* PyArray_NewFromDescr steals descr even on failure. */
             v = PyArray_NewFromDescr(&PyArray_Type, descr, fp->defs[i].rank,
                                      fp->defs[i].dims.d, NULL, fp->defs[i].data,
                                      NPY_ARRAY_FARRAY, NULL);
             if (v == NULL) {
-                Py_DECREF(descr);
                 goto fail;
             }
             int st = PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
