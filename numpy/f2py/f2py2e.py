@@ -172,6 +172,10 @@ Extra options (only effective with -c):
   -I/path/to/include/
   <filename>.o <filename>.so <filename>.a
 
+  Link prebuilt libraries with -L/-l rather than passing .a/.so
+  positionally: with the meson backend, positional archives are
+  treated as extra objects, not as link targets (gh-31249).
+
   Using the following macros may be required with non-gcc Fortran
   compilers:
     -DPREPEND_FORTRAN -DNO_APPEND_FORTRAN -DUPPERCASE_FORTRAN
