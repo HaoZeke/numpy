@@ -416,7 +416,9 @@ def _propagate_callback_intents(lst):
             for vname, var in (block.get('vars') or {}).items():
                 intents = var.get('intent') or []
                 if 'callback' in intents:
-                    cb_intents.setdefault(vname, set()).update(intents)
+                    # only the callback marker: hide/optional describe the
+                    # consuming routine's variable, not the callback block
+                    cb_intents.setdefault(vname, set()).add('callback')
 
     for item in lst:
         if '__user__' not in item['name']:
@@ -430,9 +432,13 @@ def _propagate_callback_intents(lst):
             if bi.get('block') != 'interface':
                 continue
             for b in bi.get('body') or []:
-                if b and b.get('name') in cb_intents:
-                    cur = set(b.get('intent') or [])
-                    b['intent'] = sorted(cur | cb_intents[b['name']])
+                if not b or b.get('name') not in cb_intents:
+                    continue
+                cur = set(b.get('intent') or [])
+                if 'callback' in cur:
+                    # F77-directive path already marks these; leave alone
+                    continue
+                b['intent'] = sorted(cur | cb_intents[b['name']])
 
 
 def buildmodules(lst):
