@@ -205,7 +205,7 @@ class TestAssignmentOnlyModules(util.F2PyTest):
 @pytest.mark.slow
 class TestScalarConverterDeprecation(util.F2PyTest):
     # gh-24394: lossy scalar conversions warn before eventual removal
-    sources = [util.getpath("tests", "src", "regression", "gh21767.f90")]
+    sources = [util.getpath("tests", "src", "regression", "gh24394.f90")]
 
     def test_complex_scalar_warns(self):
         with pytest.warns(DeprecationWarning, match="complex value"):
