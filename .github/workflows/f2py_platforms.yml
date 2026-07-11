@@ -82,6 +82,16 @@ jobs:
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           pip install -r requirements/build_requirements.txt -r requirements/test_requirements.txt
           pip install . -Csetup-args=-Dallow-noblas=true
+      - name: Register the MinGW runtime DLL directory
+        shell: pwsh
+        run: |
+          # Python >= 3.8 does not consult PATH for dependent DLLs of
+          # extension modules, so freshly built modules that link
+          # libgfortran/libgcc_s/libwinpthread fail to import with
+          # 'DLL load failed'. sitecustomize runs in every test
+          # process and registers the directory the supported way.
+          $site = python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])"
+          Set-Content -Path "$site\sitecustomize.py" -Value 'import os; os.add_dll_directory(r"C:\msys64\ucrt64\bin")'
       - name: Run callback tests (gh-15934 reproducer class)
         shell: pwsh
         run: |
@@ -105,7 +115,7 @@ jobs:
         uses: fortran-lang/setup-fortran@8821f57b53846d35d62632eb51c60ac6c4bff4ce # v1.6.1
         with:
           compiler: intel
-          version: '2025.0'
+          version: '2024.1'
       - name: Build and run a minimal f2py module with ifx
         shell: cmd
         run: |
@@ -115,7 +125,7 @@ jobs:
           echo subroutine hi() > hi.f90
           echo   print *, "ok" >> hi.f90
           echo end subroutine >> hi.f90
-          python -m numpy.f2py -c hi.f90 -m hi_ifx --fcompiler= --backend meson
+          python -m numpy.f2py -c hi.f90 -m hi_ifx
           python -c "import hi_ifx; hi_ifx.hi()"
 
   f2py_macos_corun:
