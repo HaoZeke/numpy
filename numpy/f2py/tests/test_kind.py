@@ -34,10 +34,17 @@ class TestKind(util.F2PyTest):
         """
         selectedrealkind = self.module.selectedrealkind
 
-        for i in range(32):
-            assert selectedrealkind(i) == selected_real_kind(
-                i
-            ), f"selectedrealkind({i}): expected {selected_real_kind(i)!r} but got {selectedrealkind(i)!r}"
+        diverging = {
+            i: (selected_real_kind(i), selectedrealkind(i))
+            for i in range(32)
+            if selectedrealkind(i) != selected_real_kind(i)
+        }
+        assert not diverging, (
+            "f2py's parse-time selected_real_kind emulation diverges from "
+            f"this Fortran compiler at p -> (emulated, compiler): {diverging}. "
+            "Kind-based declarations wrap incorrectly for these precisions; "
+            "override the mapping with a .f2py_f2cmap file (gh-3424)."
+        )
 
     @pytest.mark.xfail(IS_PPC_OR_AIX,
                        reason="Some PowerPC may not support full IEEE 754 precision")
