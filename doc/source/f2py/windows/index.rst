@@ -36,52 +36,49 @@ on Linux, or facilitated by Docker. In a similar vein, traditional
 virtualization methods like VirtualBox are also reasonable methods to develop
 UNIX tools on Windows.
 
-Native Windows support is typically stunted beyond the usage of commercial compilers.
-However, as of 2022, most commercial compilers have free plans which are sufficient for
-general use. Additionally, the Fortran language features supported by ``f2py``
-(partial coverage of Fortran 2003), means that newer toolchains are often not
-required. Briefly, then, for an end user, in order of use:
+Native Windows support no longer requires a commercial license: Intel
+oneAPI, MSYS2, and the conda-forge toolchains are all free. The Fortran
+language features supported by ``f2py`` (partial coverage of Fortran
+2003) mean that newer toolchains are often not required. Briefly, then,
+for an end user, in order of use:
 
-Classic Intel Compilers (commercial)
-   These are maintained actively, though licensing restrictions may apply as
-   further detailed in :ref:`f2py-win-intel`.
-
-   Suitable for general use for those building native Windows programs by
-   building off of MSVC.
+Intel oneAPI (free)
+   The LLVM-based Intel compilers (``ifx``, ``icx``) install through
+   free oneAPI toolkits and compile natively against MSVC. The classic
+   ``ifort`` compiler has been discontinued and removed from recent
+   oneAPI releases; see :ref:`f2py-win-intel`.
 
 MSYS2 (FOSS)
    In conjunction with the ``mingw-w64`` project, ``gfortran`` and ``gcc``
    toolchains can be used to natively build Windows programs.
 
+Conda (FOSS)
+   The `conda-forge`_ channel ships both ``flang`` (LLVM Flang, the
+   compiler conda-forge itself uses to build SciPy on Windows) and
+   MinGW-w64 ``gfortran`` packages.
+
+LLVM Flang (FOSS)
+   `LLVM Flang`_ supports Windows natively and links against MSVC. The
+   older "classic" `legacy version of Flang`_ is unmaintained; prefer
+   the LLVM version.
+
 Windows Subsystem for Linux
    Assuming the usage of ``gfortran``, this can be used for cross-compiling
    Windows applications, but is significantly more complicated.
-
-Conda
-   Windows support for GNU compilers in ``conda`` is provided by `conda-forge`_ channel.
-
-PGI Compilers (commercial)
-   Unmaintained but sufficient if an existing license is present. Works
-   natively, but has been superseded by the Nvidia HPC SDK, with no `native
-   Windows support`_.
 
 Cygwin (FOSS)
    Can also be used for ``gfortran``. However, the POSIX API compatibility layer provided by
    Cygwin is meant to compile UNIX software on Windows, instead of building
    native Windows programs. This means cross compilation is required.
 
-Intel oneAPI
-   The newer Intel compilers (``ifx``, ``icx``) are based on LLVM and can be
-   used for native compilation. Licensing requirements can be onerous.
+PGI Compilers (historical)
+   Superseded by the Nvidia HPC SDK, with no `native Windows
+   support`_; only relevant to existing licensed installs.
 
-Classic Flang (FOSS)
-   The backbone of the PGI compilers were cannibalized to form the "classic" or
-   `legacy version of Flang`_. This may be compiled from source and used
-   natively. `LLVM Flang`_ does not support Windows yet (30-01-2022).
-   
 LFortran (FOSS)
-   One of two LLVM based compilers. Not all of F2PY supported Fortran can be
-   compiled yet (30-01-2022) but uses MSVC for native linking.
+   An LLVM based compiler under active development. Not all of the
+   Fortran F2PY supports can be compiled yet, but it uses MSVC for
+   native linking.
 
 
 Baseline
@@ -92,7 +89,7 @@ For this document we will assume the following basic tools:
 - The IDE being considered is the community supported `Microsoft Visual Studio Code`_
 - The terminal being used is the `Windows Terminal`_
 - The shell environment is assumed to be `Powershell 7.x`_
-- Python 3.10 from `the Microsoft Store`_ and this can be tested with
+- A recent Python (3.12 or later) from `the Microsoft Store`_ and this can be tested with
    ``Get-Command python.exe`` resolving to
    ``C:\Users\$USERNAME\AppData\Local\Microsoft\WindowsApps\python.exe``
 - The Microsoft Visual C++ (MSVC) toolset
@@ -107,15 +104,15 @@ matrix as follows:
   +----------------------+--------------------+-------------------+
   | **Fortran Compiler** | **C/C++ Compiler** | **Source**        |
   +======================+====================+===================+
-  | Intel Fortran        | MSVC / ICC         | exe               |
+  | Intel oneAPI ifx     | MSVC / icx         | exe               |
   +----------------------+--------------------+-------------------+
   | GFortran             | MSVC               | MSYS2/exe         |
   +----------------------+--------------------+-------------------+
   | GFortran             | GCC                | WSL               |
   +----------------------+--------------------+-------------------+
-  | Classic Flang        | MSVC               | Source / Conda    |
+  | LLVM Flang           | MSVC / clang-cl    | Conda / exe       |
   +----------------------+--------------------+-------------------+
-  | Anaconda GFortran    | Anaconda GCC       | exe               |
+  | Conda GFortran       | Conda GCC          | Conda             |
   +----------------------+--------------------+-------------------+
 
 For an understanding of the key issues motivating the need for such a matrix
@@ -209,5 +206,5 @@ path using a hash. This needs to be added to the ``PATH`` variable.
 .. _native Windows support: https://developer.nvidia.com/nvidia-hpc-sdk-downloads#collapseFour
 .. _conda-forge: https://conda-forge.org/docs/maintainer/infrastructure/#compilers-supplied-by-conda-forge
 .. _now deprecated: https://github.com/numpy/numpy/pull/20875
-.. _LLVM Flang: https://releases.llvm.org/11.0.0/tools/flang/docs/ReleaseNotes.html
+.. _LLVM Flang: https://flang.llvm.org/docs/
 .. _SciPy's documentation: https://scipy.github.io/devdocs/building/index.html#system-level-dependencies
