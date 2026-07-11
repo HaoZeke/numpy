@@ -7,6 +7,9 @@ name: F2PY platform matrix
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - ci/f2py-platform-matrix
   pull_request:
     paths:
       - '.github/workflows/f2py_platforms.yml'
