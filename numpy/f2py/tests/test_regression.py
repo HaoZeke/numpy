@@ -340,3 +340,19 @@ class TestScalarConverterDeprecation(util.F2PyTest):
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             assert self.module.double_it(2.0) == 4.0
+
+
+@pytest.mark.slow
+class TestStrictSetattr(util.F2PyTest):
+    # gh-3751: -DF2PY_STRICT_ATTRS rejects attribute names that do not
+    # map to Fortran data (typos silently stored dead Python attributes)
+    sources = [util.getpath("tests", "src", "regression", "gh4013.f90")]
+    options = ["-DF2PY_STRICT_ATTRS"]
+    module_name = "gh3751_strict"
+
+    def test_unknown_attribute_rejected(self):
+        with pytest.raises(AttributeError, match="not a Fortran variable"):
+            self.module.gh4013.no_such_variable = 1
+
+    def test_underscore_names_allowed(self):
+        self.module.gh4013._scratch = 1

@@ -506,8 +506,21 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                             "delete non-existing fortran attribute");
         return rv;
     }
-    else
+    else {
+#ifdef F2PY_STRICT_ATTRS
+        /* opt-in (gh-3751): reject names that do not map to Fortran
+         * data -- a typo here otherwise stores a dead Python attribute
+         * while the Fortran variable stays unchanged */
+        if (name[0] != '_') {
+            PyErr_Format(PyExc_AttributeError,
+                         "cannot set attribute '%s': not a Fortran "
+                         "variable of this module (compiled with "
+                         "-DF2PY_STRICT_ATTRS)", name);
+            return -1;
+        }
+#endif
         return PyDict_SetItemString(fp->dict, name, v);
+    }
 }
 
 static PyObject *
