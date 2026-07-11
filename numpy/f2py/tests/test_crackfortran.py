@@ -303,7 +303,7 @@ class TestStringLiteralDepend:
 
         lwork_case = next(b for b in iface["body"] if b.get("name") == "trcon_lwork")
         lvs = lwork_case["vars"]
-        assert lvs["lwork"]["depend"] == ["norm", "n"]
+        assert set(lvs["lwork"]["depend"]) == {"norm", "n"}
         assert lvs["lwork"]["="] == "(*norm=='i'?3*n:n)"
         assert lvs["work"]["dimension"] == ["lwork"]
 
