@@ -128,6 +128,12 @@ If ``<fortran files>`` does not contain a signature file, then an extension
 module is constructed by scanning all Fortran source codes for routine
 signatures, before proceeding to build the extension module.
 
+.. note::
+   Link prebuilt libraries through ``-L``/``-l`` rather than passing
+   ``.a``/``.so`` files positionally: with the Meson backend, positional
+   archives are treated as extra objects rather than link targets, and
+   only ``PyInit_*`` symbols stay exported from the extension module.
+
 .. warning::
    ``distutils`` has been removed. Use environment
    variables or native files to interact with ``meson`` instead. See its `FAQ
