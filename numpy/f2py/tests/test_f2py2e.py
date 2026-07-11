@@ -763,7 +763,9 @@ def test_meson_non_openmp_dep_no_link_language():
     src = _meson_template(["lapack"]).generate_meson_build()
     assert "dependency('lapack')" in src
     assert "link_language" not in src
-    assert "openmp" not in src
+    # the interpreter path may contain 'openmp' (e.g. a venv name), so
+    # only assert on the dependency call
+    assert "dependency('openmp'" not in src
 
 
 def test_inclpath(monkeypatch):
