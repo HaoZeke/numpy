@@ -1,0 +1,25 @@
+python module shared__user__routines
+    interface
+        function pyfunc(x) result (r)
+            double precision, intent(in) :: x
+            double precision :: r
+        end function pyfunc
+    end interface
+end python module shared__user__routines
+
+python module gh8288
+    interface
+        subroutine first(pyfunc,x,r)
+            use shared__user__routines
+            external pyfunc
+            double precision, intent(in) :: x
+            double precision, intent(out) :: r
+        end subroutine first
+        subroutine second(pyfunc,x,r)
+            use shared__user__routines
+            external pyfunc
+            double precision, intent(in) :: x
+            double precision, intent(out) :: r
+        end subroutine second
+    end interface
+end python module gh8288

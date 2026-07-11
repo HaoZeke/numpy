@@ -200,3 +200,86 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.n_max == 16)
         assert (self.module.f_globals.i_max == 18)
         assert (self.module.f_globals.j_max == 72)
+
+
+@pytest.mark.slow
+class TestSharedCallbackRegression(util.F2PyTest):
+    # gh-8288: two routines sharing one Python callback through a common
+    # __user__ module (the form that hit C redefinition in 2016 and the
+    # thread-local fatal on 1.21.2)
+    sources = [util.getpath("tests", "src", "regression", "gh8288.pyf"),
+               util.getpath("tests", "src", "regression", "gh8288.f")]
+    module_name = "gh8288"
+
+    def test_shared_callback(self):
+        f = lambda x: x + 1.0
+        assert self.module.first(f, 1.0) == 2.0
+        assert self.module.second(f, 1.0) == 4.0
+
+
+@pytest.mark.slow
+class TestBytesCharacterCommon(util.F2PyTest):
+    # gh-9370: bytes assigned to a CHARACTER common variable must store
+    # raw bytes, not a byte-by-byte integer reading
+    sources = [util.getpath("tests", "src", "regression", "gh9370.f")]
+
+    def test_bytes_roundtrip(self):
+        self.module.setstr()
+        assert self.module.gh9370com.mystr.tobytes() == b"fortran "
+        self.module.gh9370com.mystr = b"bytesval"
+        assert self.module.gh9370com.mystr.tobytes() == b"bytesval"
+        self.module.gh9370com.mystr = "strval  "
+        assert self.module.gh9370com.mystr.tobytes() == b"strval  "
+
+
+@pytest.mark.slow
+class TestModulelessFunction(util.F2PyTest):
+    # gh-19767: a module-less function must return its computed value,
+    # not a silent zero
+    sources = [util.getpath("tests", "src", "regression", "gh19767.f90")]
+
+    def test_free_function_return(self):
+        assert self.module.mysqrt(4.0) == 2.0
+
+
+@pytest.mark.slow
+class TestContainedProcedures(util.F2PyTest):
+    # gh-20103: internal (contains) procedures wrap without leaking into
+    # the generated interface
+    sources = [util.getpath("tests", "src", "regression", "gh20103.f90")]
+
+    def test_contains_wrapping(self):
+        assert self.module.outer20103(3.0) == 7.0
+
+
+def test_gh23338_regex_no_catastrophic_backtracking():
+    # gh-23338: nameargspattern must not exponentially backtrack on
+    # repeated bind-like sequences (CodeQL ReDoS report)
+    import re
+    import time
+
+    from numpy.f2py.crackfortran import nameargspattern
+
+    payload = "subroutine foo" + "@)@bind@(@" * 30 + "x" * 40
+    t0 = time.monotonic()
+    nameargspattern.match(payload)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 1.0, f"nameargspattern took {elapsed:.2f}s (ReDoS)"
+
+
+def test_gh20135_run_main_direct(tmp_path):
+    # gh-20135: run_main itself (not just the CLI entry) has direct
+    # coverage
+    from numpy.f2py import run_main
+
+    src = tmp_path / "gh20135.f90"
+    src.write_text("subroutine hi\nend subroutine hi\n")
+    import os
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        ret = run_main(["-m", "gh20135_mod", str(src)])
+    finally:
+        os.chdir(cwd)
+    assert "gh20135_mod" in ret
+    assert (tmp_path / "gh20135_modmodule.c").exists()
