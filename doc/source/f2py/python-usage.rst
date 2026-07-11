@@ -398,6 +398,30 @@ following rules are applied:
 * If ``k < l``, then ``y_{k + 1}, ..., y_l`` are ignored.
 * If ``k > l``, then only ``x_1, ..., x_l`` are set.
 
+Using bound methods and closures as call-backs
+----------------------------------------------
+
+Any Python callable works as a call-back, including bound methods and
+closures -- the instance state travels with the callable, so no
+Fortran-side handle is needed:
+
+.. code-block:: python
+
+    >>> class Model:
+    ...     def __init__(self, scale):
+    ...         self.scale = scale
+    ...     def rhs(self, x):
+    ...         return self.scale * x
+    ...
+    >>> m = Model(3.0)
+    >>> callback_demo.apply(m.rhs, 2.0)   # the method carries ``m``
+    6.0
+
+Passing ``m.rhs`` binds the instance exactly like any Python
+higher-order call; ``functools.partial`` and lambdas work the same
+way. This covers the common "call a method on my object from Fortran"
+pattern without any opaque-pointer machinery.
+
 Returning multiple values from a call-back
 ------------------------------------------
 
