@@ -32,8 +32,11 @@ directory explicitly before the import:
    os.add_dll_directory(r"C:\msys64\ucrt64\bin")  # or mingw64\bin
    import mymodule
 
-Alternatively, link the runtimes statically by passing
-``-static-libgfortran -static-libgcc`` through ``--f90flags``, or ship
-the three DLLs next to the built module.
+Alternatively, try linking the runtimes statically by passing
+``-static-libgfortran -static-libgcc -static-libwinpthread`` through
+``--f90flags``, or ship the three DLLs next to the built module.
+Static ``libwinpthread`` support is not available in every MinGW
+layout; when it is not, prefer ``os.add_dll_directory`` (or shipping
+the DLLs), which is the more reliable route.
 
 .. _`installation instructions`: https://www.msys2.org/
