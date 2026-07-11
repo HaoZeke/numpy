@@ -177,8 +177,6 @@ def test_gh22819_many_pyf(capfd, gh22819_cli, monkeypatch):
             f2pycli()
 
 
-<<<<<<< HEAD
-=======
 def test_gh25654_pyf_fortran_mix_warn(gh25654_mix):
     """Warn when .pyf and Fortran sources are passed together.
 
@@ -199,7 +197,6 @@ def test_gh25654_pyf_fortran_mix_warn(gh25654_mix):
     assert str(ppath.name) in out
     assert str(fpath.name) in out
 
->>>>>>> origin/fix/f2py-pyf-mix-warning
 def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
     foutl = get_io_paths(gh23598_warn, mname="test")
     ipath = foutl.f90inp
