@@ -604,14 +604,18 @@ def test_gh7577_complex_callback_codegen(tmp_path, monkeypatch):
     define_at = csrc.index("#define F2PY_CB_RETURNCOMPLEX")
     callback_at = csrc.index("cb_callback_in_complex_cb_test__user__routines")
     assert define_at < callback_at
+    # Stub is a static C function (not F_FUNC-mangled) because the external
+    # stays in the Fortran signature and is passed as a function pointer.
     assert re.search(
         r"#ifdef F2PY_CB_RETURNCOMPLEX\ncomplex_float\n#else\nvoid\n#endif\n"
-        r" F_FUNC\(callback,CALLBACK\) \(\n"
+        r" cb_callback_in_complex_cb_test__user__routines \(\n"
         r"#ifndef F2PY_CB_RETURNCOMPLEX\n"
         r"complex_float \*return_value\n#endif",
         csrc,
     )
     assert "#ifdef F2PY_CB_RETURNCOMPLEX\n    return return_value;" in csrc
+    # external callback stays in the Fortran signature: pass the C stub pointer
+    assert "(*f2py_func)(callback_cptr,&z,&r);" in csrc
 
 
 @pytest.mark.slow
@@ -624,8 +628,6 @@ class TestGH7577ComplexCallback(util.F2PyTest):
 
         r = self.module.complex_cb_test(square, 1j)
         assert r == -1 + 0j
-
-
 @pytest.mark.slow
 class TestCBVarargs(util.F2PyTest):
     # gh-16357: callbacks with *args must receive every argument the
