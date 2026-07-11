@@ -65,6 +65,7 @@ jobs:
           submodules: recursive
           persist-credentials: false
       - uses: msys2/setup-msys2@40677d36a502eb2cf0fb808cc9dec31bf6152638 # v2.28.0
+        id: msys2
         with:
           msystem: UCRT64
           update: false
@@ -79,7 +80,9 @@ jobs:
       - name: Add MinGW to PATH and build
         shell: pwsh
         run: |
-          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+          $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin;$env:PATH"
+          (Get-Command gfortran).Source
+          gfortran --version
           pip install -r requirements/build_requirements.txt -r requirements/test_requirements.txt
           pip install . -Csetup-args=-Dallow-noblas=true
       - name: Register the MinGW runtime DLL directory
@@ -89,13 +92,17 @@ jobs:
           # extension modules, so freshly built modules that link
           # libgfortran/libgcc_s/libwinpthread fail to import with
           # 'DLL load failed'. sitecustomize runs in every test
-          # process and registers the directory the supported way.
+          # process and registers the directory the supported way. The
+          # action extracts its own msys64 (not C:\msys64), so take the
+          # location from its output.
+          $mingw = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin"
           $site = python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])"
-          Set-Content -Path "$site\sitecustomize.py" -Value 'import os; os.add_dll_directory(r"C:\msys64\ucrt64\bin")'
+          Set-Content -Path "$site\sitecustomize.py" -Value "import os; os.add_dll_directory(r'$mingw')"
+          python -c "import sys; assert 'sitecustomize' in sys.modules, 'sitecustomize not imported'"
       - name: Run callback tests (gh-15934 reproducer class)
         shell: pwsh
         run: |
-          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+          $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin;$env:PATH"
           cd $env:TEMP
           python -m pytest --pyargs numpy.f2py.tests.test_callback -v --no-header
 
@@ -119,14 +126,19 @@ jobs:
       - name: Build and run a minimal f2py module with ifx
         shell: cmd
         run: |
-          pip install -r requirements/build_requirements.txt meson ninja
-          pip install . -Csetup-args=-Dallow-noblas=true
+          rem setup-fortran exports CC=icx/CXX=icpx, but the Fortran-only
+          rem oneAPI install ships no icx; clear them so meson activates
+          rem MSVC for the C side while FC stays ifx.
+          set "CC="
+          set "CXX="
+          pip install -r requirements/build_requirements.txt meson ninja || exit /b 1
+          pip install . -Csetup-args=-Dallow-noblas=true || exit /b 1
           cd %TEMP%
           echo subroutine hi() > hi.f90
           echo   print *, "ok" >> hi.f90
           echo end subroutine >> hi.f90
-          python -m numpy.f2py -c hi.f90 -m hi_ifx
-          python -c "import hi_ifx; hi_ifx.hi()"
+          python -m numpy.f2py -c hi.f90 -m hi_ifx || exit /b 1
+          python -c "import hi_ifx; hi_ifx.hi()" || exit /b 1
 
   f2py_macos_corun:
     # gh-12066: the semicolon-split tests failed on macOS only when
