@@ -648,7 +648,7 @@ def routsign2map(rout):
                 ret['routdebugshowvalue'] = ("debug-capi:"
                                              f"{a}={cformat_map[ret['ctype']]}")
             if isstringfunction(rout):
-                ret['routdebugshowvalue'] = f'debug-capi:slen({a})=%d {a}=\\"%s\\"'
+                ret['routdebugshowvalue'] = f'debug-capi:slen({a})=%" NPY_INTP_FMT " {a}=\\"%s\\"'
         if isstringfunction(rout):
             ret['rlength'] = getstrlength(rout['vars'][a])
             if ret['rlength'] == '-1':
