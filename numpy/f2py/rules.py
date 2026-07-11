@@ -76,6 +76,7 @@ from .auxfuncs import (
     hasresultnote,
     isarray,
     isarrayofstrings,
+    isabsentcapable,
     isattr_value,
     ischaracter,
     ischaracter_or_characterarray,
@@ -1035,7 +1036,11 @@ if (#varname#_cb.capi==Py_None) {
     # Complex scalars
     {  # Common
         'decl': '    #ctype# #varname#;',
-        'callfortran': {isintent_c: '#varname#,', l_not(isintent_c): '&#varname#,'},
+        'callfortran': {
+            isintent_c: '#varname#,',
+            l_and(l_not(isintent_c), isabsentcapable):
+                '(#varname#_capi == Py_None ? NULL : &#varname#),',
+            l_and(l_not(isintent_c), l_not(isabsentcapable)): '&#varname#,'},
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#.r,#varname#.i);'},
         'return': {isintent_out: ',#varname#_capi'},
         '_check': iscomplex

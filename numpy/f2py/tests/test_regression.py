@@ -200,3 +200,16 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.n_max == 16)
         assert (self.module.f_globals.i_max == 18)
         assert (self.module.f_globals.j_max == 72)
+
+
+@pytest.mark.slow
+class TestOptionalPresent(util.F2PyTest):
+    # gh-4013: omitted source-optional args forward as absent, so
+    # present() branches correctly instead of reading zeros
+    sources = [util.getpath("tests", "src", "regression", "gh4013.f90")]
+
+    def test_present_branch(self):
+        assert self.module.gh4013.foo(20.0) == 20.0
+
+    def test_absent_branch(self):
+        assert self.module.gh4013.foo() == 1.0

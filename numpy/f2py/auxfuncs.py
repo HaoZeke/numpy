@@ -422,6 +422,15 @@ def isrequired(var):
     return not isoptional(var) and isintent_nothide(var)
 
 
+def isabsentcapable(var):
+    # A Fortran-source ``optional`` scalar without an f2py default:
+    # omission forwards to the compiler ABI as a NULL argument so
+    # ``present()`` sees the truth (gh-4013). A ``=`` default keeps the
+    # value-substitution behaviour.
+    return (isscalar(var) and isoptional(var) and '=' not in var
+            and not isstring(var) and not isintent_c(var))
+
+
 def iscstyledirective(f2py_line):
     directives = {"callstatement", "callprotoargument", "pymethoddef"}
     return any(directive in f2py_line.lower() for directive in directives)
