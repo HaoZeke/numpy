@@ -173,12 +173,18 @@ with ``$ENV:PATH``.
 Microsoft Store Python paths
 ============================
 
-The MS Windows version of Python discussed here installs to a non-deterministic
-path using a hash. This needs to be added to the ``PATH`` variable.
+The Microsoft Store install of Python places user scripts under a hashed
+package path under ``$env:LOCALAPPDATA\packages\``. After installing packages
+with ``pip --user``, add the corresponding
+``...\local-packages\python3X\scripts`` directory to ``PATH``. For a Store
+Python 3.12 install the path looks like:
 
 .. code-block:: powershell
 
-   $Env:Path += ";$env:LOCALAPPDATA\packages\pythonsoftwarefoundation.python.3.10_qbz5n2kfra8p0\localcache\local-packages\python310\scripts"
+   # The trailing hash is machine-specific; list
+   #   $env:LOCALAPPDATA\packages\pythonsoftwarefoundation.python*
+   # to find the exact folder name on your system.
+   $Env:Path += ";$env:LOCALAPPDATA\packages\pythonsoftwarefoundation.python.3.12_<hash>\localcache\local-packages\python312\scripts"
 
 .. toctree::
    :maxdepth: 2
@@ -189,7 +195,7 @@ path using a hash. This needs to be added to the ``PATH`` variable.
    pgi
 
 
-.. _the Microsoft Store: https://www.microsoft.com/en-us/p/python-310/9pjpw5ldxlz5
+.. _the Microsoft Store: https://www.microsoft.com/en-us/p/python-312/9ncvdn91xzqp
 .. _Microsoft Visual Studio Code: https://code.visualstudio.com/Download
 .. _more complete POSIX environment: https://www.cygwin.com/
 .. _This MSYS2 document: https://www.msys2.org/wiki/How-does-MSYS2-differ-from-Cygwin/
