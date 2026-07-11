@@ -164,6 +164,32 @@ Common build flags:
   "lapack" and "scalapack" as dependencies and remove them from argv, leaving a
   dependencies list containing ["lapack", "scalapack"].
 
+  The name is resolved by meson's `dependency()`_, so anything
+  discoverable through ``pkg-config``, CMake config files, or meson's
+  builtin dependency names works::
+
+    f2py -c solver.f90 -m solver --dep lapack
+
+  Some builtins are language-sensitive. Bare ``--dep mpi`` maps to
+  ``dependency('mpi')``, which selects the C MPI variant by default and
+  may not pull in the Fortran MPI libraries a Fortran caller needs.
+  Per-language selection for ``--dep`` is tracked separately; until then
+  use raw ``-L``/``-l`` flags or hand-edit the generated ``meson.build``
+  as described below.
+
+  When a library has no ``pkg-config`` or CMake metadata, fall back to
+  raw linker flags (``-L/path/to/lib -lname``), or pass
+  ``--build-dir mybuild`` so the generated ``mybuild/meson.build``
+  skeleton persists and can be edited by hand. Do not re-run
+  ``f2py -c`` after editing: each invocation regenerates
+  ``meson.build`` and overwrites the edit. From inside ``mybuild``,
+  reconfigure if needed (``meson setup bbdir`` or
+  ``meson setup --reconfigure bbdir``), then
+  ``meson compile -C bbdir``. f2py nests the Meson build directory as
+  ``bbdir`` under the ``--build-dir`` path.
+
+.. _dependency(): https://mesonbuild.com/Reference-manual_functions.html#dependency
+
 .. note::
   
   The ``f2py -c`` option must be applied either to an existing ``.pyf`` file
