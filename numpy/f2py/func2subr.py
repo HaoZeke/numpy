@@ -16,6 +16,7 @@ from ._isocbind import isoc_kindmap
 from .auxfuncs import (
     errmess,
     getfortranname,
+    isabsentcapable,
     isexternal,
     isfunction,
     isfunction_wrap,
@@ -280,7 +281,15 @@ def createfuncwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            decl = var2fixfortran(vars, a, f90mode=f90mode)
+            if f90mode and isabsentcapable(vars[a]) and decl:
+                # absence forwards through the wrapper (gh-4013)
+                if ' :: ' in decl:
+                    decl = decl.replace(' :: ', ', optional :: ', 1)
+                elif decl.endswith(f' {a}'):
+                    typepart = decl[: -len(a) - 1]
+                    decl = f'{typepart}, optional :: {a}'
+            add(decl)
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
@@ -398,7 +407,15 @@ def createsubrwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            decl = var2fixfortran(vars, a, f90mode=f90mode)
+            if f90mode and isabsentcapable(vars[a]) and decl:
+                # absence forwards through the wrapper (gh-4013)
+                if ' :: ' in decl:
+                    decl = decl.replace(' :: ', ', optional :: ', 1)
+                elif decl.endswith(f' {a}'):
+                    typepart = decl[: -len(a) - 1]
+                    decl = f'{typepart}, optional :: {a}'
+            add(decl)
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
