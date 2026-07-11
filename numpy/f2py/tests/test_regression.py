@@ -200,3 +200,23 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.n_max == 16)
         assert (self.module.f_globals.i_max == 18)
         assert (self.module.f_globals.j_max == 72)
+
+
+def test_gh28016_f2py_stays_lazy():
+    # gh-28016: f2py must not be imported as a side effect of plain
+    # `import numpy` -- it is lazily resolved via numpy.__getattr__
+    # like every other public submodule, not specially eager-loaded
+    # (which would pull in the Fortran-compiler-dependent bits for
+    # users who only want arrays).
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys; import numpy as np; "
+        "assert 'numpy.f2py' not in sys.modules, "
+        "'numpy.f2py imported eagerly by bare import numpy'; "
+        "np.f2py; "
+        "assert 'numpy.f2py' in sys.modules, "
+        "'numpy.f2py did not lazily resolve via __getattr__'"
+    )
+    subprocess.run([sys.executable, "-c", probe], check=True)
