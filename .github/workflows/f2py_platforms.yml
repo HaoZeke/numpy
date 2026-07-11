@@ -135,8 +135,8 @@ jobs:
         run: |
           set -ex
           brew install gcc || true
-          GF=$(ls /opt/homebrew/bin/gfortran-* /usr/local/bin/gfortran-* 2>/dev/null | sort -V | tail -1)
-          sudo ln -sf "$GF" /usr/local/bin/gfortran || ln -sf "$GF" /opt/homebrew/bin/gfortran
+          GF=$( (find /opt/homebrew/bin /usr/local/bin -maxdepth 1 -name 'gfortran-*' 2>/dev/null || true) | sort -V | tail -1)
+          ln -sf "$GF" "$(dirname "$GF")/gfortran"
           gfortran --version
           pip install -r requirements/build_requirements.txt \
                       -r requirements/test_requirements.txt
