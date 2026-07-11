@@ -165,8 +165,11 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
             if (v == NULL) {
                 goto fail;
             }
-            PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
-            Py_XDECREF(v);
+            int st = PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
+            Py_DECREF(v);
+            if (st < 0) {
+                goto fail;
+            }
         }
         else if ((fp->defs[i].data) !=
                  NULL) { /* Is Fortran variable or array (not allocatable) */
@@ -183,8 +186,11 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
                 Py_DECREF(descr);
                 goto fail;
             }
-            PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
-            Py_XDECREF(v);
+            int st = PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
+            Py_DECREF(v);
+            if (st < 0) {
+                goto fail;
+            }
         }
     }
     return (PyObject *)fp;
