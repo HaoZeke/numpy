@@ -172,6 +172,9 @@ def createfuncwrapper(rout, signature=0):
                 # absence forwards through the wrapper (gh-4013)
                 if ' :: ' in decl:
                     decl = decl.replace(' :: ', ', optional :: ', 1)
+                elif decl.endswith(f' {a}'):
+                    typepart = decl[: -len(a) - 1]
+                    decl = f'{typepart}, optional :: {a}'
             add(decl)
             dumped_args.append(a)
     for a in args:
@@ -274,6 +277,9 @@ def createsubrwrapper(rout, signature=0):
                 # absence forwards through the wrapper (gh-4013)
                 if ' :: ' in decl:
                     decl = decl.replace(' :: ', ', optional :: ', 1)
+                elif decl.endswith(f' {a}'):
+                    typepart = decl[: -len(a) - 1]
+                    decl = f'{typepart}, optional :: {a}'
             add(decl)
             dumped_args.append(a)
     for a in args:
