@@ -68,9 +68,18 @@ resolving them. Register the runtime directory before the import:
    import mymodule
 
 Additionally, ``ifx`` on Windows uses uppercase symbol names with no
-trailing underscore, so builds need the documented mangling macros::
+trailing underscore, so the C wrapper must be compiled with the standard
+mangling macros ``UPPERCASE_FORTRAN`` and ``NO_APPEND_FORTRAN`` (see
+:doc:`../usage`).
 
-   python -m numpy.f2py -c mysrc.f90 -m mymodule -DUPPERCASE_FORTRAN -DNO_APPEND_FORTRAN
+.. note::
+
+   The default meson backend does not currently forward ``-D`` defines from
+   the ``f2py -c`` command line into the generated build. Apply those macros
+   through your build system's C compiler flags (for example meson's
+   ``c_args``) rather than expecting
+   ``python -m numpy.f2py -c ... -DUPPERCASE_FORTRAN -DNO_APPEND_FORTRAN``
+   to take effect on its own.
 
 
 .. _disassembly of components and liability: https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html
