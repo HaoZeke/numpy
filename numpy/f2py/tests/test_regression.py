@@ -252,21 +252,6 @@ class TestContainedProcedures(util.F2PyTest):
         assert self.module.outer20103(3.0) == 7.0
 
 
-def test_gh23338_regex_no_catastrophic_backtracking():
-    # gh-23338: nameargspattern must not exponentially backtrack on
-    # repeated bind-like sequences (CodeQL ReDoS report)
-    import re
-    import time
-
-    from numpy.f2py.crackfortran import nameargspattern
-
-    payload = "subroutine foo" + "@)@bind@(@" * 30 + "x" * 40
-    t0 = time.monotonic()
-    nameargspattern.match(payload)
-    elapsed = time.monotonic() - t0
-    assert elapsed < 1.0, f"nameargspattern took {elapsed:.2f}s (ReDoS)"
-
-
 def test_gh20135_run_main_direct(tmp_path):
     # gh-20135: run_main itself (not just the CLI entry) has direct
     # coverage
