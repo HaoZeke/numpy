@@ -53,6 +53,26 @@ Powershell usage is a little less pleasant, and this configuration now works wit
 Note that the actual path to your local installation of `ifort` may vary, and the command above will need to be updated accordingly.
 
 
+Importing ifx-built modules
+===========================
+
+The DLL rule from :ref:`f2py-win-msys2` applies here too: a module
+built with ``ifx`` depends on the Intel runtime DLLs (``libifcoremd``,
+``svml_dispmd``, ...), and Python 3.8+ does not consult ``PATH`` when
+resolving them. Register the runtime directory before the import:
+
+.. code-block:: python
+
+   import os
+   os.add_dll_directory(r"C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin")
+   import mymodule
+
+Additionally, ``ifx`` on Windows uses uppercase symbol names with no
+trailing underscore, so builds need the documented mangling macros::
+
+   python -m numpy.f2py -c mysrc.f90 -m mymodule -DUPPERCASE_FORTRAN -DNO_APPEND_FORTRAN
+
+
 .. _disassembly of components and liability: https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html
 .. _Intel Fortran Compilers: https://www.intel.com/content/www/us/en/developer/articles/tool/oneapi-standalone-components.html#inpage-nav-6-1
 .. _Classic Intel C/C++ Compiler: https://www.intel.com/content/www/us/en/developer/articles/tool/oneapi-standalone-components.html#inpage-nav-6-undefined
