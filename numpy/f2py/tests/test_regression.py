@@ -250,6 +250,7 @@ class TestContainedProcedures(util.F2PyTest):
 
     def test_contains_wrapping(self):
         assert self.module.outer20103(3.0) == 7.0
+        assert not hasattr(self.module, "helper")
 
 
 def test_gh20135_run_main_direct(tmp_path):
