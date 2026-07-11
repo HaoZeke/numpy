@@ -890,7 +890,7 @@ def test_freethreading_compatible(hello_world_f90, monkeypatch):
         assert rout.returncode == 0
 
 
-def test_gh30167_c23_no_empty_prototypes(tmp_path, monkeypatch):
+def test_gh30167_c23_no_empty_prototypes(tmp_path):
     """callstatement without callprotoargument must not emit K&R ().
 
     Under C23, ``()`` means ``(void)``, so calls that pass arguments are
@@ -908,10 +908,13 @@ def test_gh30167_c23_no_empty_prototypes(tmp_path, monkeypatch):
             end interface
         end python module gh30167
         """), encoding="ascii")
-    monkeypatch.setattr(sys, "argv", f"f2py {pyf}".split())
-    with util.switchdir(tmp_path):
-        f2pycli()
-        text = (tmp_path / "gh30167module.c").read_text(encoding="utf-8")
+    # subprocess: in-process f2py on a .pyf leaks do-lower=0 into
+    # crackfortran.options and poisons later parses on this worker
+    subprocess.run(
+        [sys.executable, "-m", "numpy.f2py", str(pyf)],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+    text = (tmp_path / "gh30167module.c").read_text(encoding="utf-8")
 
     # K&R empty parameter list must never appear on f2py_func or the extern.
     assert "void (*f2py_func)()" not in text
@@ -921,7 +924,7 @@ def test_gh30167_c23_no_empty_prototypes(tmp_path, monkeypatch):
     assert "(*f2py_func)(&a, &b)" in text
 
 
-def test_gh30167_explicit_callprotoargument(tmp_path, monkeypatch):
+def test_gh30167_explicit_callprotoargument(tmp_path):
     """Explicit callprotoargument is still honoured over derived types."""
     pyf = tmp_path / "gh30167_explicit.pyf"
     pyf.write_text(textwrap.dedent("""\
@@ -936,10 +939,13 @@ def test_gh30167_explicit_callprotoargument(tmp_path, monkeypatch):
             end interface
         end python module gh30167_explicit
         """), encoding="ascii")
-    monkeypatch.setattr(sys, "argv", f"f2py {pyf}".split())
-    with util.switchdir(tmp_path):
-        f2pycli()
-        text = (tmp_path / "gh30167_explicitmodule.c").read_text(encoding="utf-8")
+    # subprocess: in-process f2py on a .pyf leaks do-lower=0 into
+    # crackfortran.options and poisons later parses on this worker
+    subprocess.run(
+        [sys.executable, "-m", "numpy.f2py", str(pyf)],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+    text = (tmp_path / "gh30167_explicitmodule.c").read_text(encoding="utf-8")
 
     assert "void (*f2py_func)()" not in text
     assert re.search(r"void\s*\(\*f2py_func\)\s*\(\s*char\s*\*\s*,\s*size_t\s*\)", text)
