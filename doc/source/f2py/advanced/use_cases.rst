@@ -185,23 +185,40 @@ cannot safely) inject ``PyErr_CheckSignals()`` into foreign code. The
 interrupt is delivered when control returns to Python, after the
 Fortran call completes.
 
+By default the generated wrapper holds the GIL for the whole Fortran
+call. The opt-in ``threadsafe`` signature attribute is what wraps the
+call in ``Py_BEGIN_ALLOW_THREADS`` /
+``Py_END_ALLOW_THREADS`` and releases the GIL (see
+:ref:`f2py-attributes`).
+
 Two patterns make long-running Fortran interruptible:
 
 * **Callbacks.** A routine that accepts a callback re-enters Python
   periodically; the interrupt raises inside the callback and
-  propagates out of the wrapped call. See :ref:`f2py-python-usage`
-  for callback usage.
+  propagates out of the wrapped call via the existing callback
+  ``setjmp``/``longjmp`` path. That path is cooperative and scoped:
+  it only runs when Fortran already calls back into Python through an
+  ``external`` argument. See :ref:`Call-back arguments` for usage.
 
 * **A stop flag.** Export a sentinel (a module variable or ``COMMON``
-  block member) that the Fortran loop checks each iteration, and set
-  it from Python — from a signal handler or another thread — to
-  request an orderly exit.
+  block member) that the Fortran loop checks each iteration. Updating
+  that flag while the call is in progress requires concurrency that
+  default wrappers do not provide: mark the routine ``threadsafe`` so
+  the GIL is released, then set the flag from a genuine worker thread
+  or a native/C-level signal handler. A plain Python
+  ``signal.signal`` handler is not enough — like
+  ``KeyboardInterrupt``, it only runs between bytecode instructions
+  and cannot preempt the main thread while it is inside Fortran.
+  Without ``threadsafe``, no other Python thread can run either.
 
-Signal-checking hooks around every generated call were considered and
-rejected: the wrapper releases the GIL around the Fortran call, and a
-handler that unwinds Fortran frames with ``longjmp`` leaks resources
-and corrupts state in threaded code (see gh-20148 for the
-discussion).
+Injecting signal-checking hooks around *every* generated call was
+considered and rejected (see `gh-20148
+<https://github.com/numpy/numpy/issues/20148>`_). That is a different
+risk profile from the callback path above. Callbacks only unwind when
+Fortran has already re-entered Python through a declared callback;
+universal hooks would interrupt arbitrary foreign frames from a
+signal context. Unwinding those frames with ``longjmp`` risks leaking
+resources and corrupting state, especially in threaded code.
 
 Fixed-form sources and compiler flags
 =====================================
@@ -209,11 +226,27 @@ Fixed-form sources and compiler flags
 ``f2py`` decides whether a file is fixed-form (Fortran 77 style) from
 its extension and contents, not from compiler flags: ``.f``, ``.for``,
 ``.ftn``, and ``.f77`` parse as fixed form, while ``.f90`` and later
-extensions parse as free form. Compiler arguments passed through
+extensions parse as free form. A first-line emacs-style header
+``! -*- fix -*-`` or ``! -*- f90 -*-`` also forces fixed or free form
+regardless of the extension. Compiler arguments passed through
 ``--f77flags``/``--f90flags`` (for example ``-ffixed-form``) affect
 only the compilation step; the wrapper generator never sees them (see
-gh-26704).
+`gh-26704 <https://github.com/numpy/numpy/issues/26704>`_).
 
-To wrap fixed-form code kept in a ``.f90`` file, either rename it to a
-fixed-form extension for the f2py step, or write a signature file with
-``f2py -h`` and hand that to the wrapper generation.
+To wrap fixed-form code kept in a free-form extension (for example
+``.f90``), use one of:
+
+* **Rename before parsing.** Rename the file to a fixed-form extension
+  (``.f``, ``.for``, ``.ftn``, or ``.f77``) *before* running ``f2py``
+  or ``f2py -h``. Signature generation (``-h``) uses the same
+  extension/content detection as wrapper generation, so ``-h`` alone
+  does not fix a mis-detected form.
+
+* **Hand-author a signature file.** Write a ``.pyf`` that describes
+  the interface without relying on crackfortran to re-parse the
+  fixed-form source as free form, then pass that signature to
+  wrapper generation.
+
+* **Emacs-style header.** Put ``! -*- fix -*-`` on the first line so
+  crackfortran treats the file as fixed form even when the extension
+  would otherwise imply free form.
