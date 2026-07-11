@@ -108,8 +108,10 @@ jobs:
 
   f2py_windows_ifx:
     # gh-26352: link failures with Intel ifx on Windows
+    # Soft-fail only toolchain install (availability varies). A successful
+    # install with a failed build/link/import fails the job so regressions
+    # are not masked.
     runs-on: windows-latest
-    continue-on-error: true  # ifx availability on runners varies
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -119,13 +121,19 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install Intel Fortran (oneAPI)
+        id: setup_ifx
+        continue-on-error: true
         uses: fortran-lang/setup-fortran@8821f57b53846d35d62632eb51c60ac6c4bff4ce # v1.6.1
         with:
           compiler: intel
           version: '2024.1'
       - name: Persist the MSVC environment (meson probes ifx's linker as 'link')
+        id: msvc_env
+        continue-on-error: true
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       - name: Build and run a minimal f2py module with ifx
+        # Skip smoke when the toolchain did not install; hard-fail otherwise.
+        if: steps.setup_ifx.outcome == 'success' && steps.msvc_env.outcome == 'success'
         shell: cmd
         run: |
           rem setup-fortran exports CC=icx/CXX=icpx, but the Fortran-only
@@ -138,6 +146,14 @@ jobs:
           rem --force: setup-fortran leaks SETVARS_COMPLETED=1 without
           rem the PATH it implies, so an unforced call skips itself.
           rem VS lives outside setvars' standard search on the runner.
+          rem
+          rem Known fragility (runner-image layout): three hardcoded
+          rem paths below break if GHA/oneAPI move installs without
+          rem updating this job. A broken path now fails the smoke step
+          rem hard (install soft-fail only); treat as image-layout debt.
+          rem   1) VS2022INSTALLDIR -> ...\Visual Studio\2022\Enterprise
+          rem   2) setvars.bat      -> ...\Intel\oneAPI\setvars.bat
+          rem   3) Intel runtime DLL dir -> ...\compiler\latest\bin
           set "VS2022INSTALLDIR=C:\Program Files\Microsoft Visual Studio\2022\Enterprise"
           if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
           where ifx || exit /b 1
