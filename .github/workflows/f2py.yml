@@ -1,0 +1,58 @@
+name: F2PY tests
+
+# Dedicated f2py job (gh-25134): run the full compiled f2py test suite
+# with a real Fortran compiler whenever f2py sources change. The main
+# Linux workflows deselect much of this behind the slow marker; this
+# job is the authoritative Fortran-compiler gate.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+      - maintenance/**
+    paths:
+      - 'numpy/f2py/**'
+      - '.github/workflows/f2py.yml'
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  f2py_gfortran_linux:
+    # To enable this job and subsequent jobs on a fork, comment out:
+    if: github.repository == 'numpy/numpy' && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install gfortran
+        run: |
+          sudo apt update
+          sudo apt install -y gfortran
+      - name: Install build and test dependencies from PyPI
+        run: |
+          pip install -r requirements/build_requirements.txt
+          pip install -r requirements/test_requirements.txt
+      - name: Build NumPy
+        run: |
+          spin build -- -Dallow-noblas=true
+      - name: Run the full f2py test suite (including slow compiled tests)
+        run: |
+          spin test -m full -- numpy/f2py/tests -n auto
