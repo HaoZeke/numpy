@@ -155,7 +155,8 @@ jobs:
           rem wrapper's F_FUNC needs the documented macros, delivered to
           rem the C compile line by the define-passthrough fix.
           python -m numpy.f2py -c hi.f90 -m hi_ifx -DUPPERCASE_FORTRAN -DNO_APPEND_FORTRAN || exit /b 1
-          python -c "import hi_ifx; hi_ifx.hi()" || exit /b 1
+          rem Same DLL rule as MinGW: register the Intel runtime dir.
+          python -c "import os; os.add_dll_directory(r'C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin'); import hi_ifx; hi_ifx.hi()" || exit /b 1
 
   f2py_macos_corun:
     # gh-12066: the semicolon-split tests failed on macOS only when
