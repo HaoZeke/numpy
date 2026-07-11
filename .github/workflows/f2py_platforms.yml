@@ -133,7 +133,10 @@ jobs:
           set "CXX="
           pip install -r requirements/build_requirements.txt meson ninja || exit /b 1
           pip install . -Csetup-args=-Dallow-noblas=true || exit /b 1
-          cd %TEMP%
+          rem /d: %TEMP% is on C: while the workspace is on D:, and a
+          rem drive-crossing cd without it silently stays put, leaving
+          rem the numpy source tree to shadow the installed package.
+          cd /d %TEMP%
           echo subroutine hi() > hi.f90
           echo   print *, "ok" >> hi.f90
           echo end subroutine >> hi.f90
