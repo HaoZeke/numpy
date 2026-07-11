@@ -205,8 +205,9 @@ class TestAssignmentOnlyModules(util.F2PyTest):
 @pytest.mark.slow
 class TestSharedCallbackRegression(util.F2PyTest):
     # gh-8288: two routines sharing one Python callback through a common
-    # __user__ module (the form that hit C redefinition in 2016 and the
-    # thread-local fatal on 1.21.2)
+    # __user__ module (the form that hit C redefinition). Locks that the
+    # extension builds and that both entry points invoke the shared
+    # callback with the expected values; not a TLS / concurrency stress.
     sources = [util.getpath("tests", "src", "regression", "gh8288.pyf"),
                util.getpath("tests", "src", "regression", "gh8288.f")]
     module_name = "gh8288"
