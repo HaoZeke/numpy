@@ -261,13 +261,8 @@ def test_gh20135_run_main_direct(tmp_path):
 
     src = tmp_path / "gh20135.f90"
     src.write_text("subroutine hi\nend subroutine hi\n")
-    import os
-    cwd = os.getcwd()
-    os.chdir(tmp_path)
-    try:
+    with util.switchdir(tmp_path):
         ret = run_main(["-m", "gh20135_mod", str(src)])
-    finally:
-        os.chdir(cwd)
     assert "gh20135_mod" in ret
     assert (tmp_path / "gh20135_modmodule.c").exists()
 
