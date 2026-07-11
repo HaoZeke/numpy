@@ -283,3 +283,42 @@ def test_gh20135_run_main_direct(tmp_path):
         os.chdir(cwd)
     assert "gh20135_mod" in ret
     assert (tmp_path / "gh20135_modmodule.c").exists()
+
+
+@pytest.mark.slow
+class TestCharScalarHiddenLength(util.F2PyTest):
+    # gh-13809: a CHARACTER(len=1) dummy is called with the hidden
+    # length argument gfortran >= 8 expects
+    sources = [util.getpath("tests", "src", "regression", "gh13809.f")]
+
+    def test_char_scalar_abi(self):
+        assert self.module.chararg(b"A") == 1
+        assert self.module.chararg(b"Z") == 2
+
+
+def test_gh12638_selected_real_kind_arch_routing(monkeypatch):
+    # gh-12638: selected_real_kind(p) routes to kind 16 on architectures
+    # whose long double is binary128 and to kind 10 on x86 extended
+    import platform
+
+    from numpy.f2py.crackfortran import _selected_real_kind_func
+
+    for arch, p18 in [("sparc64", 16), ("s390x", 16), ("ppc64le", 16),
+                      ("x86_64", 10)]:
+        monkeypatch.setattr(platform, "machine", lambda a=arch: a)
+        assert _selected_real_kind_func(18) == p18, arch
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    assert _selected_real_kind_func(6) == 4
+    assert _selected_real_kind_func(15) == 8
+    assert _selected_real_kind_func(33) == 16
+    assert _selected_real_kind_func(34) == -1
+
+
+def test_gh9673_harness_free_of_distutils():
+    # gh-9673: the test harness must not depend on numpy.distutils or
+    # the generated numpy.__config__
+    import pathlib
+
+    src = pathlib.Path(util.__file__).read_text()
+    assert "distutils" not in src
+    assert "__config__" not in src
