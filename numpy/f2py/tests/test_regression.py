@@ -200,3 +200,21 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.n_max == 16)
         assert (self.module.f_globals.i_max == 18)
         assert (self.module.f_globals.j_max == 72)
+
+
+@pytest.mark.slow
+class TestCharArrayLengthParsing(util.F2PyTest):
+    # gh-21672: CHARACTER GAMMA(10)*8 is ambiguous per the Fortran
+    # standard (array-of-10 length-8, vs some readings of length-80);
+    # f2py follows gfortran's real-world interpretation
+    # (array-of-10 length-8). This locks that choice end-to-end: if
+    # the dims were parsed the other way, the shape check on the
+    # numpy argument would fail before the marker write ever runs.
+    sources = [util.getpath("tests", "src", "regression", "gh21672.f")]
+
+    def test_array_of_10_length_8(self):
+        import numpy as np
+
+        gamma = np.array([b"........" for _ in range(10)], dtype="S8")
+        self.module.gammamark(gamma)
+        assert gamma[2] == b"MARKERXY"
