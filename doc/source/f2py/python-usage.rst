@@ -353,6 +353,31 @@ In Python:
    bare Fortran routine will be used. For more details, see
    https://github.com/numpy/numpy/issues/26681#issuecomment-2466460943
 
+Registration and invocation are separate steps
+----------------------------------------------
+
+The examples above share a structure worth stating explicitly: wiring a
+Python function up as a callback and Fortran actually calling it are
+two distinct stages.
+
+1. **Registration** happens in Python, either by passing the function
+   as an argument to a wrapped routine or by assigning it on the
+   module (``pfromf.fun = f`` above). This stores the Python function
+   on the *wrapped module's* callback slot; no Fortran runs yet.
+
+2. **Invocation** happens later, whenever Fortran execution reaches
+   the ``external`` procedure — possibly in a different wrapped call,
+   possibly several layers down the Fortran call stack.
+
+The consequence: the callback must be registered through the module
+that F2PY wrapped, not merely be callable from somewhere in the
+process. A Fortran routine that F2PY never saw (for example, one
+linked in from a static library without appearing in the signature
+file) has no callback slot to look up, so assigning a Python function
+cannot reach it. Wrap at least the entry-point routine that receives
+the callback, and let it forward the procedure argument to the library
+code in Fortran.
+
 Resolving arguments to call-back functions
 ------------------------------------------
 
