@@ -2347,23 +2347,28 @@ def postcrack(block, args=None, tab=''):
 def _sort_cyclic_dependents(dep, vars):
     """Order variables in a dependency cycle for initialization.
 
-    When a cycle cannot be resolved topologically, prefer intent(in)
-    arguments (and variables without hide initializers) ahead of hide
-    variables defined via ``=`` expressions.  This keeps input arrays
-    such as ``a`` ahead of ``n = shape(a, 1)`` even when literal masking
-    no longer injects accidental edges (e.g. ``diag = 'N'`` matching
-    ``n`` inside the quotes).
+    When a cycle cannot be resolved topologically, prefer:
+
+    1. intent(in) inputs (e.g. ``a``) so shape-based hide vars can run
+    2. variables defined via ``=`` (e.g. ``n = shape(a, 1)``,
+       ``lda = MAX(1, n)``) so dimension expressions see real values
+    3. remaining hide arrays (e.g. ``work`` with ``dimension(3*n)``)
+
+    This restores a usable order after literal masking removes accidental
+    edges such as ``diag = 'N'`` matching ``n`` inside the quotes.
+    ``getarrdims`` blanks any dimension that names a later depargs
+    entry, so workspace arrays must not sort ahead of the scalars they
+    size from.
     """
     def sort_key(name):
         var = vars[name]
-        order = 0
-        if isintent_in(var):
-            order -= 100
-        if '=' not in var:
-            order -= 10
-        if isintent_hide(var) and '=' in var:
-            order += 1
-        return (order, dep.index(name))
+        if isintent_in(var) and not isintent_hide(var):
+            tier = 0
+        elif '=' in var:
+            tier = 1
+        else:
+            tier = 2
+        return (tier, dep.index(name))
 
     return sorted(dep, key=sort_key)
 
