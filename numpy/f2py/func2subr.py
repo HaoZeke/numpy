@@ -244,6 +244,37 @@ def _abstract_iface_name(cbname_lower, taken=None):
     return _safe_ident(cbname_lower, 'f2py_ai_', taken)
 
 
+# Fortran keywords / intrinsics that must never be treated as use-associated
+# symbols when harvesting identifiers from expressions or interface text.
+_FORTRAN_NON_USE_NAMES = frozenset({
+    'kind', 'len', 'selected_int_kind', 'selected_real_kind',
+    'selected_char_kind', 'precision', 'digits', 'epsilon', 'huge', 'tiny',
+    'range', 'radix', 'minexponent', 'maxexponent', 'spacing', 'rrspacing',
+    'nearest', 'scale', 'set_exponent', 'fraction', 'exponent',
+    'real', 'integer', 'character', 'logical', 'complex', 'double',
+    'precision', 'and', 'or', 'not', 'eq', 'ne', 'lt', 'le', 'gt', 'ge',
+    'true', 'false', 'size', 'shape', 'lbound', 'ubound', 'present',
+    'associated', 'allocated', 'len_trim', 'trim', 'adjustl', 'adjustr',
+    'index', 'scan', 'verify', 'repeat', 'new_line', 'ishft', 'ishftc',
+    'iand', 'ior', 'ieor', 'not', 'ibits', 'ibset', 'ibclr', 'btest',
+    'transfer', 'reshape', 'pack', 'unpack', 'spread', 'merge', 'max',
+    'min', 'abs', 'mod', 'modulo', 'sign', 'dim', 'floor', 'ceiling',
+    'nint', 'int', 'real', 'dble', 'cmplx', 'aimag', 'conjg', 'sqrt',
+    'exp', 'log', 'log10', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan',
+    'atan2', 'sinh', 'cosh', 'tanh', 'sum', 'product', 'maxval', 'minval',
+    'count', 'any', 'all', 'matmul', 'dot_product', 'transpose',
+    'iso_fortran_env', 'iso_c_binding', 'ieee_arithmetic', 'ieee_exceptions',
+    'ieee_features',
+})
+
+# f2py-generated shape/hidden helpers: f2py_<arg>_d<n>
+_F2PY_SHAPE_HELPER = re.compile(r'^f2py_.+_d\d+$', re.I)
+
+
+def _is_f2py_shape_helper(name):
+    return bool(_F2PY_SHAPE_HELPER.match(name or ''))
+
+
 def _identifiers_from_fortran_expr(expr):
     """Simple identifier tokens in a Fortran expression string."""
     if not expr or not isinstance(expr, str):
@@ -251,11 +282,7 @@ def _identifiers_from_fortran_expr(expr):
     return {
         m.group(0).lower()
         for m in re.finditer(r'[A-Za-z_]\w*', expr)
-        if m.group(0).lower() not in {
-            'kind', 'len', 'selected_int_kind', 'selected_real_kind',
-            'real', 'integer', 'character', 'logical', 'complex',
-            'and', 'or', 'not', 'eq', 'ne', 'lt', 'le', 'gt', 'ge',
-        }
+        if m.group(0).lower() not in _FORTRAN_NON_USE_NAMES
     }
 
 
@@ -263,7 +290,8 @@ def _kind_identifiers_from_vars(vars_, exclude=None):
     """Identifier tokens needed from USE association for *vars_* decls.
 
     *exclude* drops host dummies / f2py shape helpers that must not be
-    imported from a Fortran module.
+    imported from a Fortran module.  User parameters named ``f2py_*``
+    (e.g. ``f2py_kind``) are *kept*; only f2py shape helpers are dropped.
     """
     exclude = {e.lower() for e in (exclude or [])}
     needed = set()
@@ -284,7 +312,7 @@ def _kind_identifiers_from_vars(vars_, exclude=None):
             needed.add(tname.lower())
     cleaned = set()
     for n in needed:
-        if n in exclude or n.startswith('f2py_'):
+        if n in exclude or n in _FORTRAN_NON_USE_NAMES or _is_f2py_shape_helper(n):
             continue
         cleaned.add(n)
     return cleaned
@@ -304,9 +332,14 @@ def _identifiers_needed_from_interface_text(text, exclude=None):
         needed |= _identifiers_from_fortran_expr(m.group(1))
     for m in re.finditer(r'type\s*\(\s*([A-Za-z_]\w*)\s*\)', text, re.I):
         needed.add(m.group(1).lower())
+    # Also harvest full kind=expr forms (kind=selected_real_kind(...)).
+    for m in re.finditer(r'kind\s*=\s*([^,)\n]+)', text, re.I):
+        needed |= _identifiers_from_fortran_expr(m.group(1))
     return {
         n for n in needed
-        if n not in exclude and not n.startswith('f2py_')
+        if n not in exclude
+        and n not in _FORTRAN_NON_USE_NAMES
+        and not _is_f2py_shape_helper(n)
     }
 
 
@@ -524,10 +557,11 @@ def _parse_use_line_locals(s):
     if not after:
         return mname, True, []
     after_l = after.lower()
-    if after_l.startswith('only'):
-        after = after[4:].lstrip()
-        if after.startswith(':'):
-            after = after[1:].strip()
+    # ONLY keyword only — do not strip names like only_thing.
+    if re.match(r'^only\s*:', after_l):
+        after = re.sub(r'^only\s*:', '', after, count=1, flags=re.I).strip()
+    elif re.match(r'^only\s*$', after_l):
+        after = ''
     # parse local => remote or local tokens
     locals_ = []
     for part in after.split(','):
@@ -580,7 +614,14 @@ def _sanitize_use_line(line, forbidden_locals, needed_ids=None,
     forbidden = {n.lower() for n in (forbidden_locals or [])}
     needed = {n.lower() for n in (needed_ids or [])}
     low = line.strip().lower()
-    has_only = 'only' in low.split(',', 1)[-1] if ',' in low else False
+    # ONLY is a keyword after the first comma, not a substring of a name
+    # (``use m, only_thing => x`` must not count as ONLY).
+    after = low.split(',', 1)[1].strip() if ',' in low else ''
+    has_only = (
+        after == 'only'
+        or after.startswith('only:')
+        or after.startswith('only ')
+    )
     if is_bare:
         keep = sorted(n for n in needed if n not in forbidden)
         if not keep:
@@ -590,10 +631,11 @@ def _sanitize_use_line(line, forbidden_locals, needed_ids=None,
     parts = []
     raw = line.split(',', 1)[-1] if ',' in line else ''
     raw = raw.strip()
-    if raw.lower().startswith('only'):
-        raw = raw[4:].lstrip()
-        if raw.startswith(':'):
-            raw = raw[1:].strip()
+    # Strip ONLY keyword only (not names that merely start with "only").
+    if re.match(r'^only\s*:', raw, flags=re.I):
+        raw = re.sub(r'^only\s*:', '', raw, count=1, flags=re.I).strip()
+    elif re.match(r'^only\s*$', raw, flags=re.I):
+        raw = ''
     for part in raw.split(','):
         part = part.strip()
         if not part:
@@ -709,8 +751,9 @@ def _resolve_saved_interface_kinds(saved_interface, vars_):
         if kind is None:
             continue
         kind_s = str(kind).strip()
-        # Only rewrite when the var has a resolved (non-identifier) kind.
-        if re.match(r'^[A-Za-z_]\w*$', kind_s):
+        # Only rewrite symbolic kind=name → numeric kind.  Leave expression
+        # kinds (selected_real_kind(...)) and unresolved names alone.
+        if not re.match(r'^\d+$', kind_s):
             continue
         name_l = name.lower()
         fixed = []
@@ -729,9 +772,10 @@ def _resolve_saved_interface_kinds(saved_interface, vars_):
             if name_l not in decl_names:
                 fixed.append(line)
                 continue
-            if re.search(r'kind\s*=\s*[A-Za-z_]\w*', line, re.I):
+            # Replace only a bare identifier kind=name, not kind=expr(...).
+            if re.search(r'kind\s*=\s*[A-Za-z_]\w*(?!\s*\()', line, re.I):
                 line = re.sub(
-                    r'kind\s*=\s*[A-Za-z_]\w*',
+                    r'kind\s*=\s*[A-Za-z_]\w*(?!\s*\()',
                     f'kind={kind_s}',
                     line,
                     flags=re.I,
@@ -830,6 +874,32 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
             continue
         i += 1
 
+    # Pre-count bare host-scope USE modules (multi-module → leave bare).
+    bare_host_count = 0
+    depth_c = 0
+    saw_hdr = False
+    for idx, ln in enumerate(lines):
+        if drop[idx]:
+            continue
+        sl = ln.strip().lower()
+        if not saw_hdr:
+            if _is_routine_header(sl):
+                saw_hdr = True
+            continue
+        if _is_interface_start(sl):
+            depth_c += 1
+            continue
+        if _is_interface_end(sl):
+            depth_c = max(0, depth_c - 1)
+            continue
+        if depth_c != 0 or not sl.startswith('use '):
+            continue
+        if '__user__' in sl:
+            continue
+        _m, is_bare, _locs = _parse_use_line_locals(ln)
+        if is_bare:
+            bare_host_count += 1
+
     header = []
     host_use = []
     body_out = []
@@ -849,8 +919,7 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
             i += 1
             continue
 
-        # Nested interface: keep block intact; leave USE inside the body
-        # (sanitize so local collisions with abstract names are dropped).
+        # Nested interface: keep block intact; leave USE inside the body.
         if _is_interface_start(s):
             depth = 1
             body_out.append(line)
@@ -868,7 +937,6 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
                 if ns.startswith('use '):
                     # Nested interfaces are separate scoping units: do *not*
                     # filter against the host callback's abstract names.
-                    # Only drop f2py __user__ modules.
                     if '__user__' in ns:
                         i += 1
                         continue
@@ -890,6 +958,12 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
             continue
 
         if s.startswith('use '):
+            _m, is_bare, _locs = _parse_use_line_locals(line)
+            if is_bare and bare_host_count > 1:
+                host_use.append(
+                    line if line.startswith(' ') else f'          {line.strip()}')
+                i += 1
+                continue
             fixed = _sanitize_use_line(line, abs_names, needed_ids=needed)
             if fixed is not None:
                 host_use.append('          ' + fixed)
