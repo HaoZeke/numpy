@@ -244,63 +244,153 @@ def _abstract_iface_name(cbname_lower, taken=None):
     return _safe_ident(cbname_lower, 'f2py_ai_', taken)
 
 
-def _kind_identifiers_from_vars(vars_):
-    """Identifier tokens used as kind/len selectors in *vars_*."""
+def _identifiers_from_fortran_expr(expr):
+    """Simple identifier tokens in a Fortran expression string."""
+    if not expr or not isinstance(expr, str):
+        return set()
+    return {
+        m.group(0).lower()
+        for m in re.finditer(r'[A-Za-z_]\w*', expr)
+        if m.group(0).lower() not in {
+            'kind', 'len', 'selected_int_kind', 'selected_real_kind',
+            'real', 'integer', 'character', 'logical', 'complex',
+            'and', 'or', 'not', 'eq', 'ne', 'lt', 'le', 'gt', 'ge',
+        }
+    }
+
+
+def _kind_identifiers_from_vars(vars_, exclude=None):
+    """Identifier tokens needed from USE association for *vars_* decls.
+
+    *exclude* drops host dummies / f2py shape helpers that must not be
+    imported from a Fortran module.
+    """
+    exclude = {e.lower() for e in (exclude or [])}
     needed = set()
     for var in (vars_ or {}).values():
         for key in ('kindselector', 'charselector'):
             sel = (var or {}).get(key) or {}
             for sk in ('kind', 'len', '*'):
                 val = sel.get(sk)
-                if isinstance(val, str) and re.match(r'^[A-Za-z_]\w*$', val):
-                    needed.add(val.lower())
-    return needed
+                if isinstance(val, str):
+                    if re.match(r'^[A-Za-z_]\w*$', val):
+                        needed.add(val.lower())
+                    else:
+                        needed |= _identifiers_from_fortran_expr(val)
+        for dim in (var or {}).get('dimension') or []:
+            needed |= _identifiers_from_fortran_expr(str(dim))
+        tname = (var or {}).get('typename')
+        if isinstance(tname, str) and re.match(r'^[A-Za-z_]\w*$', tname):
+            needed.add(tname.lower())
+    cleaned = set()
+    for n in needed:
+        if n in exclude or n.startswith('f2py_'):
+            continue
+        cleaned.add(n)
+    return cleaned
+
+
+def _identifiers_needed_from_interface_text(text, exclude=None):
+    """Identifiers referenced as kind=/len=/dimension() in interface text."""
+    exclude = {e.lower() for e in (exclude or [])}
+    needed = set()
+    if not text:
+        return needed
+    for m in re.finditer(r'kind\s*=\s*([A-Za-z_]\w*)', text, re.I):
+        needed.add(m.group(1).lower())
+    for m in re.finditer(r'len\s*=\s*([A-Za-z_]\w*)', text, re.I):
+        needed.add(m.group(1).lower())
+    for m in re.finditer(r'dimension\s*\(([^)]*)\)', text, re.I):
+        needed |= _identifiers_from_fortran_expr(m.group(1))
+    for m in re.finditer(r'type\s*\(\s*([A-Za-z_]\w*)\s*\)', text, re.I):
+        needed.add(m.group(1).lower())
+    return {
+        n for n in needed
+        if n not in exclude and not n.startswith('f2py_')
+    }
+
+
+def _use_local_names_from_block(block):
+    """Local names introduced by USE association on *block*."""
+    names = set()
+    for _m, spec in ((block or {}).get('use') or {}).items():
+        mapping = (spec or {}).get('map') or {}
+        for loc in mapping:
+            if loc:
+                names.add(loc.lower())
+        # bare use: no explicit locals; callers reserve needed identifiers
+    return names
 
 
 def _filtered_use_dict(block, forbidden_names=None):
     """Return a use-dict safe for an abstract-interface body.
 
     Drops ``__user__`` modules.  Only *local* use-associated names that
-    collide with *forbidden_names* are removed (remote names in
-    ``local => remote`` renames do not enter the local scope).  Bare
-    ``use m`` is rewritten to ``use m, only: <needed>`` so unrestricted
-    imports cannot pull in the abstract procedure name (gh-20157).
+    collide with *forbidden_names* are removed.  Unrestricted USE (bare or
+    rename-without-ONLY) is tightened to ``only`` of referenced identifiers
+    so module entities matching the abstract procedure name do not enter
+    the body.  With multiple bare modules, bare USE is left unrestricted
+    only when the procedure name is already reserved away from needed
+    identifiers (gh-20157).
     """
     forbidden = {n.lower() for n in (forbidden_names or [])}
     needed = _kind_identifiers_from_vars((block or {}).get('vars'))
+    use = (block or {}).get('use') or {}
+    bare_mods = [
+        m for m, spec in use.items()
+        if '__user__' not in m
+        and not (spec or {}).get('only')
+        and not ((spec or {}).get('map') or {})
+    ]
     out = {}
-    for mname, spec in ((block or {}).get('use') or {}).items():
+    for mname, spec in use.items():
         if '__user__' in mname:
             continue
         spec = copy.deepcopy(spec) if spec else {}
         mapping = dict(spec.get('map') or {})
         is_only = bool(spec.get('only'))
-        if mapping:
-            # Local names only: ``use m, only: dp => f2py_ai_cb`` keeps
-            # local ``dp`` even though the remote symbol matches forbidden.
+        if mapping and is_only:
+            # ONLY list: drop colliding *local* names only.
             mapping = {
                 loc: rem for loc, rem in mapping.items()
                 if (loc or '').lower() not in forbidden
             }
-            if not mapping and is_only:
+            if not mapping:
                 continue
-            if mapping:
-                spec['map'] = mapping
-                if is_only:
-                    spec['only'] = 1
-                out[mname] = spec
+            spec['map'] = mapping
+            spec['only'] = 1
+            out[mname] = spec
             continue
-        if is_only:
-            # only-list with empty map: nothing usable
+        if mapping and not is_only:
+            # Rename without ONLY still imports the rest of the module.
+            # Tighten to ONLY: keep renames + needed locals.
+            new_map = {
+                loc: rem for loc, rem in mapping.items()
+                if (loc or '').lower() not in forbidden
+            }
+            for n in needed:
+                if n in forbidden:
+                    continue
+                if n not in {k.lower() for k in new_map}:
+                    new_map[n] = n
+            if not new_map:
+                continue
+            out[mname] = {'only': 1, 'map': new_map}
             continue
-        # Bare ``use m``: restrict to kind identifiers actually referenced.
-        keep = sorted(n for n in needed if n not in forbidden)
-        if not keep:
+        if is_only and not mapping:
             continue
-        out[mname] = {
-            'only': 1,
-            'map': {n: n for n in keep},
-        }
+        # Bare ``use m``.
+        if len(bare_mods) == 1:
+            keep = sorted(n for n in needed if n not in forbidden)
+            if not keep:
+                # No selector deps, but bare use may still be needed for
+                # nothing — drop to avoid name collisions.
+                continue
+            out[mname] = {'only': 1, 'map': {n: n for n in keep}}
+        else:
+            # Multiple bare modules: cannot attribute selectors per module.
+            # Leave unrestricted; abstract naming must avoid needed ids.
+            out[mname] = spec if spec else {}
     return out
 
 
@@ -473,12 +563,14 @@ def _use_line_imports_names(s, names):
     return bool(locals_l & {n.lower() for n in names})
 
 
-def _sanitize_use_line(line, forbidden_locals, needed_ids=None):
+def _sanitize_use_line(line, forbidden_locals, needed_ids=None,
+                       force_only=False):
     """Rewrite one USE line so *forbidden_locals* are not use-associated.
 
     Returns None to drop the line, or a USE statement string to keep.
     Bare ``use m`` becomes ``use m, only: <needed>`` when *needed_ids*
-    is provided.
+    is provided.  Rename-without-ONLY is tightened to ONLY of renames
+    plus needed identifiers (*force_only* / non-only detection).
     """
     if '__user__' in line.lower():
         return None
@@ -487,12 +579,14 @@ def _sanitize_use_line(line, forbidden_locals, needed_ids=None):
         return None
     forbidden = {n.lower() for n in (forbidden_locals or [])}
     needed = {n.lower() for n in (needed_ids or [])}
+    low = line.strip().lower()
+    has_only = 'only' in low.split(',', 1)[-1] if ',' in low else False
     if is_bare:
         keep = sorted(n for n in needed if n not in forbidden)
         if not keep:
             return None
         return f'use {mname}, only: {", ".join(keep)}'
-    # only-list / renames: filter by local name only
+    # Parse original parts for renames
     parts = []
     raw = line.split(',', 1)[-1] if ',' in line else ''
     raw = raw.strip()
@@ -508,6 +602,19 @@ def _sanitize_use_line(line, forbidden_locals, needed_ids=None):
         if loc.lower() in forbidden:
             continue
         parts.append(part)
+    if not has_only or force_only:
+        # Rename without ONLY: still imports other public names. Tighten.
+        seen_loc = {
+            p.split('=>', 1)[0].strip().lower() for p in parts
+        }
+        for n in sorted(needed):
+            if n in forbidden or n in seen_loc:
+                continue
+            parts.append(n)
+            seen_loc.add(n)
+        if not parts:
+            return None
+        return f'use {mname}, only: {", ".join(parts)}'
     if not parts:
         return None
     if len(parts) == len(locals_):
@@ -515,15 +622,43 @@ def _sanitize_use_line(line, forbidden_locals, needed_ids=None):
     return f'use {mname}, only: {", ".join(parts)}'
 
 
-def _host_scope_use_lines(saved_interface, abs_map=None, host_vars=None):
+def _host_scope_use_lines(saved_interface, abs_map=None, host_vars=None,
+                          exclude_ids=None):
     """Collect USE lines at host scope only (not inside nested interfaces).
 
-    Bare ``use m`` is rewritten to ``use m, only: <kind ids>`` so a module
-    parameter that collides with an abstract-interface name cannot make
-    ``procedure(f2py_ai_*)`` unclassifiable.
+    Single bare ``use m`` is rewritten to ``use m, only: <needed ids>``.
+    Multiple bare modules are left unrestricted (cannot attribute names
+    per module); abstract naming reserves needed identifiers separately.
     """
     abs_names = {v.lower() for v in (abs_map or {}).values()}
-    needed = _kind_identifiers_from_vars(host_vars)
+    exclude = set(exclude_ids or [])
+    needed = _kind_identifiers_from_vars(host_vars, exclude=exclude)
+    needed |= _identifiers_needed_from_interface_text(
+        saved_interface, exclude=exclude | abs_names)
+    # Count bare host-scope USE modules first.
+    bare_count = 0
+    depth = 0
+    saw_header = False
+    for line in (saved_interface or '').split('\n'):
+        s = line.strip().lower()
+        if not saw_header:
+            if _is_routine_header(s):
+                saw_header = True
+            continue
+        if _is_interface_start(s):
+            depth += 1
+            continue
+        if _is_interface_end(s):
+            depth = max(0, depth - 1)
+            continue
+        if depth != 0 or not s.startswith('use '):
+            continue
+        if '__user__' in s:
+            continue
+        _m, is_bare, _locs = _parse_use_line_locals(line)
+        if is_bare:
+            bare_count += 1
+
     out = []
     saw_header = False
     depth = 0
@@ -541,10 +676,18 @@ def _host_scope_use_lines(saved_interface, abs_map=None, host_vars=None):
             continue
         if depth != 0 or not s.startswith('use '):
             continue
+        if '__user__' in s:
+            continue
+        _m, is_bare, _locs = _parse_use_line_locals(line)
+        if is_bare and bare_count > 1:
+            # Leave unrestricted; procedure names are chosen not to clash
+            # with needed kind identifiers.
+            out.append(line if line.startswith(' ') else f'          {line.strip()}')
+            continue
         fixed = _sanitize_use_line(line, abs_names, needed_ids=needed)
         if fixed:
-            # preserve indentation style used by wrappers
-            out.append('          ' + fixed if not fixed.startswith(' ') else fixed)
+            out.append(
+                '          ' + fixed if not fixed.startswith(' ') else fixed)
     return out
 
 
@@ -572,14 +715,21 @@ def _resolve_saved_interface_kinds(saved_interface, vars_):
         name_l = name.lower()
         fixed = []
         for line in lines:
-            compact = line.replace(' ', '').lower()
-            declares = (
-                f'::{name_l}' in compact
-                or compact.endswith(f'::{name_l}')
-                or re.search(
-                    rf'::\s*{re.escape(name)}\b', line, flags=re.I)
-            )
-            if declares and re.search(r'kind\s*=\s*[A-Za-z_]\w*', line, re.I):
+            if '::' not in line:
+                fixed.append(line)
+                continue
+            # Match whole declaration names after :: (not prefixes: x vs xx).
+            rhs = line.split('::', 1)[1]
+            decl_names = []
+            for part in rhs.split(','):
+                tok = part.split('=')[0].strip()
+                tok = tok.split('(')[0].strip()
+                if tok:
+                    decl_names.append(tok.lower())
+            if name_l not in decl_names:
+                fixed.append(line)
+                continue
+            if re.search(r'kind\s*=\s*[A-Za-z_]\w*', line, re.I):
                 line = re.sub(
                     r'kind\s*=\s*[A-Za-z_]\w*',
                     f'kind={kind_s}',
@@ -626,7 +776,8 @@ def _ensure_callback_result_typespec(block, host_var=None):
 
 
 def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
-                                        mod_name, abs_map, host_vars=None):
+                                        mod_name, abs_map, host_vars=None,
+                                        exclude_ids=None):
     """Adapt *saved_interface* for module-based callback interfaces.
 
     * Drop nested interface blocks that define a callback dummy.
@@ -639,7 +790,10 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
     """
     cb_set = {n.lower() for n in cb_orig_names}
     abs_names = {v.lower() for v in (abs_map or {}).values()}
-    needed = _kind_identifiers_from_vars(host_vars)
+    exclude = set(exclude_ids or [])
+    needed = _kind_identifiers_from_vars(host_vars, exclude=exclude)
+    needed |= _identifiers_needed_from_interface_text(
+        saved_interface, exclude=exclude | abs_names)
     orig_by_lower = {}
     for n in cb_orig_names:
         orig_by_lower.setdefault(n.lower(), n)
@@ -712,14 +866,13 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
                 elif _is_interface_end(ns):
                     depth -= 1
                 if ns.startswith('use '):
-                    fixed = _sanitize_use_line(
-                        nl, abs_names, needed_ids=needed)
-                    if fixed is None:
+                    # Nested interfaces are separate scoping units: do *not*
+                    # filter against the host callback's abstract names.
+                    # Only drop f2py __user__ modules.
+                    if '__user__' in ns:
                         i += 1
                         continue
-                    # keep original indentation
-                    indent = nl[:len(nl) - len(nl.lstrip())]
-                    body_out.append(indent + fixed)
+                    body_out.append(nl)
                     i += 1
                     continue
                 body_out.append(nl)
@@ -781,8 +934,9 @@ def _prepare_callback_module(rout, args, vars, need_interface):
     taken = {a.lower() for a in args}
     taken.update(k.lower() for k in (vars or {}))
     taken.update(e.lower() for e in (rout.get('externals') or []))
-    # Also reserve identifiers from each callback block so abstract names
-    # cannot collide with callback dummies/results (gh-20157).
+    # Reserve identifiers from each callback block so abstract names cannot
+    # collide with dummies/results, USE locals, or kind parameters that
+    # the body still needs (gh-20157).
     for block in needed.values():
         for a in block.get('args') or []:
             taken.add(a.lower())
@@ -792,10 +946,29 @@ def _prepare_callback_module(rout, args, vars, need_interface):
             taken.add(k.lower())
         if block.get('name'):
             taken.add(block['name'].lower())
-    abs_map = {
-        a.lower(): _abstract_iface_name(a.lower(), taken)
-        for a in orig_names
-    }
+        taken |= _use_local_names_from_block(block)
+        taken |= _kind_identifiers_from_vars(block.get('vars'))
+    # Host-level USE locals / kind ids also reserved (outer wrapper scope).
+    taken |= _use_local_names_from_block(rout)
+    taken |= _kind_identifiers_from_vars(vars)
+    abs_map = {}
+    for a in orig_names:
+        block = needed[a.lower()]
+        use = block.get('use') or {}
+        has_bare = any(
+            '__user__' not in m
+            and not (spec or {}).get('only')
+            and not ((spec or {}).get('map') or {})
+            for m, spec in use.items()
+        )
+        raw = a.lower()
+        if has_bare:
+            # Disambiguate from unrestricted module exports.
+            dig = hashlib.sha1(
+                f'{getfortranname(rout)}:{a}'.encode('utf-8')
+            ).hexdigest()[:6]
+            raw = f'{a.lower()}_{dig}'
+        abs_map[a.lower()] = _abstract_iface_name(raw, taken)
     mod_name = _cb_iface_module_name(rout, taken)
     return (
         _build_callback_iface_module(
@@ -897,11 +1070,13 @@ def createfuncwrapper(rout, signature=0):
     module_src, cb_mod_name, cb_via_module, abs_map = _prepare_callback_module(
         rout, args, vars, need_interface and not f90mode)
 
+    exclude_ids = {a.lower() for a in args}
+    exclude_ids.update(e.lower() for e in (rout.get('externals') or []))
     if need_interface:
         saved0 = _resolve_saved_interface_kinds(
             rout.get('saved_interface') or '', vars)
         for line in _host_scope_use_lines(
-                saved0, abs_map, host_vars=vars):
+                saved0, abs_map, host_vars=vars, exclude_ids=exclude_ids):
             add(line)
         if cb_mod_name:
             add(f'use {cb_mod_name}')
@@ -940,7 +1115,7 @@ def createfuncwrapper(rout, signature=0):
             if cb_mod_name:
                 saved = _rewrite_saved_interface_use_module(
                     saved, cb_via_module, cb_mod_name, abs_map,
-                    host_vars=vars)
+                    host_vars=vars, exclude_ids=exclude_ids)
             add('interface')
             add(saved.lstrip())
             add('end interface')
@@ -1005,11 +1180,13 @@ def createsubrwrapper(rout, signature=0):
     module_src, cb_mod_name, cb_via_module, abs_map = _prepare_callback_module(
         rout, args, vars, need_interface and not f90mode)
 
+    exclude_ids = {a.lower() for a in args}
+    exclude_ids.update(e.lower() for e in (rout.get('externals') or []))
     if need_interface:
         saved0 = _resolve_saved_interface_kinds(
             rout.get('saved_interface') or '', vars)
         for line in _host_scope_use_lines(
-                saved0, abs_map, host_vars=vars):
+                saved0, abs_map, host_vars=vars, exclude_ids=exclude_ids):
             add(line)
         if cb_mod_name:
             add(f'use {cb_mod_name}')
@@ -1037,7 +1214,7 @@ def createsubrwrapper(rout, signature=0):
             if cb_mod_name:
                 saved = _rewrite_saved_interface_use_module(
                     saved, cb_via_module, cb_mod_name, abs_map,
-                    host_vars=vars)
+                    host_vars=vars, exclude_ids=exclude_ids)
             add('interface')
             for line in saved.split('\n'):
                 if line.lstrip().startswith('use ') and '__user__' in line:

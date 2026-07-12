@@ -754,6 +754,9 @@ class TestCallbackInterfaceStructure:
             wrapper, re.I), wrapper
         # Type retained in abstract body.
         assert 'integer(kind=8)' in wrapper.lower() or 'integer*8' in wrapper.lower()
+        import shutil
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
         g = subprocess.run(
             ['gfortran', '-fsyntax-only', wrapper_file],
             capture_output=True, text=True)
@@ -1018,6 +1021,265 @@ class TestCallbackInterfaceStructure:
             ['gfortran', '-fsyntax-only', wrapper_file],
             capture_output=True, text=True)
         assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
+
+    def test_required_only_kind_name_not_stolen_by_abstract(self):
+        """If kind parameter is named f2py_ai_cb, abstract name must shift."""
+        import os
+        import shutil
+        import subprocess
+        src = textwrap.dedent("""\
+            module kinds
+              implicit none
+              integer, parameter :: f2py_ai_cb = kind(1.0)
+            end module kinds
+
+            subroutine host_required_collision(cb, y)
+              use kinds, only: f2py_ai_cb
+              interface
+                function cb(x) result(z)
+                  use kinds, only: f2py_ai_cb
+                  real(kind=f2py_ai_cb), intent(in) :: x
+                  real(kind=f2py_ai_cb) :: z
+                end function cb
+              end interface
+              real(kind=f2py_ai_cb), intent(inout) :: y(:)
+              y(1) = cb(y(1))
+            end subroutine host_required_collision
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_req_only')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_req_only-f2pywrappers2.f90')
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        ab = wrapper.lower().split('abstract interface', 1)[-1].split(
+            'end interface', 1)[0]
+        assert 'use kinds' in ab and 'f2py_ai_cb' in ab
+        # Procedure name must not be exactly f2py_ai_cb if USE keeps that local
+        assert 'function f2py_ai_cb(' not in ab.replace(' ', '')
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        with open(os.path.join(tmpdir, 'kinds.f90'), 'w') as fh:
+            fh.write(textwrap.dedent("""\
+                module kinds
+                  implicit none
+                  integer, parameter :: f2py_ai_cb = kind(1.0)
+                end module kinds
+            """))
+        assert subprocess.run(
+            ['gfortran', '-c', 'kinds.f90'], cwd=tmpdir,
+            capture_output=True, text=True).returncode == 0
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
+            capture_output=True, text=True, cwd=tmpdir)
+        assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
+
+    def test_helper_keeps_use_despite_host_abstract_name(self):
+        """Nested helper USE must not be stripped for host abs-name collision."""
+        import os
+        import shutil
+        import subprocess
+        src = textwrap.dedent("""\
+            module kinds
+              implicit none
+              integer, parameter :: f2py_ai_cb = kind(1.0)
+            end module kinds
+
+            function helper(x) result(z)
+              use kinds, only: f2py_ai_cb
+              real(kind=f2py_ai_cb), intent(in) :: x
+              real(kind=f2py_ai_cb) :: z
+              z = x
+            end function helper
+
+            function host_helper_collision(cb, y) result(out)
+              interface
+                real function cb(x)
+                  real, intent(in) :: x
+                end function cb
+              end interface
+              interface
+                function helper(x) result(z)
+                  use kinds, only: f2py_ai_cb
+                  real(kind=f2py_ai_cb), intent(in) :: x
+                  real(kind=f2py_ai_cb) :: z
+                end function helper
+              end interface
+              real :: out
+              real, dimension(:), intent(in) :: y
+              out = cb(helper(y(1)))
+            end function host_helper_collision
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_help_coll')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_help_coll-f2pywrappers2.f90')
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        import re
+        hb = re.search(
+            r'function\s+helper\s*\([^)]*\)\s*result\s*\([^)]*\)(.*?)'
+            r'end\s+function\s+helper',
+            wrapper, re.I | re.S)
+        assert hb is not None, wrapper
+        assert 'use kinds' in hb.group(1).lower(), wrapper
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        with open(os.path.join(tmpdir, 'kinds.f90'), 'w') as fh:
+            fh.write(textwrap.dedent("""\
+                module kinds
+                  implicit none
+                  integer, parameter :: f2py_ai_cb = kind(1.0)
+                end module kinds
+            """))
+        assert subprocess.run(
+            ['gfortran', '-c', 'kinds.f90'], cwd=tmpdir,
+            capture_output=True, text=True).returncode == 0
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
+            capture_output=True, text=True, cwd=tmpdir)
+        assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
+
+    def test_nononly_rename_tightened(self):
+        """``use m, dp => base_dp`` without ONLY must not import collisions."""
+        import os
+        import shutil
+        import subprocess
+        src = textwrap.dedent("""\
+            module kinds
+              implicit none
+              integer, parameter :: base_dp = kind(1.0d0)
+              integer, parameter :: f2py_ai_cb = 7
+            end module kinds
+
+            subroutine host_nononly_rename(cb, y)
+              use kinds, dp => base_dp
+              interface
+                function cb(x) result(z)
+                  use kinds, dp => base_dp
+                  real(kind=dp) :: x, z
+                end function cb
+              end interface
+              real(kind=dp) :: y(:)
+              y(1) = cb(y(1))
+            end subroutine host_nononly_rename
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_nononly')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_nononly-f2pywrappers2.f90')
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        ab = wrapper.lower().split('abstract interface', 1)[-1].split(
+            'end interface', 1)[0]
+        # Must be ONLY-restricted, not bare rename without only.
+        assert 'use kinds' in ab
+        assert 'only' in ab
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        with open(os.path.join(tmpdir, 'kinds.f90'), 'w') as fh:
+            fh.write(textwrap.dedent("""\
+                module kinds
+                  implicit none
+                  integer, parameter :: base_dp = kind(1.0d0)
+                  integer, parameter :: f2py_ai_cb = 7
+                end module kinds
+            """))
+        assert subprocess.run(
+            ['gfortran', '-c', 'kinds.f90'], cwd=tmpdir,
+            capture_output=True, text=True).returncode == 0
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
+            capture_output=True, text=True, cwd=tmpdir)
+        assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
+
+    def test_bare_use_keeps_dimension_param(self):
+        """Bare USE must retain dimension-bound parameters (e.g. n)."""
+        import os
+        import shutil
+        import subprocess
+        src = textwrap.dedent("""\
+            module dep_host_bound_bare
+              implicit none
+              integer, parameter :: n = 3
+              integer, parameter :: f2py_ai_cb = 17
+            end module dep_host_bound_bare
+
+            subroutine host_bound_bare(cb, y, x)
+              use dep_host_bound_bare
+              implicit none
+              interface
+                subroutine cb(v)
+                  implicit none
+                  real, intent(inout) :: v
+                end subroutine cb
+              end interface
+              real, intent(inout) :: y(:)
+              real, intent(inout) :: x(n)
+              call cb(x(1))
+              y(1) = x(1)
+            end subroutine host_bound_bare
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_bound_bare')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_bound_bare-f2pywrappers2.f90')
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        assert 'dep_host_bound_bare' in wrapper.lower()
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        with open(os.path.join(tmpdir, 'dep.f90'), 'w') as fh:
+            fh.write(textwrap.dedent("""\
+                module dep_host_bound_bare
+                  implicit none
+                  integer, parameter :: n = 3
+                  integer, parameter :: f2py_ai_cb = 17
+                end module dep_host_bound_bare
+            """))
+        assert subprocess.run(
+            ['gfortran', '-c', 'dep.f90'], cwd=tmpdir,
+            capture_output=True, text=True).returncode == 0
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
+            capture_output=True, text=True, cwd=tmpdir)
+        assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
+
+    def test_kind_resolve_no_prefix_match(self):
+        """Host-local kind rewrite must not treat x as prefix of xx."""
+        import os
+        import shutil
+        import subprocess
+        src = textwrap.dedent("""\
+            function host_prefix_kind(f, x, xx, y) result(r)
+              integer, parameter :: dp = kind(1.0d0)
+              integer, parameter :: sp = kind(1.0)
+              external f
+              real(dp) :: r, f
+              real(dp) :: x
+              real(sp) :: xx
+              real(dp), dimension(:) :: y
+              r = f(x) + real(xx, dp) + sum(y)
+            end function host_prefix_kind
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_prefix_kind')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_prefix_kind-f2pywrappers2.f90')
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        # Nested host interface: xx must not become kind=8 if sp is kind=4
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', wrapper_file],
+            capture_output=True, text=True)
+        assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
 
     def test_pyf_rebuild_emits_callback_module(self):
         """Signature file (-h) then codegen from .pyf still uses cb iface module."""
