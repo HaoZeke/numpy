@@ -431,6 +431,14 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
             # Drop f2py __user__ USE; real Fortran modules keep.
             if '__user__' in s:
                 continue
+            # Drop use-associated names that collide with abstract-interface
+            # procedure names (e.g. ``use kinds, only: f2py_ai_cb`` then
+            # ``procedure(f2py_ai_cb)`` is unclassifiable).
+            abs_names = {v.lower() for v in abs_map.values()}
+            if abs_names and any(an in s for an in abs_names):
+                # If the only-list would be emptied, skip the whole USE.
+                # Conservative: skip any USE line that mentions an abs name.
+                continue
             use_lines.append(line)
         else:
             other.append(line)
@@ -587,9 +595,16 @@ def createfuncwrapper(rout, signature=0):
         rout, args, vars, need_interface and not f90mode)
 
     if need_interface:
+        abs_names = {v.lower() for v in (abs_map or {}).values()}
         for line in rout['saved_interface'].split('\n'):
-            if line.lstrip().startswith('use ') and '__user__' not in line:
-                add(line)
+            s = line.lstrip().lower()
+            if not s.startswith('use ') or '__user__' in s:
+                continue
+            # Avoid ``use kinds, only: f2py_ai_cb`` next to
+            # ``procedure(f2py_ai_cb)`` in the outer wrapper.
+            if abs_names and any(an in s for an in abs_names):
+                continue
+            add(line)
         if cb_mod_name:
             add(f'use {cb_mod_name}')
 
@@ -691,9 +706,14 @@ def createsubrwrapper(rout, signature=0):
         rout, args, vars, need_interface and not f90mode)
 
     if need_interface:
+        abs_names = {v.lower() for v in (abs_map or {}).values()}
         for line in rout['saved_interface'].split('\n'):
-            if line.lstrip().startswith('use ') and '__user__' not in line:
-                add(line)
+            s = line.lstrip().lower()
+            if not s.startswith('use ') or '__user__' in s:
+                continue
+            if abs_names and any(an in s for an in abs_names):
+                continue
+            add(line)
         if cb_mod_name:
             add(f'use {cb_mod_name}')
 
