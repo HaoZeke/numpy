@@ -726,6 +726,7 @@ class TestCallbackInterfaceStructure:
     def test_implicit_result_codegen_compiles(self):
         """Assumed-shape host with implicit-result callback interface compiles."""
         import os
+        import re
         import subprocess
         src = textwrap.dedent("""\
             function host_implicit(cb, y) result(r)
@@ -748,7 +749,6 @@ class TestCallbackInterfaceStructure:
         with open(wrapper_file) as fh:
             wrapper = fh.read()
         # No RESULT name equal to the procedure name (invalid Fortran).
-        import re
         assert not re.search(
             r'function\s+(f2py_ai_\w+)\s*\([^)]*\)\s*result\s*\(\1\)',
             wrapper, re.I), wrapper
@@ -757,6 +757,83 @@ class TestCallbackInterfaceStructure:
         g = subprocess.run(
             ['gfortran', '-fsyntax-only', wrapper_file],
             capture_output=True, text=True)
+        assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
+
+    def test_nested_noncallback_interface_keeps_use(self):
+        """USE inside a surviving nested interface stays there (not host-hoisted).
+
+        Interface bodies are separate scoping units; hoisting their USE to
+        the host makes kinds invisible and rejects the wrapper.
+        """
+        import os
+        import re
+        import subprocess
+        src = textwrap.dedent("""\
+            module kind_mod
+              implicit none
+              integer, parameter :: hk = kind(1.0)
+            end module kind_mod
+
+            function helper(x) result(r)
+              use kind_mod, only: hk
+              real(kind=hk), intent(in) :: x
+              real(kind=hk) :: r
+              r = x
+            end function helper
+
+            function host(f, y) result(out)
+              use kind_mod, only: hk
+              interface
+                function f(x) result(r)
+                  use kind_mod, only: hk
+                  real(kind=hk), intent(in) :: x
+                  real(kind=hk) :: r
+                end function f
+              end interface
+              interface
+                function helper(x) result(r)
+                  use kind_mod, only: hk
+                  real(kind=hk), intent(in) :: x
+                  real(kind=hk) :: r
+                end function helper
+              end interface
+              real(kind=hk) :: out
+              real(kind=hk), dimension(:), intent(in) :: y
+              out = f(helper(y(1)))
+            end function host
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_nested_use')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_nested_use-f2pywrappers2.f90')
+        assert os.path.exists(wrapper_file)
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        # Helper interface body must still carry its USE (depth-aware rewrite).
+        helper_block = re.search(
+            r'function\s+helper\s*\([^)]*\)\s*result\s*\([^)]*\)(.*?)'
+            r'end\s+function\s+helper',
+            wrapper, re.I | re.S)
+        assert helper_block is not None, wrapper
+        assert 'use kind_mod' in helper_block.group(1).lower(), (
+            f"helper interface lost USE:\n{wrapper}")
+        # Compile kinds module first, then syntax-check the wrapper.
+        kinds_path = os.path.join(tmpdir, 'kind_mod.f90')
+        with open(kinds_path, 'w') as fh:
+            fh.write(textwrap.dedent("""\
+                module kind_mod
+                  implicit none
+                  integer, parameter :: hk = kind(1.0)
+                end module kind_mod
+            """))
+        c = subprocess.run(
+            ['gfortran', '-c', kinds_path],
+            capture_output=True, text=True, cwd=tmpdir)
+        assert c.returncode == 0, c.stderr
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
+            capture_output=True, text=True, cwd=tmpdir)
         assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
 
 

@@ -358,16 +358,89 @@ def _build_callback_iface_module(mod_name, cb_blocks, host_rout=None,
     return '\n'.join(lines)
 
 
+def _is_interface_start(s):
+    s = s.strip().lower()
+    return s == 'interface' or (
+        s.startswith('interface ') and not s.startswith('end'))
+
+
+def _is_interface_end(s):
+    return s.strip().lower().startswith('end interface')
+
+
+def _is_routine_header(s):
+    s = s.strip().lower()
+    return (
+        s.startswith('function ') or s.startswith('subroutine ')
+        or ' function ' in f' {s}' or ' subroutine ' in f' {s}'
+    )
+
+
+def _use_line_imports_names(s, names):
+    """True if a USE line associates any name in *names* into this scope."""
+    s = s.strip().lower()
+    if not s.startswith('use ') or not names:
+        return False
+    # Bare ``use m`` imports everything; treat as colliding if we have
+    # forbidden names (cannot know the module contents).
+    if 'only' not in s and '=>' not in s:
+        # ``use m`` / ``use m,`` without only — keep; abs names are f2py_ai_*
+        # and will not match host kind modules in practice. Only flag when
+        # an abs name appears as a token.
+        return any(
+            f' {n}' in f' {s} ' or f',{n}' in s or s.endswith(n)
+            for n in names
+        )
+    return any(
+        f' {n}' in f' {s.replace(",", " ")} '
+        or f'=> {n}' in s or f'=>{n}' in s
+        or s.rstrip().endswith(n)
+        for n in names
+    )
+
+
+def _host_scope_use_lines(saved_interface, abs_map=None):
+    """Collect USE lines at host scope only (not inside nested interfaces)."""
+    abs_names = {v.lower() for v in (abs_map or {}).values()}
+    out = []
+    saw_header = False
+    depth = 0
+    for line in (saved_interface or '').split('\n'):
+        s = line.strip().lower()
+        if not saw_header:
+            if _is_routine_header(s):
+                saw_header = True
+            continue
+        if _is_interface_start(s):
+            depth += 1
+            continue
+        if _is_interface_end(s):
+            depth = max(0, depth - 1)
+            continue
+        if depth != 0 or not s.startswith('use '):
+            continue
+        if '__user__' in s:
+            continue
+        if _use_line_imports_names(s, abs_names):
+            continue
+        out.append(line)
+    return out
+
+
 def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
                                         mod_name, abs_map):
     """Adapt *saved_interface* for module-based callback interfaces.
 
-    Drop bare EXTERNAL and nested interface blocks for the named callbacks.
-    Emit all ``use`` statements (callback module first, then host USEs), then
-    ``procedure(f2py_ai_*)`` declarations, then remaining specification
-    statements — so USE never follows a declaration (gh-20157).
+    * Drop nested interface blocks that define a callback dummy.
+    * Drop bare ``external`` for those dummies and ``__user__`` USE.
+    * At host scope only: emit ``use <mod_name>``, then host USE, then
+      ``procedure(f2py_ai_*)`` before other host specification statements.
+    * Nested (non-callback) interface bodies keep their own USE in place —
+      interface bodies are separate scoping units; hoisting USE to the host
+      breaks kinds inside surviving nested interfaces (gh-20157).
     """
     cb_set = {n.lower() for n in cb_orig_names}
+    abs_names = {v.lower() for v in (abs_map or {}).values()}
     orig_by_lower = {}
     for n in cb_orig_names:
         orig_by_lower.setdefault(n.lower(), n)
@@ -377,17 +450,16 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
     i = 0
     while i < len(lines):
         s = lines[i].strip().lower()
-        if s == 'interface' or (s.startswith('interface ') and not s.startswith('end')):
+        if _is_interface_start(s):
             start = i
             depth = 1
             j = i + 1
             chunk = [lines[i]]
             while j < len(lines) and depth:
                 sj = lines[j].strip().lower()
-                if sj == 'interface' or (
-                        sj.startswith('interface ') and not sj.startswith('end')):
+                if _is_interface_start(sj):
                     depth += 1
-                elif sj.startswith('end interface'):
+                elif _is_interface_end(sj):
                     depth -= 1
                 chunk.append(lines[j])
                 j += 1
@@ -406,52 +478,76 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
         i += 1
 
     header = []
-    use_lines = []
-    other = []
+    host_use = []
+    body_out = []
     saw_header = False
-    for idx, line in enumerate(lines):
-        if drop[idx]:
+    i = 0
+    while i < len(lines):
+        if drop[i]:
+            i += 1
             continue
+        line = lines[i]
         s = line.strip().lower()
+
+        if not saw_header:
+            header.append(line)
+            if _is_routine_header(s):
+                saw_header = True
+            i += 1
+            continue
+
+        # Nested interface: keep block intact; leave USE inside the body.
+        if _is_interface_start(s):
+            depth = 1
+            body_out.append(line)
+            i += 1
+            while i < len(lines) and depth:
+                if drop[i]:
+                    i += 1
+                    continue
+                nl = lines[i]
+                ns = nl.strip().lower()
+                if _is_interface_start(ns):
+                    depth += 1
+                elif _is_interface_end(ns):
+                    depth -= 1
+                if ns.startswith('use '):
+                    if '__user__' in ns or _use_line_imports_names(
+                            ns, abs_names):
+                        i += 1
+                        continue
+                body_out.append(nl)
+                i += 1
+            continue
+
         if s.startswith('external'):
             rest = s[len('external'):].lstrip(' :')
             names = [n.strip() for n in rest.split(',') if n.strip()]
             if names and all(n in cb_set for n in names):
+                i += 1
                 continue
-        if not saw_header:
-            header.append(line)
-            is_header = (
-                s.startswith('function ') or s.startswith('subroutine ')
-                or ' function ' in f' {s}' or ' subroutine ' in f' {s}'
-            )
-            if is_header:
-                saw_header = True
+            body_out.append(line)
+            i += 1
             continue
+
         if s.startswith('use '):
-            # Drop f2py __user__ USE; real Fortran modules keep.
-            if '__user__' in s:
-                continue
-            # Drop use-associated names that collide with abstract-interface
-            # procedure names (e.g. ``use kinds, only: f2py_ai_cb`` then
-            # ``procedure(f2py_ai_cb)`` is unclassifiable).
-            abs_names = {v.lower() for v in abs_map.values()}
-            if abs_names and any(an in s for an in abs_names):
-                # If the only-list would be emptied, skip the whole USE.
-                # Conservative: skip any USE line that mentions an abs name.
-                continue
-            use_lines.append(line)
-        else:
-            other.append(line)
+            if '__user__' not in s and not _use_line_imports_names(
+                    s, abs_names):
+                host_use.append(line)
+            i += 1
+            continue
+
+        body_out.append(line)
+        i += 1
 
     out = list(header)
     out.append(f'          use {mod_name}')
-    out.extend(use_lines)
+    out.extend(host_use)
     for low in sorted(orig_by_lower):
-        abs_name = abs_map[low]
         out.append(
-            f'          procedure({abs_name}) :: {orig_by_lower[low]}'
+            f'          procedure({abs_map[low]}) :: {orig_by_lower[low]}'
         )
-    out.extend(other)
+    out.extend(body_out)
     return '\n'.join(out)
 
 
@@ -595,15 +691,8 @@ def createfuncwrapper(rout, signature=0):
         rout, args, vars, need_interface and not f90mode)
 
     if need_interface:
-        abs_names = {v.lower() for v in (abs_map or {}).values()}
-        for line in rout['saved_interface'].split('\n'):
-            s = line.lstrip().lower()
-            if not s.startswith('use ') or '__user__' in s:
-                continue
-            # Avoid ``use kinds, only: f2py_ai_cb`` next to
-            # ``procedure(f2py_ai_cb)`` in the outer wrapper.
-            if abs_names and any(an in s for an in abs_names):
-                continue
+        for line in _host_scope_use_lines(
+                rout.get('saved_interface') or '', abs_map):
             add(line)
         if cb_mod_name:
             add(f'use {cb_mod_name}')
@@ -706,13 +795,8 @@ def createsubrwrapper(rout, signature=0):
         rout, args, vars, need_interface and not f90mode)
 
     if need_interface:
-        abs_names = {v.lower() for v in (abs_map or {}).values()}
-        for line in rout['saved_interface'].split('\n'):
-            s = line.lstrip().lower()
-            if not s.startswith('use ') or '__user__' in s:
-                continue
-            if abs_names and any(an in s for an in abs_names):
-                continue
+        for line in _host_scope_use_lines(
+                rout.get('saved_interface') or '', abs_map):
             add(line)
         if cb_mod_name:
             add(f'use {cb_mod_name}')
