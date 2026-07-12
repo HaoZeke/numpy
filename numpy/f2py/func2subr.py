@@ -234,11 +234,12 @@ def _cb_iface_module_name(rout, taken=None):
 
 
 def _abstract_iface_name(cbname_lower, rout, taken=None):
-    """Stable, unique abstract-interface body name for *cbname_lower*.
+    """Stable abstract-interface body name for *cbname_lower*.
 
-    Uses a long digest of (fortranname, callback) so the generated name is
-    not a predictable short token that a bare USE can import.  That removes
-    the need to rewrite or filter host/callback USE statements.
+    Full SHA-1 of ``(fortranname, callback)`` gives practical collision
+    avoidance against ordinary module exports so host/callback USE lists
+    need not be rewritten.  A deliberately matched export name remains a
+    known edge case of the preserve-USE design.
     """
     if taken is None:
         taken = set()
@@ -377,49 +378,116 @@ def _host_scope_use_lines(saved_interface):
     return out
 
 
+def _decl_names_on_line(line):
+    """Lowercase identifiers declared on a ``typespec ... :: names`` line."""
+    if '::' not in line:
+        return []
+    rhs = line.split('::', 1)[1]
+    names = []
+    for part in rhs.split(','):
+        tok = part.split('=')[0].strip().split('(')[0].strip()
+        if tok:
+            names.append(tok.lower())
+    return names
+
+
 def _resolve_saved_interface_kinds(saved_interface, vars_):
-    """Replace symbolic ``kind=name`` with numeric kinds from *vars_*.
+    """Replace host-local kind/len/dimension selectors with postcrack values.
 
     ``saved_interface`` is snapshotted before postcrack evaluates host-local
-    parameters; after postcrack, argument kinds are numeric but the frozen
-    text may still say ``kind=dp``.  Only rewrite bare identifier kinds to
-    digit kinds; leave expression kinds alone.
+    parameters; after postcrack, argument selectors are numeric but the frozen
+    text may still say ``kind=dp``, ``dimension(n)``, or ``len=n``.  Only
+    rewrite when the postcrack value is a bare digit string so assumed-shape
+    helpers (``f2py_d*``) and expression bounds are left alone.
     """
     if not saved_interface or not vars_:
         return saved_interface
     lines = saved_interface.split('\n')
     for name, var in vars_.items():
-        ks = (var or {}).get('kindselector') or {}
-        kind = ks.get('kind')
-        if kind is None:
-            continue
-        kind_s = str(kind).strip()
-        if not re.match(r'^\d+$', kind_s):
+        if not var or str(name).lower().startswith('f2py_'):
             continue
         name_l = name.lower()
-        fixed = []
-        for line in lines:
-            if '::' not in line:
+
+        # kind=name → kind=<digits>
+        ks = var.get('kindselector') or {}
+        kind = ks.get('kind')
+        if kind is not None:
+            kind_s = str(kind).strip()
+            if re.match(r'^\d+$', kind_s):
+                fixed = []
+                for line in lines:
+                    if name_l not in _decl_names_on_line(line):
+                        fixed.append(line)
+                        continue
+                    if re.search(
+                            r'kind\s*=\s*[A-Za-z_]\w*(?!\s*\()', line, re.I):
+                        line = re.sub(
+                            r'kind\s*=\s*[A-Za-z_]\w*(?!\s*\()',
+                            f'kind={kind_s}',
+                            line,
+                            flags=re.I,
+                        )
+                    fixed.append(line)
+                lines = fixed
+
+        # character len=name / *name → numeric
+        cs = var.get('charselector') or {}
+        len_val = cs.get('len', cs.get('*'))
+        if len_val is not None:
+            len_s = str(len_val).strip()
+            if re.match(r'^\d+$', len_s):
+                fixed = []
+                for line in lines:
+                    if name_l not in _decl_names_on_line(line):
+                        fixed.append(line)
+                        continue
+                    if re.search(r'len\s*=\s*[A-Za-z_]\w*', line, re.I):
+                        line = re.sub(
+                            r'len\s*=\s*[A-Za-z_]\w*',
+                            f'len={len_s}',
+                            line,
+                            flags=re.I,
+                        )
+                    # F77-style character*n with symbolic n is rare in saved
+                    # F90 interfaces; still normalize character*(name).
+                    if re.search(r'character\s*\(\s*[A-Za-z_]\w*\s*\)',
+                                 line, re.I):
+                        line = re.sub(
+                            r'(character\s*)\(\s*[A-Za-z_]\w*\s*\)',
+                            rf'\1(len={len_s})',
+                            line,
+                            flags=re.I,
+                        )
+                    fixed.append(line)
+                lines = fixed
+
+        # dimension(n[,...]) → dimension(<digits>[,...]) when fully numeric
+        dims = var.get('dimension') or []
+        if dims and all(re.match(r'^\d+$', str(d).strip()) for d in dims):
+            dim_s = ','.join(str(d).strip() for d in dims)
+            fixed = []
+            for line in lines:
+                if name_l not in _decl_names_on_line(line):
+                    fixed.append(line)
+                    continue
+                if re.search(r'dimension\s*\([^)]*\)', line, re.I):
+                    line = re.sub(
+                        r'dimension\s*\([^)]*\)',
+                        f'dimension({dim_s})',
+                        line,
+                        flags=re.I,
+                    )
+                # ``integer :: x(n)`` form (no dimension attribute)
+                elif re.search(
+                        rf'\b{re.escape(name)}\s*\([^)]*\)', line, re.I):
+                    line = re.sub(
+                        rf'(\b{re.escape(name)}\s*)\([^)]*\)',
+                        rf'\1({dim_s})',
+                        line,
+                        flags=re.I,
+                    )
                 fixed.append(line)
-                continue
-            rhs = line.split('::', 1)[1]
-            decl_names = []
-            for part in rhs.split(','):
-                tok = part.split('=')[0].strip().split('(')[0].strip()
-                if tok:
-                    decl_names.append(tok.lower())
-            if name_l not in decl_names:
-                fixed.append(line)
-                continue
-            if re.search(r'kind\s*=\s*[A-Za-z_]\w*(?!\s*\()', line, re.I):
-                line = re.sub(
-                    r'kind\s*=\s*[A-Za-z_]\w*(?!\s*\()',
-                    f'kind={kind_s}',
-                    line,
-                    flags=re.I,
-                )
-            fixed.append(line)
-        lines = fixed
+            lines = fixed
     return '\n'.join(lines)
 
 

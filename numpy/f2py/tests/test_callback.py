@@ -872,6 +872,81 @@ class TestCallbackInterfaceStructure:
             capture_output=True, text=True)
         assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
 
+    def test_host_local_parameter_dimension_resolved(self):
+        """Host-local ``parameter :: n`` must not remain as dimension(n)."""
+        import os
+        import shutil
+        import subprocess
+        src = textwrap.dedent("""\
+            function host_local_n(f, x, y) result(r)
+              integer, parameter :: n = 3
+              integer :: r
+              integer, dimension(n) :: x
+              integer, dimension(:) :: y
+              interface
+                function f(e) result(z)
+                  integer :: e, z
+                end function f
+              end interface
+              r = f(0) + sum(x) + sum(y)
+            end function host_local_n
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_local_n')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_local_n-f2pywrappers2.f90')
+        assert os.path.exists(wrapper_file)
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        compact = wrapper.replace(' ', '').lower()
+        assert 'dimension(n)' not in compact, wrapper
+        assert 'dimension(3)' in compact, wrapper
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', wrapper_file],
+            capture_output=True, text=True)
+        assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
+
+    def test_host_local_parameter_charlen_resolved(self):
+        """Host-local ``parameter :: n`` must not remain as character(len=n)."""
+        import os
+        import shutil
+        import subprocess
+        src = textwrap.dedent("""\
+            function host_local_len(f, s, y) result(r)
+              integer, parameter :: n = 4
+              integer :: r
+              character(len=n) :: s
+              real, dimension(:) :: y
+              interface
+                function f(c) result(z)
+                  character(len=*) :: c
+                  integer :: z
+                end function f
+              end interface
+              r = f(s) + int(sum(y))
+            end function host_local_len
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_local_len')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_local_len-f2pywrappers2.f90')
+        assert os.path.exists(wrapper_file)
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        compact = wrapper.replace(' ', '').lower()
+        assert 'len=n' not in compact, wrapper
+        assert 'len=4' in compact or 'character*4' in compact, wrapper
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', wrapper_file],
+            capture_output=True, text=True)
+        assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
+
     def test_use_rename_remote_matching_abstract_name(self):
         """``only: dp => f2py_ai_cb`` must keep local dp (remote is not local)."""
         import os
@@ -1364,8 +1439,8 @@ class TestCallbackInterfaceStructure:
         with open(wrapper_file) as fh:
             wrapper = fh.read()
         # Digest names: bare multi-module USE left as-is (no only: real64).
-        assert 'use other_mod, only: real64' not in wrapper.lower().replace(
-            ' ', '')
+        compact = ''.join(wrapper.lower().split())
+        assert 'useother_mod,only:real64' not in compact
         if not shutil.which('gfortran'):
             pytest.skip('gfortran not available')
         with open(os.path.join(tmpdir, 'other.f90'), 'w') as fh:
