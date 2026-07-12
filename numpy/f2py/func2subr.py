@@ -236,16 +236,16 @@ def _cb_iface_module_name(rout, taken=None):
 def _abstract_iface_name(cbname_lower, rout, taken=None):
     """Stable, unique abstract-interface body name for *cbname_lower*.
 
-    Always includes a short digest of (fortranname, callback) so the
-    generated name cannot collide with user module parameters or USE
-    association (e.g. a parameter also named ``f2py_ai_cb``).  That removes
+    Uses a long digest of (fortranname, callback) so the generated name is
+    not a predictable short token that a bare USE can import.  That removes
     the need to rewrite or filter host/callback USE statements.
     """
     if taken is None:
         taken = set()
+    # Full SHA-1 hex (40 chars) + prefix stays within Fortran's 63-char limit.
     digest = hashlib.sha1(
         f'{getfortranname(rout)}:{cbname_lower}'.encode('utf-8')
-    ).hexdigest()[:8]
+    ).hexdigest()
     return _safe_ident(digest, 'f2py_ai_', taken)
 
 
@@ -330,8 +330,14 @@ def _build_callback_iface_module(mod_name, cb_blocks, host_rout=None,
 
 def _is_interface_start(s):
     s = s.strip().lower()
-    return s == 'interface' or (
-        s.startswith('interface ') and not s.startswith('end'))
+    if s.startswith('end'):
+        return False
+    return (
+        s == 'interface'
+        or s == 'abstract interface'
+        or s.startswith('interface ')
+        or s.startswith('abstract interface ')
+    )
 
 
 def _is_interface_end(s):
@@ -417,11 +423,26 @@ def _resolve_saved_interface_kinds(saved_interface, vars_):
     return '\n'.join(lines)
 
 
+def _implicit_fortran_typespec(name):
+    """Default typespec under classic Fortran implicit rules."""
+    c = (name or 'x')[0].lower()
+    if 'i' <= c <= 'n':
+        return 'integer'
+    return 'real'
+
+
 def _ensure_callback_result_typespec(block, host_var=None):
-    """Ensure a function callback block has a typed result under implicit none."""
-    if (block or {}).get('block') != 'function':
+    """Ensure callback result *and args* are typed under module ``implicit none``."""
+    if not block:
         return block
     vars_ = block.setdefault('vars', {})
+    # Arguments first (implicitly typed dummies would fail under implicit none).
+    for a in block.get('args') or []:
+        v = vars_.setdefault(a, {})
+        if not v.get('typespec'):
+            v['typespec'] = _implicit_fortran_typespec(a)
+    if block.get('block') != 'function':
+        return block
     res = block.get('result') or block.get('name')
     if not res:
         return block
@@ -435,7 +456,7 @@ def _ensure_callback_result_typespec(block, host_var=None):
         }
         vars_[res] = typed
         return block
-    vars_[res] = {'typespec': 'integer'}
+    vars_[res] = {'typespec': _implicit_fortran_typespec(res)}
     return block
 
 
@@ -473,13 +494,14 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
                 chunk.append(lines[j])
                 j += 1
             block_l = '\n'.join(chunk).lower()
-            if any(
-                f'function {cb}(' in block_l
-                or f'subroutine {cb}(' in block_l
-                or f'function {cb} ' in block_l
-                or f'subroutine {cb} ' in block_l
-                for cb in cb_set
-            ):
+            # Drop the block only when every routine header is a callback
+            # (do not discard a mixed interface that also defines a plain
+            # helper procedure).
+            headers = re.findall(
+                r'(?:^|\n)\s*(?:function|subroutine)\s+(\w+)',
+                block_l,
+            )
+            if headers and all(h in cb_set for h in headers):
                 for k in range(start, j):
                     drop[k] = True
             i = j
@@ -511,7 +533,14 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
         if s.startswith('external'):
             rest = s[len('external'):].lstrip(' :')
             names = [n.strip() for n in rest.split(',') if n.strip()]
-            if names and all(n in cb_set for n in names):
+            # Drop only callback names from mixed EXTERNAL lines
+            # (``external f, g`` with f a callback must not keep EXTERNAL f).
+            keep = [n for n in names if n.lower() not in cb_set]
+            if not keep:
+                continue
+            if len(keep) != len(names):
+                indent = line[:len(line) - len(line.lstrip())]
+                body_out.append(f'{indent}external {", ".join(keep)}')
                 continue
             body_out.append(line)
             continue
@@ -605,7 +634,12 @@ def createfuncwrapper(rout, signature=0):
         v = rout['vars'][a]
         for i, d in enumerate(v.get('dimension', [])):
             if d == ':':
-                dn = f'f2py_{a}_d{i}'
+                # Digest-harden shape helpers so a bare USE cannot import
+                # a module entity named f2py_<arg>_dN into this scope.
+                dig = hashlib.sha1(
+                    f'{getfortranname(rout)}:{a}:{i}'.encode('utf-8')
+                ).hexdigest()[:10]
+                dn = f'f2py_d{i}_{dig}'
                 dv = {'typespec': 'integer', 'intent': ['hide']}
                 dv['='] = f'shape({a}, {i})'
                 extra_args.append(dn)
@@ -714,7 +748,10 @@ def createfuncwrapper(rout, signature=0):
                 saved = _rewrite_saved_interface_use_module(
                     saved, cb_via_module, cb_mod_name, abs_map)
             add('interface')
-            add(saved.lstrip())
+            for line in saved.split('\n'):
+                if line.lstrip().startswith('use ') and '__user__' in line:
+                    continue
+                add(line)
             add('end interface')
 
     sargs = ', '.join([a for a in args if a not in extra_args])
@@ -740,7 +777,10 @@ def createsubrwrapper(rout, signature=0):
         v = rout['vars'][a]
         for i, d in enumerate(v.get('dimension', [])):
             if d == ':':
-                dn = f'f2py_{a}_d{i}'
+                dig = hashlib.sha1(
+                    f'{getfortranname(rout)}:{a}:{i}'.encode('utf-8')
+                ).hexdigest()[:10]
+                dn = f'f2py_d{i}_{dig}'
                 dv = {'typespec': 'integer', 'intent': ['hide']}
                 dv['='] = f'shape({a}, {i})'
                 extra_args.append(dn)

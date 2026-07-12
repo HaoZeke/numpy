@@ -927,8 +927,8 @@ class TestCallbackInterfaceStructure:
             capture_output=True, text=True, cwd=tmpdir)
         assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
 
-    def test_bare_use_rewritten_away_from_abstract_name(self):
-        """Bare ``use kinds`` must not import a symbol equal to f2py_ai_*."""
+    def test_bare_use_with_digest_abstract_name(self):
+        """Bare ``use kinds`` is fine: abstract names are digest-unique."""
         import os
         import shutil
         import subprocess
@@ -1140,8 +1140,8 @@ class TestCallbackInterfaceStructure:
             capture_output=True, text=True, cwd=tmpdir)
         assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
 
-    def test_nononly_rename_tightened(self):
-        """``use m, dp => base_dp`` without ONLY must not import collisions."""
+    def test_nononly_rename_preserved(self):
+        """``use m, dp => base_dp`` without ONLY is preserved; digests avoid clash."""
         import os
         import shutil
         import subprocess
@@ -1274,6 +1274,60 @@ class TestCallbackInterfaceStructure:
         g = subprocess.run(
             ['gfortran', '-fsyntax-only', wrapper_file],
             capture_output=True, text=True)
+        assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
+
+
+    def test_shape_helper_not_predictable(self):
+        """Assumed-shape helpers are digest-named, not f2py_y_d0."""
+        import os
+        import shutil
+        import subprocess
+        src = textwrap.dedent("""\
+            module shape_names
+              implicit none
+              integer, parameter :: f2py_y_d0 = 11
+              integer, parameter :: marker = 0
+            end module shape_names
+
+            subroutine host_shape_name(cb, y)
+              use shape_names
+              implicit none
+              interface
+                function cb(x) result(z)
+                  real, intent(in) :: x
+                  real :: z
+                end function cb
+              end interface
+              real, intent(inout) :: y(:)
+              y(1) = cb(y(1)) + marker
+            end subroutine host_shape_name
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_shape_help')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_shape_help-f2pywrappers2.f90')
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        # Must not declare the old predictable helper name as a dummy.
+        assert 'integer f2py_y_d0' not in wrapper.replace('  ', ' ')
+        assert 'f2py_d0_' in wrapper
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        with open(os.path.join(tmpdir, 'shape_names.f90'), 'w') as fh:
+            fh.write(textwrap.dedent("""\
+                module shape_names
+                  implicit none
+                  integer, parameter :: f2py_y_d0 = 11
+                  integer, parameter :: marker = 0
+                end module shape_names
+            """))
+        assert subprocess.run(
+            ['gfortran', '-c', 'shape_names.f90'], cwd=tmpdir,
+            capture_output=True, text=True).returncode == 0
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
+            capture_output=True, text=True, cwd=tmpdir)
         assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
 
     def test_multi_bare_use_not_misattributed(self):
