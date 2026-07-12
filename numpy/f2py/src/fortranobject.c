@@ -921,11 +921,11 @@ ndarray_from_pyobj(const int type_num,
             Py_DECREF(descr);
             return NULL;
         }
+        /* PyArray_NewFromDescr steals descr even on failure. */
         arr = (PyArrayObject *)                                      \
           PyArray_NewFromDescr(&PyArray_Type, descr, rank, dims,
                                NULL, NULL, !(intent & F2PY_INTENT_C), NULL);
         if (arr == NULL) {
-          Py_DECREF(descr);
           return NULL;
         }
         if (PyArray_ITEMSIZE(arr) != elsize) {
@@ -1102,6 +1102,7 @@ ndarray_from_pyobj(const int type_num,
 
     {
         F2PY_REPORT_ON_ARRAY_COPY_FROMANY;
+        /* PyArray_FromAny steals descr even on failure. */
         arr = (PyArrayObject *)PyArray_FromAny(
                 obj, descr, 0, 0,
                 ((intent & F2PY_INTENT_C) ? NPY_ARRAY_CARRAY
@@ -1111,7 +1112,6 @@ ndarray_from_pyobj(const int type_num,
         // Warning: in the case of NPY_STRING, PyArray_FromAny may
         // reset descr->elsize, e.g. dtype('S0') becomes dtype('S1').
         if (arr == NULL) {
-          Py_DECREF(descr);
           return NULL;
         }
         if (type_num != NPY_STRING && PyArray_ITEMSIZE(arr) != elsize) {
