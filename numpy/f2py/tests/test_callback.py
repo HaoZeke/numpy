@@ -827,6 +827,9 @@ class TestCallbackInterfaceStructure:
                   integer, parameter :: hk = kind(1.0)
                 end module kind_mod
             """))
+        import shutil
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
         c = subprocess.run(
             ['gfortran', '-c', kinds_path],
             capture_output=True, text=True, cwd=tmpdir)
@@ -839,6 +842,7 @@ class TestCallbackInterfaceStructure:
     def test_host_local_parameter_kind_resolved(self):
         """Host-local ``parameter :: dp`` must not remain as kind=dp in iface."""
         import os
+        import shutil
         import subprocess
         src = textwrap.dedent("""\
             function host_local_dp(f, y) result(r)
@@ -858,6 +862,158 @@ class TestCallbackInterfaceStructure:
         with open(wrapper_file) as fh:
             wrapper = fh.read()
         assert 'kind=dp' not in wrapper.replace(' ', '').lower(), wrapper
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', wrapper_file],
+            capture_output=True, text=True)
+        assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
+
+    def test_use_rename_remote_matching_abstract_name(self):
+        """``only: dp => f2py_ai_cb`` must keep local dp (remote is not local)."""
+        import os
+        import shutil
+        import subprocess
+        src = textwrap.dedent("""\
+            module kinds
+              implicit none
+              integer, parameter :: f2py_ai_cb = kind(1.0d0)
+            end module kinds
+
+            subroutine host_alias(cb, y)
+              use kinds, only: dp => f2py_ai_cb
+              interface
+                function cb(x) result(z)
+                  use kinds, only: dp => f2py_ai_cb
+                  real(kind=dp) :: x, z
+                end function cb
+              end interface
+              real(kind=dp) :: y(:)
+              y(1) = cb(y(1))
+            end subroutine host_alias
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_use_rename')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_use_rename-f2pywrappers2.f90')
+        assert os.path.exists(wrapper_file)
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        # Local dp must remain available (via rename or resolved kind).
+        assert 'kind=dp' not in wrapper.replace(' ', '').lower() \
+            or '=> f2py_ai_cb' in wrapper.lower() \
+            or 'only: dp' in wrapper.lower() \
+            or 'kind=8' in wrapper.replace(' ', '').lower() \
+            or 'kind=4' in wrapper.replace(' ', '').lower(), wrapper
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        kinds_path = os.path.join(tmpdir, 'kinds.f90')
+        with open(kinds_path, 'w') as fh:
+            fh.write(textwrap.dedent("""\
+                module kinds
+                  implicit none
+                  integer, parameter :: f2py_ai_cb = kind(1.0d0)
+                end module kinds
+            """))
+        assert subprocess.run(
+            ['gfortran', '-c', kinds_path], cwd=tmpdir,
+            capture_output=True, text=True).returncode == 0
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
+            capture_output=True, text=True, cwd=tmpdir)
+        assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
+
+    def test_bare_use_rewritten_away_from_abstract_name(self):
+        """Bare ``use kinds`` must not import a symbol equal to f2py_ai_*."""
+        import os
+        import shutil
+        import subprocess
+        src = textwrap.dedent("""\
+            module kinds
+              implicit none
+              integer, parameter :: dp = kind(1.0d0)
+              integer, parameter :: f2py_ai_cb = 7
+            end module kinds
+
+            subroutine host_bare(cb, y)
+              use kinds
+              interface
+                function cb(x) result(z)
+                  use kinds
+                  real(kind=dp) :: x, z
+                end function cb
+              end interface
+              real(kind=dp) :: y(:)
+              y(1) = cb(y(1))
+            end subroutine host_bare
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_use_bare')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_use_bare-f2pywrappers2.f90')
+        assert os.path.exists(wrapper_file)
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        # Abstract body must not contain unrestricted ``use kinds``.
+        ab = wrapper.lower().split('abstract interface', 1)[-1].split(
+            'end interface', 1)[0]
+        assert 'use kinds' not in ab or 'only:' in ab, wrapper
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
+        kinds_path = os.path.join(tmpdir, 'kinds.f90')
+        with open(kinds_path, 'w') as fh:
+            fh.write(textwrap.dedent("""\
+                module kinds
+                  implicit none
+                  integer, parameter :: dp = kind(1.0d0)
+                  integer, parameter :: f2py_ai_cb = 7
+                end module kinds
+            """))
+        assert subprocess.run(
+            ['gfortran', '-c', kinds_path], cwd=tmpdir,
+            capture_output=True, text=True).returncode == 0
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
+            capture_output=True, text=True, cwd=tmpdir)
+        assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
+
+    def test_long_callback_result_name_bounded(self):
+        """Implicit-result rename must stay within 63-char Fortran limit."""
+        import os
+        import re
+        import shutil
+        import subprocess
+        cb = 'cb_' + 'q' * 53  # 56-char identifier
+        src = textwrap.dedent(f"""\
+            function host_long_result({cb}, y) result(r)
+              interface
+                integer(8) function {cb}(x)
+                  integer :: x
+                end function {cb}
+              end interface
+              integer(8) :: r
+              integer(8) :: y(:)
+              r = {cb}(0) + sum(y)
+            end function host_long_result
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_long_res')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_long_res-f2pywrappers2.f90')
+        assert os.path.exists(wrapper_file)
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        for m in re.finditer(
+                r'result\s*\(\s*([A-Za-z_]\w*)\s*\)', wrapper, re.I):
+            assert len(m.group(1)) <= 63, m.group(1)
+        for m in re.finditer(
+                r'\b(function|subroutine)\s+([A-Za-z_]\w*)\b', wrapper, re.I):
+            assert len(m.group(2)) <= 63, m.group(2)
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
         g = subprocess.run(
             ['gfortran', '-fsyntax-only', wrapper_file],
             capture_output=True, text=True)
@@ -911,6 +1067,9 @@ class TestCallbackInterfaceStructure:
         assert 'module f2py_cb_ifaces_' in wrapper.lower()
         assert 'use f2py_cb_ifaces_' in wrapper.lower()
         assert '__user__' not in wrapper.lower()
+        import shutil
+        if not shutil.which('gfortran'):
+            pytest.skip('gfortran not available')
         g = subprocess.run(
             ['gfortran', '-fsyntax-only', wrapper_file],
             capture_output=True, text=True)
