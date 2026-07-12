@@ -367,8 +367,8 @@ class TestF90CallbackCodegen:
             wrapper = fh.read()
         _assert_no_bare_external_for(wrapper, 'f')
         _assert_uses_cb_iface_module(wrapper, procedure_names=['f'])
-        # Implicit-result integer(8) function must keep its result type after
-        # rename to f2py_ai_* (Codex: silent real default on missing type).
+        # Implicit-result integer(8) callback must keep its result type after
+        # rename to f2py_ai_* (avoid untyped/default-real abstract body).
         assert 'integer(kind=8)' in wrapper.lower() or 'integer*8' in wrapper.lower(), (
             f"Callback abstract body lost integer(kind=8) result type:\n{wrapper}")
         # No residual bare external for the callback.
@@ -642,6 +642,7 @@ class TestCallbackInterfaceStructure:
 
     def test_rename_preserves_implicit_result_type(self):
         from numpy.f2py import func2subr
+        from numpy.f2py.crackfortran import crack2fortrangen
         block = {
             'block': 'function',
             'name': 'f',
@@ -654,10 +655,109 @@ class TestCallbackInterfaceStructure:
             'body': [],
         }
         ren = func2subr._rename_callback_block_for_abstract(block, 'f2py_ai_f')
-        assert ren['result'] == 'f2py_ai_f'
-        assert 'f2py_ai_f' in ren['vars']
-        assert ren['vars']['f2py_ai_f'].get('typespec') == 'integer'
-        assert 'f' not in ren['vars'] or ren['name'] != 'f'
+        assert ren['name'] == 'f2py_ai_f'
+        # Distinct RESULT name, not equal to the procedure name.
+        assert ren.get('result') and ren['result'] != 'f2py_ai_f'
+        assert ren['result'] in ren['vars']
+        assert ren['vars'][ren['result']].get('typespec') == 'integer'
+        text = crack2fortrangen(ren, tab='\n', as_interface=True).lower()
+        assert f"result ({ren['result'].lower()})" in text
+        assert 'integer(kind=8)' in text or 'integer*8' in text
+
+    def test_only_exclusion_does_not_fallback_to_local_name(self):
+        """ONLY without the local name must not resolve that name in the module."""
+        from numpy.f2py import crackfortran, func2subr
+        crackfortran.reset_global_f2py_vars()
+
+        def _cb(name, typespec):
+            return {
+                'block': 'function',
+                'name': name,
+                'args': ['x'],
+                'result': 'r',
+                'vars': {
+                    'x': {'typespec': 'integer'},
+                    'r': {'typespec': typespec},
+                },
+                'body': [],
+                'externals': [],
+                'interfaced': [],
+            }
+
+        crackfortran.usermodules = [
+            {
+                'block': 'python module',
+                'name': 'a__user__routines',
+                'body': [{
+                    'block': 'interface',
+                    'name': 'a_iface',
+                    'body': [_cb('f', 'integer'), _cb('g', 'integer')],
+                    'vars': {},
+                }],
+                'vars': {},
+                'interfaced': ['f', 'g'],
+            },
+            {
+                'block': 'python module',
+                'name': 'b__user__routines',
+                'body': [{
+                    'block': 'interface',
+                    'name': 'b_iface',
+                    'body': [_cb('f', 'double precision')],
+                    'vars': {},
+                }],
+                'vars': {},
+                'interfaced': ['f'],
+            },
+        ]
+        rout = {
+            'body': [],
+            'use': {
+                'a__user__routines': {'only': 1, 'map': {'g': 'g'}},
+                'b__user__routines': {'only': 1, 'map': {'f': 'f'}},
+            },
+            'externals': ['f'],
+            'args': ['f'],
+            'vars': {'f': {'attrspec': ['external']}},
+        }
+        found = func2subr._callback_routine_blocks(rout)
+        assert found['f']['vars']['r']['typespec'] == 'double precision'
+
+    def test_implicit_result_codegen_compiles(self):
+        """Assumed-shape host with implicit-result callback interface compiles."""
+        import os
+        import subprocess
+        src = textwrap.dedent("""\
+            function host_implicit(cb, y) result(r)
+              interface
+                integer(8) function cb(x)
+                  integer :: x
+                end function cb
+              end interface
+              integer(8) :: r
+              integer(8) :: y(:)
+              r = cb(0) + sum(y)
+            end function host_implicit
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_implicit_cb')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_implicit_cb-f2pywrappers2.f90')
+        assert os.path.exists(wrapper_file)
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        # No RESULT name equal to the procedure name (invalid Fortran).
+        import re
+        assert not re.search(
+            r'function\s+(f2py_ai_\w+)\s*\([^)]*\)\s*result\s*\(\1\)',
+            wrapper, re.I), wrapper
+        # Type retained in abstract body.
+        assert 'integer(kind=8)' in wrapper.lower() or 'integer*8' in wrapper.lower()
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', wrapper_file],
+            capture_output=True, text=True)
+        assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
 
 
 

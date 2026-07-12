@@ -127,15 +127,27 @@ def _user_module_catalog():
 def _remote_name_in_module(use_spec, local_name):
     """Remote procedure name for *local_name* in one module's use-spec.
 
-    Fortran ``use m, only: f => fun`` is stored as map[local]=remote
-    (``f => fun``).  Without a map entry, the local and remote names match.
+    Fortran ``use m, only: f => fun`` is stored as
+    ``{'only': 1, 'map': {local: remote}}`` (``f => fun``).
+
+    Returns ``None`` when *local_name* is not imported from this module
+    (``ONLY`` exclusion, or a rename that hides the original name).
     """
     mapping = (use_spec or {}).get('map') or {}
     want = local_name.lower()
     for local, remote in mapping.items():
         if (local or '').lower() == want:
             return (remote or local).lower()
-    # no rename entry: try the local name as-is in that module
+    # ONLY list: only map keys are in scope under their local names.
+    if (use_spec or {}).get('only'):
+        return None
+    # Bare USE with renames: ``use m, g => f`` hides remote ``f`` under
+    # the original name; only local ``g`` resolves to remote ``f``.
+    for local, remote in mapping.items():
+        rem = (remote or local or '').lower()
+        loc = (local or remote or '').lower()
+        if rem == want and loc != want:
+            return None
     return want
 
 
@@ -178,7 +190,7 @@ def _callback_routine_blocks(rout):
                 for b in _iter_routine_blocks(um.get('body'))
             }
             remote = _remote_name_in_module(spec, a)
-            if remote in routines:
+            if remote is not None and remote in routines:
                 found[a.lower()] = routines[remote]
                 break
     return found
@@ -212,10 +224,10 @@ def _cb_iface_module_name(rout, taken=None):
         taken = set()
     taken = set(taken) | set(_emitted_cb_module_names)
     raw = getfortranname(rout)
-    # Include a short digest of the full fortranname so long names that share
-    # a 63-char prefix still get distinct modules.
+    # Digest first so 63-char truncation cannot drop uniqueness when two
+    # long fortrannames share a long common prefix.
     digest = hashlib.sha1(raw.encode('utf-8')).hexdigest()[:8]
-    name = _safe_ident(f'{raw}_{digest}', 'f2py_cb_ifaces_', taken)
+    name = _safe_ident(f'{digest}_{raw}', 'f2py_cb_ifaces_', taken)
     _emitted_cb_module_names.add(name.lower())
     return name
 
@@ -231,45 +243,58 @@ def _abstract_iface_name(cbname_lower, taken=None):
     return _safe_ident(cbname_lower, 'f2py_ai_', taken)
 
 
-def _collect_use_lines_for_block(block, forbidden_names=None):
-    """USE lines from *block* only, skipping names that clash with *forbidden*."""
-    from .crackfortran import use2fortran
+def _filtered_use_dict(block, forbidden_names=None):
+    """Return a use-dict safe for an abstract-interface body.
+
+    Drops ``__user__`` modules and map entries whose local or remote name
+    collides with *forbidden_names* (procedure name, dummies, result).
+    The filtered dict is written onto the block before
+    ``crack2fortrangen`` so the normal emitter cannot re-emit the unfiltered
+    original (gh-20157).
+    """
     forbidden = {n.lower() for n in (forbidden_names or [])}
-    lines = []
-    seen = set()
-    use = (block or {}).get('use') or {}
-    for mname, spec in use.items():
+    out = {}
+    for mname, spec in ((block or {}).get('use') or {}).items():
         if '__user__' in mname:
             continue
-        # Drop only-map entries that would import a forbidden local name
         spec = copy.deepcopy(spec) if spec else {}
         mapping = dict(spec.get('map') or {})
-        if mapping and forbidden:
+        if mapping:
             mapping = {
                 loc: rem for loc, rem in mapping.items()
                 if (loc or '').lower() not in forbidden
+                and (rem or '').lower() not in forbidden
             }
             if not mapping and spec.get('only'):
-                # only-list emptied by filter: skip this use
                 continue
             spec['map'] = mapping
-        key = (mname, repr(spec))
-        if key in seen:
-            continue
-        seen.add(key)
-        chunk = use2fortran({mname: spec}, tab='')
-        for raw in chunk.split('\n'):
-            s = raw.strip()
-            if s:
-                lines.append(s)
-    return lines
+        out[mname] = spec
+    return out
+
+
+def _distinct_result_name(abs_name, args, vars_):
+    """Pick a RESULT name different from the procedure and its dummies."""
+    taken = {a.lower() for a in (args or [])}
+    taken.update(k.lower() for k in (vars_ or {}))
+    taken.add(abs_name.lower())
+    base = f'{abs_name}_r'
+    if base.lower() not in taken:
+        return base
+    n = 2
+    while True:
+        cand = f'{base}{n}'
+        if cand.lower() not in taken:
+            return cand
+        n += 1
 
 
 def _rename_callback_block_for_abstract(block, abs_name):
     """Deep-copy *block* as abstract-interface body named *abs_name*.
 
-    When the result is the function name (no ``result(...)``), retarget the
-    typed result variable so crack2fortrangen does not drop the type.
+    When the result is (or was) the function name, give it a *distinct*
+    RESULT variable so crack2fortrangen emits the typed declaration.
+    ``result(<same-as-function-name>)`` is invalid Fortran and also causes
+    vars2fortran to suppress the type.
     """
     b = copy.deepcopy(block)
     old = b.get('name')
@@ -277,16 +302,15 @@ def _rename_callback_block_for_abstract(block, abs_name):
     if not old:
         return b
     vars_ = b.setdefault('vars', {})
-    # Explicit result(name): only retarget if result is the function name.
-    if b.get('result') == old:
-        b['result'] = abs_name
+    args = b.get('args') or []
+    # Explicit result equal to the function name, or implicit result.
+    if b.get('result') == old or ('result' not in b and old in vars_):
+        res = _distinct_result_name(abs_name, args, vars_)
+        b['result'] = res
         if old in vars_:
-            vars_[abs_name] = vars_.pop(old)
-        return b
-    # Implicit result is the function name (e.g. ``integer(8) function f``).
-    if 'result' not in b and old in vars_:
-        b['result'] = abs_name
-        vars_[abs_name] = vars_.pop(old)
+            vars_[res] = vars_.pop(old)
+        elif abs_name in vars_:
+            vars_[res] = vars_.pop(abs_name)
         return b
     # Separate result variable: leave result/vars alone; only rename the
     # procedure. Do not move vars[old] — that would strip the return type.
@@ -302,10 +326,9 @@ def _build_callback_iface_module(mod_name, cb_blocks, host_rout=None,
     ``procedure(<abs>) :: <local>`` for each callback dummy.
     """
     from .crackfortran import crack2fortrangen
-    # Interface bodies are separate scoping units.  Emit USE only from the
-    # *callback* block itself (filtered for local-name clashes).  Do not
-    # union host USE into every body: a host that imports a name also used
-    # as a callback dummy produces uncompilable Fortran (gh-20157).
+    # Interface bodies are separate scoping units.  Put a *filtered* use
+    # dict on the block before crack2fortrangen so the emitter cannot
+    # reintroduce forbidden names (gh-20157).
     # *host_rout* is retained for call-site stability only.
     lines = [
         f'module {mod_name}',
@@ -316,21 +339,18 @@ def _build_callback_iface_module(mod_name, cb_blocks, host_rout=None,
     for key, block in sorted(cb_blocks.items(), key=lambda kv: kv[0]):
         abs_name = abs_map.get(key) or _abstract_iface_name(key)
         b = _rename_callback_block_for_abstract(block, abs_name)
-        # Forbidden: callback dummies/result must not be use-associated.
+        # Forbidden: callback dummies/result/procedure name must not be
+        # use-associated inside the body.
         forbidden = {a.lower() for a in (b.get('args') or [])}
         if b.get('result'):
             forbidden.add(b['result'].lower())
         forbidden.add(abs_name.lower())
-        use_lines = _collect_use_lines_for_block(b, forbidden)
+        b['use'] = _filtered_use_dict(b, forbidden)
         text = crack2fortrangen(b, tab='\n  ', as_interface=True)
         body_lines = [ln.strip() for ln in text.split('\n') if ln.strip()]
         if not body_lines:
             continue
-        # procedure header, then USE, then remaining specification statements
-        lines.append(f'    {body_lines[0]}')
-        for use_line in use_lines:
-            lines.append(f'      {use_line}')
-        for ln in body_lines[1:]:
+        for ln in body_lines:
             lines.append(f'    {ln}')
     # Abstract interfaces close with END INTERFACE (not END ABSTRACT INTERFACE).
     lines.append('  end interface')
@@ -451,7 +471,7 @@ def _prepare_callback_module(rout, args, vars, need_interface):
     taken.update(k.lower() for k in (vars or {}))
     taken.update(e.lower() for e in (rout.get('externals') or []))
     # Also reserve identifiers from each callback block so abstract names
-    # cannot collide with callback dummies/results (Codex major).
+    # cannot collide with callback dummies/results (gh-20157).
     for block in needed.values():
         for a in block.get('args') or []:
             taken.add(a.lower())

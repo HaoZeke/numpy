@@ -407,7 +407,7 @@ def buildmodules(lst):
             # Collect USE'd modules from the extension module *and* from
             # each interfaced routine (``.pyf`` stores
             # ``use host__user__routines`` on the routine, not the python
-            # module — gh-20157 / Codex review).
+            # module; signature files put USE on the routine).
             um = []
             seen_um = set()
 
