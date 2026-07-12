@@ -836,6 +836,86 @@ class TestCallbackInterfaceStructure:
             capture_output=True, text=True, cwd=tmpdir)
         assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
 
+    def test_host_local_parameter_kind_resolved(self):
+        """Host-local ``parameter :: dp`` must not remain as kind=dp in iface."""
+        import os
+        import subprocess
+        src = textwrap.dedent("""\
+            function host_local_dp(f, y) result(r)
+              integer, parameter :: dp = kind(1.0d0)
+              external f
+              real(dp) :: r, f
+              real(dp), dimension(:) :: y
+              r = f(0.0_dp) + sum(y)
+            end function host_local_dp
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_local_kind')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        wrapper_file = os.path.join(
+            tmpdir, '_test_local_kind-f2pywrappers2.f90')
+        assert os.path.exists(wrapper_file)
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        assert 'kind=dp' not in wrapper.replace(' ', '').lower(), wrapper
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', wrapper_file],
+            capture_output=True, text=True)
+        assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
+
+    def test_pyf_rebuild_emits_callback_module(self):
+        """Signature file (-h) then codegen from .pyf still uses cb iface module."""
+        import os
+        import subprocess
+        import tempfile
+        src = textwrap.dedent("""\
+            function pyf_host(f, y) result(r)
+              external f
+              integer(8) :: r, f
+              integer(8), dimension(:) :: y
+              r = f(0) + sum(y)
+            end function pyf_host
+        """)
+        tmpdir = tempfile.mkdtemp()
+        src_path = os.path.join(tmpdir, 'src.f90')
+        pyf_path = os.path.join(tmpdir, 'sig.pyf')
+        with open(src_path, 'w') as fh:
+            fh.write(src)
+        code = (
+            "import sys; sys.path = %r; "
+            "import numpy.f2py; numpy.f2py.main()"
+        ) % sys.path
+        # Generate signature
+        p1 = subprocess.run(
+            [sys.executable, '-c', code, src_path, '-h', pyf_path,
+             '-m', '_test_pyf_cb'],
+            capture_output=True, text=True)
+        assert p1.returncode == 0, f"-h failed:\n{p1.stdout}\n{p1.stderr}"
+        assert os.path.exists(pyf_path)
+        with open(pyf_path) as fh:
+            pyf = fh.read()
+        assert '__user__' in pyf
+        # Codegen from .pyf only
+        build = os.path.join(tmpdir, 'build')
+        os.makedirs(build, exist_ok=True)
+        p2 = subprocess.run(
+            [sys.executable, '-c', code, pyf_path, '--build-dir', build,
+             '-m', '_test_pyf_cb'],
+            capture_output=True, text=True)
+        assert p2.returncode == 0, f"pyf codegen failed:\n{p2.stdout}\n{p2.stderr}"
+        wrapper_file = os.path.join(build, '_test_pyf_cb-f2pywrappers2.f90')
+        assert os.path.exists(wrapper_file), (
+            f"missing wrapper; files={os.listdir(build)}")
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        assert 'module f2py_cb_ifaces_' in wrapper.lower()
+        assert 'use f2py_cb_ifaces_' in wrapper.lower()
+        assert '__user__' not in wrapper.lower()
+        g = subprocess.run(
+            ['gfortran', '-fsyntax-only', wrapper_file],
+            capture_output=True, text=True)
+        assert g.returncode == 0, f"gfortran reject:\n{g.stderr}\n{wrapper}"
+
 
 
 @pytest.mark.slow
@@ -861,6 +941,43 @@ class TestGH20157ArrayCallback(util.F2PyTest):
         y = np.zeros(4, dtype=np.int64)
         self.module.apply_arr_cb(fill, y)
         assert entered, "array-arg callback was not invoked"
+
+
+@pytest.mark.slow
+class TestGH20157TwoHosts(util.F2PyTest):
+    """Compile-and-run: two hosts, same local callback name, different types."""
+    sources = [
+        util.getpath("tests", "src", "callback", "gh20157_two_hosts.f90")
+    ]
+
+    def test_isolated_callback_types_run(self):
+        def fi(x):
+            return int(x) + 1
+
+        def fd(x):
+            return float(x) + 0.5
+
+        yi = np.array([1, 2, 3], dtype=np.int64)
+        yd = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+        assert self.module.host_i8(fi, yi) == 1 + 1 + 2 + 3
+        assert self.module.host_dp(fd, yd) == pytest.approx(0.5 + 1.0 + 2.0 + 3.0)
+
+
+@pytest.mark.slow
+class TestGH20157LocalKind(util.F2PyTest):
+    """Compile-and-run: host-local parameter kind in assumed-shape host."""
+    sources = [
+        util.getpath("tests", "src", "callback", "gh20157_local_kind.f90")
+    ]
+
+    def test_local_kind_compiles_and_runs(self):
+        def f(x):
+            return float(x) + 1.0
+
+        y = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+        assert self.module.host_local_dp(f, y) == pytest.approx(
+            1.0 + 1.0 + 2.0 + 3.0)
+
 
 
 @pytest.mark.slow

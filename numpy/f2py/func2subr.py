@@ -11,6 +11,7 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
 import hashlib
+import re
 
 from ._isocbind import isoc_kindmap
 from .auxfuncs import (
@@ -427,6 +428,83 @@ def _host_scope_use_lines(saved_interface, abs_map=None):
     return out
 
 
+def _resolve_saved_interface_kinds(saved_interface, vars_):
+    """Replace symbolic ``kind=name`` with resolved kinds from *vars_*.
+
+    ``saved_interface`` is snapshotted in crackfortran *before* postcrack
+    evaluates host-local parameters (e.g. ``integer, parameter :: dp =
+    kind(1.0d0)``).  After postcrack, ``vars_`` holds numeric kinds for
+    arguments, but the frozen interface text still has ``kind=dp`` and is
+    uncompilable in a nested interface (no host-local parameter in scope).
+    """
+    if not saved_interface or not vars_:
+        return saved_interface
+    lines = saved_interface.split('\n')
+    for name, var in vars_.items():
+        ks = (var or {}).get('kindselector') or {}
+        kind = ks.get('kind')
+        if kind is None:
+            continue
+        kind_s = str(kind).strip()
+        # Only rewrite when the var has a resolved (non-identifier) kind.
+        if re.match(r'^[A-Za-z_]\w*$', kind_s):
+            continue
+        name_l = name.lower()
+        fixed = []
+        for line in lines:
+            compact = line.replace(' ', '').lower()
+            declares = (
+                f'::{name_l}' in compact
+                or compact.endswith(f'::{name_l}')
+                or re.search(
+                    rf'::\s*{re.escape(name)}\b', line, flags=re.I)
+            )
+            if declares and re.search(r'kind\s*=\s*[A-Za-z_]\w*', line, re.I):
+                line = re.sub(
+                    r'kind\s*=\s*[A-Za-z_]\w*',
+                    f'kind={kind_s}',
+                    line,
+                    flags=re.I,
+                )
+            fixed.append(line)
+        lines = fixed
+    return '\n'.join(lines)
+
+
+def _ensure_callback_result_typespec(block, host_var=None):
+    """Ensure a function callback block has a typed result (for ``implicit none``).
+
+    When crackfortran cannot type the result, the abstract body would be
+    untyped under ``implicit none`` (rejected by strict compilers).  Fall
+    back to the host dummy's typespec when available.
+    """
+    if (block or {}).get('block') != 'function':
+        return block
+    b = block
+    vars_ = b.setdefault('vars', {})
+    res = b.get('result') or b.get('name')
+    if not res:
+        return b
+    rv = vars_.get(res) or {}
+    if rv.get('typespec'):
+        return b
+    # Prefer host external declaration (often has the result type).
+    host = host_var or {}
+    if host.get('typespec'):
+        typed = dict(host)
+        # Do not copy EXTERNAL / intent attrs onto the result.
+        if 'attrspec' in typed:
+            typed = {
+                k: v for k, v in typed.items()
+                if k not in ('attrspec', 'intent', 'check', 'depend')
+            }
+        vars_[res] = typed
+        return b
+    # Last resort: integer (matches f2py's common default external typing).
+    vars_[res] = {'typespec': 'integer'}
+    return b
+
+
 def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
                                         mod_name, abs_map):
     """Adapt *saved_interface* for module-based callback interfaces.
@@ -567,7 +645,8 @@ def _prepare_callback_module(rout, args, vars, need_interface):
             continue
         block = all_blocks.get(a.lower())
         if block is not None:
-            needed[a.lower()] = block
+            needed[a.lower()] = _ensure_callback_result_typespec(
+                copy.deepcopy(block), host_var=vars.get(a))
             orig_names.append(a)
     if not needed:
         return empty
@@ -691,8 +770,9 @@ def createfuncwrapper(rout, signature=0):
         rout, args, vars, need_interface and not f90mode)
 
     if need_interface:
-        for line in _host_scope_use_lines(
-                rout.get('saved_interface') or '', abs_map):
+        saved0 = _resolve_saved_interface_kinds(
+            rout.get('saved_interface') or '', vars)
+        for line in _host_scope_use_lines(saved0, abs_map):
             add(line)
         if cb_mod_name:
             add(f'use {cb_mod_name}')
@@ -726,7 +806,8 @@ def createfuncwrapper(rout, signature=0):
             # interface conflict to fix (gh-20157 applies to free routines).
             pass
         else:
-            saved = rout['saved_interface']
+            saved = _resolve_saved_interface_kinds(
+                rout.get('saved_interface') or '', vars)
             if cb_mod_name:
                 saved = _rewrite_saved_interface_use_module(
                     saved, cb_via_module, cb_mod_name, abs_map)
@@ -795,8 +876,9 @@ def createsubrwrapper(rout, signature=0):
         rout, args, vars, need_interface and not f90mode)
 
     if need_interface:
-        for line in _host_scope_use_lines(
-                rout.get('saved_interface') or '', abs_map):
+        saved0 = _resolve_saved_interface_kinds(
+            rout.get('saved_interface') or '', vars)
+        for line in _host_scope_use_lines(saved0, abs_map):
             add(line)
         if cb_mod_name:
             add(f'use {cb_mod_name}')
@@ -819,7 +901,8 @@ def createsubrwrapper(rout, signature=0):
             # Module CONTAINS path: no dual EXTERNAL+interface conflict.
             pass
         else:
-            saved = rout['saved_interface']
+            saved = _resolve_saved_interface_kinds(
+                rout.get('saved_interface') or '', vars)
             if cb_mod_name:
                 saved = _rewrite_saved_interface_use_module(
                     saved, cb_via_module, cb_mod_name, abs_map)
