@@ -289,8 +289,14 @@ def _assert_no_bare_external_for(wrapper, name):
             )
 
 
-def _assert_uses_cb_iface_module(wrapper, routine_name=None):
-    """Assert a f2py_cb_ifaces_* module is defined and USEd (gh-20157)."""
+def _assert_uses_cb_iface_module(wrapper, routine_name=None,
+                                 procedure_names=None):
+    """Assert a f2py_cb_ifaces_* module is defined, USEd, and applied.
+
+    When *procedure_names* is given, require ``procedure(f2py_ai_*)`` for
+    each callback dummy in both the outer wrapper and the nested host
+    interface (not only a single bare ``use`` somewhere in the file).
+    """
     text = wrapper.lower()
     assert 'module f2py_cb_ifaces_' in text, (
         f"Missing callback interface module. Wrapper:\n{wrapper}")
@@ -301,6 +307,33 @@ def _assert_uses_cb_iface_module(wrapper, routine_name=None):
     sub_pos = text.find('subroutine f2pywrap')
     assert 0 <= mod_pos < sub_pos, (
         f"Callback module must precede wrappers. Wrapper:\n{wrapper}")
+    # Count opening "module f2py_cb_ifaces_*" lines (not "end module ...").
+    n_open = sum(
+        1 for ln in text.splitlines()
+        if ln.strip().startswith('module f2py_cb_ifaces_')
+    )
+    n_end = sum(
+        1 for ln in text.splitlines()
+        if ln.strip().startswith('end module f2py_cb_ifaces_')
+    )
+    assert n_open == n_end and n_open >= 1, (
+        f"Mismatched module/end module counts ({n_open}/{n_end}):\n{wrapper}")
+    if procedure_names:
+        for pname in procedure_names:
+            # procedure(f2py_ai_*) :: pname in wrapper text
+            assert f':: {pname.lower()}' in text, (
+                f"Missing procedure(...) :: {pname} declaration:\n{wrapper}")
+            assert 'procedure(f2py_ai_' in text, (
+                f"Missing procedure(f2py_ai_*) form for {pname}:\n{wrapper}")
+        # USE must appear both outside and inside the host interface
+        use_depths = [
+            depth for depth, s in _outer_wrapper_scope_lines(wrapper)
+            if s.startswith('use f2py_cb_ifaces_')
+        ]
+        assert 0 in use_depths, (
+            f"Outer wrapper must USE callback module:\n{wrapper}")
+        assert any(d >= 1 for d in use_depths), (
+            f"Nested host interface must USE callback module:\n{wrapper}")
 
 
 class TestF90CallbackCodegen:
@@ -333,9 +366,11 @@ class TestF90CallbackCodegen:
         with open(wrapper_file) as fh:
             wrapper = fh.read()
         _assert_no_bare_external_for(wrapper, 'f')
-        _assert_uses_cb_iface_module(wrapper)
-        # Nested host interface must USE the module, not re-declare f.
-        assert 'use f2py_cb_ifaces_' in wrapper.lower()
+        _assert_uses_cb_iface_module(wrapper, procedure_names=['f'])
+        # Implicit-result integer(8) function must keep its result type after
+        # rename to f2py_ai_* (Codex: silent real default on missing type).
+        assert 'integer(kind=8)' in wrapper.lower() or 'integer*8' in wrapper.lower(), (
+            f"Callback abstract body lost integer(kind=8) result type:\n{wrapper}")
         # No residual bare external for the callback.
         assert 'external f' not in ' '.join(wrapper.lower().split()), (
             f"Residual 'external f' in wrapper:\n{wrapper}")
@@ -354,13 +389,54 @@ class TestF90CallbackCodegen:
         import os
         wrapper_file = os.path.join(
             tmpdir, '_test_gh20157_sub-f2pywrappers2.f90')
-        if not os.path.exists(wrapper_file):
-            # Some shapes may not force an F90 wrapper; nothing to check.
-            return
+        assert os.path.exists(wrapper_file), (
+            "Assumed-shape F90 subroutine must emit f2pywrappers2.f90")
         with open(wrapper_file) as fh:
             wrapper = fh.read()
         _assert_no_bare_external_for(wrapper, 'cb')
-        _assert_uses_cb_iface_module(wrapper)
+        _assert_uses_cb_iface_module(wrapper, procedure_names=['cb'])
+
+    def test_two_hosts_same_callback_name_isolated(self):
+        """Different hosts both using local callback name ``f`` keep own types."""
+        src = textwrap.dedent("""\
+            function host_i8(f, y) result(r)
+              external f
+              integer(8) :: r, f
+              integer(8), dimension(:) :: y
+              r = f(0) + sum(y)
+            end function host_i8
+
+            function host_dp(f, y) result(r)
+              external f
+              double precision :: r, f
+              double precision, dimension(:) :: y
+              r = f(0d0) + sum(y)
+            end function host_dp
+        """)
+        tmpdir, out, err, rc = _run_f2py_codegen(
+            src, '.f90', '_test_two_hosts_f')
+        assert rc == 0, f"f2py failed:\n{out}\n{err}"
+        import os
+        wrapper_file = os.path.join(
+            tmpdir, '_test_two_hosts_f-f2pywrappers2.f90')
+        assert os.path.exists(wrapper_file), (
+            "Two assumed-shape hosts must emit f2pywrappers2.f90")
+        with open(wrapper_file) as fh:
+            wrapper = fh.read()
+        # Two distinct callback modules (digest/name isolation).
+        text = wrapper.lower()
+        n_defs = sum(
+            1 for ln in text.splitlines()
+            if ln.strip().startswith('module f2py_cb_ifaces_')
+        )
+        assert n_defs >= 2, (
+            f"Expected separate cb-iface modules per host, got {n_defs}:\n"
+            f"{wrapper}")
+        assert 'integer(kind=8)' in text or 'integer*8' in text, (
+            f"i8 host callback type missing:\n{wrapper}")
+        assert 'double precision' in text or 'real(kind=8)' in text, (
+            f"dp host callback type missing:\n{wrapper}")
+        _assert_no_bare_external_for(wrapper, 'f')
 
     def test_f77_callback_external_preserved(self):
         """F77 fixed-form without assumed-shape keeps the legacy path."""
@@ -507,6 +583,81 @@ class TestCallbackInterfaceStructure:
         found = func2subr._callback_routine_blocks(rout)
         assert 'cb' in found
         assert found['cb']['name'] == 'cb'
+
+    def test_callback_lookup_isolated_per_used_module(self):
+        """First-wins global table must not cross-pollinate two user modules."""
+        from numpy.f2py import crackfortran, func2subr
+        crackfortran.reset_global_f2py_vars()
+
+        def _cb(name, typespec):
+            return {
+                'block': 'function',
+                'name': name,
+                'args': ['x'],
+                'result': 'r',
+                'vars': {
+                    'x': {'typespec': 'integer'},
+                    'r': {'typespec': typespec},
+                },
+                'body': [],
+                'externals': [],
+                'interfaced': [],
+            }
+
+        crackfortran.usermodules = [
+            {
+                'block': 'python module',
+                'name': 'host_a__user__routines',
+                'body': [{
+                    'block': 'interface',
+                    'name': 'a_iface',
+                    'body': [_cb('f', 'integer')],
+                    'vars': {},
+                }],
+                'vars': {},
+                'interfaced': ['f'],
+            },
+            {
+                'block': 'python module',
+                'name': 'host_b__user__routines',
+                'body': [{
+                    'block': 'interface',
+                    'name': 'b_iface',
+                    'body': [_cb('f', 'double precision')],
+                    'vars': {},
+                }],
+                'vars': {},
+                'interfaced': ['f'],
+            },
+        ]
+        rout_b = {
+            'body': [],
+            'use': {'host_b__user__routines': {}},
+            'externals': ['f'],
+            'args': ['f'],
+            'vars': {'f': {'attrspec': ['external']}},
+        }
+        found = func2subr._callback_routine_blocks(rout_b)
+        assert found['f']['vars']['r']['typespec'] == 'double precision'
+
+    def test_rename_preserves_implicit_result_type(self):
+        from numpy.f2py import func2subr
+        block = {
+            'block': 'function',
+            'name': 'f',
+            'args': ['x'],
+            # no 'result' key: implicit result is the function name
+            'vars': {
+                'x': {'typespec': 'integer'},
+                'f': {'typespec': 'integer', 'kindselector': {'kind': '8'}},
+            },
+            'body': [],
+        }
+        ren = func2subr._rename_callback_block_for_abstract(block, 'f2py_ai_f')
+        assert ren['result'] == 'f2py_ai_f'
+        assert 'f2py_ai_f' in ren['vars']
+        assert ren['vars']['f2py_ai_f'].get('typespec') == 'integer'
+        assert 'f' not in ren['vars'] or ren['name'] != 'f'
 
 
 

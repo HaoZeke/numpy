@@ -1456,7 +1456,12 @@ def _buildmodule_body(m, um, vrd=None):
     rd = dictappend(rd, ar)
 
     for u in um:
-        ar = use_rules.buildusevars(u, m['use'][u['name']])
+        # um may include __user__ modules resolved from routine-level USE
+        # (not only m['use']); fall back to empty map (gh-20157).
+        use_map = {}
+        if 'use' in m and u.get('name') in m['use']:
+            use_map = m['use'][u['name']]
+        ar = use_rules.buildusevars(u, use_map)
         rd = dictappend(rd, ar)
 
     needs = cfuncs.get_needs()
