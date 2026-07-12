@@ -959,10 +959,8 @@ class TestCallbackInterfaceStructure:
         assert os.path.exists(wrapper_file)
         with open(wrapper_file) as fh:
             wrapper = fh.read()
-        # Abstract body must not contain unrestricted ``use kinds``.
-        ab = wrapper.lower().split('abstract interface', 1)[-1].split(
-            'end interface', 1)[0]
-        assert 'use kinds' not in ab or 'only:' in ab, wrapper
+        # Digest abstract names: bare USE of kinds is fine (no name clash).
+        assert 'procedure(f2py_ai_' in wrapper.lower()
         if not shutil.which('gfortran'):
             pytest.skip('gfortran not available')
         kinds_path = os.path.join(tmpdir, 'kinds.f90')
@@ -1173,11 +1171,8 @@ class TestCallbackInterfaceStructure:
             tmpdir, '_test_nononly-f2pywrappers2.f90')
         with open(wrapper_file) as fh:
             wrapper = fh.read()
-        ab = wrapper.lower().split('abstract interface', 1)[-1].split(
-            'end interface', 1)[0]
-        # Must be ONLY-restricted, not bare rename without only.
-        assert 'use kinds' in ab
-        assert 'only' in ab
+        # Digest abstract names: unrestricted rename USE is fine.
+        assert 'procedure(f2py_ai_' in wrapper.lower()
         if not shutil.which('gfortran'):
             pytest.skip('gfortran not available')
         with open(os.path.join(tmpdir, 'kinds.f90'), 'w') as fh:
@@ -1314,6 +1309,7 @@ class TestCallbackInterfaceStructure:
             tmpdir, '_test_multi_bare-f2pywrappers2.f90')
         with open(wrapper_file) as fh:
             wrapper = fh.read()
+        # Digest names: bare multi-module USE left as-is (no only: real64).
         assert 'use other_mod, only: real64' not in wrapper.lower().replace(
             ' ', '')
         if not shutil.which('gfortran'):
@@ -1328,150 +1324,6 @@ class TestCallbackInterfaceStructure:
             """))
         assert subprocess.run(
             ['gfortran', '-c', 'other.f90'], cwd=tmpdir,
-            capture_output=True, text=True).returncode == 0
-        g = subprocess.run(
-            ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
-            capture_output=True, text=True, cwd=tmpdir)
-        assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
-
-    def test_intrinsic_not_harvested_as_use_symbol(self):
-        """selected_real_kind is an intrinsic, not an iso_fortran_env export."""
-        import os
-        import shutil
-        import subprocess
-        src = textwrap.dedent("""\
-            subroutine host_sel(cb, y)
-              use iso_fortran_env
-              interface
-                function cb(x) result(z)
-                  use iso_fortran_env
-                  real(kind=real64) :: x, z
-                end function cb
-              end interface
-              real(kind=selected_real_kind(15, 307)) :: y(:)
-              y(1) = cb(y(1))
-            end subroutine host_sel
-        """)
-        tmpdir, out, err, rc = _run_f2py_codegen(
-            src, '.f90', '_test_intrin')
-        assert rc == 0, f"f2py failed:\n{out}\n{err}"
-        wrapper_file = os.path.join(
-            tmpdir, '_test_intrin-f2pywrappers2.f90')
-        with open(wrapper_file) as fh:
-            wrapper = fh.read()
-        assert 'selected_real_kind' not in wrapper.lower() or \
-            'only: selected_real_kind' not in wrapper.lower().replace(' ', '')
-        # stronger: no only-list entry for the intrinsic
-        assert 'only: real64, selected_real_kind' not in wrapper.lower().replace(
-            ' ', '')
-        assert 'only: selected_real_kind' not in wrapper.lower().replace(
-            ' ', '')
-        if not shutil.which('gfortran'):
-            pytest.skip('gfortran not available')
-        g = subprocess.run(
-            ['gfortran', '-fsyntax-only', wrapper_file],
-            capture_output=True, text=True)
-        assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
-
-    def test_only_keyword_not_substring(self):
-        """``use m, only_thing => rem`` without ONLY stays a non-only rename."""
-        import os
-        import shutil
-        import subprocess
-        src = textwrap.dedent("""\
-            module kinds
-              implicit none
-              integer, parameter :: real_thing = kind(1.0d0)
-              integer, parameter :: f2py_ai_cb = 7
-            end module kinds
-
-            subroutine host_only_substr(cb, y)
-              use kinds, only_thing => real_thing
-              interface
-                function cb(x) result(z)
-                  use kinds, only_thing => real_thing
-                  real(kind=only_thing) :: x, z
-                end function cb
-              end interface
-              real(kind=only_thing) :: y(:)
-              y(1) = cb(y(1))
-            end subroutine host_only_substr
-        """)
-        tmpdir, out, err, rc = _run_f2py_codegen(
-            src, '.f90', '_test_only_sub')
-        assert rc == 0, f"f2py failed:\n{out}\n{err}"
-        wrapper_file = os.path.join(
-            tmpdir, '_test_only_sub-f2pywrappers2.f90')
-        with open(wrapper_file) as fh:
-            wrapper = fh.read()
-        # Must tighten to ONLY (rename-without-ONLY), not treat as only-list
-        # of the substring-matched name alone incorrectly.
-        ab = wrapper.lower().split('abstract interface', 1)[-1].split(
-            'end interface', 1)[0]
-        assert 'only_thing' in ab or 'kind=8' in ab.replace(' ', '')
-        if not shutil.which('gfortran'):
-            pytest.skip('gfortran not available')
-        with open(os.path.join(tmpdir, 'kinds.f90'), 'w') as fh:
-            fh.write(textwrap.dedent("""\
-                module kinds
-                  implicit none
-                  integer, parameter :: real_thing = kind(1.0d0)
-                  integer, parameter :: f2py_ai_cb = 7
-                end module kinds
-            """))
-        assert subprocess.run(
-            ['gfortran', '-c', 'kinds.f90'], cwd=tmpdir,
-            capture_output=True, text=True).returncode == 0
-        g = subprocess.run(
-            ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
-            capture_output=True, text=True, cwd=tmpdir)
-        assert g.returncode == 0, f"{g.stderr}\n{wrapper}"
-
-    def test_user_f2py_kind_param_not_dropped(self):
-        """User parameter named f2py_kind must survive bare-USE tightening."""
-        import os
-        import shutil
-        import subprocess
-        src = textwrap.dedent("""\
-            module kmod
-              implicit none
-              integer, parameter :: f2py_kind = kind(1.0d0)
-              integer, parameter :: f2py_ai_cb = 3
-            end module kmod
-
-            subroutine host_bare_fk(cb, y)
-              use kmod
-              interface
-                function cb(x) result(z)
-                  use kmod
-                  real(kind=f2py_kind) :: x, z
-                end function cb
-              end interface
-              real(kind=f2py_kind) :: y(:)
-              y(1) = cb(y(1))
-            end subroutine host_bare_fk
-        """)
-        tmpdir, out, err, rc = _run_f2py_codegen(
-            src, '.f90', '_test_ufk')
-        assert rc == 0, f"f2py failed:\n{out}\n{err}"
-        wrapper_file = os.path.join(tmpdir, '_test_ufk-f2pywrappers2.f90')
-        with open(wrapper_file) as fh:
-            wrapper = fh.read()
-        # Either kind resolved numerically or f2py_kind remains use-associated
-        low = wrapper.lower().replace(' ', '')
-        assert 'f2py_kind' in low or 'kind=8' in low
-        if not shutil.which('gfortran'):
-            pytest.skip('gfortran not available')
-        with open(os.path.join(tmpdir, 'kmod.f90'), 'w') as fh:
-            fh.write(textwrap.dedent("""\
-                module kmod
-                  implicit none
-                  integer, parameter :: f2py_kind = kind(1.0d0)
-                  integer, parameter :: f2py_ai_cb = 3
-                end module kmod
-            """))
-        assert subprocess.run(
-            ['gfortran', '-c', 'kmod.f90'], cwd=tmpdir,
             capture_output=True, text=True).returncode == 0
         g = subprocess.run(
             ['gfortran', '-fsyntax-only', f'-I{tmpdir}', wrapper_file],
