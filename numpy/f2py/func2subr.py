@@ -236,10 +236,17 @@ def _cb_iface_module_name(rout, taken=None):
 def _abstract_iface_name(cbname_lower, rout, taken=None):
     """Stable abstract-interface body name for *cbname_lower*.
 
-    Full SHA-1 of ``(fortranname, callback)`` gives practical collision
-    avoidance against ordinary module exports so host/callback USE lists
-    need not be rewritten.  A deliberately matched export name remains a
-    known edge case of the preserve-USE design.
+    Namespace policy (preserve-USE design):
+    * Generated identifiers live under ``f2py_ai_`` / ``f2py_cb_ifaces_`` /
+      ``f2py_d`` prefixes.
+    * The abstract body name is ``f2py_ai_`` + full SHA-1 of
+      ``(fortranname, callback)`` (both host and callback affect the digest).
+    * That is practical collision avoidance against ordinary module exports so
+      host/callback USE lists need not be rewritten or filtered.
+    * A user module that deliberately exports the exact computed spelling can
+      still clash under bare USE; ``_sanitize_abstract_use`` drops only/map
+      associations of that name when they are visible, but bare USE exports are
+      not fully enumerable without a second association solver.
     """
     if taken is None:
         taken = set()
@@ -248,6 +255,14 @@ def _abstract_iface_name(cbname_lower, rout, taken=None):
         f'{getfortranname(rout)}:{cbname_lower}'.encode('utf-8')
     ).hexdigest()
     return _safe_ident(digest, 'f2py_ai_', taken)
+
+
+def _shape_helper_name(rout, arg, dim_index):
+    """Digest-hardened assumed-shape dimension helper (not ``f2py_<arg>_dN``)."""
+    dig = hashlib.sha1(
+        f'{getfortranname(rout)}:{arg}:{dim_index}'.encode('utf-8')
+    ).hexdigest()[:10]
+    return f'f2py_d{dim_index}_{dig}'
 
 
 def _distinct_result_name(abs_name, args, vars_):
@@ -290,7 +305,54 @@ def _drop_user_use(block):
     """Drop f2py ``__user__`` modules from a cracked block's use dict."""
     use = (block or {}).get('use') or {}
     cleaned = {m: s for m, s in use.items() if '__user__' not in m}
-    block = block
+    block['use'] = cleaned
+    return block
+
+
+def _sanitize_abstract_use(block, abs_name):
+    """Drop ``__user__`` and USE associations of the abstract body name.
+
+    Preserve real USE (kinds, types) under the simple design.  Only remove
+    associations that would bind *abs_name* (or a rename of it) into the
+    abstract-interface body — that is the program-unit name of the generated
+    procedure and must not also be an imported entity.
+    """
+    if not block:
+        return block
+    abs_l = (abs_name or '').lower()
+    use = block.get('use') or {}
+    cleaned = {}
+    for mname, spec in use.items():
+        if '__user__' in (mname or ''):
+            continue
+        if not abs_l:
+            cleaned[mname] = spec
+            continue
+        spec = dict(spec or {})
+        mapping = dict(spec.get('map') or {})
+        new_map = {}
+        for local, remote in mapping.items():
+            loc = (local or '').lower()
+            rem = (remote or local or '').lower()
+            # Drop associations that import abs_name under any local name,
+            # or that use abs_name as the local name for something else.
+            if loc == abs_l or rem == abs_l:
+                continue
+            new_map[local] = remote
+        if spec.get('only'):
+            if not new_map:
+                # ONLY list emptied: nothing left to import from this module.
+                continue
+            spec['map'] = new_map
+            cleaned[mname] = spec
+            continue
+        # Bare USE: keep the module (kinds/parameters) but drop rename entries
+        # that would bind abs_name.
+        if new_map:
+            spec['map'] = new_map
+        elif 'map' in spec:
+            spec.pop('map', None)
+        cleaned[mname] = spec
     block['use'] = cleaned
     return block
 
@@ -318,7 +380,7 @@ def _build_callback_iface_module(mod_name, cb_blocks, host_rout=None,
                 key, host_rout if host_rout is not None else {'name': key}, set())
 
         b = _rename_callback_block_for_abstract(block, abs_name)
-        _drop_user_use(b)
+        _sanitize_abstract_use(b, abs_name)
         text = crack2fortrangen(b, tab='\n  ', as_interface=True)
         for ln in text.split('\n'):
             s = ln.strip()
@@ -528,13 +590,106 @@ def _ensure_callback_result_typespec(block, host_var=None):
     return block
 
 
+def _header_name_on_line(s):
+    """Return (kind, name) for a function/subroutine header line, else None."""
+    s = s.strip().lower()
+    if s.startswith('end'):
+        return None
+    m = re.search(r'\b(function|subroutine)\s+(\w+)', s)
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+def _is_routine_end(s, kind=None):
+    s = s.strip().lower()
+    if kind:
+        return s.startswith(f'end {kind}') or s == f'end{kind}'
+    return (
+        s.startswith('end function') or s.startswith('end subroutine')
+        or s in ('endfunction', 'endsubroutine')
+    )
+
+
+def _rewrite_interface_chunk_drop_callbacks(chunk_lines, cb_set):
+    """Rewrite one ``interface...end interface`` chunk.
+
+    * All members are callbacks → drop the whole chunk (return empty).
+    * No callback members → return the chunk unchanged.
+    * Mixed → keep the interface shell and non-callback procedures only.
+    """
+    if not chunk_lines:
+        return []
+    # Collect top-level procedure ranges inside the interface (depth 1).
+    ranges = []  # (start, end_exclusive, name)
+    i = 1
+    n = len(chunk_lines)
+    while i < n:
+        s = chunk_lines[i].strip().lower()
+        if _is_interface_end(s) and i == n - 1:
+            break
+        hdr = _header_name_on_line(s)
+        if hdr is None:
+            i += 1
+            continue
+        kind, name = hdr
+        start = i
+        j = i + 1
+        depth = 1
+        while j < n:
+            sj = chunk_lines[j].strip().lower()
+            if _header_name_on_line(sj) and not sj.startswith('end'):
+                # Nested procedure (rare in cracked interfaces).
+                depth += 1
+            elif _is_routine_end(sj, kind) or (
+                    depth == 1 and _is_routine_end(sj)):
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            elif _is_interface_end(sj):
+                break
+            j += 1
+        ranges.append((start, j, name))
+        i = j
+
+    if not ranges:
+        return list(chunk_lines)
+    headers = [name for _, _, name in ranges]
+    if all(h in cb_set for h in headers):
+        return []
+    if not any(h in cb_set for h in headers):
+        return list(chunk_lines)
+
+    # Mixed: drop only callback procedure sub-ranges.
+    drop_idx = set()
+    for start, end, name in ranges:
+        if name in cb_set:
+            drop_idx.update(range(start, end))
+    return [ln for k, ln in enumerate(chunk_lines) if k not in drop_idx]
+
+
+def _filter_user_use_text_lines(lines):
+    """Drop ``use ...__user__...`` lines from saved-interface text."""
+    out = []
+    for line in lines:
+        s = line.lstrip().lower()
+        if s.startswith('use ') and '__user__' in s:
+            continue
+        out.append(line)
+    return out
+
+
 def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
                                         mod_name, abs_map):
     """Adapt *saved_interface* for module-based callback interfaces.
 
-    Minimal transform (no USE filtering — abstract names are digest-unique):
-    * drop nested interfaces that define a callback dummy
-    * drop bare ``external`` for those dummies and ``__user__`` USE
+    Minimal transform (no USE-association algebra — abstract names are
+    digest-unique under the f2py_* namespace policy):
+    * drop nested interfaces that define only callback dummies; in mixed
+      interface groups, drop only the callback members
+    * drop bare ``external`` for those dummies (split mixed EXTERNAL lists)
+      and ``__user__`` USE
     * host-scope USE is hoisted before ``procedure(...)`` (Fortran order)
     * nested-interface USE stays inside those nested bodies
     """
@@ -543,8 +698,8 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
     for n in cb_orig_names:
         orig_by_lower.setdefault(n.lower(), n)
 
-    lines = saved_interface.split('\n')
-    drop = [False] * len(lines)
+    lines = (saved_interface or '').split('\n')
+    rebuilt = []
     i = 0
     while i < len(lines):
         s = lines[i].strip().lower()
@@ -552,38 +707,28 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
             start = i
             depth = 1
             j = i + 1
-            chunk = [lines[i]]
             while j < len(lines) and depth:
                 sj = lines[j].strip().lower()
                 if _is_interface_start(sj):
                     depth += 1
                 elif _is_interface_end(sj):
                     depth -= 1
-                chunk.append(lines[j])
                 j += 1
-            block_l = '\n'.join(chunk).lower()
-            # Drop the block only when every routine header is a callback
-            # (do not discard a mixed interface that also defines a plain
-            # helper procedure).
-            headers = re.findall(
-                r'(?:^|\n)\s*(?:function|subroutine)\s+(\w+)',
-                block_l,
-            )
-            if headers and all(h in cb_set for h in headers):
-                for k in range(start, j):
-                    drop[k] = True
+            chunk = lines[start:j]
+            rewritten = _rewrite_interface_chunk_drop_callbacks(chunk, cb_set)
+            rebuilt.extend(rewritten)
             i = j
             continue
+        rebuilt.append(lines[i])
         i += 1
+    lines = rebuilt
 
     header = []
     host_use = []
     body_out = []
     saw_header = False
     depth = 0
-    for idx, line in enumerate(lines):
-        if drop[idx]:
-            continue
+    for line in lines:
         s = line.strip().lower()
         if not saw_header:
             header.append(line)
@@ -702,12 +847,7 @@ def createfuncwrapper(rout, signature=0):
         v = rout['vars'][a]
         for i, d in enumerate(v.get('dimension', [])):
             if d == ':':
-                # Digest-harden shape helpers so a bare USE cannot import
-                # a module entity named f2py_<arg>_dN into this scope.
-                dig = hashlib.sha1(
-                    f'{getfortranname(rout)}:{a}:{i}'.encode('utf-8')
-                ).hexdigest()[:10]
-                dn = f'f2py_d{i}_{dig}'
+                dn = _shape_helper_name(rout, a, i)
                 dv = {'typespec': 'integer', 'intent': ['hide']}
                 dv['='] = f'shape({a}, {i})'
                 extra_args.append(dn)
@@ -816,9 +956,7 @@ def createfuncwrapper(rout, signature=0):
                 saved = _rewrite_saved_interface_use_module(
                     saved, cb_via_module, cb_mod_name, abs_map)
             add('interface')
-            for line in saved.split('\n'):
-                if line.lstrip().startswith('use ') and '__user__' in line:
-                    continue
+            for line in _filter_user_use_text_lines(saved.split('\n')):
                 add(line)
             add('end interface')
 
@@ -845,10 +983,7 @@ def createsubrwrapper(rout, signature=0):
         v = rout['vars'][a]
         for i, d in enumerate(v.get('dimension', [])):
             if d == ':':
-                dig = hashlib.sha1(
-                    f'{getfortranname(rout)}:{a}:{i}'.encode('utf-8')
-                ).hexdigest()[:10]
-                dn = f'f2py_d{i}_{dig}'
+                dn = _shape_helper_name(rout, a, i)
                 dv = {'typespec': 'integer', 'intent': ['hide']}
                 dv['='] = f'shape({a}, {i})'
                 extra_args.append(dn)
@@ -917,9 +1052,7 @@ def createsubrwrapper(rout, signature=0):
                 saved = _rewrite_saved_interface_use_module(
                     saved, cb_via_module, cb_mod_name, abs_map)
             add('interface')
-            for line in saved.split('\n'):
-                if line.lstrip().startswith('use ') and '__user__' in line:
-                    continue
+            for line in _filter_user_use_text_lines(saved.split('\n')):
                 add(line)
             add('end interface')
 

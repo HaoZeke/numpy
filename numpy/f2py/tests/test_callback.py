@@ -493,6 +493,113 @@ class TestF90CallbackCodegen:
 class TestCallbackInterfaceStructure:
     """Unit tests for the structured gh-20157 helpers (no full f2py run)."""
 
+    def test_abstract_digest_depends_on_host_and_callback(self):
+        """Both host fortranname and callback name enter the abstract digest."""
+        from numpy.f2py import func2subr
+        a = func2subr._abstract_iface_name('cb', {'name': 'host_a'}, set())
+        b = func2subr._abstract_iface_name('cb', {'name': 'host_b'}, set())
+        c = func2subr._abstract_iface_name('other', {'name': 'host_a'}, set())
+        assert a != b
+        assert a != c
+        assert a.startswith('f2py_ai_')
+        assert len(a) <= 63
+
+    def test_resolve_saved_interface_selectors_unit(self):
+        """Host-local kind/len/dimension digits replace frozen selector text."""
+        from numpy.f2py import func2subr
+        saved = textwrap.dedent("""\
+            function host(f, x, s) result(r)
+              real(kind=dp) :: r
+              integer, dimension(n) :: x
+              character(len=n) :: s
+            end function host
+        """)
+        vars_ = {
+            'r': {'typespec': 'real', 'kindselector': {'kind': '8'}},
+            'x': {'typespec': 'integer', 'dimension': ['3']},
+            's': {'typespec': 'character', 'charselector': {'len': '4'}},
+        }
+        out = func2subr._resolve_saved_interface_kinds(saved, vars_)
+        compact = ''.join(out.lower().split())
+        assert 'kind=8' in compact
+        assert 'kind=dp' not in compact
+        assert 'dimension(3)' in compact
+        assert 'dimension(n)' not in compact
+        assert 'len=4' in compact
+        assert 'len=n' not in compact
+
+    def test_rewrite_drops_callback_keeps_sibling_in_mixed_interface(self):
+        """Mixed interface: drop callback member, keep non-callback sibling."""
+        from numpy.f2py import func2subr
+        saved = textwrap.dedent("""\
+            function host(f, g, y) result(r)
+              interface
+                function f(x) result(z)
+                  integer :: x, z
+                end function f
+                function g(x) result(z)
+                  integer :: x, z
+                end function g
+              end interface
+              integer :: r, y(:)
+            end function host
+        """)
+        out = func2subr._rewrite_saved_interface_use_module(
+            saved, ['f'], 'f2py_cb_ifaces_t', {'f': 'f2py_ai_deadbeef'})
+        compact = ''.join(out.lower().split())
+        # Callback member removed; sibling g retained.
+        assert 'functionf(' not in compact
+        assert 'functiong(' in compact
+        assert 'procedure(f2py_ai_deadbeef)::f' in compact
+        assert 'usef2py_cb_ifaces_t' in compact
+
+    def test_rewrite_splits_mixed_external_line(self):
+        from numpy.f2py import func2subr
+        saved = textwrap.dedent("""\
+            subroutine host(f, g, y)
+              external f, g
+              integer :: y(:)
+            end subroutine host
+        """)
+        out = func2subr._rewrite_saved_interface_use_module(
+            saved, ['f'], 'f2py_cb_ifaces_t', {'f': 'f2py_ai_cafe'})
+        low = ' '.join(out.lower().split())
+        assert 'external f' not in low
+        assert 'external g' in low
+        assert 'procedure(f2py_ai_cafe) :: f' in low
+
+    def test_sanitize_abstract_use_drops_abs_name_only(self):
+        from numpy.f2py import func2subr
+        block = {
+            'use': {
+                'kinds': {
+                    'only': 1,
+                    'map': {
+                        'dp': 'dp',
+                        'f2py_ai_abc': 'f2py_ai_abc',
+                    },
+                },
+                'host__user__routines': {'only': 0, 'map': {}},
+            }
+        }
+        func2subr._sanitize_abstract_use(block, 'f2py_ai_abc')
+        assert 'host__user__routines' not in block['use']
+        assert 'kinds' in block['use']
+        assert 'f2py_ai_abc' not in {
+            k.lower() for k in block['use']['kinds']['map']
+        }
+        assert 'dp' in block['use']['kinds']['map']
+
+    def test_filter_user_use_text_lines(self):
+        from numpy.f2py import func2subr
+        lines = [
+            'use real_mod',
+            'use foo__user__routines',
+            'integer :: x',
+        ]
+        out = func2subr._filter_user_use_text_lines(lines)
+        assert out == ['use real_mod', 'integer :: x']
+
     def test_external_has_explicit_interface_nested(self):
         from numpy.f2py.crackfortran import _external_has_explicit_interface
         block = {
