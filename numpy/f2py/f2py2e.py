@@ -382,9 +382,14 @@ def buildmodules(lst):
     cfuncs.buildcfuncs()
     outmess('Building modules...\n')
     modules, mnames, isusedby = [], [], {}
+    # __user__ python modules hold callback signatures; keep them available
+    # for F90 wrapper generation even though they are not extension modules
+    # themselves (gh-20157 / ``.pyf`` rebuild path).
+    user_modules = {}
     for item in lst:
         if '__user__' in item['name']:
             cb_rules.buildcallbacks(item)
+            user_modules[item['name']] = item
         else:
             if 'use' in item:
                 for u in item['use'].keys():
@@ -399,15 +404,32 @@ def buildmodules(lst):
             using_modules = ','.join(f'"{s}"' for s in isusedby[name])
             outmess(f'\tSkipping module "{name}" which is used by {using_modules}.\n')
         else:
+            # Collect USE'd modules from the extension module *and* from
+            # each interfaced routine (``.pyf`` stores
+            # ``use host__user__routines`` on the routine, not the python
+            # module; signature files put USE on the routine).
             um = []
-            if 'use' in module:
-                for u in module['use'].keys():
-                    if u in isusedby and u in mnames:
-                        um.append(modules[mnames.index(u)])
-                    else:
-                        outmess(
-                            f'\tModule "{name}" uses nonexisting "{u}" '
-                            'which will be ignored.\n')
+            seen_um = set()
+
+            def _add_use_target(u):
+                if u in seen_um:
+                    return
+                seen_um.add(u)
+                if u in user_modules:
+                    um.append(user_modules[u])
+                elif u in isusedby and u in mnames:
+                    um.append(modules[mnames.index(u)])
+                else:
+                    outmess(
+                        f'\tModule "{name}" uses nonexisting "{u}" '
+                        'which will be ignored.\n')
+
+            for u in (module.get('use') or {}):
+                _add_use_target(u)
+            for bi in module.get('body') or []:
+                for b in bi.get('body') or []:
+                    for u in (b.get('use') or {}):
+                        _add_use_target(u)
             ret[name] = {}
             dict_append(ret[name], rules.buildmodule(module, um))
     return ret

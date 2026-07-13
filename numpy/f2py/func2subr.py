@@ -10,6 +10,8 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
+import hashlib
+import re
 
 from ._isocbind import isoc_kindmap
 from .auxfuncs import (
@@ -83,6 +85,759 @@ def useiso_c_binding(rout):
             return True
     return useisoc
 
+
+# User-module blocks available while building F90 wrappers for one extension
+# (set by rules.buildmodule from the um list; complements crackfortran.usermodules).
+_active_user_modules = []
+# Module names already emitted in this buildmodule call (63-char uniqueness).
+_emitted_cb_module_names = set()
+
+
+def set_active_user_modules(um):
+    """Register python-module ``__user__`` blocks for the current buildmodule call."""
+    global _active_user_modules, _emitted_cb_module_names
+    _active_user_modules = list(um or [])
+    if not um:
+        _emitted_cb_module_names = set()
+
+
+def _iter_routine_blocks(body):
+    """Yield function/subroutine blocks nested under *body* (incl. interfaces)."""
+    for b in body or []:
+        btype = b.get('block')
+        if btype in ('function', 'subroutine') and b.get('name'):
+            yield b
+        elif btype in ('interface', 'abstract interface'):
+            yield from _iter_routine_blocks(b.get('body'))
+
+
+def _user_module_catalog():
+    """All known ``__user__`` modules for this build (globals + active um list)."""
+    from . import crackfortran
+    seen = set()
+    out = []
+    for um in list(crackfortran.usermodules) + list(_active_user_modules):
+        name = um.get('name')
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(um)
+    return out
+
+
+def _remote_name_in_module(use_spec, local_name):
+    """Remote procedure name for *local_name* in one module's use-spec.
+
+    Fortran ``use m, only: f => fun`` is stored as
+    ``{'only': 1, 'map': {local: remote}}`` (``f => fun``).
+
+    Returns ``None`` when *local_name* is not imported from this module
+    (``ONLY`` exclusion, or a rename that hides the original name).
+    """
+    mapping = (use_spec or {}).get('map') or {}
+    want = local_name.lower()
+    for local, remote in mapping.items():
+        if (local or '').lower() == want:
+            return (remote or local).lower()
+    # ONLY list: only map keys are in scope under their local names.
+    if (use_spec or {}).get('only'):
+        return None
+    # Bare USE with renames: ``use m, g => f`` hides remote ``f`` under
+    # the original name; only local ``g`` resolves to remote ``f``.
+    for local, remote in mapping.items():
+        rem = (remote or local or '').lower()
+        loc = (local or remote or '').lower()
+        if rem == want and loc != want:
+            return None
+    return want
+
+
+def _callback_routine_blocks(rout):
+    """Map lowercased *local* callback dummy name -> cracked routine block.
+
+    Prefer definitions still on ``rout['body']``. Otherwise resolve only
+    through modules listed in *this* routine's ``use`` association (never a
+    global first-wins table across unrelated hosts).  ``only``/rename maps
+    are applied per used module (gh-20157).
+    """
+    found = {}
+    for b in _iter_routine_blocks(rout.get('body')):
+        found[b['name'].lower()] = b
+
+    use = rout.get('use') or {}
+    if not use:
+        return found
+
+    catalog = {um.get('name'): um for um in _user_module_catalog()}
+    vars_ = rout.get('vars') or {}
+    candidates = list(rout.get('args') or [])
+    for e in rout.get('externals') or []:
+        if e not in candidates:
+            candidates.append(e)
+
+    for a in candidates:
+        if a.lower() in found:
+            continue
+        if a in vars_ and not isexternal(vars_[a]):
+            continue
+        if a not in vars_ and a not in (rout.get('externals') or []):
+            continue
+        for mname, spec in use.items():
+            um = catalog.get(mname)
+            if um is None:
+                continue
+            routines = {
+                b['name'].lower(): b
+                for b in _iter_routine_blocks(um.get('body'))
+            }
+            remote = _remote_name_in_module(spec, a)
+            if remote is not None and remote in routines:
+                found[a.lower()] = routines[remote]
+                break
+    return found
+
+
+def _safe_ident(raw, prefix, taken, max_len=63):
+    """Build a Fortran-safe identifier that does not collide with *taken*."""
+    base = ''.join(c if (c.isalnum() or c == '_') else '_' for c in raw)
+    if not base or base[0].isdigit():
+        base = 'r_' + base
+    name = f'{prefix}{base}'
+    if len(name) > max_len:
+        name = name[:max_len]
+    if name.lower() not in taken:
+        taken.add(name.lower())
+        return name
+    n = 2
+    while True:
+        suffix = f'_{n}'
+        cand = (name[: max_len - len(suffix)] + suffix)
+        if cand.lower() not in taken:
+            taken.add(cand.lower())
+            return cand
+        n += 1
+
+
+def _cb_iface_module_name(rout, taken=None):
+    """Fortran module name holding abstract interfaces for this routine's callbacks."""
+    global _emitted_cb_module_names
+    if taken is None:
+        taken = set()
+    taken = set(taken) | set(_emitted_cb_module_names)
+    raw = getfortranname(rout)
+    # Digest first so 63-char truncation cannot drop uniqueness when two
+    # long fortrannames share a long common prefix.
+    digest = hashlib.sha1(raw.encode('utf-8')).hexdigest()[:8]
+    name = _safe_ident(f'{digest}_{raw}', 'f2py_cb_ifaces_', taken)
+    _emitted_cb_module_names.add(name.lower())
+    return name
+
+
+def _abstract_iface_name(cbname_lower, rout, taken=None):
+    """Stable abstract-interface body name for *cbname_lower*.
+
+    Namespace policy (preserve-USE design):
+    * Generated identifiers live under ``f2py_ai_`` / ``f2py_cb_ifaces_`` /
+      ``f2py_d`` prefixes.
+    * The abstract body name is ``f2py_ai_`` + full SHA-1 of
+      ``(fortranname, callback)`` (both host and callback affect the digest).
+    * That is practical collision avoidance against ordinary module exports so
+      host/callback USE lists need not be rewritten or filtered.
+    * A user module that deliberately exports the exact computed spelling can
+      still clash under bare USE; ``_sanitize_abstract_use`` drops only/map
+      associations of that name when they are visible, but bare USE exports are
+      not fully enumerable without a second association solver.
+    """
+    if taken is None:
+        taken = set()
+    # Full SHA-1 hex (40 chars) + prefix stays within Fortran's 63-char limit.
+    digest = hashlib.sha1(
+        f'{getfortranname(rout)}:{cbname_lower}'.encode('utf-8')
+    ).hexdigest()
+    return _safe_ident(digest, 'f2py_ai_', taken)
+
+
+def _shape_helper_name(rout, arg, dim_index):
+    """Digest-hardened assumed-shape dimension helper (not ``f2py_<arg>_dN``)."""
+    dig = hashlib.sha1(
+        f'{getfortranname(rout)}:{arg}:{dim_index}'.encode('utf-8')
+    ).hexdigest()[:10]
+    return f'f2py_d{dim_index}_{dig}'
+
+
+def _distinct_result_name(abs_name, args, vars_):
+    """RESULT name different from the procedure, within 63 characters."""
+    taken = {a.lower() for a in (args or [])}
+    taken.update(k.lower() for k in (vars_ or {}))
+    taken.add(abs_name.lower())
+    cand = f'{abs_name}_r'
+    if len(cand) <= 63 and cand.lower() not in taken:
+        taken.add(cand.lower())
+        return cand
+    return _safe_ident(f'{abs_name}_r', '', taken, max_len=63)
+
+
+def _rename_callback_block_for_abstract(block, abs_name):
+    """Deep-copy *block* as abstract-interface body named *abs_name*.
+
+    When the result is (or was) the function name, give it a *distinct*
+    RESULT variable so crack2fortrangen emits the typed declaration.
+    """
+    b = copy.deepcopy(block)
+    old = b.get('name')
+    b['name'] = abs_name
+    if not old:
+        return b
+    vars_ = b.setdefault('vars', {})
+    args = b.get('args') or []
+    if b.get('result') == old or ('result' not in b and old in vars_):
+        res = _distinct_result_name(abs_name, args, vars_)
+        b['result'] = res
+        if old in vars_:
+            vars_[res] = vars_.pop(old)
+        elif abs_name in vars_:
+            vars_[res] = vars_.pop(abs_name)
+        return b
+    return b
+
+
+def _drop_user_use(block):
+    """Drop f2py ``__user__`` modules from a cracked block's use dict."""
+    use = (block or {}).get('use') or {}
+    cleaned = {m: s for m, s in use.items() if '__user__' not in m}
+    block['use'] = cleaned
+    return block
+
+
+def _sanitize_abstract_use(block, abs_name):
+    """Drop ``__user__`` and USE associations of the abstract body name.
+
+    Preserve real USE (kinds, types) under the simple design.  Only remove
+    associations that would bind *abs_name* (or a rename of it) into the
+    abstract-interface body — that is the program-unit name of the generated
+    procedure and must not also be an imported entity.
+    """
+    if not block:
+        return block
+    abs_l = (abs_name or '').lower()
+    use = block.get('use') or {}
+    cleaned = {}
+    for mname, spec in use.items():
+        if '__user__' in (mname or ''):
+            continue
+        if not abs_l:
+            cleaned[mname] = spec
+            continue
+        spec = dict(spec or {})
+        mapping = dict(spec.get('map') or {})
+        new_map = {}
+        for local, remote in mapping.items():
+            loc = (local or '').lower()
+            rem = (remote or local or '').lower()
+            # Drop associations that import abs_name under any local name,
+            # or that use abs_name as the local name for something else.
+            if loc == abs_l or rem == abs_l:
+                continue
+            new_map[local] = remote
+        if spec.get('only'):
+            if not new_map:
+                # ONLY list emptied: nothing left to import from this module.
+                continue
+            spec['map'] = new_map
+            cleaned[mname] = spec
+            continue
+        # Bare USE: keep the module (kinds/parameters) but drop rename entries
+        # that would bind abs_name.
+        if new_map:
+            spec['map'] = new_map
+        elif 'map' in spec:
+            spec.pop('map', None)
+        cleaned[mname] = spec
+    block['use'] = cleaned
+    return block
+
+
+def _build_callback_iface_module(mod_name, cb_blocks, host_rout=None,
+                                 abs_map=None):
+    """Emit a Fortran module of abstract interfaces for *cb_blocks*.
+
+    USE association on each callback is left intact (except ``__user__``).
+    Collision avoidance is handled by digest-unique abstract names, not by
+    filtering USE lists.
+    """
+    from .crackfortran import crack2fortrangen
+    lines = [
+        f'module {mod_name}',
+        '  implicit none',
+        '  abstract interface',
+    ]
+    abs_map = abs_map or {}
+    for key, block in sorted(cb_blocks.items(), key=lambda kv: kv[0]):
+        abs_name = abs_map.get(key)
+        if not abs_name:
+            # host_rout should always be provided; fall back to key digest
+            abs_name = _abstract_iface_name(
+                key, host_rout if host_rout is not None else {'name': key}, set())
+
+        b = _rename_callback_block_for_abstract(block, abs_name)
+        _sanitize_abstract_use(b, abs_name)
+        text = crack2fortrangen(b, tab='\n  ', as_interface=True)
+        for ln in text.split('\n'):
+            s = ln.strip()
+            if s:
+                lines.append(f'    {s}')
+    lines.append('  end interface')
+    lines.append(f'end module {mod_name}')
+    return '\n'.join(lines)
+
+
+def _is_interface_start(s):
+    s = s.strip().lower()
+    if s.startswith('end'):
+        return False
+    return (
+        s == 'interface'
+        or s == 'abstract interface'
+        or s.startswith('interface ')
+        or s.startswith('abstract interface ')
+    )
+
+
+def _is_interface_end(s):
+    return s.strip().lower().startswith('end interface')
+
+
+def _is_routine_header(s):
+    s = s.strip().lower()
+    return (
+        s.startswith('function ') or s.startswith('subroutine ')
+        or ' function ' in f' {s}' or ' subroutine ' in f' {s}'
+    )
+
+
+def _host_scope_use_lines(saved_interface):
+    """Host-scope USE lines (not nested), dropping only ``__user__`` modules."""
+    out = []
+    saw_header = False
+    depth = 0
+    for line in (saved_interface or '').split('\n'):
+        s = line.strip().lower()
+        if not saw_header:
+            if _is_routine_header(s):
+                saw_header = True
+            continue
+        if _is_interface_start(s):
+            depth += 1
+            continue
+        if _is_interface_end(s):
+            depth = max(0, depth - 1)
+            continue
+        if depth != 0 or not s.startswith('use '):
+            continue
+        if '__user__' in s:
+            continue
+        out.append(line if line.startswith(' ') else f'          {line.strip()}')
+    return out
+
+
+def _decl_names_on_line(line):
+    """Lowercase identifiers declared on a ``typespec ... :: names`` line."""
+    if '::' not in line:
+        return []
+    rhs = line.split('::', 1)[1]
+    names = []
+    for part in rhs.split(','):
+        tok = part.split('=')[0].strip().split('(')[0].strip()
+        if tok:
+            names.append(tok.lower())
+    return names
+
+
+def _resolve_saved_interface_kinds(saved_interface, vars_):
+    """Replace host-local kind/len/dimension selectors with postcrack values.
+
+    ``saved_interface`` is snapshotted before postcrack evaluates host-local
+    parameters; after postcrack, argument selectors are numeric but the frozen
+    text may still say ``kind=dp``, ``dimension(n)``, or ``len=n``.  Only
+    rewrite when the postcrack value is a bare digit string so assumed-shape
+    helpers (``f2py_d*``) and expression bounds are left alone.
+    """
+    if not saved_interface or not vars_:
+        return saved_interface
+    lines = saved_interface.split('\n')
+    for name, var in vars_.items():
+        if not var or str(name).lower().startswith('f2py_'):
+            continue
+        name_l = name.lower()
+
+        # kind=name → kind=<digits>
+        ks = var.get('kindselector') or {}
+        kind = ks.get('kind')
+        if kind is not None:
+            kind_s = str(kind).strip()
+            if re.match(r'^\d+$', kind_s):
+                fixed = []
+                for line in lines:
+                    if name_l not in _decl_names_on_line(line):
+                        fixed.append(line)
+                        continue
+                    if re.search(
+                            r'kind\s*=\s*[A-Za-z_]\w*(?!\s*\()', line, re.I):
+                        line = re.sub(
+                            r'kind\s*=\s*[A-Za-z_]\w*(?!\s*\()',
+                            f'kind={kind_s}',
+                            line,
+                            flags=re.I,
+                        )
+                    fixed.append(line)
+                lines = fixed
+
+        # character len=name / *name → numeric
+        cs = var.get('charselector') or {}
+        len_val = cs.get('len', cs.get('*'))
+        if len_val is not None:
+            len_s = str(len_val).strip()
+            if re.match(r'^\d+$', len_s):
+                fixed = []
+                for line in lines:
+                    if name_l not in _decl_names_on_line(line):
+                        fixed.append(line)
+                        continue
+                    if re.search(r'len\s*=\s*[A-Za-z_]\w*', line, re.I):
+                        line = re.sub(
+                            r'len\s*=\s*[A-Za-z_]\w*',
+                            f'len={len_s}',
+                            line,
+                            flags=re.I,
+                        )
+                    # F77-style character*n with symbolic n is rare in saved
+                    # F90 interfaces; still normalize character*(name).
+                    if re.search(r'character\s*\(\s*[A-Za-z_]\w*\s*\)',
+                                 line, re.I):
+                        line = re.sub(
+                            r'(character\s*)\(\s*[A-Za-z_]\w*\s*\)',
+                            rf'\1(len={len_s})',
+                            line,
+                            flags=re.I,
+                        )
+                    fixed.append(line)
+                lines = fixed
+
+        # dimension(n[,...]) → dimension(<digits>[,...]) when fully numeric
+        dims = var.get('dimension') or []
+        if dims and all(re.match(r'^\d+$', str(d).strip()) for d in dims):
+            dim_s = ','.join(str(d).strip() for d in dims)
+            fixed = []
+            for line in lines:
+                if name_l not in _decl_names_on_line(line):
+                    fixed.append(line)
+                    continue
+                if re.search(r'dimension\s*\([^)]*\)', line, re.I):
+                    line = re.sub(
+                        r'dimension\s*\([^)]*\)',
+                        f'dimension({dim_s})',
+                        line,
+                        flags=re.I,
+                    )
+                # ``integer :: x(n)`` form (no dimension attribute)
+                elif re.search(
+                        rf'\b{re.escape(name)}\s*\([^)]*\)', line, re.I):
+                    line = re.sub(
+                        rf'(\b{re.escape(name)}\s*)\([^)]*\)',
+                        rf'\1({dim_s})',
+                        line,
+                        flags=re.I,
+                    )
+                fixed.append(line)
+            lines = fixed
+    return '\n'.join(lines)
+
+
+def _implicit_fortran_typespec(name):
+    """Default typespec under classic Fortran implicit rules."""
+    c = (name or 'x')[0].lower()
+    if 'i' <= c <= 'n':
+        return 'integer'
+    return 'real'
+
+
+def _ensure_callback_result_typespec(block, host_var=None):
+    """Ensure callback result *and args* are typed under module ``implicit none``."""
+    if not block:
+        return block
+    vars_ = block.setdefault('vars', {})
+    # Arguments first (implicitly typed dummies would fail under implicit none).
+    for a in block.get('args') or []:
+        v = vars_.setdefault(a, {})
+        if not v.get('typespec'):
+            v['typespec'] = _implicit_fortran_typespec(a)
+    if block.get('block') != 'function':
+        return block
+    res = block.get('result') or block.get('name')
+    if not res:
+        return block
+    if (vars_.get(res) or {}).get('typespec'):
+        return block
+    host = host_var or {}
+    if host.get('typespec'):
+        typed = {
+            k: v for k, v in host.items()
+            if k not in ('attrspec', 'intent', 'check', 'depend')
+        }
+        vars_[res] = typed
+        return block
+    vars_[res] = {'typespec': _implicit_fortran_typespec(res)}
+    return block
+
+
+def _header_name_on_line(s):
+    """Return (kind, name) for a function/subroutine header line, else None."""
+    s = s.strip().lower()
+    if s.startswith('end'):
+        return None
+    m = re.search(r'\b(function|subroutine)\s+(\w+)', s)
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+def _is_routine_end(s, kind=None):
+    s = s.strip().lower()
+    if kind:
+        return s.startswith(f'end {kind}') or s == f'end{kind}'
+    return (
+        s.startswith('end function') or s.startswith('end subroutine')
+        or s in ('endfunction', 'endsubroutine')
+    )
+
+
+def _rewrite_interface_chunk_drop_callbacks(chunk_lines, cb_set):
+    """Rewrite one ``interface...end interface`` chunk.
+
+    * All members are callbacks → drop the whole chunk (return empty).
+    * No callback members → return the chunk unchanged.
+    * Mixed → keep the interface shell and non-callback procedures only.
+    """
+    if not chunk_lines:
+        return []
+    # Collect top-level procedure ranges inside the interface (depth 1).
+    ranges = []  # (start, end_exclusive, name)
+    i = 1
+    n = len(chunk_lines)
+    while i < n:
+        s = chunk_lines[i].strip().lower()
+        if _is_interface_end(s) and i == n - 1:
+            break
+        hdr = _header_name_on_line(s)
+        if hdr is None:
+            i += 1
+            continue
+        kind, name = hdr
+        start = i
+        j = i + 1
+        depth = 1
+        while j < n:
+            sj = chunk_lines[j].strip().lower()
+            if _header_name_on_line(sj) and not sj.startswith('end'):
+                # Nested procedure (rare in cracked interfaces).
+                depth += 1
+            elif _is_routine_end(sj, kind) or (
+                    depth == 1 and _is_routine_end(sj)):
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            elif _is_interface_end(sj):
+                break
+            j += 1
+        ranges.append((start, j, name))
+        i = j
+
+    if not ranges:
+        return list(chunk_lines)
+    headers = [name for _, _, name in ranges]
+    if all(h in cb_set for h in headers):
+        return []
+    if not any(h in cb_set for h in headers):
+        return list(chunk_lines)
+
+    # Mixed: drop only callback procedure sub-ranges.
+    drop_idx = set()
+    for start, end, name in ranges:
+        if name in cb_set:
+            drop_idx.update(range(start, end))
+    return [ln for k, ln in enumerate(chunk_lines) if k not in drop_idx]
+
+
+def _filter_user_use_text_lines(lines):
+    """Drop ``use ...__user__...`` lines from saved-interface text."""
+    out = []
+    for line in lines:
+        s = line.lstrip().lower()
+        if s.startswith('use ') and '__user__' in s:
+            continue
+        out.append(line)
+    return out
+
+
+def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
+                                        mod_name, abs_map):
+    """Adapt *saved_interface* for module-based callback interfaces.
+
+    Minimal transform (no USE-association algebra — abstract names are
+    digest-unique under the f2py_* namespace policy):
+    * drop nested interfaces that define only callback dummies; in mixed
+      interface groups, drop only the callback members
+    * drop bare ``external`` for those dummies (split mixed EXTERNAL lists)
+      and ``__user__`` USE
+    * host-scope USE is hoisted before ``procedure(...)`` (Fortran order)
+    * nested-interface USE stays inside those nested bodies
+    """
+    cb_set = {n.lower() for n in cb_orig_names}
+    orig_by_lower = {}
+    for n in cb_orig_names:
+        orig_by_lower.setdefault(n.lower(), n)
+
+    lines = (saved_interface or '').split('\n')
+    rebuilt = []
+    i = 0
+    while i < len(lines):
+        s = lines[i].strip().lower()
+        if _is_interface_start(s):
+            start = i
+            depth = 1
+            j = i + 1
+            while j < len(lines) and depth:
+                sj = lines[j].strip().lower()
+                if _is_interface_start(sj):
+                    depth += 1
+                elif _is_interface_end(sj):
+                    depth -= 1
+                j += 1
+            chunk = lines[start:j]
+            rewritten = _rewrite_interface_chunk_drop_callbacks(chunk, cb_set)
+            rebuilt.extend(rewritten)
+            i = j
+            continue
+        rebuilt.append(lines[i])
+        i += 1
+    lines = rebuilt
+
+    header = []
+    host_use = []
+    body_out = []
+    saw_header = False
+    depth = 0
+    for line in lines:
+        s = line.strip().lower()
+        if not saw_header:
+            header.append(line)
+            if _is_routine_header(s):
+                saw_header = True
+            continue
+        if _is_interface_start(s):
+            depth += 1
+            body_out.append(line)
+            continue
+        if _is_interface_end(s):
+            depth = max(0, depth - 1)
+            body_out.append(line)
+            continue
+        if s.startswith('external'):
+            rest = s[len('external'):].lstrip(' :')
+            names = [n.strip() for n in rest.split(',') if n.strip()]
+            # Drop only callback names from mixed EXTERNAL lines
+            # (``external f, g`` with f a callback must not keep EXTERNAL f).
+            keep = [n for n in names if n.lower() not in cb_set]
+            if not keep:
+                continue
+            if len(keep) != len(names):
+                indent = line[:len(line) - len(line.lstrip())]
+                body_out.append(f'{indent}external {", ".join(keep)}')
+                continue
+            body_out.append(line)
+            continue
+        if s.startswith('use '):
+            if '__user__' in s:
+                continue
+            if depth == 0:
+                host_use.append(line)
+            else:
+                body_out.append(line)
+            continue
+        body_out.append(line)
+
+    out = list(header)
+    out.append(f'          use {mod_name}')
+    out.extend(host_use)
+    for low in sorted(orig_by_lower):
+        out.append(
+            f'          procedure({abs_map[low]}) :: {orig_by_lower[low]}'
+        )
+    out.extend(body_out)
+    return '\n'.join(out)
+
+
+def _prepare_callback_module(rout, args, vars, need_interface):
+    """Return (module_src, mod_name, cb_orig_names, abs_map)."""
+    empty = ('', None, [], {})
+    if not need_interface:
+        return empty
+    all_blocks = _callback_routine_blocks(rout)
+    needed = {}
+    orig_names = []
+    for a in args:
+        if not isexternal(vars[a]):
+            continue
+        block = all_blocks.get(a.lower())
+        if block is not None:
+            needed[a.lower()] = _ensure_callback_result_typespec(
+                copy.deepcopy(block), host_var=vars.get(a))
+            orig_names.append(a)
+    if not needed:
+        return empty
+    taken = {a.lower() for a in args}
+    taken.update(k.lower() for k in (vars or {}))
+    taken.update(e.lower() for e in (rout.get('externals') or []))
+    for block in needed.values():
+        for a in block.get('args') or []:
+            taken.add(a.lower())
+        if block.get('result'):
+            taken.add(block['result'].lower())
+        for k in block.get('vars') or {}:
+            taken.add(k.lower())
+        if block.get('name'):
+            taken.add(block['name'].lower())
+    abs_map = {
+        a.lower(): _abstract_iface_name(a.lower(), rout, taken)
+        for a in orig_names
+    }
+    mod_name = _cb_iface_module_name(rout, taken)
+    return (
+        _build_callback_iface_module(
+            mod_name, needed, host_rout=rout, abs_map=abs_map),
+        mod_name,
+        orig_names,
+        abs_map,
+    )
+
+
+def _declare_external_args(args, vars, cb_orig_names, abs_map, add):
+    """Declare procedure(...) for module-backed callbacks, else EXTERNAL."""
+    cb_lower = {n.lower() for n in cb_orig_names}
+    dumped = []
+    for a in args:
+        if not isexternal(vars[a]):
+            continue
+        if a.lower() in cb_lower:
+            add(f'procedure({abs_map[a.lower()]}) :: {a}')
+            dumped.append(a)
+            continue
+        add(f'external {a}')
+        dumped.append(a)
+    return dumped
+
+
 def createfuncwrapper(rout, signature=0):
     assert isfunction(rout)
 
@@ -92,7 +847,7 @@ def createfuncwrapper(rout, signature=0):
         v = rout['vars'][a]
         for i, d in enumerate(v.get('dimension', [])):
             if d == ':':
-                dn = f'f2py_{a}_d{i}'
+                dn = _shape_helper_name(rout, a, i)
                 dv = {'typespec': 'integer', 'intent': ['hide']}
                 dv['='] = f'shape({a}, {i})'
                 extra_args.append(dn)
@@ -151,17 +906,23 @@ def createfuncwrapper(rout, signature=0):
             add(f'external {fortranname}')
             rl = l_tmpl.replace('@@@NAME@@@', '') + ' ' + fortranname
 
-    if need_interface:
-        for line in rout['saved_interface'].split('\n'):
-            if line.lstrip().startswith('use ') and '__user__' not in line:
-                add(line)
-
     args = args[1:]
-    dumped_args = []
-    for a in args:
-        if isexternal(vars[a]):
-            add(f'external {a}')
-            dumped_args.append(a)
+    # Callback interface module (gh-20157): one definition, USE'd in the
+    # wrapper and in the nested host interface.
+    # f90mode (module CONTAINS): no nested host interface, skip module path.
+    module_src, cb_mod_name, cb_via_module, abs_map = _prepare_callback_module(
+        rout, args, vars, need_interface and not f90mode)
+
+    if need_interface:
+        saved0 = _resolve_saved_interface_kinds(
+            rout.get('saved_interface') or '', vars)
+        for line in _host_scope_use_lines(saved0):
+            add(line)
+        if cb_mod_name:
+            add(f'use {cb_mod_name}')
+
+    dumped_args = _declare_external_args(
+        args, vars, cb_via_module, abs_map, add)
     for a in args:
         if a in dumped_args:
             continue
@@ -185,11 +946,18 @@ def createfuncwrapper(rout, signature=0):
 
     if need_interface:
         if f90mode:
-            # f90 module already defines needed interface
+            # Module CONTAINS path: use modulename only; no dual EXTERNAL+
+            # interface conflict to fix (gh-20157 applies to free routines).
             pass
         else:
+            saved = _resolve_saved_interface_kinds(
+                rout.get('saved_interface') or '', vars)
+            if cb_mod_name:
+                saved = _rewrite_saved_interface_use_module(
+                    saved, cb_via_module, cb_mod_name, abs_map)
             add('interface')
-            add(rout['saved_interface'].lstrip())
+            for line in _filter_user_use_text_lines(saved.split('\n')):
+                add(line)
             add('end interface')
 
     sargs = ', '.join([a for a in args if a not in extra_args])
@@ -203,7 +971,7 @@ def createfuncwrapper(rout, signature=0):
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:
         add('end')
-    return ret[0]
+    return module_src, ret[0]
 
 
 def createsubrwrapper(rout, signature=0):
@@ -215,7 +983,7 @@ def createsubrwrapper(rout, signature=0):
         v = rout['vars'][a]
         for i, d in enumerate(v.get('dimension', [])):
             if d == ':':
-                dn = f'f2py_{a}_d{i}'
+                dn = _shape_helper_name(rout, a, i)
                 dv = {'typespec': 'integer', 'intent': ['hide']}
                 dv['='] = f'shape({a}, {i})'
                 extra_args.append(dn)
@@ -249,16 +1017,19 @@ def createsubrwrapper(rout, signature=0):
         if not need_interface:
             add(f'external {fortranname}')
 
-    if need_interface:
-        for line in rout['saved_interface'].split('\n'):
-            if line.lstrip().startswith('use ') and '__user__' not in line:
-                add(line)
+    module_src, cb_mod_name, cb_via_module, abs_map = _prepare_callback_module(
+        rout, args, vars, need_interface and not f90mode)
 
-    dumped_args = []
-    for a in args:
-        if isexternal(vars[a]):
-            add(f'external {a}')
-            dumped_args.append(a)
+    if need_interface:
+        saved0 = _resolve_saved_interface_kinds(
+            rout.get('saved_interface') or '', vars)
+        for line in _host_scope_use_lines(saved0):
+            add(line)
+        if cb_mod_name:
+            add(f'use {cb_mod_name}')
+
+    dumped_args = _declare_external_args(
+        args, vars, cb_via_module, abs_map, add)
     for a in args:
         if a in dumped_args:
             continue
@@ -272,13 +1043,16 @@ def createsubrwrapper(rout, signature=0):
 
     if need_interface:
         if f90mode:
-            # f90 module already defines needed interface
+            # Module CONTAINS path: no dual EXTERNAL+interface conflict.
             pass
         else:
+            saved = _resolve_saved_interface_kinds(
+                rout.get('saved_interface') or '', vars)
+            if cb_mod_name:
+                saved = _rewrite_saved_interface_use_module(
+                    saved, cb_via_module, cb_mod_name, abs_map)
             add('interface')
-            for line in rout['saved_interface'].split('\n'):
-                if line.lstrip().startswith('use ') and '__user__' in line:
-                    continue
+            for line in _filter_user_use_text_lines(saved.split('\n')):
                 add(line)
             add('end interface')
 
@@ -290,7 +1064,9 @@ def createsubrwrapper(rout, signature=0):
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:
         add('end')
-    return ret[0]
+    return module_src, ret[0]
+
+
 
 
 def assubr(rout):
@@ -326,4 +1102,4 @@ def assubr(rout):
                 f'"{name}"("{fortranname}")...\n')
         rout = copy.copy(rout)
         return rout, createsubrwrapper(rout)
-    return rout, ''
+    return rout, ('', '')
