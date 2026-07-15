@@ -164,6 +164,27 @@ Common build flags:
   "lapack" and "scalapack" as dependencies and remove them from argv, leaving a
   dependencies list containing ["lapack", "scalapack"].
 
+  For **OpenMP**, prefer Meson's dependency (compile *and* link flags):
+
+  .. code-block:: sh
+
+     f2py -c mymod.pyf mymod.F90 --dep openmp
+
+  On GNU Fortran you can instead pass flags explicitly:
+
+  .. code-block:: sh
+
+     f2py -c mymod.pyf --f90flags=-fopenmp mymod.F90 -lgomp
+
+  On Intel ``ifx`` / ``icx``:
+
+  .. code-block:: sh
+
+     CC=icx CXX=icpx FC=ifx f2py -c mymod.pyf --f90flags=-qopenmp mymod.F90 -liomp5
+
+  Do **not** put OpenMP flags in ``--opt=``: that switch is a legacy distutils
+  option and is **ignored** under the meson backend (``f2py`` prints a warning).
+
 .. note::
   
   The ``f2py -c`` option must be applied either to an existing ``.pyf`` file

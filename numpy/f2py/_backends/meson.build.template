@@ -40,6 +40,11 @@ quadmath_dep = fc.find_library('quadmath', required: false)
 ${lib_declarations}
 ${lib_dir_declarations}
 
+# gnu_symbol_visibility: default — Meson's python.extension_module default
+# (-fvisibility=hidden) breaks Intel ifx OpenMP: omp_get_* refs become
+# GLOBAL HIDDEN UND and the final link fails with "hidden symbol isn't
+# defined" (gh-30804, gh-27163). Default visibility keeps OpenMP and
+# Fortran runtime symbols resolvable; gfortran OpenMP is unaffected.
 py.extension_module('${modulename}',
                      [
 ${source_list},
@@ -60,4 +65,5 @@ ${lib_list}
 ${lib_dir_list}
                      ],
 ${fortran_args}
+                     gnu_symbol_visibility: 'default',
                      install : true)

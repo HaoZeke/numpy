@@ -186,6 +186,26 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\n1foo =" not in meson_build
 
 
+def test_meson_template_default_symbol_visibility():
+    """Hidden visibility breaks ifx OpenMP (gh-30804); keep default."""
+    meson_build = MesonTemplate(
+        modulename="ompmod",
+        sources=[Path("dummy.F90")],
+        deps=["openmp"],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=["-fopenmp"],
+        build_type="release",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+    assert "gnu_symbol_visibility: 'default'" in meson_build
+    assert "dependency('openmp')" in meson_build
+    assert "fortran_args: ['-fopenmp']" in meson_build
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():

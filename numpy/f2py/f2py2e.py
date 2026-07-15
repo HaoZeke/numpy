@@ -654,6 +654,20 @@ def run_compile():
     distutils_flags = [_m for _m in sys.argv[1:] if reg_distutils_flags.match(_m)]
     sys.argv = [_m for _m in sys.argv if _m not in (fc_flags + distutils_flags)]
 
+    # Meson does not consume distutils-era flib flags; warn so e.g. --opt=-fopenmp
+    # is not mistaken for a working OpenMP switch (gh-30804).
+    if distutils_flags:
+        outmess(
+            "Meson backend ignores the following distutils-only option(s): "
+            f"{' '.join(distutils_flags)}\n"
+            "  --opt / --arch / --noopt / --noarch / --f77exec / --f90exec "
+            "have no effect under meson.\n"
+            "  For OpenMP use:  f2py -c ... --dep openmp\n"
+            "  or pass compiler flags:  --f90flags=-fopenmp  "
+            "(Intel ifx: --f90flags=-qopenmp) and link -lgomp / -liomp5 "
+            "as needed.\n"
+        )
+
     del_list = []
     for s in flib_flags:
         v = '--fcompiler='

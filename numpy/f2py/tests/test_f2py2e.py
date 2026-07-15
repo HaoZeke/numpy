@@ -235,6 +235,25 @@ def test_untitled_cli(capfd, hello_world_f90, monkeypatch):
         assert "untitledmodule.c" in out
 
 @pytest.mark.slow
+def test_meson_warns_on_ignored_opt_flag(capfd, hello_world_f90, monkeypatch):
+    """--opt is distutils-only; meson must warn (gh-30804 OpenMP footgun)."""
+    MNAME = "hi_opt"
+    foutl = get_io_paths(hello_world_f90, mname=MNAME)
+    ipath = foutl.f90inp
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        f"f2py {ipath} -c --opt=-fopenmp -m {MNAME}".split(),
+    )
+    with util.switchdir(ipath.parent):
+        compiler_check_f2pycli()
+        out, _ = capfd.readouterr()
+        assert "ignores the following distutils-only option" in out
+        assert "--opt=-fopenmp" in out
+        assert "--dep openmp" in out
+
+
+@pytest.mark.slow
 def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
     """Check that distutils backend and related options fail
     CLI :: --fcompiler --help-link --backend distutils

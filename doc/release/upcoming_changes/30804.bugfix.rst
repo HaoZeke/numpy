@@ -1,0 +1,10 @@
+<!-- Towncrier release notes start -->
+f2py meson OpenMP
+-----------------
+
+The meson backend no longer applies hidden ELF symbol visibility to f2py
+extension modules. Hidden visibility made Intel ``ifx`` OpenMP objects
+un-linkable (``hidden symbol omp_get_* isn't defined``). Building with
+``--dep openmp`` or ``--f90flags=-fopenmp`` now works for gfortran and ifx.
+Passing legacy ``--opt=`` under meson prints an explicit warning pointing at
+these options.

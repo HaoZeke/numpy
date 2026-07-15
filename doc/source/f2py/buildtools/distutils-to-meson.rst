@@ -117,6 +117,29 @@ This maps to ``dependency("lapack")`` and so can be used for a wide variety
 of dependencies. They can be `customized further <https://mesonbuild.com/Dependencies.html>`_
 to use CMake or other systems to resolve dependencies.
 
+OpenMP (gh-30804)
+~~~~~~~~~~~~~~~~~
+
+With distutils it was common to stuff OpenMP into ``--opt``:
+
+.. code-block:: bash
+
+  # distutils-era (does NOT work under meson)
+  f2py -c mymod.pyf --opt='-fopenmp' mymod.F90 -lgomp
+
+Under meson, ``--opt`` is ignored (``f2py`` warns). Prefer:
+
+.. code-block:: bash
+
+  # recommended: Meson resolves compile and link flags
+  f2py -c mymod.pyf mymod.F90 --dep openmp
+
+  # gfortran fallback
+  f2py -c mymod.pyf --f90flags=-fopenmp mymod.F90 -lgomp
+
+  # Intel ifx
+  CC=icx CXX=icpx FC=ifx f2py -c mymod.pyf --f90flags=-qopenmp mymod.F90 -liomp5
+
 1.2.5 Libraries
 ^^^^^^^^^^^^^^^
 
