@@ -227,9 +227,9 @@ def _run_f2py_codegen(src, suffix, module_name, tmpdir):
     with open(src_path, 'w') as fh:
         fh.write(src)
     code = (
-        "import sys; sys.path = %r; "
+        f"import sys; sys.path = {sys.path!r}; "
         "import numpy.f2py; numpy.f2py.main()"
-    ) % sys.path
+    )
     cmd = [
         sys.executable, '-c', code,
         src_path, '--build-dir', tmpdir, '-m', module_name,
@@ -275,7 +275,6 @@ def _assert_no_bare_external_for(wrapper, name):
     interface in the same scope (gh-20157).
     """
     name = name.lower()
-    bare = f'external {name}'
     for depth, s in _outer_wrapper_scope_lines(wrapper):
         # Match "external f" / "external :: f" but not longer identifiers.
         body = s
@@ -288,7 +287,7 @@ def _assert_no_bare_external_for(wrapper, name):
             )
 
 
-def _assert_uses_cb_iface_module(wrapper, routine_name=None):
+def _assert_uses_cb_iface_module(wrapper):
     """Assert a f2py_cb_ifaces_* module is defined and USEd (gh-20157)."""
     text = wrapper.lower()
     assert 'module f2py_cb_ifaces_' in text, (
@@ -353,9 +352,9 @@ class TestF90CallbackCodegen:
         import os
         wrapper_file = os.path.join(
             tmpdir, '_test_gh20157_sub-f2pywrappers2.f90')
-        if not os.path.exists(wrapper_file):
-            # Some shapes may not force an F90 wrapper; nothing to check.
-            return
+        assert os.path.exists(wrapper_file), (
+            "Assumed-shape subroutine should generate an F90 wrapper.\n"
+            f"{out}\n{err}")
         with open(wrapper_file) as fh:
             wrapper = fh.read()
         _assert_no_bare_external_for(wrapper, 'cb')
@@ -382,12 +381,17 @@ class TestF90CallbackCodegen:
         assert not os.path.exists(wrapper_f90), (
             "F77 source should not produce an F90 assumed-shape wrapper")
         wrapper_f77 = os.path.join(tmpdir, '_test_f77cb-f2pywrappers.f')
-        if os.path.exists(wrapper_f77):
-            with open(wrapper_f77) as fh:
-                content = fh.read().lower()
-            assert 'interface' not in content, (
-                "F77 wrapper should not contain interface blocks. "
-                f"Content:\n{content}")
+        assert os.path.exists(wrapper_f77), (
+            "F77 function should still emit a fixed-form wrapper. "
+            f"stdout:\n{out}\nstderr:\n{err}")
+        with open(wrapper_f77) as fh:
+            content = fh.read().lower()
+        assert 'interface' not in content, (
+            "F77 wrapper should not contain interface blocks. "
+            f"Content:\n{content}")
+        assert 'external cb' in content, (
+            "F77 wrapper should keep a bare external for the callback. "
+            f"Content:\n{content}")
 
     def test_f90_explicit_shape_preserves_external(self, tmp_path):
         """Explicit-shape arrays do not force the assumed-shape interface path."""
@@ -507,6 +511,22 @@ class TestCallbackInterfaceStructure:
         assert 'cb' in found
         assert found['cb']['name'] == 'cb'
 
+
+@pytest.mark.slow
+class TestF77CallbackLegacy(util.F2PyTest):
+    """Compile-and-run a fixed-form callback after the gh-20157 change.
+
+    Pearu asked that the module-based F90 path not break legacy F77.
+    This builds a fixed-form function with an external callback and
+    checks the numeric result, not only the generated text.
+    """
+    sources = [util.getpath("tests", "src", "callback", "gh20157_f77.f")]
+
+    def test_f77_callback_compiles_and_runs(self):
+        def plus_one(n):
+            return n + 1
+
+        assert self.module.addcb(plus_one, 4) == 5
 
 
 @pytest.mark.slow
