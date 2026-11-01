@@ -1,5 +1,5 @@
 ``f2py`` callback wrappers no longer emit conflicting ``external`` declarations
---------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
 ``f2py``-generated Fortran 90 wrappers for assumed-shape routines place
 callback interfaces in a small Fortran module and ``use`` it from both the
 outer wrapper and the nested host interface, instead of bare ``external``
