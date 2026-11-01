@@ -135,7 +135,7 @@ def _remote_names_for_local(use_dict, local_name):
     ``use[m]['map'][local] = remote``.
     """
     names = {local_name.lower()}
-    for _mname, spec in (use_dict or {}).items():
+    for spec in (use_dict or {}).values():
         mapping = (spec or {}).get('map') or {}
         for local, remote in mapping.items():
             if (local or '').lower() == local_name.lower():
@@ -392,7 +392,7 @@ def _rewrite_saved_interface_use_module(saved_interface, cb_orig_names,
         if not saw_header:
             header.append(line)
             is_header = (
-                s.startswith('function ') or s.startswith('subroutine ')
+                s.startswith(('function ', 'subroutine '))
                 or ' function ' in f' {s}' or ' subroutine ' in f' {s}'
             )
             if is_header:
@@ -705,8 +705,6 @@ def createsubrwrapper(rout, signature=0):
     else:
         add('end')
     return module_src, ret[0]
-
-
 
 
 def assubr(rout):
