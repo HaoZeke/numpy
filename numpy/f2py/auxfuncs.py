@@ -43,7 +43,7 @@ __all__ = [
     'isunsigned_shortarray', 'l_and', 'l_not', 'l_or', 'outmess', 'replace',
     'show', 'stripcomma', 'throw_error', 'isattr_value', 'getuseblocks',
     'process_f2cmap_dict', 'containscommon', 'containsderivedtypes',
-    'isparameter'
+    'isparameter', 'islong_doublearray'
 ]
 
 
@@ -278,6 +278,11 @@ def issigned_array(var):
 def issigned_long_longarray(var):
     return isarray(var) and var.get('typespec') in ['integer', 'logical']\
         and get_kind(var) == '8'
+
+
+def islong_doublearray(var):
+    return isarray(var) and var.get('typespec') == 'real'\
+        and get_kind(var) == '16'
 
 
 def isallocatable(var):
