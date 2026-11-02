@@ -633,6 +633,26 @@ class TestLiteralKinds:
         assert crackfortran.get_parameters({'yes': var}) == {'yes': True}
 
 
+class TestIntegerDivision:
+    # the quotient of two integers is truncated, as in Fortran
+    def test_extents(self, tmp_path):
+        fpath = tmp_path / "division.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module division
+              integer, parameter :: n = 7, half = n / 2, neg = -n / 2
+              real, parameter :: ratio = n / 2.0
+              integer, parameter :: twice = int(ratio * 2)
+              real :: buf(half), low(neg + 5), every(twice)
+              character(len=n / 2) :: word
+            end module division
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["buf"]["dimension"] == ["3"]
+        assert vs["low"]["dimension"] == ["2"]
+        assert vs["every"]["dimension"] == ["7"]
+        assert vs["word"]["charselector"]["len"] == "3"
+
+
 class TestGetStrLength:
     def test_stringarray(self, capsys):
         # get_elsize asks for the length of string arrays as well
