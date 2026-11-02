@@ -2561,11 +2561,20 @@ def _fortran_div(a, b):
     return a / b
 
 
+class _ParameterArray(dict):
+    # pa(2) in an expression is an element of the parameter array pa
+    def __call__(self, *index):
+        return self[index if len(index) > 1 else index[0]]
+
+
 def _fortran_eval(expr, g_params, params):
     """Evaluate a Fortran expression that Python can parse."""
     tree = _FortranDivision().visit(ast.parse(expr.strip(), mode='eval'))
     code = compile(ast.fix_missing_locations(tree), '<fortran>', 'eval')
-    return eval(code, {**g_params, '_fortran_div': _fortran_div}, params)
+    arrays = {k: _ParameterArray(v) for k, v in params.items()
+              if isinstance(v, dict)}
+    return eval(code, {**g_params, '_fortran_div': _fortran_div},
+                {**params, **arrays})
 
 
 def get_parameters(vars, global_params={}):
