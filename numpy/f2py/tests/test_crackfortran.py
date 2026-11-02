@@ -653,6 +653,22 @@ class TestIntegerDivision:
         assert vs["word"]["charselector"]["len"] == "3"
 
 
+class TestArrayElements:
+    # an element of a parameter array can define another parameter
+    def test_extents(self, tmp_path):
+        fpath = tmp_path / "elements.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module elements
+              integer, parameter :: dims(2) = [4, 5]
+              integer, parameter :: nx = dims(2), total = dims(1) * dims(2)
+              real :: buf(nx), grid(total)
+            end module elements
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["buf"]["dimension"] == ["5"]
+        assert vs["grid"]["dimension"] == ["20"]
+
+
 class TestGetStrLength:
     def test_stringarray(self, capsys):
         # get_elsize asks for the length of string arrays as well
