@@ -2700,6 +2700,19 @@ def get_parameters(vars, global_params={}):
     return params
 
 
+def _eval_dimension(d, params):
+    """Evaluate a dimension that is a constant integer expression.
+
+    param_parse substitutes parameters and leaves the arithmetic to
+    symbolic, which knows no intrinsics and folds 2 * (n / 2) to n.
+    """
+    try:
+        value = _fortran_eval(d, _intrinsics, params)
+    except Exception:
+        return d
+    return str(value) if isinstance(value, int) else d
+
+
 def _eval_length(length, params):
     if length in ['(:)', '(*)', '*']:
         return '(*)'
@@ -2880,7 +2893,7 @@ def analyzevars(block):
                     try:
                         # the dimension for this variable depends on a
                         # previously defined parameter
-                        d = param_parse(d, params)
+                        d = param_parse(_eval_dimension(d, params), params)
                     except (ValueError, IndexError, KeyError):
                         outmess(
                             'analyzevars: could not parse dimension for '
@@ -3179,8 +3192,8 @@ def param_eval(v, g_params, params, dimspec=None):
         # now, dimrange is a list of 1 or 2 elements
         if len(dimrange) == 1:
             dimrange = ['1'] + dimrange
-        lbound = int(param_parse(dimrange[0], params))
-        ubound = param_parse(dimrange[1], params)
+        lbound = int(param_parse(_eval_dimension(dimrange[0], params), params))
+        ubound = param_parse(_eval_dimension(dimrange[1], params), params)
     else:
         raise ValueError('param_eval: multidimensional array parameters '
                          f'{dimspec} not supported')
