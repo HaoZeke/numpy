@@ -14,6 +14,8 @@ import copy
 import os
 import re
 
+import numpy as np
+
 from . import cb_rules
 from ._isocbind import iso_c2py_map, iso_c_binding_map, isoc_c2pycode_map
 from ._isofenv import iso_fortran_env_map
@@ -129,6 +131,11 @@ f2cmap_all = {'real': {'': 'float', '4': 'float', '8': 'double',
               'double precision': {'': 'double'},
               'byte': {'': 'char'},
               }
+# real(10) is the x87 extended type, which long double is on x86
+if np.finfo(np.longdouble).nmant == 63:
+    f2cmap_all['real']['10'] = 'long_double'
+    f2cmap_all['complex']['20'] = 'complex_long_double'
+    f2cmap_all['complexkind']['10'] = 'complex_long_double'
 
 # Add ISO_C handling
 c2pycode_map.update(isoc_c2pycode_map)

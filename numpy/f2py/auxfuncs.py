@@ -221,7 +221,7 @@ def islong_double(var):
         return 0
     if not var.get('typespec') == 'real':
         return 0
-    return get_kind(var) == '16'
+    return get_kind(var) in ('10', '16')
 
 
 def islong_complex(var):
@@ -282,7 +282,7 @@ def issigned_long_longarray(var):
 
 def islong_doublearray(var):
     return isarray(var) and var.get('typespec') == 'real'\
-        and get_kind(var) == '16'
+        and get_kind(var) in ('10', '16')
 
 
 def isallocatable(var):
