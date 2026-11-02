@@ -571,7 +571,7 @@ class TestParameterSizes:
               integer, parameter :: n_max = 2
               integer, parameter :: ints(*) = [n_max, 2 * n_max, 8]
               real(8), parameter :: reals(0:*) = (/1.5d0, 2.5d0/)
-              integer, parameter :: unknown(*) = (/(i, i = 1, 3)/)
+              integer, parameter :: unknown(*) = (/huge(i)/)
               character(len=*), parameter :: phrase = 'don''t' // '!'
               character(len=*), parameter :: names(*) = ['ab', 'cd']
             end module sizes
@@ -728,6 +728,33 @@ class TestConstantDimensions:
         assert vs["buf"]["dimension"] == ["3"]
         assert vs["odd"]["dimension"] == ["3"]
         assert vs["third"]["dimension"] == ["5"]
+
+
+class TestImpliedDo:
+    @pytest.mark.parametrize("v, expected", [
+        ("(/(i, i = 1, n)/)", [1, 2, 3]),
+        ("[(2 * i, i = 5, 1, -2)]", [10, 6, 2]),
+        ("[(i, -i, i = 1, 2)]", [1, -1, 2, -2]),
+        ("[((i * j, i = 1, 2), j = 2, 3)]", [2, 4, 3, 6]),
+        ("[0, ([i, 10 * i], i = 1, 2), 9]", [0, 1, 10, 2, 20, 9]),
+        ("[(i, i = 1, 0)]", []),
+    ])
+    def test_values(self, v, expected):
+        p = crackfortran.param_eval(v, {}, {'n': 3}, dimspec='(*)')
+        assert p == dict(enumerate(expected, start=1))
+
+    def test_extents(self, tmp_path):
+        fpath = tmp_path / "implied_do.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module implied_do
+              integer :: i
+              integer, parameter :: seq(*) = (/(i, i = 1, 4)/)
+              real :: buf(seq(4) - 1)
+            end module implied_do
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["seq"]["dimension"] == ["4"]
+        assert vs["buf"]["dimension"] == ["3"]
 
 
 class TestGetStrLength:
