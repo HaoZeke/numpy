@@ -88,4 +88,5 @@ class TestLongDoubleKind(util.F2PyTest):
         a = np.array([step, 1])
         mod.twice(a)
         assert a.tolist() == [2 * step, 2]
-        assert mod.half(3) == 1.5
+        assert mod.half(2 * step) == step
+        assert mod.zhalf(2 * (step - 1j)) == step - 1j

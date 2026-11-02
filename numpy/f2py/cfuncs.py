@@ -280,16 +280,33 @@ cppmacros['pyobj_from_long_long1'] = """
 #define pyobj_from_long_long1(v) (PyLong_FromLong(v))
 #endif
 """
+# A Python float or complex would round a long double to a double
 needs['pyobj_from_long_double1'] = ['long_double']
-cppmacros['pyobj_from_long_double1'] = """
-#define pyobj_from_long_double1(v) (PyFloat_FromDouble(v))"""
+cfuncs['pyobj_from_long_double1'] = """
+static PyObject *
+pyobj_from_long_double1(long_double v)
+{
+    PyArray_Descr *descr = PyArray_DescrFromType(NPY_LONGDOUBLE);
+    PyObject *obj = PyArray_Scalar(&v, descr, NULL);
+    Py_DECREF(descr);
+    return obj;
+}
+"""
 cppmacros['pyobj_from_double1'] = """
 #define pyobj_from_double1(v) (PyFloat_FromDouble(v))"""
 cppmacros['pyobj_from_float1'] = """
 #define pyobj_from_float1(v) (PyFloat_FromDouble(v))"""
-needs['pyobj_from_complex_long_double1'] = ['complex_long_double', 'npy_math.h']
-cppmacros['pyobj_from_complex_long_double1'] = """
-#define pyobj_from_complex_long_double1(v) (PyComplex_FromDoubles((double)npy_creall(v._npy),(double)npy_cimagl(v._npy)))"""
+needs['pyobj_from_complex_long_double1'] = ['complex_long_double']
+cfuncs['pyobj_from_complex_long_double1'] = """
+static PyObject *
+pyobj_from_complex_long_double1(complex_long_double v)
+{
+    PyArray_Descr *descr = PyArray_DescrFromType(NPY_CLONGDOUBLE);
+    PyObject *obj = PyArray_Scalar(&v._npy, descr, NULL);
+    Py_DECREF(descr);
+    return obj;
+}
+"""
 needs['pyobj_from_complex_double1'] = ['complex_double', 'npy_math.h']
 cppmacros['pyobj_from_complex_double1'] = """
 #define pyobj_from_complex_double1(v) (PyComplex_FromDoubles(npy_creal(v._npy),npy_cimag(v._npy)))"""
