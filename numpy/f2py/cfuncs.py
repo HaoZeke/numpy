@@ -362,8 +362,7 @@ static inline double _f2py_cimag_as_double(const void *p, int typenum) {
         _re = _f2py_creal_as_double(v, typenum);\\
         _im = _f2py_cimag_as_double(v, typenum);\\
         if (PyArray_TYPE(arr)==typenum) {\\
-            *(ctype *)(PyArray_DATA(arr))=(ctype)_re;\\
-            *(ctype *)(PyArray_DATA(arr)+sizeof(ctype))=(ctype)_im;\\
+            memcpy(PyArray_DATA(arr), v, sizeof(*v));\\
             return 1;\\
         }\\
         switch (PyArray_TYPE(arr)) {\\
@@ -1319,6 +1318,10 @@ cfuncs[
 needs['try_pyarr_from_double'] = ['pyobj_from_double1', 'TRYPYARRAYTEMPLATE']
 cfuncs[
     'try_pyarr_from_double'] = 'static int try_pyarr_from_double(PyObject* obj,double* v) {\n    TRYPYARRAYTEMPLATE(double,\'d\');\n}\n'
+needs['try_pyarr_from_long_double'] = [
+    'pyobj_from_long_double1', 'TRYPYARRAYTEMPLATE', 'long_double']
+cfuncs[
+    'try_pyarr_from_long_double'] = 'static int try_pyarr_from_long_double(PyObject* obj,long_double* v) {\n    TRYPYARRAYTEMPLATE(long_double,\'g\');\n}\n'
 needs['try_pyarr_from_complex_float'] = [
     'pyobj_from_complex_float1', 'TRYCOMPLEXPYARRAYTEMPLATE', 'complex_float']
 cfuncs[
@@ -1327,6 +1330,11 @@ needs['try_pyarr_from_complex_double'] = [
     'pyobj_from_complex_double1', 'TRYCOMPLEXPYARRAYTEMPLATE', 'complex_double']
 cfuncs[
     'try_pyarr_from_complex_double'] = 'static int try_pyarr_from_complex_double(PyObject* obj,complex_double* v) {\n    TRYCOMPLEXPYARRAYTEMPLATE(double,NPY_CDOUBLE);\n}\n'
+needs['try_pyarr_from_complex_long_double'] = [
+    'pyobj_from_complex_long_double1', 'TRYCOMPLEXPYARRAYTEMPLATE',
+    'complex_long_double']
+cfuncs[
+    'try_pyarr_from_complex_long_double'] = 'static int try_pyarr_from_complex_long_double(PyObject* obj,complex_long_double* v) {\n    TRYCOMPLEXPYARRAYTEMPLATE(long_double,NPY_CLONGDOUBLE);\n}\n'
 
 
 needs['create_cb_arglist'] = ['CFUNCSMESS', 'PRINTPYOBJERR', 'MINMAX']

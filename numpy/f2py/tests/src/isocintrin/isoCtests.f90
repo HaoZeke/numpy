@@ -20,6 +20,13 @@
         complex(c_long_double_complex), intent(out), dimension(3) :: C
         C = A + B
       end subroutine add_clong_double_arr
+      subroutine twice_clong_double(a, c)
+        use iso_c_binding, only: c_long_double, c_long_double_complex
+        real(c_long_double), intent(inout) :: a
+        complex(c_long_double_complex), intent(inout) :: c
+        a = 2 * a
+        c = 2 * c
+      end subroutine twice_clong_double
       subroutine c_add(a, b, c) bind(c, name="c_add")
         real(c_double), intent(in) :: a, b
         real(c_double), intent(out) :: c
