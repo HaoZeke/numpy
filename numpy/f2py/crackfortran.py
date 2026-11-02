@@ -2591,12 +2591,18 @@ def _fortran_eval(expr, g_params, params):
     arrays = {k: _ParameterArray(v) for k, v in params.items()
               if isinstance(v, dict)}
     funcs = {'_fortran_div': _fortran_div, '_fortran_pow': _fortran_pow}
-    return eval(code, {**g_params, **funcs}, {**params, **arrays})
+    return eval(code, {**_intrinsics, **g_params, **funcs},
+                {**params, **arrays})
 
 
 def _nint(a):
     # halves round away from zero, where Python's round goes to even
     return int(decimal.Decimal(a).to_integral_value(decimal.ROUND_HALF_UP))
+
+
+def _elements(array):
+    # a parameter array is a dict of its elements, keyed by their indices
+    return list(array.values()) if isinstance(array, dict) else list(array)
 
 
 # Fortran intrinsics that Python lacks or defines differently, with the
@@ -2619,8 +2625,16 @@ _intrinsics = {
     'repeat': lambda string, ncopies: string * ncopies,
     'trim': lambda string: string.rstrip(' '),
     'len_trim': lambda string, kind=None: len(string.rstrip(' ')),
+    'len': lambda string, kind=None:
+        len(string if isinstance(string, str) else _elements(string)[0]),
     'size': lambda array, dim=None, kind=None:
         len(array) if dim is None else _extent(array, dim),
+    'sum': lambda array: sum(_elements(array)),
+    'product': lambda array: math.prod(_elements(array)),
+    'maxval': lambda array: max(_elements(array)),
+    'minval': lambda array: min(_elements(array)),
+    'any': lambda mask: any(_elements(mask)),
+    'all': lambda mask: all(_elements(mask)),
 }
 
 
@@ -2648,8 +2662,7 @@ def get_parameters(vars, global_params={}):
     g_params = copy.copy(global_params)
     for name, func in [('kind', _kind_func),
                        ('selected_int_kind', _selected_int_kind_func),
-                       ('selected_real_kind', _selected_real_kind_func),
-                       *_intrinsics.items()]:
+                       ('selected_real_kind', _selected_real_kind_func), ]:
         if name not in g_params:
             g_params[name] = func
     param_names = []
@@ -2746,7 +2759,7 @@ def _eval_dimension(d, params):
     symbolic, which knows no intrinsics and folds 2 * (n / 2) to n.
     """
     try:
-        value = _fortran_eval(d, _intrinsics, params)
+        value = _fortran_eval(d, {}, params)
     except Exception:
         return d
     return str(value) if isinstance(value, int) else d

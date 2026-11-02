@@ -735,6 +735,31 @@ class TestIntrinsics:
         assert vs["buf"]["dimension"] == ["3"]
         assert vs["each"]["dimension"] == ["3"]
 
+    def test_array_arguments(self, tmp_path):
+        # these see the elements of an array, not their indices
+        fpath = tmp_path / "reductions.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module reductions
+              integer, parameter :: dims(2) = [4, 5]
+              character(len=3), parameter :: names(2) = ['ab', 'cd']
+              logical, parameter :: flags(2) = [.false., .false.]
+              integer, parameter :: total = sum(dims), width = len(names)
+              integer, parameter :: area = product(dims)
+              integer, parameter :: hi = maxval(dims), lo = minval(dims)
+              real :: buf(total), each(width)
+              real :: one(merge(1, 2, any(flags))), two(merge(1, 2, all(flags)))
+              character(len=len(names)) :: word
+            end module reductions
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["total"]["="] == "9"
+        assert [vs[n]["="] for n in ("area", "hi", "lo")] == ["20", "5", "4"]
+        assert vs["buf"]["dimension"] == ["9"]
+        assert vs["each"]["dimension"] == ["3"]
+        assert vs["one"]["dimension"] == ["2"]
+        assert vs["two"]["dimension"] == ["2"]
+        assert vs["word"]["charselector"]["len"] == "3"
+
 
 class TestConstantDimensions:
     # a dimension that is a constant expression is evaluated as in Fortran
