@@ -16,4 +16,10 @@ contains
     real(ek) :: y
     y = x / 2
   end function half
+  function zhalf(z) result(w)
+    integer, parameter :: ek = selected_real_kind(18)
+    complex(ek), intent(in) :: z
+    complex(ek) :: w
+    w = z / 2
+  end function zhalf
 end module long_double_kind

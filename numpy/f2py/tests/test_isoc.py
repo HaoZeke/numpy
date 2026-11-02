@@ -37,6 +37,10 @@ class TestISOC(util.F2PyTest):
     def test_bindc_long_double_out(self):
         assert self.module.coddity.third_clong_double(3) == 1
         assert self.module.coddity.half_clong_double(3) == 1.5
+        # a double would drop the bits a long double has beyond it
+        third = np.longdouble(1) / 3
+        assert self.module.coddity.third_clong_double(1) == third
+        assert self.module.coddity.half_clong_double(2 * third) == third
 
     # gh-24553
     def test_c_double(self):
