@@ -817,6 +817,23 @@ class TestReshape:
         assert vs["grid"]["dimension"] == ["2", "3"]
 
 
+class TestArrayArithmetic:
+    # Python would repeat the list, where Fortran doubles each element
+    def test_unevaluated(self, tmp_path):
+        fpath = tmp_path / "arithmetic.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module arithmetic
+              integer, parameter :: twice(*) = 2 * [1, 2, 3]
+              complex, parameter :: z = (1.0, 2.0) * 2
+              real :: buf(size(2 * [1, 2, 3]))
+            end module arithmetic
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["twice"]["dimension"] == ["*"]
+        assert vs["z"]["="] == "(1.0, 2.0)*2"
+        assert vs["buf"]["dimension"] == ["size(2 * [1, 2, 3])"]
+
+
 class TestGetStrLength:
     def test_stringarray(self, capsys):
         # get_elsize asks for the length of string arrays as well
