@@ -86,6 +86,35 @@ def buildhooks(pymod):
            'separatorsfor': {'includes0': '\n', 'includes': '\n'},
            'docs': ['"Fortran 90/95 modules:\\n"'],
            'latexdoc': []}
+    # gh-22511: a parameter can reach f2pysetupfunc as a temporary,
+    # so keep a copy of it rather than the pointer.  The copy is a struct
+    # assignment, as the setup function has the module variables in scope
+    # and any of them could shadow a function or typedef name.  The struct
+    # is named after the entry in f2py_<module>_def, since joining module
+    # and variable names with _ need not give a unique name.
+    parameter_rules = {
+        'f90modhooks': {
+            l_not(isstring_or_stringarray):
+                'struct f2py_#f90modulename#_def_#index# '
+                '{#ctype# capi_data[#size#];};\n',
+            isstring: 'struct f2py_#f90modulename#_def_#index# '
+                      '{char capi_data[#size#];};\n',
+            isstringarray: 'struct f2py_#f90modulename#_def_#index# '
+                           '{char capi_data[#size#][#elsize#];};\n',
+        },
+        'setdata': ('\t{\n'
+                    '\t\tstatic struct f2py_#f90modulename#_def_#index# capi_copy;\n'
+                    '\t\tcapi_copy = '
+                    '*(struct f2py_#f90modulename#_def_#index# *)#varname#;\n'
+                    '\t\tf2py_#f90modulename#_def[i_f2py++].data = '
+                    '(char *)&capi_copy;\n'
+                    '\t}'),
+        'need': [rules.typedef_need_dict,
+                 {l_or(iscomplex, iscomplexarray, isint1array): '#ctype#'}],
+        # an empty parameter has nothing to copy, and C has no empty arrays
+        '_check': l_and(isparameter, lambda var: '0' not in (
+            capi_maps.get_elsize(var), *var.get('dimension', []))),
+    }
     fhooks = ['']
 
     def fadd(line, s=fhooks):
@@ -109,6 +138,11 @@ def buildhooks(pymod):
             var = m['vars'][n]
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
+                if isparameter(var) and ('*' in var.get('dimension', []) or
+                                         capi_maps.get_elsize(var) == '-1'):
+                    outmess(f"\t\t\tSkipping {n} since f2py could not "
+                            "evaluate its size...\n")
+                    continue
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
@@ -145,7 +179,7 @@ def buildhooks(pymod):
             dadd(note)
         if onlyvars:
             dadd('\\begin{description}')
-        for n in onlyvars:
+        for i, n in enumerate(onlyvars):
             var = m['vars'][n]
             modobjs.append(n)
             ct = capi_maps.getctype(var)
@@ -187,7 +221,14 @@ def buildhooks(pymod):
                 fargs.append(n)
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
-                iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
+                ar = applyrules(parameter_rules, {**vrd, **dm, 'varname': n,
+                                                  'ctype': ct, 'elsize': elsize,
+                                                  'index': str(i)},
+                                var)
+                if ar:
+                    ret['f90modhooks'].append(ar['f90modhooks'])
+                iadd(ar.get('setdata',
+                            f"\tf2py_{m['name']}_def[i_f2py++].data = {n};"))
         if onlyvars:
             dadd('\\end{description}')
         if hasbody(m):
