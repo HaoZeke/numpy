@@ -42,7 +42,8 @@ __all__ = [
     'isunsigned_long_long', 'isunsigned_long_longarray', 'isunsigned_short',
     'isunsigned_shortarray', 'l_and', 'l_not', 'l_or', 'outmess', 'replace',
     'show', 'stripcomma', 'throw_error', 'isattr_value', 'getuseblocks',
-    'process_f2cmap_dict', 'containscommon', 'containsderivedtypes'
+    'process_f2cmap_dict', 'containscommon', 'containsderivedtypes',
+    'isparameter'
 ]
 
 
@@ -281,6 +282,10 @@ def issigned_long_longarray(var):
 
 def isallocatable(var):
     return 'attrspec' in var and 'allocatable' in var['attrspec']
+
+
+def isparameter(var):
+    return 'attrspec' in var and 'parameter' in var['attrspec']
 
 
 def ismutable(var):
