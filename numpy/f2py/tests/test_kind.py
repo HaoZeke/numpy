@@ -62,7 +62,9 @@ def test_long_double_array_typedef(tmp_path):
                      "  real(16), intent(inout) :: a(2)\n"
                      "  a = 2 * a\n"
                      "end subroutine twice\n")
-    run_main(["-m", "ldarr", "--build-dir", str(tmp_path), str(fpath)])
+    # without -h, run_main would leave crackfortran not lowering case
+    run_main(["-m", "ldarr", "--lower", "--build-dir", str(tmp_path),
+              str(fpath)])
     cmod = (tmp_path / "ldarrmodule.c").read_text()
     assert "typedef long double long_double;" in cmod
 
