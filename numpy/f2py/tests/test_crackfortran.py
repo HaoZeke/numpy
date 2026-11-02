@@ -707,6 +707,29 @@ class TestIntrinsics:
         assert vs["each"]["dimension"] == ["3"]
 
 
+class TestConstantDimensions:
+    # a dimension that is a constant expression is evaluated as in Fortran
+    def test_extents(self, tmp_path):
+        fpath = tmp_path / "dimensions.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module dimensions
+              integer, parameter :: n = 7, neg = -3
+              integer, parameter :: dims(2) = [4, 5]
+              real, parameter :: scale = 2.5
+              integer, parameter :: odd(n / 2) = [1, 3, 5]
+              real :: even(2 * (n / 2)), pos(-neg), more(dims(1) + 1)
+              real :: buf(nint(scale)), third(odd(3))
+            end module dimensions
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["even"]["dimension"] == ["6"]
+        assert vs["pos"]["dimension"] == ["3"]
+        assert vs["more"]["dimension"] == ["5"]
+        assert vs["buf"]["dimension"] == ["3"]
+        assert vs["odd"]["dimension"] == ["3"]
+        assert vs["third"]["dimension"] == ["5"]
+
+
 class TestGetStrLength:
     def test_stringarray(self, capsys):
         # get_elsize asks for the length of string arrays as well
