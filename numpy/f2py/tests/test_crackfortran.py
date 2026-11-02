@@ -657,6 +657,21 @@ class TestIntegerDivision:
         assert vs["every"]["dimension"] == ["7"]
         assert vs["word"]["charselector"]["len"] == "3"
 
+    def test_negative_powers(self, tmp_path):
+        # 2**(-2) is 1 / 4
+        fpath = tmp_path / "powers.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module powers
+              integer, parameter :: zero = 2**(-2), minus = (-1)**(-3)
+              real, parameter :: quarter = 2.0**(-2)
+              real :: buf(zero + 1), odd(minus + 2), four(int(1 / quarter))
+            end module powers
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["buf"]["dimension"] == ["1"]
+        assert vs["odd"]["dimension"] == ["1"]
+        assert vs["four"]["dimension"] == ["4"]
+
 
 class TestArrayElements:
     # an element of a parameter array can define another parameter
