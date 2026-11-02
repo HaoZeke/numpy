@@ -834,6 +834,24 @@ class TestArrayArithmetic:
         assert vs["buf"]["dimension"] == ["size(2 * [1, 2, 3])"]
 
 
+class TestCharacterLengths:
+    # a character parameter is blank padded or cut to its length
+    def test_lengths(self, tmp_path):
+        fpath = tmp_path / "lengths.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module lengths
+              character(len=5), parameter :: padded = 'ab'
+              character(len=2), parameter :: cut = 'abcd'
+              character(len=*), parameter :: both = padded // cut // '!'
+              integer, parameter :: n = len(padded)
+              real :: buf(n)
+            end module lengths
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["both"]["charselector"]["len"] == "8"
+        assert vs["buf"]["dimension"] == ["5"]
+
+
 class TestGetStrLength:
     def test_stringarray(self, capsys):
         # get_elsize asks for the length of string arrays as well

@@ -2624,6 +2624,25 @@ _intrinsics = {
 }
 
 
+def _fit_length(value, var, g_params, params):
+    """Blank pad or cut a character value to the length of var."""
+    sel = var.get('charselector') or {}
+    try:
+        length = _fortran_eval(sel.get('len', sel.get('*', '1')), g_params,
+                               params)
+    except Exception:
+        # an assumed length, e.g. len=*, is the length of the value
+        return value
+    if not isinstance(length, int):
+        return value
+
+    def fit(s):
+        return s.ljust(length)[:length] if isinstance(s, str) else s
+    if isinstance(value, dict):
+        return {k: fit(s) for k, s in value.items()}
+    return fit(value)
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2709,6 +2728,8 @@ def get_parameters(vars, global_params={}):
                 continue
             if isstring(vars[n]) and isinstance(params[n], int):
                 params[n] = chr(params[n])
+            if isstring_or_stringarray(vars[n]):
+                params[n] = _fit_length(params[n], vars[n], g_params, params)
             nl = n.lower()
             if nl != n:
                 params[nl] = params[n]
