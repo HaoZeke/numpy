@@ -585,6 +585,28 @@ class TestParameterSizes:
         assert vs["names"]["charselector"]["len"] == "2"
 
 
+class TestRealParameters:
+    # a real literal makes a value a kind only if it cannot be evaluated
+    def test_extents(self, tmp_path):
+        fpath = tmp_path / "reals.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module reals
+              integer, parameter :: dp = kind(1.0d0)
+              integer, parameter :: wp = selected_real_kind(precision(1.0d0))
+              real, parameter :: ratio = 1.5
+              real(dp), parameter :: half = 0.5_dp
+              integer, parameter :: n = int(ratio * 2), m = int(4 * half)
+              integer, parameter :: k = int(2.5)
+              real :: kinds(dp, wp), buf(n), low(m), two(k)
+            end module reals
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["kinds"]["dimension"] == ["8", "8"]
+        assert vs["buf"]["dimension"] == ["3"]
+        assert vs["low"]["dimension"] == ["2"]
+        assert vs["two"]["dimension"] == ["2"]
+
+
 class TestGetStrLength:
     def test_stringarray(self, capsys):
         # get_elsize asks for the length of string arrays as well

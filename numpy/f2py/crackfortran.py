@@ -2623,13 +2623,6 @@ def get_parameters(vars, global_params={}):
                 outmess(f'get_parameters[TODO]: '
                         f'implement evaluation of complex expression {v}\n')
 
-            # Handle _dp for gh-6624
-            # Also fixes gh-20460
-            if not dimspec:
-                if real16pattern.search(v):
-                    v = 8
-                elif real8pattern.search(v):
-                    v = 4
             if isstring_or_stringarray(vars[n]):
                 v = _char_literal_re.sub(_python_string, vars[n]['='])
             try:
@@ -2637,6 +2630,13 @@ def get_parameters(vars, global_params={}):
             except Exception as msg:
                 params[n] = v
                 outmess(f'get_parameters: got "{msg}" on {n!r}\n')
+            # Handle _dp for gh-6624
+            # Also fixes gh-20460
+            if not dimspec and isscalar(vars[n]) and params[n] == v:
+                if real16pattern.search(v):
+                    params[n] = 8
+                elif real8pattern.search(v):
+                    params[n] = 4
 
             if (dimspec or isstring_or_stringarray(vars[n])) and params[n] == v:
                 # unlike a number, an array or a string cannot stand for
