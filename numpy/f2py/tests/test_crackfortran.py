@@ -524,15 +524,20 @@ class TestParamEval:
         ret = crackfortran.param_eval(v, g_params, params, dimspec=None)
         assert ret == '3.14_dp'
 
-    def test_param_eval_too_many_dims(self):
+    def test_param_eval_reshape(self):
         v = 'reshape((/ (i, i=1, 250) /), (/5, 10, 5/))'
         g_params = {"kind": crackfortran._kind_func,
                 "selected_int_kind": crackfortran._selected_int_kind_func,
                 "selected_real_kind": crackfortran._selected_real_kind_func}
         params = {}
         dimspec = '(0:4, 3:12, 5)'
-        pytest.raises(ValueError, crackfortran.param_eval, v, g_params, params,
-                      dimspec=dimspec)
+        ret = crackfortran.param_eval(v, g_params, params, dimspec=dimspec)
+        # the first index varies fastest
+        assert len(ret) == 250
+        assert ret[0, 3, 1] == 1
+        assert ret[1, 3, 1] == 2
+        assert ret[0, 4, 1] == 6
+        assert ret[4, 12, 5] == 250
 
 
 class TestUseParameters:
@@ -755,6 +760,37 @@ class TestImpliedDo:
         vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
         assert vs["seq"]["dimension"] == ["4"]
         assert vs["buf"]["dimension"] == ["3"]
+
+
+class TestReshape:
+    # elements are in array element order, the first index varying fastest
+    @pytest.mark.parametrize("v, expected", [
+        ("reshape([1, 2, 3, 4], [2, 2])", [1, 2, 3, 4]),
+        ("reshape([1, 2, 3, 4], [2, 2], order=[2, 1])", [1, 3, 2, 4]),
+        ("reshape(shape=[2, 2], source=[1, 2, 3], pad=[0])", [1, 2, 3, 0]),
+        ("0", [0, 0, 0, 0]),
+    ])
+    def test_values(self, v, expected):
+        p = crackfortran.param_eval(v, {}, {}, dimspec='(2, 2)')
+        assert list(p) == [(1, 1), (2, 1), (1, 2), (2, 2)]
+        assert list(p.values()) == expected
+
+    def test_extents(self, tmp_path):
+        fpath = tmp_path / "rank2.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module rank2
+              integer, parameter :: m(*, *) = reshape([1, 2, 3, 4, 5, 6], [2, 3])
+              character(len=*), parameter :: s(*, *) = reshape(['ab', 'cd'], [1, 2])
+              integer, parameter :: rows = size(m, 1)
+              real :: second(m(2, 1)), grid(rows, size(m, 2))
+            end module rank2
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["m"]["dimension"] == ["2", "3"]
+        assert vs["s"]["dimension"] == ["1", "2"]
+        assert vs["s"]["charselector"]["len"] == "2"
+        assert vs["second"]["dimension"] == ["2"]
+        assert vs["grid"]["dimension"] == ["2", "3"]
 
 
 class TestGetStrLength:

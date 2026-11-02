@@ -144,6 +144,7 @@ import codecs
 import copy
 import decimal
 import fileinput
+import itertools
 import math
 import os
 import platform
@@ -2604,7 +2605,8 @@ _intrinsics = {
     'repeat': lambda string, ncopies: string * ncopies,
     'trim': lambda string: string.rstrip(' '),
     'len_trim': lambda string, kind=None: len(string.rstrip(' ')),
-    'size': lambda array, dim=None, kind=None: len(array),
+    'size': lambda array, dim=None, kind=None:
+        len(array) if dim is None else _extent(array, dim),
 }
 
 
@@ -2885,9 +2887,9 @@ def analyzevars(block):
                     check = None
             if dim and 'dimension' not in vars[n]:
                 vars[n]['dimension'] = []
-                for d in rmbadname(
+                for axis, d in enumerate(rmbadname(
                         [x.strip() for x in markoutercomma(dim).split('@,@')]
-                ):
+                ), start=1):
                     # d is the expression inside the dimension declaration
                     # Evaluate `d` with respect to params
                     try:
@@ -2911,7 +2913,7 @@ def analyzevars(block):
                     if (d == '*' and isparameter(vars[n])
                             and isinstance(params.get(n), dict)):
                         # an implied shape parameter has the extent of its value
-                        dl = [str(len(params[n]))]
+                        dl = [str(_extent(params[n], axis))]
                     if len(dl) == 1 and dl[0] != dim_char:
                         dl = ['1', dl[0]]
                     if len(dl) == 2:
@@ -3188,17 +3190,56 @@ def _eval_items(item, g_params, params):
     return value if isinstance(value, list) else [value]
 
 
+def _element_order(shape):
+    """Yield the subscripts of an array from 0 in array element order.
+
+    The first subscript varies fastest, as Fortran stores arrays.
+    """
+    for s in itertools.product(*map(range, reversed(shape))):
+        yield s[::-1]
+
+
+def _extent(array, dim):
+    # a parameter array is keyed by its subscripts, a tuple for rank > 1
+    return len({k[dim - 1] if isinstance(k, tuple) else k for k in array})
+
+
+_reshape_re = re.compile(r'\s*reshape\s*\((?P<args>.*)\)\s*\Z', re.I)
+
+
+def _eval_reshape(args, g_params, params):
+    """Evaluate reshape(source, shape, pad, order) given its arguments.
+
+    Returns the elements of the result in array element order and its
+    shape.
+    """
+    names = ['source', 'shape', 'pad', 'order']
+    texts = {}
+    for name, arg in zip(names, markoutercomma(args).split('@,@')):
+        m = re.match(r'\s*(source|shape|pad|order)\s*=(?!=)', arg, re.I)
+        texts[m[1].lower() if m else name] = arg[m.end():] if m else arg
+    source, shape, pad, order = (
+        _eval_items(texts[k], g_params, params) if k in texts else []
+        for k in names)
+    size = math.prod(shape)
+    values = (source + pad * size)[:size]
+    if order:
+        # the result is filled with subscript order(1) varying fastest
+        filled = {}
+        for s, x in zip(_element_order([shape[k - 1] for k in order]), values):
+            filled[tuple(s[order.index(k)] for k in range(1, len(shape) + 1))] = x
+        values = [filled[s] for s in _element_order(shape)]
+    return values, shape
+
+
 def param_eval(v, g_params, params, dimspec=None):
     """
     Creates a dictionary of indices and values for each parameter in a
     parameter array to be evaluated later.
 
-    WARNING: It is not possible to initialize multidimensional array
-    parameters e.g. dimension(-3:1, 4, 3:5) at this point. This is because in
-    Fortran initialization through array constructor requires the RESHAPE
-    intrinsic function. Since the right-hand side of the parameter declaration
-    is not executed in f2py, but rather at the compiled c/fortran extension,
-    later, it is not possible to execute a reshape of a parameter array.
+    A multidimensional array parameter, e.g. dimension(-3:1, 4, 3:5), is
+    keyed by tuples of its indices. Its value is a RESHAPE, as Fortran
+    has no other constructor for it, or a scalar.
     One issue remains: if the user wants to access the array parameter from
     python, we should either
     1) allow them to access the parameter array using python standard indexing
@@ -3219,40 +3260,49 @@ def param_eval(v, g_params, params, dimspec=None):
     # First, we parse the dimension information
     if len(dimspec) < 2 or dimspec[::len(dimspec) - 1] != "()":
         raise ValueError(f'param_eval: dimension {dimspec} can\'t be parsed')
-    dimrange = dimspec[1:-1].split(',')
-    if len(dimrange) == 1:
+    bounds = []
+    for dimrange in markoutercomma(dimspec[1:-1]).split('@,@'):
         # e.g. dimension(2), dimension(-1:1) or dimension(0:*)
-        dimrange = dimrange[0].split(':')
+        dimrange = dimrange.split(':')
         # now, dimrange is a list of 1 or 2 elements
         if len(dimrange) == 1:
             dimrange = ['1'] + dimrange
         lbound = int(param_parse(_eval_dimension(dimrange[0], params), params))
         ubound = param_parse(_eval_dimension(dimrange[1], params), params)
-    else:
-        raise ValueError('param_eval: multidimensional array parameters '
-                         f'{dimspec} not supported')
-    # an implied shape array has the extent of its value
-    implied = ubound.strip() == '*'
+        bounds.append((lbound, ubound.strip()))
+    # an implied shape array has the shape of its value
+    implied = any(ubound == '*' for _, ubound in bounds)
 
     # Parse parameter value
-    if v.startswith('(/'):
-        v = v[2:-2]
-    elif v.startswith('['):
-        v = v[1:-1]
-    v_eval = []
-    for item in markoutercomma(v).split('@,@'):
-        try:
-            v_eval.extend(_eval_items(item, g_params, params))
-        except Exception as msg:
-            if implied:
-                raise
-            outmess(f'param_eval: got "{msg}" on {item!r}\n')
-            v_eval.append(None)
+    m = _reshape_re.match(v)
+    if m:
+        v_eval, shape = _eval_reshape(m['args'], g_params, params)
+    else:
+        if v.startswith('(/'):
+            v = v[2:-2]
+        elif v.startswith('['):
+            v = v[1:-1]
+        v_eval = []
+        for item in markoutercomma(v).split('@,@'):
+            try:
+                v_eval.extend(_eval_items(item, g_params, params))
+            except Exception as msg:
+                if implied:
+                    raise
+                outmess(f'param_eval: got "{msg}" on {item!r}\n')
+                v_eval.append(None)
+        shape = [len(v_eval)]
 
-    if implied:
-        ubound = lbound + len(v_eval) - 1
-    dimrange = range(lbound, int(ubound) + 1)
-    p = {i: x for i, x in zip(dimrange, v_eval) if x is not None}
+    extents = [shape[i] if ubound == '*' else int(ubound) - lbound + 1
+               for i, (lbound, ubound) in enumerate(bounds)]
+    if len(v_eval) == 1:
+        # a scalar sets every element
+        v_eval *= math.prod(extents)
+    p = {}
+    for s, x in zip(_element_order(extents), v_eval):
+        index = tuple(lbound + i for (lbound, _), i in zip(bounds, s))
+        if x is not None:
+            p[index if len(index) > 1 else index[0]] = x
 
     return p
 
