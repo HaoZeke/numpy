@@ -3,6 +3,7 @@ import sys
 
 import pytest
 
+import numpy as np
 from numpy.f2py import run_main
 from numpy.f2py.crackfortran import (
     _selected_int_kind_func as selected_int_kind,
@@ -64,3 +65,27 @@ def test_long_double_array_typedef(tmp_path):
     run_main(["-m", "ldarr", "--build-dir", str(tmp_path), str(fpath)])
     cmod = (tmp_path / "ldarrmodule.c").read_text()
     assert "typedef long double long_double;" in cmod
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(np.finfo(np.longdouble).precision < 18,
+                    reason="long double has fewer than 18 digits")
+class TestLongDoubleKind(util.F2PyTest):
+    # selected_real_kind(18) is real(10) on x86 and real(16) elsewhere
+    sources = [util.getpath("tests", "src", "kind", "long_double.f90")]
+
+    def test_parameters(self):
+        # 1 + 2**-60 is a long double that a double rounds to 1
+        step = 1 + np.longdouble(2) ** -60
+        mod = self.module.long_double_kind
+        assert mod.step == step
+        assert mod.steps.tolist() == [step, 2 * step]
+        assert mod.zstep == step - 1j
+
+    def test_routines(self):
+        step = 1 + np.longdouble(2) ** -60
+        mod = self.module.long_double_kind
+        a = np.array([step, 1])
+        mod.twice(a)
+        assert a.tolist() == [2 * step, 2]
+        assert mod.half(3) == 1.5
