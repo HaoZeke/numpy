@@ -27,6 +27,18 @@
         a = 2 * a
         c = 2 * c
       end subroutine twice_clong_double
+      subroutine third_clong_double(a, b)
+        use iso_c_binding, only: c_long_double
+        real(c_long_double), intent(in) :: a
+        real(c_long_double), intent(out) :: b
+        b = a / 3
+      end subroutine third_clong_double
+      function half_clong_double(a) result(b) bind(c)
+        use iso_c_binding, only: c_long_double
+        real(c_long_double), intent(in) :: a
+        real(c_long_double) :: b
+        b = a / 2
+      end function half_clong_double
       subroutine c_add(a, b, c) bind(c, name="c_add")
         real(c_double), intent(in) :: a, b
         real(c_double), intent(out) :: c
