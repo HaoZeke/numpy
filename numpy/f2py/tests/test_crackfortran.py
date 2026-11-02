@@ -153,6 +153,13 @@ class TestMarkinnerspaces:
         assert markinnerspaces(r'a "b c" "d e"') == r'a "b@_@c" "d@_@e"'
 
 
+class TestMarkoutercomma:
+    def test_brackets(self):
+        # an array constructor in brackets is a single item
+        assert (crackfortran.markoutercomma("a = [1, 2], b(2)")
+                == "a = [1, 2]@,@ b(2)")
+
+
 @pytest.mark.slow
 class TestDimSpec(util.F2PyTest):
     """This test suite tests various expressions that are used as dimension
