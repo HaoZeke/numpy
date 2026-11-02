@@ -607,6 +607,32 @@ class TestRealParameters:
         assert vs["two"]["dimension"] == ["2"]
 
 
+class TestLiteralKinds:
+    # kinds are dropped from literals, not from names
+    def test_extents(self, tmp_path):
+        fpath = tmp_path / "kinds.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module kinds
+              integer, parameter :: i8 = selected_int_kind(18)
+              integer, parameter :: dp = kind(1.0d0)
+              integer, parameter :: n_max = 2, n = n_max + 1
+              integer(i8), parameter :: k = 2_i8 + 3_8
+              real(dp), parameter :: x = 1.5_dp
+              integer, parameter :: m = int(x * 2.0_dp)
+              real :: buf(n), big(k), three(m)
+            end module kinds
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["buf"]["dimension"] == ["3"]
+        assert vs["big"]["dimension"] == ["5"]
+        assert vs["three"]["dimension"] == ["3"]
+
+    def test_logical(self):
+        var = {'typespec': 'logical', 'kindselector': {'kind': '1'},
+               'attrspec': ['parameter'], '=': '.true._1'}
+        assert crackfortran.get_parameters({'yes': var}) == {'yes': True}
+
+
 class TestGetStrLength:
     def test_stringarray(self, capsys):
         # get_elsize asks for the length of string arrays as well

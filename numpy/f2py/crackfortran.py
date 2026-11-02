@@ -2558,8 +2558,6 @@ def get_parameters(vars, global_params={}):
     kind_re = re.compile(r'\bkind\s*\(\s*(?P<value>.*)\s*\)', re.I)
     selected_int_kind_re = re.compile(
         r'\bselected_int_kind\s*\(\s*(?P<value>.*)\s*\)', re.I)
-    selected_kind_re = re.compile(
-        r'\bselected_(int|real)_kind\s*\(\s*(?P<value>.*)\s*\)', re.I)
     for n in param_names:
         if '=' in vars[n]:
             v = vars[n]['=']
@@ -2574,35 +2572,17 @@ def get_parameters(vars, global_params={}):
                     # TODO: test .eq., .neq., etc replacements.
                 ]:
                     v = v.replace(*repl)
+                v = re.sub(r'\b(True|False)_\w+', r'\1', v)
 
             v = kind_re.sub(r'kind("\1")', v)
             v = selected_int_kind_re.sub(r'selected_int_kind(\1)', v)
 
-            # We need to act according to the data.
-            # The easy case is if the data has a kind-specifier,
-            # then we may easily remove those specifiers.
-            # However, it may be that the user uses other specifiers...(!)
-            is_replaced = False
-
-            if 'kindselector' in vars[n]:
-                # Remove kind specifier (including those defined
-                # by parameters)
-                if 'kind' in vars[n]['kindselector']:
-                    orig_v_len = len(v)
-                    v = v.replace('_' + vars[n]['kindselector']['kind'], '')
-                    # Again, this will be true if even a single specifier
-                    # has been replaced, see comment above.
-                    is_replaced = len(v) < orig_v_len
-
             if dimspec:
                 # e.g. [1.5d0, 2_8, 3.0_dp] reads as [1.5e0, 2, 3.0]
                 v = _fortran_number_re.sub(_python_number, v)
-            elif not is_replaced:
-                if not selected_kind_re.match(v):
-                    v_ = v.split('_')
-                    # In case there are additive parameters
-                    if len(v_) > 1:
-                        v = ''.join(v_[:-1]).lower().replace(v_[-1].lower(), '')
+            else:
+                # e.g. 3_ik + n_max reads as 3 + n_max
+                v = _fortran_number_re.sub(lambda m: m[0].partition('_')[0], v)
 
             # Currently this will not work for complex numbers.
             # There is missing code for extracting a complex number,
