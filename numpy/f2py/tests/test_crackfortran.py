@@ -611,6 +611,15 @@ class TestRealParameters:
         assert vs["low"]["dimension"] == ["2"]
         assert vs["two"]["dimension"] == ["2"]
 
+    def test_not_kinds(self):
+        # and only if the value is a kind
+        par = {'attrspec': ['parameter']}
+        vars = {'big': {**par, 'typespec': 'real', '=': 'huge(1.0)'},
+                'z': {**par, 'typespec': 'complex', '=': 'cmplx(1.0, 2.0)'},
+                'n': {**par, 'typespec': 'integer', '=': 'int(big / 1e38)'}}
+        assert crackfortran.get_parameters(vars) == {
+            'big': 'huge(1.0)', 'z': 'cmplx(1.0, 2.0)', 'n': 'int(big / 1e38)'}
+
 
 class TestLiteralKinds:
     # kinds are dropped from literals, not from names

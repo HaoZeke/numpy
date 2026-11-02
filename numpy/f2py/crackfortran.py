@@ -2635,6 +2635,7 @@ def get_parameters(vars, global_params={}):
     kind_re = re.compile(r'\bkind\s*\(\s*(?P<value>.*)\s*\)', re.I)
     selected_int_kind_re = re.compile(
         r'\bselected_int_kind\s*\(\s*(?P<value>.*)\s*\)', re.I)
+    kind_call_re = re.compile(r'\b(selected_(int|real)_)?kind\s*\(', re.I)
     for n in param_names:
         if '=' in vars[n]:
             v = vars[n]['=']
@@ -2689,7 +2690,8 @@ def get_parameters(vars, global_params={}):
                 outmess(f'get_parameters: got "{msg}" on {n!r}\n')
             # Handle _dp for gh-6624
             # Also fixes gh-20460
-            if not dimspec and isscalar(vars[n]) and params[n] == v:
+            if (not dimspec and isscalar(vars[n]) and params[n] == v
+                    and kind_call_re.search(v)):
                 if real16pattern.search(v):
                     params[n] = 8
                 elif real8pattern.search(v):
