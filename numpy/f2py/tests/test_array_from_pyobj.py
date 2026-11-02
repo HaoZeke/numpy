@@ -380,6 +380,21 @@ class TestIntent:
         assert not intent.in_.is_intent("c")
 
 
+class TestFailedArray:
+    def test_dtype_refcount(self):
+        # an array that cannot be made must not release the dtype twice
+        t = Type("DOUBLE")
+        before = sys.getrefcount(t.dtype)
+        for _ in range(3):
+            with pytest.raises(ValueError, match="too big"):
+                wrap.call(t.type_num, t.elsize, (2**30,) * 3,
+                          intent.hide.flags, None)
+            with pytest.raises(ValueError, match="could not convert"):
+                wrap.call(t.type_num, t.elsize, (2,), intent.in_.flags, "abc")
+        after = sys.getrefcount(t.dtype)
+        assert after == before
+
+
 class TestSharedMemory:
 
     @pytest.fixture(autouse=True, scope="class", params=_type_names)
