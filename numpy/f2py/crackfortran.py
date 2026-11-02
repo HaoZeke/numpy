@@ -139,6 +139,7 @@ TODO:
     The above may be solved by creating appropriate preprocessor program, for example.
 
 """
+import ast
 import codecs
 import copy
 import fileinput
@@ -2543,6 +2544,30 @@ def _python_string(m):
     return '+' if s == '//' else repr(s[1:-1].replace(2 * s[0], s[0]))
 
 
+class _FortranDivision(ast.NodeTransformer):
+    # Fortran truncates the quotient of two integers, so 7 / 2 is 3
+    def visit_BinOp(self, node):
+        self.generic_visit(node)
+        if not isinstance(node.op, ast.Div):
+            return node
+        return ast.Call(ast.Name('_fortran_div', ast.Load()),
+                        [node.left, node.right], [])
+
+
+def _fortran_div(a, b):
+    if isinstance(a, int) and isinstance(b, int):
+        q = abs(a) // abs(b)
+        return q if (a < 0) == (b < 0) else -q
+    return a / b
+
+
+def _fortran_eval(expr, g_params, params):
+    """Evaluate a Fortran expression that Python can parse."""
+    tree = _FortranDivision().visit(ast.parse(expr.strip(), mode='eval'))
+    code = compile(ast.fix_missing_locations(tree), '<fortran>', 'eval')
+    return eval(code, {**g_params, '_fortran_div': _fortran_div}, params)
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2648,7 +2673,7 @@ def _eval_scalar(value, params):
         value = value.split('_')[0]
     try:
         # TODO: use symbolic from PR #19805
-        value = eval(value, {}, params)
+        value = _fortran_eval(value, {}, params)
         value = (repr if isinstance(value, str) else str)(value)
     except (NameError, SyntaxError, TypeError):
         return value
@@ -2731,7 +2756,7 @@ def analyzevars(block):
             if 'len' in vars[n]['charselector']:
                 l = vars[n]['charselector']['len']
                 try:
-                    l = str(eval(l, {}, params))
+                    l = str(_fortran_eval(l, {}, params))
                 except Exception:
                     pass
                 vars[n]['charselector']['len'] = l
@@ -2749,7 +2774,7 @@ def analyzevars(block):
             if 'kind' in vars[n]['kindselector']:
                 l = vars[n]['kindselector']['kind']
                 try:
-                    l = str(eval(l, {}, params))
+                    l = str(_fortran_eval(l, {}, params))
                 except Exception:
                     pass
                 vars[n]['kindselector']['kind'] = l
@@ -3096,7 +3121,7 @@ def param_eval(v, g_params, params, dimspec=None):
     """
     if dimspec is None:
         try:
-            p = eval(v, g_params, params)
+            p = _fortran_eval(v, g_params, params)
         except Exception as msg:
             p = v
             outmess(f'param_eval: got "{msg}" on {v!r}\n')
@@ -3129,7 +3154,7 @@ def param_eval(v, g_params, params, dimspec=None):
     v_eval = []
     for item in markoutercomma(v).split('@,@'):
         try:
-            item = eval(item, g_params, params)
+            item = _fortran_eval(item, g_params, params)
         except Exception as msg:
             if implied:
                 raise
