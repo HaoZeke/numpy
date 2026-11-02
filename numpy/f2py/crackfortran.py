@@ -2524,6 +2524,25 @@ def _selected_real_kind_func(p, r=0, radix=0):
     return -1
 
 
+# a number with an optional exponent and kind, e.g. 1.5d0 or 2_int64
+_fortran_number_re = re.compile(
+    r'(?<![\w.])(\d+\.?\d*|\.\d+)(?:[dDeE]([-+]?\d+))?(?:_\w+)?')
+
+
+def _python_number(m):
+    return m[1] + (f'e{m[2]}' if m[2] else '')
+
+
+# a character literal, which doubles its delimiter instead of escaping it,
+# or the concatenation operator
+_char_literal_re = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|//")
+
+
+def _python_string(m):
+    s = m[0]
+    return '+' if s == '//' else repr(s[1:-1].replace(2 * s[0], s[0]))
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2544,6 +2563,9 @@ def get_parameters(vars, global_params={}):
     for n in param_names:
         if '=' in vars[n]:
             v = vars[n]['=']
+            dimspec = ([s.removeprefix('dimension').strip()
+                        for s in vars[n]['attrspec']
+                       if s.startswith('dimension')] or [None])[0]
             if islogical(vars[n]):
                 v = v.lower()
                 for repl in [
@@ -2572,7 +2594,10 @@ def get_parameters(vars, global_params={}):
                     # has been replaced, see comment above.
                     is_replaced = len(v) < orig_v_len
 
-            if not is_replaced:
+            if dimspec:
+                # e.g. [1.5d0, 2_8, 3.0_dp] reads as [1.5e0, 2, 3.0]
+                v = _fortran_number_re.sub(_python_number, v)
+            elif not is_replaced:
                 if not selected_kind_re.match(v):
                     v_ = v.split('_')
                     # In case there are additive parameters
@@ -2598,22 +2623,26 @@ def get_parameters(vars, global_params={}):
                 outmess(f'get_parameters[TODO]: '
                         f'implement evaluation of complex expression {v}\n')
 
-            dimspec = ([s.removeprefix('dimension').strip()
-                        for s in vars[n]['attrspec']
-                       if s.startswith('dimension')] or [None])[0]
-
             # Handle _dp for gh-6624
             # Also fixes gh-20460
-            if real16pattern.search(v):
-                v = 8
-            elif real8pattern.search(v):
-                v = 4
+            if not dimspec:
+                if real16pattern.search(v):
+                    v = 8
+                elif real8pattern.search(v):
+                    v = 4
+            if isstring_or_stringarray(vars[n]):
+                v = _char_literal_re.sub(_python_string, vars[n]['='])
             try:
                 params[n] = param_eval(v, g_params, params, dimspec=dimspec)
             except Exception as msg:
                 params[n] = v
                 outmess(f'get_parameters: got "{msg}" on {n!r}\n')
 
+            if (dimspec or isstring_or_stringarray(vars[n])) and params[n] == v:
+                # unlike a number, an array or a string cannot stand for
+                # its expression
+                del params[n]
+                continue
             if isstring(vars[n]) and isinstance(params[n], int):
                 params[n] = chr(params[n])
             nl = n.lower()
@@ -2726,6 +2755,15 @@ def analyzevars(block):
                 except Exception:
                     pass
                 vars[n]['charselector']['len'] = l
+            # an assumed length parameter has the length of its value
+            selector = vars[n]['charselector']
+            key = 'len' if 'len' in selector else '*'
+            value = params.get(n)
+            values = value.values() if isinstance(value, dict) else [value]
+            lengths = {len(s) for s in values if isinstance(s, str)}
+            if (selector.get(key) in ('*', '(*)') and len(lengths) == 1
+                    and isparameter(vars[n])):
+                selector[key] = str(lengths.pop())
 
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
@@ -2811,6 +2849,10 @@ def analyzevars(block):
                     if len(dl) == 2 and '*' in dl:  # e.g. dimension(5:*)
                         dl = ['*']
                         d = '*'
+                    if (d == '*' and isparameter(vars[n])
+                            and isinstance(params.get(n), dict)):
+                        # an implied shape parameter has the extent of its value
+                        dl = [str(len(params[n]))]
                     if len(dl) == 1 and dl[0] != dim_char:
                         dl = ['1', dl[0]]
                     if len(dl) == 2:
@@ -3086,31 +3128,41 @@ def param_eval(v, g_params, params, dimspec=None):
         raise ValueError(f'param_eval: dimension {dimspec} can\'t be parsed')
     dimrange = dimspec[1:-1].split(',')
     if len(dimrange) == 1:
-        # e.g. dimension(2) or dimension(-1:1)
+        # e.g. dimension(2), dimension(-1:1) or dimension(0:*)
         dimrange = dimrange[0].split(':')
         # now, dimrange is a list of 1 or 2 elements
         if len(dimrange) == 1:
-            bound = param_parse(dimrange[0], params)
-            dimrange = range(1, int(bound) + 1)
-        else:
-            lbound = param_parse(dimrange[0], params)
-            ubound = param_parse(dimrange[1], params)
-            dimrange = range(int(lbound), int(ubound) + 1)
+            dimrange = ['1'] + dimrange
+        lbound = int(param_parse(dimrange[0], params))
+        ubound = param_parse(dimrange[1], params)
     else:
         raise ValueError('param_eval: multidimensional array parameters '
                          f'{dimspec} not supported')
+    # an implied shape array has the extent of its value
+    implied = ubound.strip() == '*'
 
     # Parse parameter value
-    v = (v[2:-2] if v.startswith('(/') else v).split(',')
+    if v.startswith('(/'):
+        v = v[2:-2]
+    elif v.startswith('['):
+        v = v[1:-1]
     v_eval = []
-    for item in v:
+    for item in markoutercomma(v).split('@,@'):
         try:
             item = eval(item, g_params, params)
         except Exception as msg:
+            if implied:
+                raise
             outmess(f'param_eval: got "{msg}" on {item!r}\n')
-        v_eval.append(item)
+            item = None
+        if isinstance(item, dict):
+            item = list(item.values())
+        v_eval.extend(item if isinstance(item, list) else [item])
 
-    p = dict(zip(dimrange, v_eval))
+    if implied:
+        ubound = lbound + len(v_eval) - 1
+    dimrange = range(lbound, int(ubound) + 1)
+    p = {i: x for i, x in zip(dimrange, v_eval) if x is not None}
 
     return p
 

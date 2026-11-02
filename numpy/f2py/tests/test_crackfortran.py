@@ -544,17 +544,45 @@ class TestUseParameters:
               module base
                 integer, parameter, dimension(2) :: fixed = (/5, 6/)
                 integer, parameter, dimension(-1:1) :: offset = (/7, 8, 9/)
+                integer, parameter, dimension(*) :: sizes = (/2, 3/)
               end module base
               module user
                 use base
                 real, dimension(fixed(1)) :: buf
                 real, dimension(offset(1)) :: low
+                integer, parameter, dimension(*) :: both = [sizes, fixed]
               end module user
             end python module uses
             """))
         vs = crackfortran.crackfortran([str(fpath)])[0]["body"][1]["vars"]
         assert vs["buf"]["dimension"] == ["5"]
         assert vs["low"]["dimension"] == ["9"]
+        assert vs["both"]["dimension"] == ["4"]
+
+
+class TestParameterSizes:
+    # implied shape and assumed length parameters take their size from
+    # their value
+    def test_sizes(self, tmp_path):
+        fpath = tmp_path / "sizes.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module sizes
+              integer :: i
+              integer, parameter :: n_max = 2
+              integer, parameter :: ints(*) = [n_max, 2 * n_max, 8]
+              real(8), parameter :: reals(0:*) = (/1.5d0, 2.5d0/)
+              integer, parameter :: unknown(*) = (/(i, i = 1, 3)/)
+              character(len=*), parameter :: phrase = 'don''t' // '!'
+              character(len=*), parameter :: names(*) = ['ab', 'cd']
+            end module sizes
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["ints"]["dimension"] == ["3"]
+        assert vs["reals"]["dimension"] == ["2"]
+        assert vs["unknown"]["dimension"] == ["*"]
+        assert vs["phrase"]["charselector"]["len"] == "6"
+        assert vs["names"]["dimension"] == ["2"]
+        assert vs["names"]["charselector"]["len"] == "2"
 
 
 class TestParamParseNestedParens:
