@@ -3,6 +3,7 @@ import sys
 
 import pytest
 
+from numpy.f2py import run_main
 from numpy.f2py.crackfortran import (
     _selected_int_kind_func as selected_int_kind,
     _selected_real_kind_func as selected_real_kind,
@@ -51,3 +52,15 @@ class TestKind(util.F2PyTest):
             assert selectedrealkind(i) == selected_real_kind(
                 i
             ), f"selectedrealkind({i}): expected {selected_real_kind(i)!r} but got {selectedrealkind(i)!r}"
+
+
+def test_long_double_array_typedef(tmp_path):
+    # a real(16) array needs the long_double typedef, as a scalar does
+    fpath = tmp_path / "ldarr.f90"
+    fpath.write_text("subroutine twice(a)\n"
+                     "  real(16), intent(inout) :: a(2)\n"
+                     "  a = 2 * a\n"
+                     "end subroutine twice\n")
+    run_main(["-m", "ldarr", "--build-dir", str(tmp_path), str(fpath)])
+    cmod = (tmp_path / "ldarrmodule.c").read_text()
+    assert "typedef long double long_double;" in cmod
