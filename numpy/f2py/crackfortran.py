@@ -2547,13 +2547,16 @@ def _python_string(m):
     return '+' if s == '//' else repr(s[1:-1].replace(2 * s[0], s[0]))
 
 
-class _FortranDivision(ast.NodeTransformer):
-    # Fortran truncates the quotient of two integers, so 7 / 2 is 3
+_fortran_ops = {ast.Div: '_fortran_div', ast.Pow: '_fortran_pow'}
+
+
+class _FortranArithmetic(ast.NodeTransformer):
+    # Fortran truncates integer quotients, so 7 / 2 is 3 and 2**(-1) is 0
     def visit_BinOp(self, node):
         self.generic_visit(node)
-        if not isinstance(node.op, ast.Div):
+        if type(node.op) not in _fortran_ops:
             return node
-        return ast.Call(ast.Name('_fortran_div', ast.Load()),
+        return ast.Call(ast.Name(_fortran_ops[type(node.op)], ast.Load()),
                         [node.left, node.right], [])
 
 
@@ -2564,6 +2567,12 @@ def _fortran_div(a, b):
     return a / b
 
 
+def _fortran_pow(a, b):
+    if isinstance(a, int) and isinstance(b, int) and b < 0:
+        return _fortran_div(1, a ** -b)
+    return a ** b
+
+
 class _ParameterArray(dict):
     # pa(2) in an expression is an element of the parameter array pa
     def __call__(self, *index):
@@ -2572,12 +2581,12 @@ class _ParameterArray(dict):
 
 def _fortran_eval(expr, g_params, params):
     """Evaluate a Fortran expression that Python can parse."""
-    tree = _FortranDivision().visit(ast.parse(expr.strip(), mode='eval'))
+    tree = _FortranArithmetic().visit(ast.parse(expr.strip(), mode='eval'))
     code = compile(ast.fix_missing_locations(tree), '<fortran>', 'eval')
     arrays = {k: _ParameterArray(v) for k, v in params.items()
               if isinstance(v, dict)}
-    return eval(code, {**g_params, '_fortran_div': _fortran_div},
-                {**params, **arrays})
+    funcs = {'_fortran_div': _fortran_div, '_fortran_pow': _fortran_pow}
+    return eval(code, {**g_params, **funcs}, {**params, **arrays})
 
 
 def _nint(a):
