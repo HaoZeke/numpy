@@ -535,6 +535,28 @@ class TestParamEval:
                       dimspec=dimspec)
 
 
+class TestUseParameters:
+    # parameter arrays keep their bounds in the modules that use them
+    def test_array_bounds(self, tmp_path):
+        fpath = tmp_path / "uses.pyf"
+        fpath.write_text(textwrap.dedent("""\
+            python module uses
+              module base
+                integer, parameter, dimension(2) :: fixed = (/5, 6/)
+                integer, parameter, dimension(-1:1) :: offset = (/7, 8, 9/)
+              end module base
+              module user
+                use base
+                real, dimension(fixed(1)) :: buf
+                real, dimension(offset(1)) :: low
+              end module user
+            end python module uses
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["body"][1]["vars"]
+        assert vs["buf"]["dimension"] == ["5"]
+        assert vs["low"]["dimension"] == ["9"]
+
+
 class TestParamParseNestedParens:
     # issue gh-28095: grouping parens in a dimension expression such as
     # (mx_supply_curves + mx_intl_curves) must fold to a concrete size,
