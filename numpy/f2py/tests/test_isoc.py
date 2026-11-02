@@ -25,6 +25,15 @@ class TestISOC(util.F2PyTest):
         assert_allclose(out, exp)
         assert out.dtype == exp.dtype
 
+    def test_bindc_long_double_inout(self):
+        # 1 + 2**-60 is a long double that a double rounds to 1
+        x = 1 + np.longdouble(2) ** -60
+        a = np.array(x)
+        c = np.array(x - 1j)
+        self.module.coddity.twice_clong_double(a, c)
+        assert a == 2 * x
+        assert c == 2 * (x - 1j)
+
     # gh-24553
     def test_c_double(self):
         out = self.module.coddity.c_add(1, 2)
