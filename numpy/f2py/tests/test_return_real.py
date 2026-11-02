@@ -67,6 +67,8 @@ float t4(float value) { return value; }
 void s4(float *t4, float value) { *t4 = value; }
 double t8(double value) { return value; }
 void s8(double *t8, double value) { *t8 = value; }
+long double t16(long double value) { return value; }
+void s16(long double *t16, long double value) { *t16 = value; }
 \'\'\'
 interface
   function t4(value)
@@ -85,11 +87,19 @@ interface
     real*8 intent(out) :: t8
     real*8 intent(c) :: value
   end
+  function t16(value)
+    real*16 intent(c) :: t16,value
+  end
+  subroutine s16(t16,value)
+    intent(c) s16
+    real*16 intent(out) :: t16
+    real*16 intent(c) :: value
+  end
 end interface
 end python module c_ext_return_real
     """
 
-    @pytest.mark.parametrize("name", ["t4", "t8", "s4", "s8"])
+    @pytest.mark.parametrize("name", ["t4", "t8", "t16", "s4", "s8", "s16"])
     def test_all(self, name):
         self.check_function(getattr(self.module, name), name)
 
