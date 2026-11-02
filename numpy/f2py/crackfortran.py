@@ -3153,6 +3153,40 @@ def analyzevars(block):
 
 analyzeargs_re_1 = re.compile(r'\A[a-z]+[\w$]*\Z', re.I)
 
+# the control of an implied-do loop, e.g. the i = 1 in (i, i = 1, n)
+_implied_do_re = re.compile(r'\s*([a-z]\w*)\s*=(?!=)', re.I)
+
+
+def _eval_items(item, g_params, params):
+    """Evaluate an item of an array constructor to a list of elements.
+
+    Arrays are flattened and implied-do loops such as (i, 2 * i, i = 1, n)
+    are expanded, as in Fortran.
+    """
+    item = item.strip()
+    if item[:2] == '(/' and item[-2:] == '/)':
+        item = f'[{item[2:-2]}]'
+    if item[:1] + item[-1:] in ('[]', '()'):
+        parts = markoutercomma(item[1:-1]).split('@,@')
+        if item[0] == '[':
+            return [x for part in parts
+                    for x in _eval_items(part, g_params, params)]
+        for j in (-2, -3):
+            m = len(parts) > -j and _implied_do_re.match(parts[j])
+            if m:
+                start, end, step = (
+                    _fortran_eval(e, g_params, params)
+                    for e in [parts[j][m.end():], *parts[j + 1:], '1'][:3])
+                # the loop includes its end, where a Python range does not
+                end += 1 if step > 0 else -1
+                return [x for i in range(start, end, step)
+                        for part in parts[:j]
+                        for x in _eval_items(part, g_params, {**params, m[1]: i})]
+    value = _fortran_eval(item, g_params, params)
+    if isinstance(value, dict):
+        return list(value.values())
+    return value if isinstance(value, list) else [value]
+
 
 def param_eval(v, g_params, params, dimspec=None):
     """
@@ -3208,15 +3242,12 @@ def param_eval(v, g_params, params, dimspec=None):
     v_eval = []
     for item in markoutercomma(v).split('@,@'):
         try:
-            item = _fortran_eval(item, g_params, params)
+            v_eval.extend(_eval_items(item, g_params, params))
         except Exception as msg:
             if implied:
                 raise
             outmess(f'param_eval: got "{msg}" on {item!r}\n')
-            item = None
-        if isinstance(item, dict):
-            item = list(item.values())
-        v_eval.extend(item if isinstance(item, list) else [item])
+            v_eval.append(None)
 
     if implied:
         ubound = lbound + len(v_eval) - 1
