@@ -34,6 +34,10 @@ class TestISOC(util.F2PyTest):
         assert a == 2 * x
         assert c == 2 * (x - 1j)
 
+    def test_bindc_long_double_out(self):
+        assert self.module.coddity.third_clong_double(3) == 1
+        assert self.module.coddity.half_clong_double(3) == 1.5
+
     # gh-24553
     def test_c_double(self):
         out = self.module.coddity.c_add(1, 2)

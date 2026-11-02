@@ -107,6 +107,7 @@ c2buildvalue_map = {'double': 'd',
                     'complex_float': 'N',
                     'complex_double': 'N',
                     'complex_long_double': 'N',
+                    'long_double': 'N',
                     'string': 'y',
                     'character': 'c'}
 
