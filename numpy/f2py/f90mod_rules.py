@@ -143,6 +143,9 @@ def buildhooks(pymod):
                     outmess(f"\t\t\tSkipping {n} since f2py could not "
                             "evaluate its size...\n")
                     continue
+                if var.get('typespec') == 'type':
+                    outmess(f"\t\t\tSkipping {n} since it is of derived type...\n")
+                    continue
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")

@@ -112,6 +112,21 @@ class TestModuleParameters(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestDerivedTypeVariables(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "derived_type_vars.f90")
+    ]
+
+    def test_skipped(self):
+        # f2py has no C type for these, so the rest of the module is kept
+        mod = self.module.typed
+        assert mod.plain == 5
+        assert mod.total(2) == 7
+        assert not hasattr(mod, "origin")
+        assert not hasattr(mod, "current")
+
+
+@pytest.mark.slow
 class TestUsedModule(util.F2PyTest):
     module_name = "fmath"
     sources = [
