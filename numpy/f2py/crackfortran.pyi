@@ -43,6 +43,7 @@ groupcache: dict[int, dict[str, Any]] | None
 grouplist: dict[int, list[dict[str, Any]]] | None
 previous_context: tuple[str, str, int] | None
 
+f90moduleparams: dict[str, dict[str, Any]] = {}
 f90modulevars: dict[str, dict[str, Any]] = {}
 debug: list[Never] = []
 include_paths: list[str] = []

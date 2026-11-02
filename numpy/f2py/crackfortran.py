@@ -180,6 +180,7 @@ debug = []
 beginpattern = ''
 currentfilename = ''
 expectbegin = 1
+f90moduleparams = {}
 f90modulevars = {}
 filepositiontext = ''
 gotnextfile = 1
@@ -201,7 +202,7 @@ def reset_global_f2py_vars():
     global groupcounter, grouplist, neededmodule, expectbegin
     global skipblocksuntil, usermodules, f90modulevars, gotnextfile
     global filepositiontext, currentfilename, skipfunctions, skipfuncs
-    global onlyfuncs, include_paths, previous_context
+    global onlyfuncs, include_paths, previous_context, f90moduleparams
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
     global f77modulename, skipemptyends, ignorecontains, dolowercase, debug
 
@@ -224,6 +225,7 @@ def reset_global_f2py_vars():
     expectbegin = 1
     skipblocksuntil = -1
     usermodules = []
+    f90moduleparams = {}
     f90modulevars = {}
     gotnextfile = 1
     filepositiontext = ''
@@ -2004,8 +2006,7 @@ def get_useparameters(block, param_map=None):
             outmess(f'get_useparameters: no module {usename} info used by '
                     f'{block.get("name")}\n')
             continue
-        mvars = f90modulevars[usename]
-        params = get_parameters(mvars)
+        params = f90moduleparams[usename]
         if not params:
             continue
         # XXX: apply mapping
@@ -2680,7 +2681,13 @@ def analyzevars(block):
         if n not in args:
             svars.append(n)
 
-    params = get_parameters(vars, get_useparameters(block))
+    use_params = get_useparameters(block)
+    params = get_parameters(vars, use_params)
+    if block['block'] == 'module':
+        # kept for get_useparameters, as the analysis below reduces the
+        # dimensions of arrays to their sizes
+        f90moduleparams[block['name']] = {
+            k: v for k, v in params.items() if k not in use_params}
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
     dep_matches = {}
