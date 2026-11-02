@@ -2554,6 +2554,11 @@ class _FortranArithmetic(ast.NodeTransformer):
     # Fortran truncates integer quotients, so 7 / 2 is 3 and 2**(-1) is 0
     def visit_BinOp(self, node):
         self.generic_visit(node)
+        if any(isinstance(x, (ast.List, ast.Tuple))
+               for x in (node.left, node.right)):
+            # Python repeats and joins lists and tuples, where Fortran
+            # works elementwise on arrays and complex numbers
+            raise ValueError('array and complex arithmetic is not supported')
         if type(node.op) not in _fortran_ops:
             return node
         return ast.Call(ast.Name(_fortran_ops[type(node.op)], ast.Load()),
