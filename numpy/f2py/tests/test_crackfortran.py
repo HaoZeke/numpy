@@ -585,6 +585,15 @@ class TestParameterSizes:
         assert vs["names"]["charselector"]["len"] == "2"
 
 
+class TestGetStrLength:
+    def test_stringarray(self, capsys):
+        # get_elsize asks for the length of string arrays as well
+        var = {'typespec': 'character', 'charselector': {'len': '2'},
+               'dimension': ['3']}
+        assert capi_maps.getstrlength(var) == '2'
+        assert capsys.readouterr().err == ''
+
+
 class TestParamParseNestedParens:
     # issue gh-28095: grouping parens in a dimension expression such as
     # (mx_supply_curves + mx_intl_curves) must fold to a concrete size,
