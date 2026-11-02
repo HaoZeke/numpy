@@ -142,7 +142,9 @@ TODO:
 import ast
 import codecs
 import copy
+import decimal
 import fileinput
+import math
 import os
 import platform
 import re
@@ -2577,12 +2579,42 @@ def _fortran_eval(expr, g_params, params):
                 {**params, **arrays})
 
 
+def _nint(a):
+    # halves round away from zero, where Python's round goes to even
+    return int(decimal.Decimal(a).to_integral_value(decimal.ROUND_HALF_UP))
+
+
+# Fortran intrinsics that Python lacks or defines differently, with the
+# Fortran argument names so that keyword calls work too
+_intrinsics = {
+    'int': lambda a, kind=None: int(a.real),
+    'nint': lambda a, kind=None: _nint(a),
+    'ceiling': lambda a, kind=None: math.ceil(a),
+    'floor': lambda a, kind=None: math.floor(a),
+    'real': lambda a, kind=None: float(a.real),
+    'dble': lambda a: float(a.real),
+    'mod': lambda a, p: a - int(_fortran_div(a, p)) * p,
+    'modulo': lambda a, p: a % p,
+    'sign': lambda a, b: abs(a) if b >= 0 else -abs(a),
+    'merge': lambda tsource, fsource, mask: tsource if mask else fsource,
+    'achar': lambda i, kind=None: chr(i),
+    'char': lambda i, kind=None: chr(i),
+    'iachar': lambda c, kind=None: ord(c),
+    'ichar': lambda c, kind=None: ord(c),
+    'repeat': lambda string, ncopies: string * ncopies,
+    'trim': lambda string: string.rstrip(' '),
+    'len_trim': lambda string, kind=None: len(string.rstrip(' ')),
+    'size': lambda array, dim=None, kind=None: len(array),
+}
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
     for name, func in [('kind', _kind_func),
                        ('selected_int_kind', _selected_int_kind_func),
-                       ('selected_real_kind', _selected_real_kind_func), ]:
+                       ('selected_real_kind', _selected_real_kind_func),
+                       *_intrinsics.items()]:
         if name not in g_params:
             g_params[name] = func
     param_names = []

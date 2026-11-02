@@ -669,6 +669,44 @@ class TestArrayElements:
         assert vs["grid"]["dimension"] == ["20"]
 
 
+class TestIntrinsics:
+    # intrinsics follow Fortran, so nint rounds halves away from zero
+    @pytest.mark.parametrize("value, expected", [
+        ("nint(2.5)", 3), ("nint(-2.5)", -3),
+        ("nint(0.49999999999999994)", 0), ("nint(a=7.5, kind=8)", 8),
+        ("int(-2.7)", -2), ("floor(-1.5)", -2), ("ceiling(1.2)", 2),
+        ("mod(-7, 3)", -1), ("modulo(-7, 3)", 2), ("sign(4, -1)", -4),
+        ("merge(2, 9, 1 > 0)", 2), ("iachar('B')", 66),
+    ])
+    def test_integer(self, value, expected):
+        var = {'typespec': 'integer', 'attrspec': ['parameter'], '=': value}
+        assert crackfortran.get_parameters({'n': var}) == {'n': expected}
+
+    @pytest.mark.parametrize("value, expected", [
+        ("achar(65)", "A"), ("char(66) // 'c'", "Bc"),
+        ("repeat('-', 3)", "---"), ("trim('ab  ')", "ab"),
+    ])
+    def test_character(self, value, expected):
+        var = {'typespec': 'character', 'charselector': {'len': '*'},
+               'attrspec': ['parameter'], '=': value}
+        assert crackfortran.get_parameters({'s': var}) == {'s': expected}
+
+    def test_extents(self, tmp_path):
+        fpath = tmp_path / "intrinsics.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module intrinsics
+              character(len=*), parameter :: names(*) = ['ab', 'cd', 'ef']
+              character(len=*), parameter :: letter = achar(65)
+              integer, parameter :: k = nint(2.5), n = size(names)
+              real :: buf(k), each(n)
+            end module intrinsics
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["letter"]["charselector"]["len"] == "1"
+        assert vs["buf"]["dimension"] == ["3"]
+        assert vs["each"]["dimension"] == ["3"]
+
+
 class TestGetStrLength:
     def test_stringarray(self, capsys):
         # get_elsize asks for the length of string arrays as well
