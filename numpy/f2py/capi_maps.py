@@ -266,7 +266,7 @@ def getstrlength(var):
             return getstrlength(var['vars'][a])
         else:
             errmess(f'getstrlength: function {a} has no return value?!\n')
-    if not isstring(var):
+    if not isstring_or_stringarray(var):
         errmess(
             f'getstrlength: expected a signature of a string but got: {repr(var)}\n')
     len = '1'
