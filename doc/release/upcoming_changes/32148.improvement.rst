@@ -1,0 +1,14 @@
+``f2py`` module parameters keep their values with LLVM ``flang``
+----------------------------------------------------------------
+Named constants in Fortran 90 modules wrapped by ``f2py`` are now copied when
+the module is initialized rather than read through the pointer the compiler
+passed in. LLVM ``flang`` passes a temporary there, so these values used to
+read as garbage. Implied-shape arrays such as ``x(*)`` and assumed-length
+strings such as ``character(len=*)`` now take their size from their value;
+they used to crash the import or fail to read. A parameter array used from
+another module keeps its bounds there, so a dimension such as ``sizes(1)``
+now refers to the right element. Outside Windows, the meson backend now lets
+LLVM ``flang`` link the extension module, so modules that need its runtime
+library, such as ones with allocatable arrays, no longer fail to import. A real
+parameter now keeps its value when it sizes another variable, so
+``n = int(ratio * 2)`` with ``ratio = 1.5`` is 3 rather than 8.

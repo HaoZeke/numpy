@@ -89,6 +89,29 @@ class TestAllocatableCharacterArray(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestModuleParameters(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "gh22511_parameters.f90")
+    ]
+
+    def test_parameter_values(self):
+        # gh-22511: module parameters should keep their declared values
+        mod = self.module.constants
+        assert mod.constant == 4
+        assert mod.non_parameter == 5
+        assert mod.vector.tolist() == [1, 2, 3]
+        assert mod.ratio == 1.5
+        assert mod.word == b"abc"
+        assert mod.phrase == b"don't"
+        assert mod.names.tolist() == [b"ab", b"cd"]
+        assert mod.implied.tolist() == [4, 6, 8]
+        assert mod.memcpy == 3
+        # constants.word_length and constants_word.length share a joined name
+        assert mod.word_length == 3
+        assert self.module.constants_word.length == 7
+
+
+@pytest.mark.slow
 class TestUsedModule(util.F2PyTest):
     module_name = "fmath"
     sources = [
