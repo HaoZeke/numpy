@@ -12,3 +12,22 @@ LLVM ``flang`` link the extension module, so modules that need its runtime
 library, such as ones with allocatable arrays, no longer fail to import. A real
 parameter now keeps its value when it sizes another variable, so
 ``n = int(ratio * 2)`` with ``ratio = 1.5`` is 3 rather than 8.
+
+``f2py`` also evaluates more of Fortran's constant expressions in parameters.
+Integer division and negative integer powers truncate, intrinsics such as
+``nint``, ``mod``, ``achar``, ``size``, ``len`` and ``sum`` are understood,
+array constructors may use implied-do loops, and parameter arrays may have rank
+two or more, including ones built by ``reshape``. So ``k = nint(2.5)`` is 3
+rather than 4. Character parameters are blank padded or cut to their declared
+length, as Fortran stores them. Arithmetic on array constructors and complex
+constants, which Python would repeat or join, is left unevaluated, as is a
+value such as ``huge(1.0)``, which used to read as the kind 4.
+
+Where ``long double`` is the x87 extended type, as on x86, ``real(10)`` and
+``complex(10)`` now map to it instead of reading as zero. ``long double``
+scalars can now be passed with ``intent(inout)`` and returned from functions
+and ``intent(out)`` arguments. They are returned, and passed to Python
+callbacks, as NumPy ``longdouble`` and ``clongdouble`` scalars, so they keep
+the precision that a Python ``float`` or ``complex`` would round away. Module
+variables of derived type are skipped with a message, rather than stopping
+``f2py`` with ``KeyError: 'void'``.
