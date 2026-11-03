@@ -5,3 +5,5 @@ They share one call-back; previously the generated C code defined it once per ro
 
 A routine that calls such an external without declaring it now passes the Fortran arguments to the Python call-back, as the declaring routines do, instead of calling it with only ``<name>_extra_args``.
 For backward compatibility, a Python function that can be called with the extra arguments alone, for instance because all of its parameters have default values, is still called with only those from such a routine.
+
+Signature files written by ``f2py -h`` now keep the ``callback`` and ``hide`` intents of such call-backs, so modules built from them no longer fail to import or expose a hidden call-back as a required argument.
