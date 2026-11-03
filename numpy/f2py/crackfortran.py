@@ -144,19 +144,22 @@ import codecs
 import copy
 import decimal
 import fileinput
+import functools
 import itertools
 import math
 import os
-import platform
 import re
 import string
 import sys
+from fractions import Fraction
 from pathlib import Path
 
 try:
     import charset_normalizer
 except ImportError:
     charset_normalizer = None
+
+import numpy as np
 
 from . import __version__, symbolic
 
@@ -2493,38 +2496,137 @@ def _kind_func(string):
     return 'kind(' + string + ')'
 
 
+# Fortran 2018 16.4 describes the numbers of each kind by a model: integers
+# by their radix and digits, reals by their radix, digits and exponent
+# range.  gfortran, whose kinds f2py maps to C types, stores integer(k) as a
+# two's complement integer of k bytes and real(k) in an IEEE 754 binary
+# format, so the model of each kind follows from its storage.
+_integer_kinds = (1, 2, 4, 8, 16)
+
+
+def _real_formats_for_long_double(nmant, nexp, maxexp):
+    # Kinds 4 and 8 are binary32 and binary64. gfortran has both on every
+    # target (KIND Type Parameters, The GNU Fortran Compiler).
+    formats = {4: (8, 24), 8: (11, 53)}
+    # Kind 10 is 80-bit extended precision. gfortran's kind is the mode
+    # precision rounded up to bytes, and XFmode is kind 10
+    # (gcc/fortran/trans-types.cc, GCC 13.3). C long double has that
+    # shape when NumPy reports 63 fraction bits, 15 exponent bits and
+    # max exponent 16384. capi_maps.py maps real(10) from the 63 bits.
+    # Any other long double has no real(10).
+    if (nmant, nexp, maxexp) == (63, 15, 16384):
+        formats[10] = (15, 64)
+    # Kind 16 is IEEE binary128, (15, 113). gfortran's real(16) is the
+    # IBM extended double, two IEEE doubles, when long double has
+    # binary64's max exponent and a significand wider than 53 bits
+    # (trans-types.cc, the pnan < p branch; numpy/_core/getlimits.py).
+    # That kind is left out. It is also left out when long double is
+    # itself binary128: powerpc64le -mabi=ieeelongdouble keeps kind 16
+    # for the IBM format and uses kind 17 for IEEE binary128
+    # (trans-types.cc). A binary128 long double does not identify
+    # kind 16, so those targets have no kind 16 here either.
+    if (maxexp == 1024 and nmant > 52) or (nmant, maxexp) == (112, 16384):
+        return formats
+    formats[16] = (15, 113)
+    return formats
+
+
+_ldinfo = np.finfo(np.longdouble)
+_real_formats = _real_formats_for_long_double(
+    _ldinfo.nmant, _ldinfo.nexp, _ldinfo.maxexp)
+# character kinds by the names selected_char_kind takes
+_character_kinds = {'ascii': 1, 'iso_10646': 4}
+_default_kinds = {'integer': 4, 'real': 4, 'complex': 4, 'logical': 4,
+                  'character': 1}
+
+
+@functools.cache
+def _model(typespec, kind):
+    """Return the radix, digits and least and greatest exponent of the
+    model numbers of a kind, with no exponents for an integer."""
+    if typespec == 'integer' and kind in _integer_kinds:
+        # every bit but the sign is a digit
+        return 2, 8 * kind - 1, None, None
+    if typespec in ('real', 'complex') and kind in _real_formats:
+        bits, digits = _real_formats[kind]
+        # IEEE 754 writes significands from 1 to 2 and the model from 1/2
+        # to 1, so the model exponents are one more than IEEE's
+        emax = 2 ** (bits - 1)
+        return 2, digits, 3 - emax, emax
+    raise TypeError(f'f2py knows no {typespec} of kind {kind!r}')
+
+
+def _huge_number(typespec, kind):
+    radix, digits, _, emax = _model(typespec, kind)
+    if emax is None:
+        return radix ** digits - 1
+    return (1 - Fraction(radix) ** -digits) * radix ** emax
+
+
+def _decimal_exponent(x):
+    # the d with 10**d <= x < 10**(d + 1) of a number x > 0, exactly, so
+    # INT(LOG10(x)) where x is at least 1
+    x = Fraction(x)
+    d = math.floor(math.log10(x.numerator) - math.log10(x.denominator))
+    while Fraction(10) ** d > x:
+        d -= 1
+    while Fraction(10) ** (d + 1) <= x:
+        d += 1
+    return d
+
+
+@functools.cache
+def _precision(kind):
+    radix, digits, _, _ = _model('real', kind)
+    # INT((p - 1) * LOG10(b)), as the radix is no power of 10
+    return _decimal_exponent(Fraction(radix) ** (digits - 1))
+
+
+@functools.cache
+def _range(typespec, kind):
+    radix, _, emin, _ = _model(typespec, kind)
+    huge = _decimal_exponent(_huge_number(typespec, kind))
+    if emin is None:
+        return huge
+    # INT(MIN(LOG10(huge), -LOG10(tiny))), where tiny is b**(emin - 1)
+    return min(huge, _decimal_exponent(Fraction(radix) ** (1 - emin)))
+
+
 def _selected_int_kind_func(r):
-    # XXX: This should be processor dependent
-    m = 10 ** r
-    if m <= 2 ** 8:
-        return 1
-    if m <= 2 ** 16:
-        return 2
-    if m <= 2 ** 32:
-        return 4
-    if m <= 2 ** 63:
-        return 8
-    if m <= 2 ** 128:
-        return 16
-    return -1
+    # 2**q - 1 holds all of -10**r < n < 10**r exactly when its decimal
+    # range is at least r
+    kinds = [k for k in _integer_kinds if _range('integer', k) >= r]
+    if not kinds:
+        return -1
+    # of those the one of least range, and then the least kind
+    return min(kinds, key=lambda k: (_range('integer', k), k))
 
 
-def _selected_real_kind_func(p, r=0, radix=0):
-    # XXX: This should be processor dependent
-    # This is only verified for 0 <= p <= 20, possibly good for p <= 33 and above
-    if p < 7:
-        return 4
-    if p < 16:
-        return 8
-    machine = platform.machine().lower()
-    if machine.startswith(('aarch64', 'alpha', 'arm64', 'loongarch', 'mips', 'power', 'ppc', 'riscv', 's390x', 'sparc')):
-        if p <= 33:
-            return 16
-    elif p < 19:
-        return 10
-    elif p <= 33:
-        return 16
-    return -1
+def _selected_real_kind_func(p=None, r=None, radix=None):
+    if p is None and r is None and radix is None:
+        raise TypeError('selected_real_kind takes at least one argument')
+    p = 0 if p is None else p
+    r = 0 if r is None else r
+    kinds = [k for k in _real_formats
+             if radix is None or _model('real', k)[0] == radix]
+    with_p = {k for k in kinds if _precision(k) >= p}
+    with_r = {k for k in kinds if _range('real', k) >= r}
+    if with_p & with_r:
+        # the one of least precision, and then the least kind
+        return min(with_p & with_r, key=lambda k: (_precision(k), k))
+    if not kinds:
+        return -5
+    if with_p and with_r:
+        return -4
+    return -1 if with_r else -2 if with_p else -3
+
+
+def _selected_char_kind_func(name):
+    # the name is read without regard to case or trailing blanks
+    name = name.rstrip(' ').lower()
+    if name == 'default':
+        return _default_kinds['character']
+    return _character_kinds.get(name, -1)
 
 
 # a number with an optional exponent and kind, e.g. 1.5d0 or 2_int64
@@ -2661,7 +2763,8 @@ def get_parameters(vars, global_params={}):
     g_params = copy.copy(global_params)
     for name, func in [('kind', _kind_func),
                        ('selected_int_kind', _selected_int_kind_func),
-                       ('selected_real_kind', _selected_real_kind_func), ]:
+                       ('selected_real_kind', _selected_real_kind_func),
+                       ('selected_char_kind', _selected_char_kind_func), ]:
         if name not in g_params:
             g_params[name] = func
     param_names = []

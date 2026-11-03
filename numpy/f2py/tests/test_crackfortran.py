@@ -545,6 +545,60 @@ class TestParamEval:
         assert ret[4, 12, 5] == 250
 
 
+class TestSelectedKinds:
+    # a kind is selected by its precision, range and radix, as Fortran
+    # 2018 16.9.168 to 16.9.170 say, from the model of each kind
+    extended = (10 if 10 in crackfortran._real_formats
+                else 16 if 16 in crackfortran._real_formats else -2)
+    quad = 16 if 16 in crackfortran._real_formats else -1
+
+    @pytest.mark.parametrize("value, expected", [
+        ("selected_real_kind(6, 70)", 8),
+        ("selected_real_kind(15, 400)", extended),
+        ("selected_real_kind(r=400)", extended),
+        ("selected_real_kind(33)", quad),
+        ("selected_real_kind(radix=2)", 4), ("selected_real_kind(7, 0, 2)", 8),
+        ("selected_real_kind(34)", -1), ("selected_real_kind(6, 5000)", -2),
+        ("selected_real_kind(40, 5000)", -3),
+        ("selected_real_kind(0, 0, 10)", -5),
+        ("selected_int_kind(-1)", 1), ("selected_int_kind(9)", 4),
+        ("selected_int_kind(10)", 8), ("selected_int_kind(38)", 16),
+        ("selected_int_kind(39)", -1),
+        ("selected_char_kind('ASCII ')", 1), ("selected_char_kind('default')", 1),
+        ("selected_char_kind('iso_10646')", 4),
+        ("selected_char_kind('utf-8')", -1),
+    ])
+    def test_values(self, value, expected):
+        var = {'typespec': 'integer', 'attrspec': ['parameter'], '=': value}
+        assert crackfortran.get_parameters({'k': var}) == {'k': expected}
+
+
+class TestLongDoubleFormats:
+    # real(10) follows the 80-bit long double, and kind 16 is binary128
+    # except where that model would describe an IBM double-double
+    @pytest.mark.parametrize("nmant, nexp, maxexp, kinds", [
+        (63, 15, 16384, (4, 8, 10, 16)),
+        (52, 11, 1024, (4, 8, 16)),
+        (105, 11, 1024, (4, 8)),
+        (112, 15, 16384, (4, 8)),
+        (23, 8, 128, (4, 8, 16)),
+    ])
+    def test_cases(self, nmant, nexp, maxexp, kinds):
+        formats = crackfortran._real_formats_for_long_double(
+            nmant, nexp, maxexp)
+        assert tuple(formats) == kinds
+        if 10 in formats:
+            assert formats[10] == (15, 64)
+        if 16 in formats:
+            assert formats[16] == (15, 113)
+
+    def test_this_build(self):
+        info = np.finfo(np.longdouble)
+        got = crackfortran._real_formats_for_long_double(
+            info.nmant, info.nexp, info.maxexp)
+        assert crackfortran._real_formats == got
+
+
 class TestUseParameters:
     # parameter arrays keep their bounds in the modules that use them
     def test_array_bounds(self, tmp_path):
