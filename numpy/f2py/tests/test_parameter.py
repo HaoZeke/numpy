@@ -1,6 +1,7 @@
 import pytest
 
 import numpy as np
+from numpy.f2py import crackfortran
 
 from . import util
 
@@ -119,3 +120,31 @@ class TestParameters(util.F2PyTest):
     def test_constant_array_delims(self):
         x = self.module.foo_array_delims()
         assert x == 9
+
+
+REAL_EXPR_SRC = util.getpath("tests", "src", "parameter", "real_expr_dimension.f90")
+
+
+def test_real_literal_parameter_values():
+    # A value containing a real literal used to be replaced by a kind
+    # number (4 or 8) before evaluation, so n = int(big) became 4
+    mod = crackfortran.crackfortran([str(REAL_EXPR_SRC)])
+    params = crackfortran.get_parameters(mod[0]["vars"])
+    assert params["big"] == 100.0
+    assert params["n"] == 100
+    assert params["m"] == 10
+    assert params["dp"] == 8
+    assert params["dp_precision"] == 8
+
+
+@pytest.mark.slow
+class TestRealExprDimension(util.F2PyTest):
+    sources = [REAL_EXPR_SRC]
+
+    def test_fill(self):
+        # The wrapper allocated 4 elements while Fortran wrote 100
+        x, y = self.module.real_expr_dimension.fill()
+        assert x.shape == (100,)
+        assert y.shape == (10,)
+        assert np.all(x == 1)
+        assert np.all(y == 2)

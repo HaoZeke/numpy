@@ -2601,17 +2601,22 @@ def get_parameters(vars, global_params={}):
                         for s in vars[n]['attrspec']
                        if s.startswith('dimension')] or [None])[0]
 
-            # Handle _dp for gh-6624
-            # Also fixes gh-20460
-            if real16pattern.search(v):
-                v = 8
-            elif real8pattern.search(v):
-                v = 4
-            try:
-                params[n] = param_eval(v, g_params, params, dimspec=dimspec)
-            except Exception as msg:
-                params[n] = v
-                outmess(f'get_parameters: got "{msg}" on {n!r}\n')
+            if dimspec is None and (real16pattern.search(v)
+                                    or real8pattern.search(v)):
+                try:
+                    params[n] = eval(v, g_params, params)
+                except Exception:
+                    # gh-6624: selected_real_kind(precision(1.0d0)) cannot
+                    # be evaluated here, so take the kind of its real
+                    # literal, without a warning (gh-20460)
+                    params[n] = 8 if real16pattern.search(v) else 4
+            else:
+                try:
+                    params[n] = param_eval(v, g_params, params,
+                                           dimspec=dimspec)
+                except Exception as msg:
+                    params[n] = v
+                    outmess(f'get_parameters: got "{msg}" on {n!r}\n')
 
             if isstring(vars[n]) and isinstance(params[n], int):
                 params[n] = chr(params[n])
