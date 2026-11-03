@@ -147,6 +147,9 @@ and
   specifications. In such cases ``integer*<negintlen>`` represents
   unsigned C integers;
 
+* a ``<kind>`` that F2PY cannot map to a C type needs an entry in the f2cmap
+  file, see :ref:`f2py-kind-specifiers`;
+
 If an argument has no ``<argument type declaration>``, its type is
 determined by applying ``implicit`` rules to its name.
 
