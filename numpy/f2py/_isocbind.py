@@ -45,7 +45,7 @@ iso_c_binding_map = {
         'c_long_double_complex': 'complex_long_double'
     },
     'logical': {
-        'c_bool': 'unsigned_char'  # _Bool <=> 'unsigned_char' for now
+        'c_bool': 'char'  # same C type as logical(kind=1), see get_kind
     },
     'character': {
         'c_char': 'char'

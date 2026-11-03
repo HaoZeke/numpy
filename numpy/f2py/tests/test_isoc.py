@@ -1,7 +1,7 @@
 import pytest
 
 import numpy as np
-from numpy.testing import assert_allclose
+from numpy.testing import assert_allclose, assert_array_equal
 
 from . import util
 
@@ -56,6 +56,15 @@ class TestISOC(util.F2PyTest):
         exp_out = a + b
         assert_allclose(out, exp_out)
         assert out.dtype == exp_out.dtype
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_bindc_logical(self, value):
+        assert self.module.coddity.not_cbool(value) == (not value)
+
+    def test_bindc_logical_arr(self):
+        a = np.array([True, False, True])
+        out = self.module.coddity.not_cbool_arr(a)
+        assert_array_equal(out, ~a)
 
 
 def test_process_f2cmap_dict():

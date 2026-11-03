@@ -68,4 +68,16 @@
         integer(c_long), intent(out), dimension(3) :: C
         C = A + B
       end subroutine add_clong_arr
+      subroutine not_cbool(a, b) bind(c)
+        use iso_c_binding, only: c_bool
+        logical(c_bool), intent(in) :: a
+        logical(c_bool), intent(out) :: b
+        b = .not. a
+      end subroutine not_cbool
+      subroutine not_cbool_arr(A, B)
+        use iso_c_binding, only: c_bool
+        logical(c_bool), intent(in), dimension(3) :: A
+        logical(c_bool), intent(out), dimension(3) :: B
+        B = .not. A
+      end subroutine not_cbool_arr
   end module coddity
