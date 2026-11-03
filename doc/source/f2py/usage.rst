@@ -229,7 +229,8 @@ Other options
   All F2PY generated files are created in ``<dirname>``. Default is
   ``tempfile.mkdtemp()``.
 ``--f2cmap <filename>``
-  Load Fortran-to-C ``KIND`` specifications from the given file.
+  Load Fortran-to-C ``KIND`` specifications from the given file, see
+  :ref:`f2py-kind-specifiers`.
 ``--quiet``
   Run quietly.
 ``--verbose``
