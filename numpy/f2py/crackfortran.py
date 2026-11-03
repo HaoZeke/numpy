@@ -3352,6 +3352,10 @@ _intrinsics = {
     'minval': lambda array: _extremum(min, _elements(array)),
     'any': lambda mask: _logical('Or', *_elements(mask)),
     'all': lambda mask: _logical('And', *_elements(mask)),
+    'kind': _kind_func,
+    'selected_int_kind': _selected_int_kind_func,
+    'selected_real_kind': _selected_real_kind_func,
+    'selected_char_kind': _selected_char_kind_func,
 }
 
 
@@ -3379,12 +3383,6 @@ def _fit_length(value, var, g_params, params):
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
-    for name, func in [('kind', _kind_func),
-                       ('selected_int_kind', _selected_int_kind_func),
-                       ('selected_real_kind', _selected_real_kind_func),
-                       ('selected_char_kind', _selected_char_kind_func), ]:
-        if name not in g_params:
-            g_params[name] = func
     param_names = []
     for n in get_sorted_names(vars):
         if 'attrspec' in vars[n] and 'parameter' in vars[n]['attrspec']:

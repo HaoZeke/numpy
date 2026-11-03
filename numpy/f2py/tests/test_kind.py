@@ -89,6 +89,18 @@ class TestParameterValues(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestKindSelectors(util.F2PyTest):
+    # an argument whose kind an intrinsic gives gets the C type of the kind
+    sources = [util.getpath("tests", "src", "kind", "kind_selectors.f90")]
+
+    def test_routine(self):
+        # one past a C int, so the argument has to be integer(8)
+        wide = np.iinfo(np.int32).max + 1
+        y, j, w = self.module.kind_selectors.twice(1.1, wide, 1.1 + 2.2j)
+        assert (y, j, w) == (2 * 1.1, 2 * wide, 2 * (1.1 + 2.2j))
+
+
+@pytest.mark.slow
 class TestSelectedKindParameters(util.F2PyTest):
     # module parameters are copies of the compiler's values
     sources = [util.getpath("tests", "src", "kind", "selected_kinds.f90")]
