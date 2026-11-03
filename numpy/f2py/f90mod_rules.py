@@ -109,6 +109,20 @@ def buildhooks(pymod):
             var = m['vars'][n]
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
+                if 'pointer' in var.get('attrspec', []):
+                    # f2pyinit would pass the target, which a pointer that
+                    # is not associated does not have
+                    outmess(f"\t\t\tSkipping {n} since it is a pointer...\n")
+                    continue
+                # the module table stores each size as a C constant,
+                # except for an allocatable array
+                sizes = [capi_maps.get_elsize(var)]
+                if not isallocatable(var):
+                    sizes += var.get('dimension', [])
+                if not all(str(s).strip().isdigit() for s in sizes):
+                    outmess(f"\t\t\tSkipping {n} since f2py could not "
+                            "evaluate its size...\n")
+                    continue
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")

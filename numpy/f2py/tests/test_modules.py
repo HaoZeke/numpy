@@ -37,6 +37,23 @@ class TestModuleWithoutPublicEntities(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestUnwrappableModuleVariables(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "unwrappable_vars.f90")
+    ]
+
+    def test_skipped(self):
+        # pointers and variables of a size f2py cannot evaluate used to fail
+        # the build or the import, and are now left out
+        mod = self.module.unwrappable
+        for name in ("view", "single", "sized"):
+            assert not hasattr(mod, name)
+        assert mod.plain == 7
+        mod.attach()
+        assert mod.storage.tolist() == [1, 2, 3]
+
+
+@pytest.mark.slow
 class TestModuleDocString(util.F2PyTest):
     sources = [util.getpath("tests", "src", "modules", "module_data_docstring.f90")]
 
