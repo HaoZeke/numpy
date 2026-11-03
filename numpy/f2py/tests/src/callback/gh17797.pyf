@@ -1,0 +1,18 @@
+python module gh17797__user__routines
+    interface gh17797_user_interface
+        function f(e_0_err) result (r)
+            integer :: e_0_err
+            integer(kind=8) :: r
+        end function f
+    end interface gh17797_user_interface
+end python module gh17797__user__routines
+python module gh17797
+    interface
+        function gh17797(f,y) result (r)
+            use gh17797__user__routines
+            external f
+            integer(kind=8) dimension(:) :: y
+            integer(kind=8) :: r
+        end function gh17797
+    end interface
+end python module gh17797

@@ -10,4 +10,6 @@ as one written by ``f2py -h``, no longer fails to compile. The Fortran
 wrapper no longer contains ``f2py``-only syntax such as ``check``,
 ``depend``, ``required``, ``intent(hide)``, argument default values,
 ``threadsafe`` or ``fortranname``, which also came from ``!f2py``
-directives in Fortran sources.
+directives in Fortran sources. The wrapper of a function with a callback
+argument no longer uses the ``__user__`` module that holds the callback
+signature either.
