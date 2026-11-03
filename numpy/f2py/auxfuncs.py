@@ -22,7 +22,8 @@ __all__ = [
     'getargs2', 'getcallprotoargument', 'getcallstatement',
     'getfortranname', 'getpymethoddef', 'getrestdoc', 'getusercode',
     'getusercode1', 'getdimension', 'hasbody', 'hascallstatement', 'hascommon',
-    'hasexternals', 'hasinitvalue', 'hasnote', 'hasresultnote',
+    'hasexternals', 'hasinitvalue', 'hasnote', 'hasreal16_long_double',
+    'hasresultnote',
     'isallocatable', 'isarray', 'isarrayofstrings',
     'ischaracter', 'ischaracterarray', 'ischaracter_or_characterarray',
     'iscomplex', 'iscstyledirective',
@@ -35,7 +36,8 @@ __all__ = [
     'islogicalfunction', 'islong_complex', 'islong_double',
     'islong_doublefunction', 'islong_long', 'islong_longfunction',
     'ismodule', 'ismoduleroutine', 'isoptional', 'isprivate', 'isvariable',
-    'isrequired', 'isroutine', 'isscalar', 'issigned_long_longarray',
+    'isreal16_long_double', 'isrequired', 'isroutine', 'isscalar',
+    'issigned_long_longarray',
     'isstring', 'isstringarray', 'isstring_or_stringarray', 'isstringfunction',
     'issubroutine', 'get_f2py_modulename', 'issubroutine_wrap', 'isthreadsafe',
     'isunsigned', 'isunsigned_char', 'isunsigned_chararray',
@@ -229,6 +231,22 @@ def islong_complex(var):
     return get_kind(var) == '32'
 
 
+def isreal16_long_double(var):
+    # Inspect the declared kind: get_kind() also reports '16' for named
+    # kinds such as c_long_double, which are long double by definition.
+    if var.get('typespec') == 'real':
+        star = '16'
+    elif var.get('typespec') == 'complex':
+        star = '32'
+    else:
+        return 0
+    selector = var.get('kindselector', {})
+    if str(selector.get('*')) != star and str(selector.get('kind')) != '16':
+        return 0
+    from .capi_maps import getctype
+    return getctype(var) in ('long_double', 'complex_long_double')
+
+
 def iscomplexarray(var):
     return isarray(var) and \
            var.get('typespec') in ['complex', 'double complex']
@@ -413,6 +431,17 @@ def isstringfunction(rout):
 
 def hasexternals(rout):
     return 'externals' in rout and rout['externals']
+
+
+def hasreal16_long_double(rout):
+    if isintent_c(rout):
+        return 0
+    names = list(rout.get('args', []))
+    if isfunction(rout):
+        names.append(rout.get('result', rout['name']))
+    variables = rout.get('vars', {})
+    return any(isreal16_long_double(variables[n])
+               for n in names if n in variables)
 
 
 def isthreadsafe(rout):

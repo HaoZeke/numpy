@@ -55,6 +55,7 @@ commonhooks = {'commonhooks': '/*need_commonhooks*/',
 includes0['math.h'] = '#include <math.h>'
 includes0['string.h'] = '#include <string.h>'
 includes0['setjmp.h'] = '#include <setjmp.h>'
+includes0['float.h'] = '#include <float.h>'
 
 includes['arrayobject.h'] = '''#define PY_ARRAY_UNIQUE_SYMBOL PyArray_API
 #include "arrayobject.h"'''
@@ -283,6 +284,12 @@ cppmacros['pyobj_from_long_long1'] = """
 needs['pyobj_from_long_double1'] = ['long_double']
 cppmacros['pyobj_from_long_double1'] = """
 #define pyobj_from_long_double1(v) (PyFloat_FromDouble(v))"""
+needs['F2PY_REAL16_IS_LONG_DOUBLE'] = ['float.h']
+cppmacros['F2PY_REAL16_IS_LONG_DOUBLE'] = """
+/* REAL(KIND=16) is IEEE 754 binary128 (113-bit significand) or, with
+   gfortran on POWER, IBM double-double (106 bits).  C long double can only
+   hold it where it uses one of these formats. */
+#define F2PY_REAL16_IS_LONG_DOUBLE (LDBL_MANT_DIG == 113 || LDBL_MANT_DIG == 106)"""
 cppmacros['pyobj_from_double1'] = """
 #define pyobj_from_double1(v) (PyFloat_FromDouble(v))"""
 cppmacros['pyobj_from_float1'] = """

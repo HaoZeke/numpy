@@ -73,6 +73,7 @@ from .auxfuncs import (
     hasexternals,
     hasinitvalue,
     hasnote,
+    hasreal16_long_double,
     hasresultnote,
     isarray,
     isarrayofstrings,
@@ -499,6 +500,16 @@ rout_rules = [
         'pyname': '#modulename#.#f90modulename#.#name#',
         'decl': '',
         '_check': ismoduleroutine
+    }, {  # REAL(KIND=16) and COMPLEX(KIND=16) passed as C long double
+        'frompyobj': """\
+    if (!F2PY_REAL16_IS_LONG_DOUBLE) {
+        PyErr_SetString(PyExc_NotImplementedError,
+            \"#pyname#: REAL(KIND=16) and COMPLEX(KIND=16) do not match \"
+            \"C long double on this platform\");
+        return NULL;
+    }""",
+        'need': 'F2PY_REAL16_IS_LONG_DOUBLE',
+        '_check': hasreal16_long_double
     }, {  # Subroutine
         'functype': 'void',
         'declfortranroutine': {l_and(l_not(l_or(ismoduleroutine, isintent_c)), l_not(isdummyroutine)): 'extern void #F_FUNC#(#fortranname#,#FORTRANNAME#)(#callprotoargument#);',
