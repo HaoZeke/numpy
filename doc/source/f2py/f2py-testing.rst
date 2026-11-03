@@ -34,13 +34,13 @@ temporary location.
 Adding a test
 ==============
 
-F2PY's current test suite predates ``pytest`` and therefore does not use fixtures.
-Instead, the test files contain test classes that inherit from ``F2PyTest``
-class present in ``util.py``.
+Most of F2PY's test suite predates ``pytest`` fixtures, so the test files
+contain test classes that inherit from the ``F2PyTest`` class in ``util.py``.
 
 .. literalinclude:: ../../../numpy/f2py/tests/util.py
    :language: python
-   :lines:  327-336
+   :pyobject: F2PyTest
+   :lines: 1-8
    :linenos:
 
 This class many helper functions for parsing and compiling test source files. Its child 
@@ -56,6 +56,18 @@ Each of the ``f2py`` tests should run without failure if no Fortran compilers
 are present on the host machine. To facilitate this, the ``CompilerChecker`` is
 used, essentially providing a ``meson`` dependent set of utilities namely
 ``has_{c,f77,f90,fortran}_compiler()``.
+
+.. versionchanged:: 2.6.0
+
+The ``CompilerChecker`` runs ``meson``, so it is no longer run when the test
+modules are imported. It runs once per test session, when a test first needs a
+compiler, through the session-scoped ``check_compilers`` fixture defined in
+``conftest.py``; the ``has_{c,f77,f90,fortran}_compiler()`` helpers share its
+results. ``F2PyTest`` only requests the fixture for classes which set
+``sources`` or ``code``, so tests which do not build an extension module run
+without ``meson`` or a Fortran compiler. New tests which build a module outside
+of ``F2PyTest`` should request ``check_compilers`` instead of probing for
+compilers at import time.
 
 For the CLI tests in ``test_f2py2e``, flags which are expected to call ``meson``
 or otherwise depend on a compiler need to call ``compiler_check_f2pycli()``

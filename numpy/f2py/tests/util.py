@@ -23,7 +23,7 @@ import pytest
 import numpy
 from numpy._utils import asunicode
 from numpy.f2py._backends._meson import MesonBackend
-from numpy.testing import IS_IOS, IS_WASM, temppath
+from numpy.testing import temppath
 
 #
 # Check if compilers are available at all...
@@ -31,9 +31,10 @@ from numpy.testing import IS_IOS, IS_WASM, temppath
 
 def check_language(lang, code_snippet=None):
     if sys.platform == "win32":
-        pytest.skip("No Fortran tests on Windows (Issue #25134)", allow_module_level=True)
-    tmpdir = tempfile.mkdtemp()
-    try:
+        pytest.skip("No Fortran tests on Windows (Issue #25134)")
+    # Removing the probe directory can fail while meson's files are still
+    # locked (gh-25447); that does not change the probe result.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         meson_file = os.path.join(tmpdir, "meson.build")
         with open(meson_file, "w") as f:
             f.write("project('check_compilers')\n")
@@ -54,10 +55,8 @@ def check_language(lang, code_snippet=None):
                 capture_output=True,
             )
         except OSError:
-            pytest.skip("meson not present, skipping compiler dependent test", allow_module_level=True)
+            pytest.skip("meson not present, skipping compiler dependent test")
         return runmeson.returncode == 0
-    finally:
-        shutil.rmtree(tmpdir)
 
 
 fortran77_code = '''
@@ -104,20 +103,25 @@ class CompilerChecker:
             self.compilers_checked = True
 
 
-if not IS_WASM and not IS_IOS:
-    checker = CompilerChecker()
-    checker.check_compilers()
+# Never probe on import: that runs meson while tests are collected
+# (gh-25239, gh-25447). Tests get the results from the session-scoped
+# ``check_compilers`` fixture in conftest.py, or from the helpers below.
+checker = CompilerChecker()
 
 def has_c_compiler():
+    checker.check_compilers()
     return checker.has_c
 
 def has_f77_compiler():
+    checker.check_compilers()
     return checker.has_f77
 
 def has_f90_compiler():
+    checker.check_compilers()
     return checker.has_f90
 
 def has_fortran_compiler():
+    checker.check_compilers()
     return (checker.has_f90 and checker.has_f77)
 
 
@@ -366,20 +370,26 @@ class F2PyTest:
     _has_c_compiler = None
     _has_f77_compiler = None
     _has_f90_compiler = None
+    _has_fortran_compiler = None
 
     @property
     def module_name(self):
         cls = type(self)
         return f'_{cls.__module__.rsplit(".", 1)[-1]}_{cls.__name__}_ext_module'
 
+    @pytest.fixture(autouse=True, scope="class")
     @classmethod
-    def setup_class(cls):
+    def _f2py_compilers(cls, request):
         if sys.platform == "win32":
             pytest.skip("Fails with MinGW64 Gfortran (Issue #9673)")
-        F2PyTest._has_c_compiler = has_c_compiler()
-        F2PyTest._has_f77_compiler = has_f77_compiler()
-        F2PyTest._has_f90_compiler = has_f90_compiler()
-        F2PyTest._has_fortran_compiler = has_fortran_compiler()
+        # Classes that build no module must not depend on meson or compilers
+        if cls.code is None and cls.sources is None:
+            return
+        checker = request.getfixturevalue("check_compilers")
+        cls._has_c_compiler = checker.has_c
+        cls._has_f77_compiler = checker.has_f77
+        cls._has_f90_compiler = checker.has_f90
+        cls._has_fortran_compiler = checker.has_f77 and checker.has_f90
 
     def setup_method(self):
         if self.module is not None:
