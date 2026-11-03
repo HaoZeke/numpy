@@ -1041,20 +1041,28 @@ def test_npd_lib():
     pass
 
 
-def test_npd_define():
+def test_npd_define(hello_world_f90, monkeypatch, tmp_path):
     """
     CLI :: -D<define>
     """
-    # TODO: populate
-    pass
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    assert "c_args" not in cli_meson_build(monkeypatch, tmp_path, hello_world_f90)
+    macros = ["-DF2PY_REPORT_ATEXIT", "-DF2PY_REPORT_ON_ARRAY_COPY=1",
+              '-DVERSION="1.0"']
+    meson_build = cli_meson_build(monkeypatch, tmp_path, hello_world_f90, *macros)
+    mparser.Parser(meson_build, "meson.build").parse()
+    c_args = ", ".join(f"'''{macro}'''" for macro in macros)
+    assert f"c_args: [{c_args}]" in meson_build
 
 
-def test_npd_undefine():
+def test_npd_undefine(hello_world_f90, monkeypatch, tmp_path):
     """
     CLI :: -U<name>
     """
-    # TODO: populate
-    pass
+    meson_build = cli_meson_build(
+        monkeypatch, tmp_path, hello_world_f90, "-UNDEBUG", "-DFOO"
+    )
+    assert "c_args: ['''-DFOO''', '''-UNDEBUG''']" in meson_build
 
 
 def test_npd_incl():

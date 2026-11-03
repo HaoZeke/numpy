@@ -32,6 +32,7 @@ class MesonTemplate:
         object_files: list[Path],
         linker_args: list[str],
         fortran_args: list[str],
+        c_args: list[str],
         build_type: str,
         python_exe: str,
     ):
@@ -54,6 +55,7 @@ class MesonTemplate:
             f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
             for x in fortran_args
         ]
+        self.c_args = c_args
         self.pipeline = [
             self.initialize_template,
             self.sources_substitution,
@@ -62,6 +64,7 @@ class MesonTemplate:
             self.include_substitution,
             self.libraries_substitution,
             self.fortran_args_substitution,
+            self.c_args_substitution,
         ]
         self.build_type = build_type
         self.python_exe = python_exe
@@ -137,6 +140,13 @@ class MesonTemplate:
         else:
             self.substitutions["fortran_args"] = ""
 
+    def c_args_substitution(self) -> None:
+        if self.c_args:
+            c_args = ", ".join(f"'''{arg}'''" for arg in self.c_args)
+            self.substitutions["c_args"] = f"{self.indent}c_args: [{c_args}],"
+        else:
+            self.substitutions["c_args"] = ""
+
     def generate_meson_build(self):
         for node in self.pipeline:
             node()
@@ -182,6 +192,7 @@ class MesonBackend(Backend):
             self.extra_objects,
             self.flib_flags,
             self.fc_flags,
+            _get_c_args(self.define_macros, self.undef_macros),
             self.build_type,
             sys.executable,
         )
@@ -252,3 +263,10 @@ def _get_flags(fc_flags):
     # Hacky way to preserve order of flags
     unique_flags = list(dict.fromkeys(flag_values))
     return unique_flags
+
+def _get_c_args(define_macros, undef_macros):
+    c_args = [
+        f"-D{name}" if value is None else f"-D{name}={value}"
+        for name, value in define_macros
+    ]
+    return c_args + [f"-U{name}" for name in undef_macros]

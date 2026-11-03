@@ -107,6 +107,27 @@ class TestIncludeFiles(util.F2PyTest):
         res = self.module.add(3.0, 4.0)
         assert exp == res
 
+
+@pytest.mark.slow
+class TestDefineMacros(util.F2PyTest):
+    # -D macros must reach the C compiler of the meson build (gh-30353)
+    code = """
+      subroutine total(x, n, s)
+        integer, intent(in) :: n
+        real(8), intent(in) :: x(n)
+        real(8), intent(out) :: s
+        s = sum(x)
+      end subroutine
+    """
+    suffix = ".f90"
+    options = ["-DF2PY_REPORT_ON_ARRAY_COPY=0"]
+
+    def test_report_on_array_copy(self, capfd):
+        assert self.module.total(np.arange(3, dtype=np.float32)) == 3
+        _, err = capfd.readouterr()
+        assert "copied an array: size=3" in err
+
+
 @pytest.mark.slow
 class TestF77Comments(util.F2PyTest):
     # Check that comments are stripped from F77 continuation lines
@@ -172,6 +193,7 @@ def test_meson_library_names_use_valid_identifiers():
         object_files=[],
         linker_args=[],
         fortran_args=[],
+        c_args=[],
         build_type="debug",
         python_exe=sys.executable,
     ).generate_meson_build()
