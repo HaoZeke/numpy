@@ -1849,8 +1849,24 @@ def updatevars(typespec, selector, attrspec, entitydecl):
             if 'externals' not in groupcache[groupcounter]:
                 groupcache[groupcounter]['externals'] = []
             groupcache[groupcounter]['externals'].append(e)
-        if m.group('after'):
-            m1 = lenarraypattern.match(markouterparen(m.group('after')))
+        after = m.group('after')
+        # a coarray-spec follows the array-spec and precedes the length and
+        # the initialization (F2018 R803); brackets inside parentheses or
+        # after = construct arrays
+        depth, bracket = 0, -1
+        for i, c in enumerate(after):
+            depth += {'(': 1, ')': -1}.get(c, 0)
+            if depth == 0 and c in '=[':
+                bracket = i if c == '[' else -1
+                break
+        if bracket != -1:
+            closing = after.find(']', bracket)
+            if closing != -1:
+                edecl['attrspec'] = [*(edecl.get('attrspec') or []),
+                                     f'codimension{after[bracket:closing + 1]}']
+                after = after[:bracket] + after[closing + 1:]
+        if after:
+            m1 = lenarraypattern.match(markouterparen(after))
             if m1:
                 d1 = m1.groupdict()
                 for lk in ['len', 'array', 'init']:
@@ -1920,7 +1936,7 @@ def updatevars(typespec, selector, attrspec, entitydecl):
 
             else:
                 outmess('updatevars: could not crack entity declaration "%s". Ignoring.\n' % (
-                    ename + m.group('after')))
+                    ename + after))
         for k in list(edecl.keys()):
             if not edecl[k]:
                 del edecl[k]
