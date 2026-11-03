@@ -307,15 +307,21 @@ fortran_getattr(PyFortranObject *fp, char *name)
 {
     int i, j, k, flag;
     if (fp->dict != NULL) {
-        // python 3.13 added PyDict_GetItemRef
-#if PY_VERSION_HEX < 0x030D0000
-        PyObject *v = _PyDict_GetItemStringWithError(fp->dict, name); // noqa: borrowed-ref OK
-        if (v == NULL && PyErr_Occurred()) {
+        // python 3.13 added PyDict_GetItemStringRef, also to the Limited API
+#if PY_VERSION_HEX < 0x030D0000 || \
+        (defined(Py_LIMITED_API) && Py_LIMITED_API+0 < 0x030D0000)
+        PyObject *key = PyUnicode_FromString(name);
+        if (key == NULL) {
             return NULL;
         }
-        else if (v != NULL) {
-            Py_INCREF(v);
+        PyObject *v = PyDict_GetItemWithError(fp->dict, key); // noqa: borrowed-ref OK
+        Py_XINCREF(v);
+        Py_DECREF(key);
+        if (v != NULL) {
             return v;
+        }
+        else if (PyErr_Occurred()) {
+            return NULL;
         }
 #else
         PyObject *v;
@@ -792,16 +798,22 @@ get_elsize(PyObject *obj) {
   if (PyArray_Check(obj)) {
     return PyArray_ITEMSIZE((PyArrayObject *)obj);
   } else if (PyBytes_Check(obj)) {
-    return PyBytes_GET_SIZE(obj);
+    return PyBytes_Size(obj);
   } else if (PyUnicode_Check(obj)) {
-    return PyUnicode_GET_LENGTH(obj);
+    return PyUnicode_GetLength(obj);
   } else if (PySequence_Check(obj)) {
     PyObject* fast = PySequence_Fast(obj, "f2py:fortranobject.c:get_elsize"); // noqa: borrowed-ref OK
     if (fast != NULL) {
-      Py_ssize_t i, n = PySequence_Fast_GET_SIZE(fast);
+      Py_ssize_t i, n = PySequence_Size(fast);
       int sz, elsize = 0;
       for (i=0; i<n; i++) {
-        sz = get_elsize(PySequence_Fast_GET_ITEM(fast, i) /* borrowed */);
+        PyObject *item = PySequence_GetItem(fast, i);
+        if (item == NULL) {
+          Py_DECREF(fast);
+          return -1;
+        }
+        sz = get_elsize(item);
+        Py_DECREF(item);
         if (sz > elsize) {
           elsize = sz;
         }
@@ -952,7 +964,7 @@ ndarray_from_pyobj(const int type_num,
                   return NULL;
                 }
                 if (intent & F2PY_INTENT_OUT)
-                  Py_INCREF(arr);
+                  Py_INCREF((PyObject *)arr);
                 Py_DECREF(descr);
                 return arr;
             }
@@ -997,7 +1009,7 @@ ndarray_from_pyobj(const int type_num,
               ? ((intent & F2PY_INTENT_C) ? PyArray_ISCARRAY(arr) : PyArray_ISFARRAY(arr))
               : ((intent & F2PY_INTENT_C) ? PyArray_ISCARRAY_RO(arr) : PyArray_ISFARRAY_RO(arr))) {
                 if ((intent & F2PY_INTENT_OUT)) {
-                    Py_INCREF(arr);
+                    Py_INCREF((PyObject *)arr);
                 }
                 /* Returning input array */
                 Py_DECREF(descr);
