@@ -126,6 +126,27 @@ to use CMake or other systems to resolve dependencies.
 
   python -m numpy.f2py -c fib.f90 -m fib -lmylib -L/path/to/mylib
 
+1.2.6 OpenMP
+^^^^^^^^^^^^
+
+The ``distutils`` options ``--opt``, ``--arch``, ``--noopt`` and ``--noarch``
+are ignored by the ``meson`` backend, so OpenMP flags passed with them are
+lost. Use ``meson``'s OpenMP dependency, which adds the compile and link flags:
+
+.. code-block:: bash
+
+  python -m numpy.f2py -c fib.f90 -m fib --dep openmp
+
+``meson`` looks for OpenMP with the C compiler and applies its flags to all
+sources, so this needs C and Fortran compilers from the same toolchain, such
+as ``gcc`` with ``gfortran``, ``clang`` with ``flang`` or ``icx`` with
+``ifx``. Otherwise, pass the OpenMP flag of the Fortran compiler and link its
+OpenMP runtime library:
+
+.. code-block:: bash
+
+  python -m numpy.f2py -c fib.f90 -m fib --f90flags=-fopenmp -lgomp
+
 1.3 Customizing builds
 ~~~~~~~~~~~~~~~~~~~~~~
 
