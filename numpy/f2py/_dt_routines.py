@@ -1455,9 +1455,13 @@ def wrapper_handles(rout, args, result=None):
             if storage is None:
                 selects.append((a, cases))
                 continue
-            # a polymorphic allocatable or pointer dummy needs an actual of
-            # the same kind (F2018 15.5.2.5), which is made from the object
-            # of the dynamic type
+            # F2018 15.5.2.5: a polymorphic allocatable or pointer dummy
+            # needs a polymorphic actual.  Every other dummy, including a
+            # class() dummy that is neither allocatable nor a pointer,
+            # accepts a type() actual, so the wrapper declares type().
+            if not _is_polymorphic_arg(var):
+                raise AssertionError(
+                    f"refusing to declare class() for nonpolymorphic {a}")
             decls.append(f"class({dt['spec']}), {storage} :: f2py_{a}")
             if storage == 'pointer':
                 pre.append(f'nullify(f2py_{a})')
