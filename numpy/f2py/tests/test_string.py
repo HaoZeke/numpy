@@ -115,3 +115,8 @@ class TestLargeString(util.F2PyTest):
     def test_string_len(self):
         s = b"z".rjust(LEN_BEYOND_INT, b"a")
         assert self.module.string_len(s) == (LEN_BEYOND_INT, ord("z"))
+
+    @requires_memory(free_bytes=2 * LEN_BEYOND_INT)
+    def test_string_array_len(self):
+        s = b"z".rjust(LEN_BEYOND_INT, b"a")
+        assert self.module.string_array_len(s) == (LEN_BEYOND_INT, ord("z"))
