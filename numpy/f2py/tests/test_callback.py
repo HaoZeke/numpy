@@ -5,10 +5,12 @@ import textwrap
 import threading
 import time
 import traceback
+from pathlib import Path
 
 import pytest
 
 import numpy as np
+from numpy.f2py.f2py2e import run_main
 
 from . import util
 
@@ -202,6 +204,25 @@ class TestF77CallbackPythonTLS(TestF77Callback):
     """
 
     options = ["-DF2PY_USE_PYTHON_TLS"]
+
+
+def _signature_file(test, source):
+    # build_module copies the sources into the module directory, so the
+    # signature file is written next to it rather than into it
+    pyf = Path(util.get_module_dir()) / "signatures" / f"{test.module_name}.pyf"
+    if not pyf.exists():
+        pyf.parent.mkdir(exist_ok=True)
+        run_main(["-h", str(pyf), "-m", test.module_name, str(source)])
+    return [pyf, source]
+
+
+@pytest.mark.slow
+class TestF77CallbackSignatureFile(TestF77Callback):
+    # foo.f through the signature file that f2py -h writes for it
+    @property
+    def sources(self):
+        return _signature_file(
+            self, util.getpath("tests", "src", "callback", "foo.f"))
 
 
 @pytest.mark.slow
