@@ -261,6 +261,10 @@ cppmacros['len..'] = """
 cppmacros['pyobj_from_char1'] = r"""
 #define pyobj_from_char1(v) (PyLong_FromLong(v))
 """
+needs['pyobj_from_signed_char1'] = ['signed_char']
+cppmacros['pyobj_from_signed_char1'] = r"""
+#define pyobj_from_signed_char1(v) (PyLong_FromLong(v))
+"""
 cppmacros['pyobj_from_short1'] = r"""
 #define pyobj_from_short1(v) (PyLong_FromLong(v))
 """
@@ -1297,7 +1301,8 @@ cfuncs[
 needs['try_pyarr_from_signed_char'] = ['TRYPYARRAYTEMPLATE', 'unsigned_char']
 cfuncs[
     'try_pyarr_from_unsigned_char'] = 'static int try_pyarr_from_unsigned_char(PyObject* obj,unsigned_char* v) {\n    TRYPYARRAYTEMPLATE(unsigned_char,\'b\');\n}\n'
-needs['try_pyarr_from_signed_char'] = ['TRYPYARRAYTEMPLATE', 'signed_char']
+needs['try_pyarr_from_signed_char'] = [
+    'pyobj_from_signed_char1', 'TRYPYARRAYTEMPLATE', 'signed_char']
 cfuncs[
     'try_pyarr_from_signed_char'] = 'static int try_pyarr_from_signed_char(PyObject* obj,signed_char* v) {\n    TRYPYARRAYTEMPLATE(signed_char,\'1\');\n}\n'
 needs['try_pyarr_from_short'] = ['pyobj_from_short1', 'TRYPYARRAYTEMPLATE']
