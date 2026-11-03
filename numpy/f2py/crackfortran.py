@@ -2996,8 +2996,8 @@ def analyzevars(block):
                         if kindselect:
                             if 'kind' in kindselect:
                                 try:
-                                    kindselect['kind'] = eval(
-                                        kindselect['kind'], {}, params)
+                                    kindselect['kind'] = str(eval(
+                                        kindselect['kind'], {}, params))
                                 except Exception:
                                     pass
                             vars[n]['kindselector'] = kindselect
