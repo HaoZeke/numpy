@@ -3314,6 +3314,26 @@ def determineexprtype(expr, vars, rules={}):
 ######
 
 
+def _body_without_external_interfaces(block):
+    """Drop the interface bodies of the dummy procedures declared EXTERNAL.
+
+    vars2fortran declares these dummies EXTERNAL, as the definition does.
+    An interface body would specify that attribute a second time (F2018
+    15.4.3.2 p5, C815) and an explicit interface that the definition does
+    not have (15.3.2.3, 15.4.3.2 p7).
+    """
+    externals = block.get('externals', [])
+    body = []
+    for b in block['body']:
+        if b['block'] == 'interface':
+            procs = [p for p in b['body'] if p.get('name') not in externals]
+            if not procs:
+                continue
+            b = {**b, 'body': procs}
+        body.append(b)
+    return body
+
+
 def crack2fortrangen(block, tab='\n', as_interface=False):
     global skipfuncs, onlyfuncs
 
@@ -3369,7 +3389,10 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         result = f" result ({block['result']})"
         if block['result'] not in argsl:
             argsl.append(block['result'])
-    body = crack2fortrangen(block['body'], tab + tabchar, as_interface=as_interface)
+    body = block['body']
+    if as_interface:
+        body = _body_without_external_interfaces(block)
+    body = crack2fortrangen(body, tab + tabchar, as_interface=as_interface)
     vars = vars2fortran(
         block, block['vars'], argsl, tab + tabchar, as_interface=as_interface)
     mess = ''
