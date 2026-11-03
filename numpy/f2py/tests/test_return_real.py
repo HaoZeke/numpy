@@ -88,12 +88,12 @@ interface
     real*8 intent(c) :: value
   end
   function t16(value)
-    real*16 intent(c) :: t16,value
+    real(kind=c_long_double) intent(c) :: t16,value
   end
   subroutine s16(t16,value)
     intent(c) s16
-    real*16 intent(out) :: t16
-    real*16 intent(c) :: value
+    real(kind=c_long_double) intent(out) :: t16
+    real(kind=c_long_double) intent(c) :: value
   end
 end interface
 end python module c_ext_return_real
