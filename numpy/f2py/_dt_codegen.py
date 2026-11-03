@@ -678,6 +678,11 @@ static int
     return '\n'.join(funcs) + '\n' + getset_array
 
 
+# One extra byte so a Fortran character value can be stored as a C string.
+# C99 7.1.1 requires the terminating NUL, which the Fortran length does not count.
+_C_STRING_NUL = 1
+
+
 def _gen_repr_return(typename, fmt_str, args):
     """Return the C statements that return the repr of a type instance.
 
@@ -692,11 +697,11 @@ def _gen_repr_return(typename, fmt_str, args):
         PyErr_SetString(PyExc_ValueError, "cannot format {typename}");
         return NULL;
     }}
-    char *f2py_buf = PyMem_Malloc((size_t)f2py_len + 1);
+    char *f2py_buf = PyMem_Malloc((size_t)f2py_len + {_C_STRING_NUL});
     if (f2py_buf == NULL) {{
         return PyErr_NoMemory();
     }}
-    snprintf(f2py_buf, (size_t)f2py_len + 1, {fmt}{args});
+    snprintf(f2py_buf, (size_t)f2py_len + {_C_STRING_NUL}, {fmt}{args});
     PyObject *f2py_repr = PyUnicode_FromStringAndSize(f2py_buf, f2py_len);
     PyMem_Free(f2py_buf);
     return f2py_repr;"""
@@ -2012,8 +2017,8 @@ static PyObject *
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
-    char buf[{char_len + 1}];
-    memset(buf, 0, {char_len + 1});
+    char buf[{char_len + _C_STRING_NUL}];
+    memset(buf, 0, {char_len + _C_STRING_NUL});
     f2py_get_{sym}_{mname}(ptr, buf, {char_len});
     /* Trim trailing spaces */
     int len = {char_len};
@@ -2315,7 +2320,7 @@ static PyObject *
     /* Query runtime length (F2018 16.9.109 len()) */
     int str_length = f2py_get_{sym}_{mname}_len(ptr);
     if (str_length <= 0) return PyUnicode_FromString("");
-    char *buffer = (char *)malloc(str_length + 1);
+    char *buffer = (char *)malloc(str_length + {_C_STRING_NUL});
     if (buffer == NULL) return PyErr_NoMemory();
     f2py_get_{sym}_{mname}(ptr, buffer, str_length);
     buffer[str_length] = '\\0';
