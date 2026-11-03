@@ -2714,6 +2714,20 @@ class _Character(str):
         return self
 
 
+class _Unknown:
+    """A name of known type and kind but unknown value, such as a variable,
+    which only inquiries take."""
+
+    __slots__ = ('typespec', 'kind')
+
+    def __init__(self, typespec, kind):
+        self.typespec = typespec
+        self.kind = kind
+
+    def __bool__(self):
+        raise TypeError('the value is not known')
+
+
 _value_types = {_Integer: 'integer', _Real: 'real', _Logical: 'logical',
                 _Character: 'character'}
 _numeric_types = ('integer', 'real')
@@ -3175,7 +3189,10 @@ class _Names(collections.abc.Mapping):
 
     def __getitem__(self, name):
         for m in self.maps:
-            if name in m:
+            # text is a value that f2py could not evaluate, and a later map
+            # may know at least its type
+            if name in m and (not isinstance(m[name], str)
+                              or isinstance(m[name], _Character)):
                 return _typed(m[name])
         raise KeyError(name)
 
@@ -3314,11 +3331,29 @@ def _size(array, dim=None, kind=None):
     return _integer(n, _kind_arg(kind, 'integer'))
 
 
+def _inquired(x):
+    # the type and kind of a value, an array or a name of unknown value
+    if isinstance(x, _Unknown):
+        return x.typespec, x.kind
+    return _type_kind(x)
+
+
 def _kind_func(x):
-    kind = _type_kind(x)[1]
+    kind = _inquired(x)[1]
     if kind is None:
         raise TypeError(f'f2py does not know the kind of {x!r}')
-    return _Integer(kind, _default_kinds['integer'])
+    return _default_integer(kind)
+
+
+def _inquiry(typespecs, result):
+    """Return an inquiry function of the model numbers of a kind, which
+    takes a value, an array or a name of one of typespecs."""
+    def inquiry(x):
+        typespec, kind = _inquired(x)
+        if typespec not in typespecs or kind is None:
+            raise TypeError(f'the {typespec} of kind {kind} has no such model')
+        return result(typespec, kind, *_model(typespec, kind))
+    return inquiry
 
 
 # Fortran intrinsics by the Fortran names of their arguments, so that keyword
@@ -3363,6 +3398,30 @@ _intrinsics = {
     'selected_int_kind': _selected_int_kind_func,
     'selected_real_kind': _selected_real_kind_func,
     'selected_char_kind': _selected_char_kind_func,
+    # the model numbers of 16.4 with radix b, digits q or p and exponents
+    # emin to emax, as 16.9 defines these inquiries of them
+    'bit_size': _inquiry(('integer',), lambda t, k, b, q, emin, emax:
+                         _integer(q + 1, k)),
+    'digits': _inquiry(('integer', 'real'), lambda t, k, b, p, emin, emax:
+                       _default_integer(p)),
+    'epsilon': _inquiry(('real',), lambda t, k, b, p, emin, emax:
+                        _Real(Fraction(b) ** (1 - p), k)),
+    'huge': _inquiry(('integer', 'real'), lambda t, k, b, p, emin, emax:
+                     (_integer if t == 'integer' else _Real)(
+                         _huge_number(t, k), k)),
+    'maxexponent': _inquiry(('real',), lambda t, k, b, p, emin, emax:
+                            _default_integer(emax)),
+    'minexponent': _inquiry(('real',), lambda t, k, b, p, emin, emax:
+                            _default_integer(emin)),
+    'precision': _inquiry(('real', 'complex'), lambda t, k, b, p, emin, emax:
+                          _default_integer(_precision(k))),
+    'radix': _inquiry(('integer', 'real'), lambda t, k, b, p, emin, emax:
+                      _default_integer(b)),
+    'range': _inquiry(('integer', 'real', 'complex'),
+                      lambda t, k, b, p, emin, emax:
+                      _default_integer(_range(t, k))),
+    'tiny': _inquiry(('real',), lambda t, k, b, p, emin, emax:
+                     _Real(Fraction(b) ** (emin - 1), k)),
 }
 
 
@@ -3434,9 +3493,33 @@ def _assign(value, typespec, kind):
         return value
 
 
+class _Declarations(collections.abc.Mapping):
+    """The names declared in a block as names of unknown value, whose type
+    and kind are known for inquiries such as huge(i).  A name of a type or
+    procedure has no type declared."""
+
+    def __init__(self, vars, params):
+        self.vars, self.params = vars, params
+
+    def __getitem__(self, name):
+        if name not in self.vars:
+            raise KeyError(name)
+        typespec, kind = _declared_type(name, self.vars[name], self.params)
+        if typespec is None:
+            raise KeyError(name)
+        return _Unknown(typespec, kind)
+
+    def __iter__(self):
+        return iter(self.vars)
+
+    def __len__(self):
+        return len(self.vars)
+
+
 def get_parameters(vars, global_params={}, implicitrules=None):
     params = copy.copy(global_params)
-    g_params = copy.copy(global_params)
+    g_params = collections.ChainMap(global_params,
+                                    _Declarations(vars, params))
     param_names = []
     for n in get_sorted_names(vars):
         if 'attrspec' in vars[n] and 'parameter' in vars[n]['attrspec']:
@@ -3494,14 +3577,15 @@ def get_parameters(vars, global_params={}, implicitrules=None):
     return params
 
 
-def _eval_dimension(d, params):
-    """Evaluate a dimension that is a constant integer expression.
+def _eval_dimension(d, params, declared={}):
+    """Evaluate a dimension, length or kind that is a constant integer
+    expression, in which an inquiry may ask about a declared variable.
 
     param_parse substitutes parameters and leaves the arithmetic to
     symbolic, which knows no intrinsics and folds 2 * (n / 2) to n.
     """
     try:
-        value = _fortran_eval(d, {}, params)
+        value = _fortran_eval(d, declared, params)
     except Exception:
         return d
     return str(value) if isinstance(value, int) else d
@@ -3573,6 +3657,7 @@ def analyzevars(block):
 
     use_params = get_useparameters(block)
     params = get_parameters(vars, use_params, implicitrules)
+    declared = _Declarations(vars, params)
     if block['block'] == 'module':
         # kept for get_useparameters, as the analysis below reduces the
         # dimensions of arrays to their sizes
@@ -3610,12 +3695,8 @@ def analyzevars(block):
                             f"in routine {block['name']}.\n")
         if 'charselector' in vars[n]:
             if 'len' in vars[n]['charselector']:
-                l = vars[n]['charselector']['len']
-                try:
-                    l = str(_fortran_eval(l, {}, params))
-                except Exception:
-                    pass
-                vars[n]['charselector']['len'] = l
+                vars[n]['charselector']['len'] = _eval_dimension(
+                    vars[n]['charselector']['len'], params, declared)
             # an assumed length parameter has the length of its value
             selector = vars[n]['charselector']
             key = 'len' if 'len' in selector else '*'
@@ -3628,12 +3709,8 @@ def analyzevars(block):
 
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
-                l = vars[n]['kindselector']['kind']
-                try:
-                    l = str(_fortran_eval(l, {}, params))
-                except Exception:
-                    pass
-                vars[n]['kindselector']['kind'] = l
+                vars[n]['kindselector']['kind'] = _eval_dimension(
+                    vars[n]['kindselector']['kind'], params, declared)
 
         dimension_exprs = {}
         if 'attrspec' in vars[n]:
@@ -3695,7 +3772,8 @@ def analyzevars(block):
                     try:
                         # the dimension for this variable depends on a
                         # previously defined parameter
-                        d = param_parse(_eval_dimension(d, params), params)
+                        d = param_parse(_eval_dimension(d, params, declared),
+                                        params)
                     except (ValueError, IndexError, KeyError):
                         outmess(
                             'analyzevars: could not parse dimension for '
@@ -4069,8 +4147,10 @@ def param_eval(v, g_params, params, dimspec=None):
         # now, dimrange is a list of 1 or 2 elements
         if len(dimrange) == 1:
             dimrange = ['1'] + dimrange
-        lbound = int(param_parse(_eval_dimension(dimrange[0], params), params))
-        ubound = param_parse(_eval_dimension(dimrange[1], params), params)
+        lbound = int(param_parse(
+            _eval_dimension(dimrange[0], params, g_params), params))
+        ubound = param_parse(_eval_dimension(dimrange[1], params, g_params),
+                             params)
         bounds.append((lbound, ubound.strip()))
     # an implied shape array has the shape of its value
     implied = any(ubound == '*' for _, ubound in bounds)

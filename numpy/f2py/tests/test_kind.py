@@ -1,6 +1,9 @@
 import platform
+import subprocess
 import sys
+import tempfile
 from fractions import Fraction
+from pathlib import Path
 
 import pytest
 
@@ -86,6 +89,69 @@ class TestParameterValues(util.F2PyTest):
         mod = self.module.parameter_values
         assert {n: _compiled(getattr(mod, n)) for n in params} == {
             n: _cracked(v) for n, v in params.items()}
+
+
+@pytest.mark.slow
+class TestInquiryParameters(util.F2PyTest):
+    # inquiries give the model numbers of the kinds of gfortran and flang
+    sources = [util.getpath("tests", "src", "kind", "inquiry.f90")]
+
+    def test_compiler_values(self):
+        crackfortran.crackfortran([str(self.sources[0])])
+        params = crackfortran.f90moduleparams["inquiry"]
+        mod = self.module.inquiry
+        assert {n: _compiled(getattr(mod, n)) for n in params} == {
+            n: _cracked(v) for n, v in params.items()}
+
+
+def _compiles(code):
+    # whether the Fortran compiler meson finds compiles code, which
+    # util.check_language does not tell
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "meson.build").write_text(
+            "project('probe', 'fortran')\n"
+            f"assert(meson.get_compiler('fortran').compiles('''{code}'''))\n")
+        try:
+            run = subprocess.run(["meson", "setup", "build"], cwd=d,
+                                 capture_output=True, check=False)
+        except OSError:
+            return False
+    return run.returncode == 0
+
+
+def _binary128(x):
+    # the two 64-bit words, low first, of a positive normal binary128
+    e = x.numerator.bit_length() - x.denominator.bit_length()
+    while x < Fraction(2) ** e:
+        e -= 1
+    while x >= Fraction(2) ** (e + 1):
+        e += 1
+    bits = (e + 16383) << 112 | int((x / Fraction(2) ** e - 1) * 2 ** 112)
+    return [w - 2 ** 64 if w >= 2 ** 63 else w
+            for w in (bits % 2 ** 64, bits >> 64)]
+
+
+@pytest.mark.slow
+class TestQuadInquiryParameters(util.F2PyTest):
+    # numpy has no binary128 on x86-64, so its bits are compared
+    sources = [util.getpath("tests", "src", "kind", "inquiry_quad.f90")]
+
+    @classmethod
+    def setup_class(cls):
+        if not _compiles("real(16) :: x\nend"):
+            pytest.skip("the Fortran compiler has no real(16)")
+        super().setup_class()
+
+    def test_compiler_values(self):
+        crackfortran.crackfortran([str(self.sources[0])])
+        params = crackfortran.f90moduleparams["inquiry_quad"]
+        mod = self.module.inquiry_quad
+        reals = ["huge_q", "tiny_q", "epsilon_q"]
+        assert {n: _compiled(getattr(mod, n)) for n in params
+                if n not in reals} == {
+            n: _cracked(v) for n, v in params.items() if n not in reals}
+        bits = [b.tolist() for b in mod.bits()]
+        assert bits == [_binary128(params[n].value) for n in reals]
 
 
 @pytest.mark.slow
