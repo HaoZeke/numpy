@@ -42,7 +42,12 @@ iso_c_binding_map = {
     'complex': {
         'c_float_complex': 'complex_float',
         'c_double_complex': 'complex_double',
-        'c_long_double_complex': 'complex_long_double'
+        'c_long_double_complex': 'complex_long_double',
+        # C_FLOAT_COMPLEX, C_DOUBLE_COMPLEX and C_LONG_DOUBLE_COMPLEX equal
+        # C_FLOAT, C_DOUBLE and C_LONG_DOUBLE (Fortran 2018, 18.2.2)
+        'c_float': 'complex_float',
+        'c_double': 'complex_double',
+        'c_long_double': 'complex_long_double'
     },
     'logical': {
         'c_bool': 'unsigned_char'  # _Bool <=> 'unsigned_char' for now
