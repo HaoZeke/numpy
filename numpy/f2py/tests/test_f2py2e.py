@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from numpy.f2py._backends._meson import MesonBackend
 from numpy.f2py.f2py2e import get_newer_options, main as f2pycli, preparse_sysargv
 from numpy.testing._private.utils import NOGIL_BUILD
 
@@ -26,6 +27,22 @@ def compiler_check_f2pycli():
         pytest.skip("CLI command needs a Fortran compiler")
     else:
         f2pycli()
+
+
+def cli_meson_build(monkeypatch, tmp_path, fsrc, *flags):
+    """Run ``f2py -c`` with `flags` up to writing meson.build and return it
+
+    meson itself is not run, so no compilers are needed.
+    """
+    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
+    bdir = tmp_path / "bld"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["f2py", "-c", str(fsrc), "-m", "blah", "--build-dir", str(bdir), *flags],
+    )
+    with util.switchdir(tmp_path):
+        f2pycli()
+    return (bdir / "meson.build").read_text()
 
 #########################
 # CLI utils and classes #
@@ -993,12 +1010,19 @@ def test_npd_noarch():
     pass
 
 
-def test_npd_debug():
+def test_npd_debug(hello_world_f90, monkeypatch, tmp_path):
     """
     CLI :: -c --debug
     """
-    # TODO: populate
-    pass
+    meson_build = cli_meson_build(monkeypatch, tmp_path, hello_world_f90)
+    assert "buildtype=release" in meson_build
+    meson_build = cli_meson_build(monkeypatch, tmp_path, hello_world_f90, "--debug")
+    assert "buildtype=debug" in meson_build
+    # Compiler flags which merely mention "debug" keep the release build type
+    meson_build = cli_meson_build(
+        monkeypatch, tmp_path, hello_world_f90, "--f90flags=-fdebug-prefix-map=/a=/b"
+    )
+    assert "buildtype=release" in meson_build
 
 
 def test_npd_link_auto():

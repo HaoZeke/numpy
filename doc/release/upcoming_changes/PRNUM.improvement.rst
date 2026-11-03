@@ -2,3 +2,6 @@
 ----------------------------------------------------
 * ``f2py -c`` no longer prints a message about the removed ``distutils``
   backend when ``--backend`` is not given.
+* ``--debug`` builds the extension module with meson's ``debug`` build type
+  again. Compiler flags passed with ``--f77flags`` or ``--f90flags`` no longer
+  switch the build type to ``debug`` when they contain the word "debug".
