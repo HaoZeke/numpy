@@ -118,7 +118,7 @@ def get_include():
 
         # Or rely on pkg-config:
         $ export PKG_CONFIG_PATH=$(numpy-config --pkgconfigdir)
-        $ pkg-config --cflags
+        $ pkg-config --cflags numpy
         -I/path/to/site-packages/numpy/_core/include
 
     Examples
