@@ -119,3 +119,14 @@ class TestParameters(util.F2PyTest):
     def test_constant_array_delims(self):
         x = self.module.foo_array_delims()
         assert x == 9
+
+
+@pytest.mark.slow
+class TestParameterStatements(util.F2PyTest):
+    # sizes from parameter statements are those the compiler gives them
+    sources = [util.getpath("tests", "src", "parameter", "statements.f")]
+
+    def test_sizes(self):
+        a, b, c = self.module.fill()
+        assert [a.tolist(), b.tolist(), c.tolist()] == [[3] * 3, [5] * 5,
+                                                        [4] * 4]
