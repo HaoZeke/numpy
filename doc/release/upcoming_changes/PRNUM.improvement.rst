@@ -8,3 +8,9 @@ GCC 14 and later, refused to build.
 The lengths of character arguments and character function results are
 now ``npy_intp`` in the generated wrappers and their helpers. Strings
 longer than the largest C ``int`` no longer raise ``OverflowError``.
+
+Callback wrappers receive the hidden lengths of character arguments and
+results as ``npy_intp``, the width that gfortran 8 and later and LLVM
+flang pass. A callback that returns a character value now builds with
+GCC 14 and later, and passes its result length rather than the address
+of that length when the callback is a ``PyCapsule``.

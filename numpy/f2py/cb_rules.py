@@ -252,10 +252,10 @@ cb_rout_rules = [
         '_check': l_and(isfunction, l_not(isstringfunction), l_not(iscomplexfunction))
     },
     {  # String function
-        'pyobjfrom': {debugcapi: '    fprintf(stderr,"debug-capi:cb:#name#:%d:\\n",return_value_len);'},
-        'args': '#ctype# return_value,int return_value_len',
-        'args_nm': 'return_value,&return_value_len',
-        'args_td': '#ctype# ,int',
+        'pyobjfrom': {debugcapi: '    fprintf(stderr,"debug-capi:cb:#name#:%" NPY_INTP_FMT ":\\n",return_value_len);'},
+        'args': '#ctype# return_value,npy_intp return_value_len',
+        'args_nm': 'return_value,return_value_len',
+        'args_td': '#ctype# ,npy_intp',
         'frompyobj': [
             {debugcapi: '    CFUNCSMESS("cb:Getting return_value->\\"");'},
             """\
@@ -376,8 +376,8 @@ cb_arg_rules = [
         },
         'need': {l_or(isscalar, isarray, isstring): '#ctype#'},
         # untested with multiple args
-        'strarglens': {isstring: ',int #varname_i#_cb_len'},
-        'strarglens_td': {isstring: ',int'},  # untested with multiple args
+        'strarglens': {isstring: ',npy_intp #varname_i#_cb_len'},
+        'strarglens_td': {isstring: ',npy_intp'},  # untested with multiple args
         # untested with multiple args
         'strarglens_nm': {isstring: ',#varname_i#_cb_len'},
     },
@@ -420,7 +420,7 @@ cb_arg_rules = [
                       """    if (capi_j>capi_i)
         GETSTRFROMPYTUPLE(capi_return,capi_i++,#varname_i#,#varname_i#_cb_len);""",
                       {debugcapi:
-                       '    fprintf(stderr,"#showvalueformat#\\":%d:.\\n",#varname_i#,#varname_i#_cb_len);'},
+                       '    fprintf(stderr,"#showvalueformat#\\":%" NPY_INTP_FMT ":.\\n",#varname_i#,#varname_i#_cb_len);'},
                       ],
         'need': ['#ctype#', 'GETSTRFROMPYTUPLE',
                  {debugcapi: 'CFUNCSMESS'}, 'string.h'],
@@ -429,7 +429,7 @@ cb_arg_rules = [
         'pyobjfrom': [
             {debugcapi:
              ('    fprintf(stderr,"debug-capi:cb:#varname#=#showvalueformat#:'
-              '%d:\\n",#varname_i#,#varname_i#_cb_len);')},
+              '%" NPY_INTP_FMT ":\\n",#varname_i#,#varname_i#_cb_len);')},
             {isintent_in: """\
     if (cb->nofargs>capi_i)
         if (CAPI_ARGLIST_SETITEM(capi_i++,pyobj_from_#ctype#1size(#varname_i#,#varname_i#_cb_len)))

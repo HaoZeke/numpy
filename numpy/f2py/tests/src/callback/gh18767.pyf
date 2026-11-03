@@ -3,6 +3,9 @@ python module __user__routines
         subroutine cb(t)
             character*(*), intent(inout) :: t
         end subroutine cb
+        function string_function() result(rv)
+            character*5 :: rv
+        end function string_function
     end interface
 end python module __user__routines
 
@@ -13,5 +16,13 @@ python module gh18767_callback
             external cb
             character*(*), intent(inout) :: s
         end subroutine call_cb
+        subroutine call_string_function(cb, r)
+            use __user__routines, cb=>string_function
+            external cb
+            character*5, intent(out) :: r
+        end subroutine call_string_function
+        function hello() result(s)
+            character*5 :: s
+        end function hello
     end interface
 end python module gh18767_callback
