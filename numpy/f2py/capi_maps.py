@@ -726,7 +726,9 @@ def cb_routsign2map(rout, um):
         else:
             F_FUNC = 'F_FUNC'
         ret['callbackname'] = f"{F_FUNC}({rout['name'].lower()},{rout['name'].upper()})"
-        ret['static'] = 'extern'
+        # Fortran code calls this by name and may live in a separate shared
+        # library, so it stays exported under -fvisibility=hidden builds
+        ret['static'] = 'extern Py_EXPORTED_SYMBOL'
     else:
         ret['callbackname'] = ret['name']
         ret['static'] = 'static'
