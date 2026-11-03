@@ -186,6 +186,28 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\n1foo =" not in meson_build
 
 
+def test_meson_include_dirs_come_from_running_numpy():
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = MesonTemplate(
+        modulename="Blah",
+        sources=[Path("f90continuation.f90")],
+        deps=[],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=[],
+        build_type="debug",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+
+    mparser.Parser(meson_build, "meson.build").parse()
+    assert f"incdir_numpy = '''{np.get_include()}'''" in meson_build
+    assert f"incdir_f2py = '''{np.f2py.get_include()}'''" in meson_build
+    assert "run_command" not in meson_build
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():

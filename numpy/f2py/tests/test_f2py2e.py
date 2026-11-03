@@ -4,6 +4,7 @@ import re
 import shlex
 import subprocess
 import sys
+import sysconfig
 import textwrap
 from collections import namedtuple
 from pathlib import Path
@@ -712,6 +713,30 @@ def test_cli_obj(capfd, hello_world_f90, monkeypatch):
             mbld = mesonbuild.read()
             assert "objects:" in mbld
             assert f"'''{obj}'''" in mbld
+
+
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
+def test_meson_build_dir_beside_numpy_dir(hello_world_f90, monkeypatch, tmp_path):
+    """A ``numpy`` directory next to the build directory is not imported
+
+    The generated meson.build used to import numpy from the parent of the
+    build directory, so e.g. a ``/tmp/numpy`` checkout broke every build in
+    the default temporary build directory.
+    """
+    ipath = Path(hello_world_f90)
+    decoy = tmp_path / "numpy"
+    decoy.mkdir()
+    (decoy / "__init__.py").write_text("raise ImportError('not numpy')\n")
+    odir = tmp_path / "bdir"
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    monkeypatch.setattr(sys, "argv",
+                        f'f2py --backend meson --build-dir {odir} -m blah -c {ipath}'.split())
+
+    with util.switchdir(outdir):
+        compiler_check_f2pycli()
+    assert (outdir / f"blah{sysconfig.get_config_var('EXT_SUFFIX')}").is_file()
 
 
 def test_inclpath(monkeypatch):
