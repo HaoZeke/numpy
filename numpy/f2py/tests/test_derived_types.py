@@ -6,8 +6,21 @@ import numpy as np
 import pytest
 
 from numpy.f2py import crackfortran, derived_type_rules
+from numpy.f2py.f2py2e import run_main
 
 from . import util
+
+
+def _generated(tmp_path, fpath, name="m"):
+    """Return the C module and the Fortran 90 wrappers f2py writes."""
+    # without -h, run_main would leave crackfortran not lowering case
+    run_main(["-m", name, "--lower", "--build-dir", str(tmp_path),
+              str(fpath)])
+    wrappers = tmp_path / f"{name}-f2pywrappers2.f90"
+    # join the lines f2py continues
+    return ((tmp_path / f"{name}module.c").read_text(),
+            wrappers.read_text().replace("&\n     &", "")
+            if wrappers.exists() else "")
 
 
 class TestDerivedTypeCodeGeneration:
@@ -67,9 +80,10 @@ class TestDerivedTypeCodeGeneration:
 
         init_code = '\n'.join(hooks['initf90modhooks'])
         assert 'PyType_Ready(&Pycartesian_Type)' in init_code
-        assert 'PyModule_AddObject(m, "cartesian"' in init_code
+        assert 'PyModule_AddObjectRef(m, "cartesian"' in init_code
+        assert 'PyObject_SetAttrString(fmod, "cartesian"' in init_code
         assert 'PyType_Ready(&Pypoint_Type)' in init_code
-        assert 'PyModule_AddObject(m, "point"' in init_code
+        assert 'PyModule_AddObjectRef(m, "point"' in init_code
 
     def test_repr_generation(self):
         fpath = util.getpath("tests", "src", "derived_types",
@@ -487,51 +501,38 @@ class TestTypeAsArgCodeGen:
                 if b.get('name') == 'particle_distance':
                     assert derived_type_rules._has_derived_type_args(b)
 
-    def test_routine_wrapper_generated(self):
+    def test_routine_wrapper_generated(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_as_arg.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        hooks = derived_type_rules.buildhooks(mod[0])
-        # Should have: type wrapper + routine wrappers + method table
-        all_code = '\n'.join(hooks['f90modhooks'])
-        assert 'f2py_routine_translate_particle' in all_code
-        assert 'f2py_routine_particle_distance' in all_code
-        assert 'f2py_routine_make_particle' in all_code
-        assert 'f2py_routine_create_particle' in all_code
-        assert 'f2py_type_arg_mod_derived_methods' in all_code
-
-    def test_function_returning_type_generated(self):
+        cmod, _ = _generated(tmp_path, fpath)
+        # Routines are wrapped like the others of the module, with the
+        # derived type arguments as handles
+        for name in ('translate_particle', 'particle_distance',
+                     'make_particle', 'create_particle'):
+            assert f'f2py_rout_m_type_arg_mod_{name}' in cmod
+            assert f'{{"{name}",-1,' in cmod
+        assert 'f2py_dt_from_pyobj(&p, &p_tag' in cmod
+    def test_function_returning_type_generated(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_as_arg.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        hooks = derived_type_rules.buildhooks(mod[0])
-        all_code = '\n'.join(hooks['f90modhooks'])
-        # Function returning type should have void* extern
-        assert 'extern void *' in all_code
-        assert 'f2py_wrap_create_particle' in all_code
-        # Should wrap result in capsule
-        assert 'f2py_routine_create_particle' in all_code
-        assert 'PyCapsule_New' in all_code
-
-    def test_fortran_wrappers_for_routines(self):
+        cmod, wrappers = _generated(tmp_path, fpath)
+        # The result is a handle of a new object, which a new instance
+        # owns
+        assert 'type(c_ptr) create_particlef2pywrap' in wrappers
+        assert 'allocate(f2py_create_particlef2pywrap)' in wrappers
+        assert ('create_particlef2pywrap = '
+                'c_loc(f2py_create_particlef2pywrap)') in wrappers
+        assert 'f2py_dt_to_pyobj(create_particlef2pywrap' in cmod
+    def test_fortran_wrappers_for_routines(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_as_arg.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        from numpy.f2py.f90mod_rules import findf90modules
-        for m in findf90modules(mod[0]):
-            type_blocks = derived_type_rules._find_derived_types(m)
-            routines = [b for b in m.get('body', [])
-                        if b.get('block') in ('subroutine', 'function')]
-            src = derived_type_rules.generate_fortran_wrappers(
-                m['name'], type_blocks, routines=routines)
-        assert src is not None
-        assert 'f2py_wrap_translate_particle' in src
-        assert 'f2py_wrap_particle_distance' in src
-        assert 'f2py_wrap_create_particle' in src
-        assert 'c_f_pointer' in src
-        # Function returning type should allocate temp and use c_loc
-        assert 'f2py_temp_result' in src
-        assert 'c_loc(f2py_temp_result)' in src
+        _, wrappers = _generated(tmp_path, fpath)
+        for name in ('translate_particle', 'particle_distance',
+                     'create_particle'):
+            assert f'subroutine f2pywrap_type_arg_mod_{name}' in wrappers
+        assert 'type(c_ptr) p' in wrappers
+        assert 'call c_f_pointer(p, f2py_p)' in wrappers
+        assert 'call translate_particle(f2py_p, dx, dy, dz)' in wrappers
 
 
 @pytest.mark.slow
@@ -594,6 +595,49 @@ class TestTypeAsArg(util.F2PyTest):
         p = self.module.create_particle(1.0, 2.0, 3.0, 10.0)
         self.module.translate_particle(p, 0.5, 0.5, 0.5)
         assert abs(p.x - 1.5) < 1e-6
+
+
+@pytest.mark.slow
+class TestRoutineArguments(util.F2PyTest):
+    # derived type arguments pass with arguments of every other kind,
+    # which f2py converts as for any routine
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "routine_args.f90")]
+
+    def test_arrays_strings_and_optional(self):
+        mod = self.module.routine_args
+        acc = mod.account(id=1)
+        amounts = np.array([1.0, 2.5])
+        mod.deposit(acc, amounts, "ann")
+        assert acc.balance == 3.5
+        assert acc.owner == "ann"
+        np.testing.assert_array_equal(amounts, [0.0, 0.0])
+        mod.deposit(acc, np.array([1.0]), "bob", fee=0.5)
+        assert acc.balance == 4.0
+        assert acc.owner == "bob"
+
+    def test_assumed_shape_and_dependent_extent(self):
+        mod = self.module.routine_args
+        accounts = [mod.account(balance=1.0), mod.account(balance=2.0)]
+        assert mod.total(accounts, [10.0, 100.0]) == 210.0
+
+    def test_intent_out(self):
+        acc = self.module.routine_args.open_account(7)
+        assert (acc.id, acc.balance) == (7, 1.0)
+
+    def test_callback(self):
+        mod = self.module.routine_args
+        acc = mod.account(balance=4.0)
+        mod.apply(acc, lambda b: 3 * b)
+        assert acc.balance == 12.0
+        assert mod.interest(acc, 0.5) == 6.0
+
+    def test_module_attributes(self):
+        # the routines and types are attributes of their Fortran module,
+        # and of the extension module as before
+        mod = self.module.routine_args
+        assert self.module.deposit is mod.deposit
+        assert self.module.account is mod.account
 
 
 class TestTypeBoundProcCodeGen:
@@ -1628,43 +1672,26 @@ class TestTypeArrayArgCodeGen:
         # Should generate the Atom type
         assert 'PyatomObject' in code
 
-    def test_routine_wrapper_generated(self):
+    def test_routine_wrapper_generated(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_array_arg.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        hooks = derived_type_rules.buildhooks(mod[0])
-        code = '\n'.join(hooks['f90modhooks'])
+        cmod, _ = _generated(tmp_path, fpath)
         # Should generate wrappers for routines with array-of-type args
-        assert 'f2py_routine_sum_positions' in code
-        assert 'f2py_routine_count_element' in code
-
-    def test_list_extraction_code(self):
+        assert 'f2py_rout_m_type_array_arg_mod_sum_positions' in cmod
+        assert 'f2py_rout_m_type_array_arg_mod_count_element' in cmod
+    def test_list_extraction_code(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_array_arg.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        hooks = derived_type_rules.buildhooks(mod[0])
-        code = '\n'.join(hooks['f90modhooks'])
-        # Should check for list type and extract capsule pointers
-        assert 'PyList_Check' in code
-        assert 'atoms_ptrs' in code
-
-    def test_fortran_wrapper_generated(self):
+        cmod, _ = _generated(tmp_path, fpath)
+        # The sequence of instances becomes an array of handles
+        assert 'f2py_dt_handles_from_pyobj(atoms_capi' in cmod
+    def test_fortran_wrapper_generated(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_array_arg.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        module = mod[0]
-        type_blocks = [b for b in module['body']
-                       if b.get('block') == 'type']
-        routines = [b for b in module['body']
-                    if b.get('block') in ('subroutine', 'function')]
-        fortran = derived_type_rules.generate_fortran_wrappers(
-            module['name'], type_blocks, routines=routines,
-            module_block=module)
+        _, wrappers = _generated(tmp_path, fpath)
         # Fortran wrapper should accept c_ptr array
-        assert fortran is not None
-        assert 'atoms_ptrs' in fortran
-        assert 'atoms_n' in fortran
-        assert 'c_f_pointer' in fortran
+        assert 'type(c_ptr) atoms(n)' in wrappers
+        assert 'call c_f_pointer(atoms(f2py_atoms_i1), f2py_atoms_e)' in wrappers
 
 
 @pytest.mark.slow
@@ -1729,32 +1756,22 @@ class TestTypeArrayArgOpaque(util.F2PyTest):
 class TestAssumedShapeCodeGen:
     """Test code generation for assumed-shape array-of-type arguments."""
 
-    def test_no_invalid_c_for_colon_dim(self):
+    def test_no_invalid_c_for_colon_dim(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_assumed_shape_arg.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        hooks = derived_type_rules.buildhooks(mod[0])
-        all_code = '\n'.join(hooks['f90modhooks'])
+        cmod, _ = _generated(tmp_path, fpath)
         # Should generate wrapper for sum_vectors
-        assert 'f2py_routine_sum_vectors' in all_code
+        assert 'f2py_rout_m_type_assumed_shape_mod_sum_vectors' in cmod
         # Should NOT have `: =` (invalid C from assumed-shape dim)
-        assert ': =' not in all_code
-
-    def test_fortran_wrapper_for_assumed_shape(self):
+        assert ': =' not in cmod
+    def test_fortran_wrapper_for_assumed_shape(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_assumed_shape_arg.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        from numpy.f2py.f90mod_rules import findf90modules
-        for m in findf90modules(mod[0]):
-            type_blocks = derived_type_rules._find_derived_types(m)
-            routines = [b for b in m.get('body', [])
-                        if b.get('block') in ('subroutine', 'function')]
-            src = derived_type_rules.generate_fortran_wrappers(
-                m['name'], type_blocks, routines=routines)
-        assert src is not None
-        assert 'f2py_wrap_sum_vectors' in src
-        assert 'vecs_ptrs' in src
-        assert 'vecs_n' in src
+        _, wrappers = _generated(tmp_path, fpath)
+        # the extent of the handles comes from the sequence
+        assert ('subroutine f2pywrap_type_assumed_shape_mod_sum_vectors '
+                '(vecs, total_x, total_y, total_z, f2py_vecs_d0)') in wrappers
+        assert 'type(c_ptr) vecs(f2py_vecs_d0)' in wrappers
 
 
 @pytest.mark.slow
@@ -2223,6 +2240,67 @@ class TestHostParameters(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestBoundWithArrays(util.F2PyTest):
+    """Type-bound procedures in a module with array arguments."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "tbp_with_arrays.f90")]
+
+    def test_methods(self):
+        c = self.module.counter()
+        c.add(2)
+        assert c.n == 2
+        assert self.module.tbp_with_arrays.total([1, 2, 3]) == 6
+
+
+@pytest.mark.slow
+class TestStorageArguments(util.F2PyTest):
+    """Allocatable and pointer dummies and results of derived type."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "storage_args.f90")]
+
+    def test_allocatable_scalars(self):
+        x = self.module.make(4)
+        assert x.n == 4
+        assert self.module.make(0) is None
+        self.module.bump(x)
+        assert x.n == 5
+        self.module.bump(None)
+
+    def test_pointer_scalars(self):
+        p = self.module.pick(2)
+        assert p.n == 20
+        assert self.module.pick(0) is None
+        assert self.module.look(p) == 20
+        assert self.module.look(None) == -1
+        assert self.module.at(0) is None
+        # instances own copies, so the module variable outlives them
+        del p
+        assert self.module.at(2).n == 20
+
+    def test_bindc_pointer(self):
+        p = self.module.pick_pair(1)
+        assert (p.a, p.b) == (1, -1)
+        assert self.module.pick_pair(0) is None
+
+    def test_arrays(self):
+        v = [self.module.item(n=1), self.module.item(n=2)]
+        self.module.grow(v, 3)
+        assert [o.n for o in v] == [4, 5]
+        # a new shape is not copied back
+        self.module.regrow(v)
+        assert [o.n for o in v] == [4, 5]
+        assert self.module.total(v) == 9
+
+    def test_polymorphic(self):
+        t = self.module.tagged(tag=1)
+        assert self.module.kind_of(self.module.item()) == 1
+        assert self.module.kind_of(t) == 2
+        assert self.module.kind_of(None) == 0
+        self.module.retag(t)
+        assert t.tag == 2
+
+
+@pytest.mark.slow
 class TestPrivateComponents(util.F2PyTest):
     """PRIVATE components get no accessors (F2018 7.5.4.8)."""
     sources = [util.getpath("tests", "src", "derived_types",
@@ -2565,58 +2643,35 @@ class TestPointerInitCodeGen:
 class TestIntentOutTypeArrayCodeGen:
     """Test code generation for intent(out) allocatable arrays of types."""
 
-    def test_wrapper_generated(self):
+    def test_wrapper_generated(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "intent_out_type_array.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        hooks = derived_type_rules.buildhooks(mod[0])
-        all_code = '\n'.join(hooks['f90modhooks'])
-        assert 'f2py_routine_make_sequence' in all_code
-
-    def test_output_array_wrapper_code(self):
+        cmod, _ = _generated(tmp_path, fpath)
+        assert 'f2py_rout_m_intent_out_type_array_mod_make_sequence' in cmod
+    def test_output_array_wrapper_code(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "intent_out_type_array.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        hooks = derived_type_rules.buildhooks(mod[0])
-        all_code = '\n'.join(hooks['f90modhooks'])
-        # Should have void** extern for the output array
-        assert 'void **' in all_code
-        # Should build a Python list from results
-        assert 'PyList_New' in all_code
-        assert 'PyList_SET_ITEM' in all_code
-
-    def test_fortran_wrapper_has_heap_alloc(self):
+        cmod, _ = _generated(tmp_path, fpath)
+        # Fortran gives a buffer of handles and the extent
+        assert 'f2py_dt_from_vector(results, 1, (npy_intp[]){f2py_results_n1}' in cmod
+        assert 'f2py_intent_out_type_array_mod_make_sequence_free_results' in cmod
+    def test_fortran_wrapper_has_heap_alloc(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "intent_out_type_array.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        from numpy.f2py.f90mod_rules import findf90modules
-        for m in findf90modules(mod[0]):
-            type_blocks = derived_type_rules._find_derived_types(m)
-            routines = [b for b in m.get('body', [])
-                        if b.get('block') in ('subroutine', 'function')]
-            src = derived_type_rules.generate_fortran_wrappers(
-                m['name'], type_blocks, routines=routines)
-        assert src is not None
-        assert 'f2py_wrap_make_sequence' in src
-        assert 'results_ptrs' in src
-        assert 'results_n' in src
+        _, wrappers = _generated(tmp_path, fpath)
+        assert 'subroutine f2pywrap_intent_out_type_array_mod_make_sequence' in wrappers
+        assert 'f2py_results_n1 = size(f2py_results, 1)' in wrappers
         # Heap allocation for each element
-        assert 'results_heap_tmp' in src
-        assert 'c_loc' in src
-
-    def test_out_args_not_in_kwlist(self):
+        assert 'allocate(f2py_results_e)' in wrappers
+        assert 'f2py_results_h(f2py_results_k) = c_loc(f2py_results_e)' in wrappers
+        assert ('subroutine f2py_intent_out_type_array_mod_make_sequence_'
+                'free_results(h, n) bind(c)') in wrappers
+    def test_out_args_not_in_kwlist(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "intent_out_type_array.f90")
-        mod = crackfortran.crackfortran([str(fpath)])
-        hooks = derived_type_rules.buildhooks(mod[0])
-        all_code = '\n'.join(hooks['f90modhooks'])
-        # nresults is intent(out), should not be in kwlist
-        assert '"nresults"' not in all_code
-        # results is intent(out) array, should not be in kwlist
-        assert '"results"' not in all_code
-        # start and count should be in kwlist
-        assert '"start"' in all_code
-        assert '"count"' in all_code
+        cmod, _ = _generated(tmp_path, fpath)
+        # start and count are the only arguments
+        assert 'static char *capi_kwlist[] = {"start","count",NULL};' in cmod
 
 
 @pytest.mark.slow

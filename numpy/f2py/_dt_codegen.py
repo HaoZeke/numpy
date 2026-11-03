@@ -8,12 +8,6 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 
-from .auxfuncs import (
-    hasbody,
-    isfunction,
-    isroutine,
-)
-
 from ._dt_helpers import (
     _C_TO_NPY_ENUM,
     _C_TO_PYFORMAT,
@@ -21,27 +15,29 @@ from ._dt_helpers import (
     _FORTRAN_ARITH_OPS,
     _FORTRAN_CMP_OPS,
     _PYOBJ_TO_C,
+    _coarray_as_local,
     _fortran_sym,
+    _get_alloc_ndim,
     _get_array_dims,
     _get_c_return_type,
     _get_char_len,
     _get_member_ctype,
     _get_member_isoc_type,
-    _get_alloc_ndim,
     _get_pointer_ndim,
     _is_allocatable_member,
     _is_array_member,
+    _is_char_member,
     _is_coarray_member,
-    _coarray_as_local,
+    _is_complex_member,
     _is_deferred_char_member,
     _is_len_sized_array,
     _is_pointer_member,
     _is_private_member,
-    _is_char_member,
-    _is_complex_member,
     _is_type_array_member,
     _is_type_member,
+    _routine_args,
 )
+from .auxfuncs import hasbody, isfunction, isroutine
 
 
 def _gen_array_from_any_helper():
@@ -114,12 +110,10 @@ def _gen_bindc_struct(typename, members):
 
 
 def _gen_pytype_struct(typename, has_kind=False, len_info=None):
-    """Generate the Python type object struct."""
-    kind_field = ''
-    if has_kind:
-        kind_field = (
-            f'\n    int kind_value;'
-            f'  /* KIND parameter value for dispatch */')
+    """Generate the Python type object struct.
+
+    It starts like f2py_dt_object, which routine arguments are read as.
+    """
     len_fields = ''
     if len_info:
         for li in len_info:
@@ -130,8 +124,9 @@ def _gen_pytype_struct(typename, has_kind=False, len_info=None):
     return f"""\
 typedef struct {{
     PyObject_HEAD
-    PyObject *capsule;  /* PyCapsule wrapping Fortran {typename} data */{kind_field}{len_fields}
+    PyObject *capsule;  /* PyCapsule wrapping Fortran {typename} data */
     int type_tag;  /* F2018 7.3.2.3: type discriminator for polymorphic dispatch */
+    int kind_value;  /* KIND parameter value for dispatch */{len_fields}
 }} Py{typename}Object;
 """
 
@@ -869,7 +864,7 @@ def _scan_operator_interfaces(module_block, typename, type_map):
             proc = routines[pname_lower]
 
             # Check if this procedure involves our type
-            args = proc.get('args', [])
+            args = _routine_args(proc)
             involves_type = False
             for argname in args:
                 var = proc['vars'].get(argname, {})
@@ -909,7 +904,7 @@ def _gen_operator_fortran_wrappers(typename, ops, type_map):
     lines = []
     for op_sym, proc_list in ops.items():
         for pname, proc, result_kind in proc_list:
-            args = proc.get('args', [])
+            args = _routine_args(proc)
             wrapper_name = f'f2py_op_{typename}_{pname}'
 
             if result_kind == 'type':
@@ -1021,7 +1016,7 @@ def _gen_operator_c_code(typename, ops, type_map):
     for op_sym, proc_list in ops.items():
         for pname, proc, result_kind in proc_list:
             wrapper_sym = f'f2py_op_{sym}_{pname}'
-            args = proc.get('args', [])
+            args = _routine_args(proc)
 
             if result_kind == 'type' and op_sym in _FORTRAN_ARITH_OPS:
                 result_var = proc['vars'].get(
@@ -1191,16 +1186,22 @@ static PyTypeObject Py{typename}_Type = {{
 
 
 def _gen_init_code(typename, modulename):
-    """Generate code for module init to register the type."""
+    """Generate code for module init to register the type.
+
+    The type is an attribute of the extension module and of the object
+    of its Fortran module.
+    """
     # Use lowercase for the Python-accessible attribute name to match
     # Fortran's case-insensitive convention
     pyname = typename.lower()
     return [
         '\t{',
+        f'\t\tPyObject *fmod = PyDict_GetItemString(d, "{modulename}");',
         f'\t\tif (PyType_Ready(&Py{typename}_Type) < 0) return -1;',
-        f'\t\tPy_INCREF(&Py{typename}_Type);',
-        f'\t\tPyModule_AddObject(m, "{pyname}", '
-        f'(PyObject *)&Py{typename}_Type);',
+        f'\t\tif (PyModule_AddObjectRef(m, "{pyname}", '
+        f'(PyObject *)&Py{typename}_Type) < 0) return -1;',
+        f'\t\tif (fmod != NULL && PyObject_SetAttrString(fmod, "{pyname}", '
+        f'(PyObject *)&Py{typename}_Type) < 0) return -1;',
         '\t}',
     ]
 
