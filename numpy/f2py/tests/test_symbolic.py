@@ -499,3 +499,11 @@ class TestSymbolic(util.F2PyTest):
         #gh - 30268
         with pytest.raises(ValueError, match=r"Mismatch of \(\) parenthesis"):
             Expr.parse("DATA (A, I=1, N", language=Language.Fortran)
+
+    def test_string_kind_gh28628(self):
+        assert str(as_string('"a+b*c"', 2)) == '2_"a+b*c"'
+        for kind in [1, 2, 4, "MYSTRKIND"]:
+            s = as_string('"ABC"', kind)
+            assert fromstring(str(s)) == s
+        assert fromstring('4_"ABC"') == as_string('"ABC"', 4)
+        assert fromstring('1_"ABC"') == as_string('"ABC"')

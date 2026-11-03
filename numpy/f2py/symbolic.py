@@ -293,7 +293,7 @@ class Expr:
         elif self.op is Op.STRING:
             r = self.data[0]
             if self.data[1] != 1:
-                r = self.data[1] + '_' + r
+                r = f'{self.data[1]}_{r}'
             precedence = Precedence.ATOM
         elif self.op is Op.ARRAY:
             r = ', '.join(item.tostring(Precedence.TUPLE, language=language)
@@ -1468,6 +1468,8 @@ class _FromStringWorker:
         # string-literal-constant with kind parameter specification
         if r in self.quotes_map:
             kind = r[:r.find('@')]
+            if kind and kind.isdigit():
+                kind = int(kind)
             return as_string(self.quotes_map[r], kind or 1)
 
         # array constructor or literal complex constant or
