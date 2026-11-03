@@ -11,3 +11,6 @@
 * ``--debug`` selects a debug build again. It used to be dropped, while any
   ``--f77flags`` or ``--f90flags`` value containing the word ``debug``
   selected a debug build instead.
+* Relative ``-I`` and ``-L`` directories and extra object files in other
+  directories are now found. They are resolved against the working directory,
+  as the rest of the command line is, instead of the build directory.
