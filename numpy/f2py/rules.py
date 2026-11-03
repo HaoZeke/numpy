@@ -91,6 +91,9 @@ from .auxfuncs import (
     isexternal,
     isfunction,
     isfunction_wrap,
+    ishalf,
+    ishalfarray,
+    ishalffunction,
     isint1,
     isint1array,
     isintent_aux,
@@ -126,10 +129,13 @@ from .auxfuncs import (
     isunsigned,
     isunsigned_char,
     isunsigned_chararray,
+    isunsigned_charfunction,
     isunsigned_long_long,
     isunsigned_long_longarray,
+    isunsigned_long_longfunction,
     isunsigned_short,
     isunsigned_shortarray,
+    isunsigned_shortfunction,
     l_and,
     l_not,
     l_or,
@@ -671,7 +677,7 @@ rout_rules = [
         },
         'decl': [{iscomplexfunction_warn: '    #ctype# #name#_return_value={0,0};',
                   l_not(iscomplexfunction): '    #ctype# #name#_return_value=0;'},
-                 {l_or(iscomplexfunction, islong_doublefunction):
+                 {l_or(iscomplexfunction, islong_doublefunction, ishalffunction):
                   '    PyObject *#name#_return_value_capi = Py_None;'}
                  ],
         'callfortranroutine': [
@@ -689,15 +695,20 @@ rout_rules = [
             {hasexternals: '    }'},
             {l_and(debugcapi, iscomplexfunction)
                    : '    fprintf(stderr,"#routdebugshowvalue#\\n",#name#_return_value.r,#name#_return_value.i);'},
-            {l_and(debugcapi, l_not(iscomplexfunction)): '    fprintf(stderr,"#routdebugshowvalue#\\n",#name#_return_value);'}],
-        'pyobjfrom': {l_or(iscomplexfunction, islong_doublefunction): '    #name#_return_value_capi = pyobj_from_#ctype#1(#name#_return_value);'},
+            {l_and(debugcapi, ishalffunction): '    fprintf(stderr,"#routdebugshowvalue#\\n",(double)#name#_return_value);'},
+            {l_and(debugcapi, l_not(l_or(iscomplexfunction, ishalffunction))): '    fprintf(stderr,"#routdebugshowvalue#\\n",#name#_return_value);'}],
+        'pyobjfrom': {l_or(iscomplexfunction, islong_doublefunction, ishalffunction): '    #name#_return_value_capi = pyobj_from_#ctype#1(#name#_return_value);'},
         'need': [{l_not(isdummyroutine): 'F_FUNC'},
-                 {l_or(iscomplexfunction, islong_doublefunction): 'pyobj_from_#ctype#1'},
+                 {l_or(iscomplexfunction, islong_doublefunction, ishalffunction): 'pyobj_from_#ctype#1'},
                  {islong_longfunction: 'long_long'},
-                 {islong_doublefunction: 'long_double'}],
+                 {islong_doublefunction: 'long_double'},
+                 {ishalffunction: 'float16'},
+                 {isunsigned_charfunction: 'unsigned_char'},
+                 {isunsigned_shortfunction: 'unsigned_short'},
+                 {isunsigned_long_longfunction: 'unsigned_long_long'}],
         'returnformat': {l_not(isintent_hide): '#rformat#'},
-        'return': {l_or(iscomplexfunction, islong_doublefunction): ',#name#_return_value_capi',
-                   l_not(l_or(iscomplexfunction, islong_doublefunction, isintent_hide)): ',#name#_return_value'},
+        'return': {l_or(iscomplexfunction, islong_doublefunction, ishalffunction): ',#name#_return_value_capi',
+                   l_not(l_or(iscomplexfunction, islong_doublefunction, ishalffunction, isintent_hide)): ',#name#_return_value'},
         '_check': l_and(isfunction, l_not(isstringfunction), l_not(isfunction_wrap))
     }, {  # String function # in use for --no-wrap
         'declfortranroutine': 'extern void #F_FUNC#(#fortranname#,#FORTRANNAME#)(#callprotoargument#);',
@@ -753,6 +764,7 @@ rout_rules = [
 
 typedef_need_dict = {islong_long: 'long_long',
                      islong_double: 'long_double',
+                     ishalf: 'float16',
                      islong_complex: 'complex_long_double',
                      isunsigned_char: 'unsigned_char',
                      isunsigned_short: 'unsigned_short',
@@ -763,6 +775,7 @@ typedef_need_dict = {islong_long: 'long_long',
                      isunsigned_long_longarray: 'unsigned_long_long',
                      issigned_long_longarray: 'long_long',
                      islong_doublearray: 'long_double',
+                     ishalfarray: 'float16',
                      isint1: 'signed_char',
                      ischaracter_or_characterarray: 'character',
                      }
@@ -1130,16 +1143,16 @@ if (#varname#_cb.capi==Py_None) {
     # Scalars (not complex)
     {  # Common
         'decl': '    #ctype# #varname# = 0;',
-        'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#);'},
+        'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#showvaluearg#);'},
         'callfortran': {l_or(isintent_c, isattr_value): '#varname#,', l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
-        'return': {l_and(isintent_out, l_not(islong_double)): ',#varname#'},
+        'return': {l_and(isintent_out, l_not(l_or(islong_double, ishalf))): ',#varname#'},
         '_check': l_and(isscalar, l_not(iscomplex))
-    }, {  # Py_BuildValue has no code for long double
+    }, {  # Py_BuildValue has no code for long double or _Float16
         'decl': {l_and(isintent_out, isintent_hide): '    PyObject *#varname#_capi = Py_None;'},
         'pyobjfrom': {isintent_out: '    #varname#_capi = pyobj_from_#ctype#1(#varname#);'},
         'need': {isintent_out: 'pyobj_from_#ctype#1'},
         'return': {isintent_out: ',#varname#_capi'},
-        '_check': islong_double
+        '_check': l_or(islong_double, ishalf)
     }, {
         'need': {hasinitvalue: 'math.h'},
         '_check': l_and(isscalar, l_not(iscomplex)),
@@ -1487,7 +1500,7 @@ check_rules = [
         'frompyobj': {debugcapi: '    fprintf(stderr,\"debug-capi:Checking `#check#\'\\n\");'},
         'need': 'len..'
     }, {
-        'frompyobj': '    CHECKSCALAR(#check#,\"#check#\",\"#nth# #varname#\",\"#varshowvalue#\",#varname#) {',
+        'frompyobj': '    CHECKSCALAR(#check#,\"#check#\",\"#nth# #varname#\",\"#varshowvalue#\",#showvaluearg#) {',
         'cleanupfrompyobj': '    } /*CHECKSCALAR(#check#)*/',
         'need': 'CHECKSCALAR',
         '_check': l_and(isscalar, l_not(iscomplex)),
