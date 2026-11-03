@@ -98,6 +98,7 @@ c2pycode_map = {'double': 'd',
 # https://docs.python.org/3/c-api/arg.html#building-values
 c2buildvalue_map = {'double': 'd',
                     'float': 'f',
+                    'long_double': 'd',
                     'char': 'b',
                     'signed_char': 'b',
                     'short': 'h',
@@ -109,6 +110,9 @@ c2buildvalue_map = {'double': 'd',
                     'complex_long_double': 'N',
                     'string': 'y',
                     'character': 'c'}
+
+# Py_BuildValue has no unit for long double: pass the double "d" reads.
+c2buildvalue_cast = {'long_double': '(double)'}
 
 f2cmap_all = {'real': {'': 'float', '4': 'float', '8': 'double',
                        '12': 'long_double', '16': 'long_double'},
@@ -483,7 +487,7 @@ def sign2map(a, var):
     varname,ctype,atype
     init,init.r,init.i,pytype
     vardebuginfo,vardebugshowvalue,varshowvalue
-    varrformat
+    varrformat,varrcast
 
     intent
     """
@@ -509,6 +513,7 @@ def sign2map(a, var):
         ret['varrformat'] = c2buildvalue_map[ret['ctype']]
     else:
         ret['varrformat'] = 'O'
+    ret['varrcast'] = c2buildvalue_cast.get(ret['ctype'], '')
     ret['init'], ret['showinit'] = getinit(a, var)
     if hasinitvalue(var) and iscomplex(var) and not isarray(var):
         ret['init.r'], ret['init.i'] = markoutercomma(
@@ -586,7 +591,7 @@ def sign2map(a, var):
 def routsign2map(rout):
     """
     name,NAME,begintitle,endtitle
-    rname,ctype,rformat
+    rname,ctype,rformat,rcast
     routdebugshowvalue
     """
     global lcb_map
@@ -645,6 +650,7 @@ def routsign2map(rout):
         else:
             ret['rformat'] = 'O'
             errmess(f"routsign2map: no c2buildvalue key for type {ret['ctype']!r}\n")
+        ret['rcast'] = c2buildvalue_cast.get(ret['ctype'], '')
         if debugcapi(rout):
             if ret['ctype'] in cformat_map:
                 ret['routdebugshowvalue'] = ("debug-capi:"

@@ -77,6 +77,12 @@ class TestReal16(util.F2PyTest):
             pytest.skip("Fortran compiler does not support REAL(KIND=16)")
         super().setup_method()
 
+    @pytest.mark.skipif(not LONGDOUBLE_HOLDS_REAL16,
+                        reason="long double lacks the REAL(KIND=16) format")
+    def test_real16_long_double(self):
+        assert self.module.f_get_pi() == np.pi
+        assert self.module.f_deg2rad(181.0) == pytest.approx(np.deg2rad(181.0))
+
     @pytest.mark.skipif(LONGDOUBLE_HOLDS_REAL16,
                         reason="long double has the REAL(KIND=16) format")
     def test_real16_unsupported(self):
