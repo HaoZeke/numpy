@@ -153,6 +153,16 @@ with the meson backend or above Python 3.12:
                        and remove them from argv, leaving a dependencies list
                        containing ["lapack", "scalapack"].
 
+  --cross-file         <filename>
+                       Pass <filename> to meson setup as a cross file, to build
+                       the module for another machine. This may be passed
+                       multiple times; later files override earlier ones.
+
+  --native-file        <filename>
+                       Pass <filename> to meson setup as a native file. This may
+                       be passed multiple times; later files override earlier
+                       ones.
+
   --backend            <backend_type>
                        Specify the build backend for the compilation process.
                        The only supported backend is 'meson', which is the
@@ -567,6 +577,8 @@ def make_f2py_compile_parser():
     parser.add_argument("--dep", action="append", dest="dependencies")
     parser.add_argument("--backend", choices=['meson', 'distutils'], default='distutils')
     parser.add_argument("-m", dest="module_name")
+    parser.add_argument("--cross-file", action="append", dest="cross_files")
+    parser.add_argument("--native-file", action="append", dest="native_files")
     return parser
 
 def preparse_sysargv():
@@ -587,6 +599,8 @@ def preparse_sysargv():
         "dependencies": args.dependencies or [],
         "backend": backend_key,
         "modulename": args.module_name,
+        "cross_files": args.cross_files or [],
+        "native_files": args.native_files or [],
     }
 
 def run_compile():
@@ -728,7 +742,11 @@ def run_compile():
         flib_flags,
         setup_flags,
         remove_build_dir,
-        {"dependencies": dependencies},
+        {
+            "dependencies": dependencies,
+            "cross_files": argy["cross_files"],
+            "native_files": argy["native_files"],
+        },
     )
 
     builder.compile()
