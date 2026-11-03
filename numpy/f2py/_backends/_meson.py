@@ -34,6 +34,8 @@ class MesonTemplate:
         fortran_args: list[str],
         build_type: str,
         python_exe: str,
+        define_macros: list[tuple[str, str | None]] | None = None,
+        undef_macros: list[str] | None = None,
     ):
         self.modulename = modulename
         self.build_template_path = (
@@ -54,6 +56,10 @@ class MesonTemplate:
             f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
             for x in fortran_args
         ]
+        self.macro_args = [
+            f"'''-D{name}'''" if value is None else f"'''-D{name}={value}'''"
+            for name, value in define_macros or []
+        ] + [f"'''-U{name}'''" for name in undef_macros or []]
         self.pipeline = [
             self.initialize_template,
             self.sources_substitution,
@@ -61,6 +67,7 @@ class MesonTemplate:
             self.deps_substitution,
             self.include_substitution,
             self.libraries_substitution,
+            self.c_args_substitution,
             self.fortran_args_substitution,
         ]
         self.build_type = build_type
@@ -129,10 +136,19 @@ class MesonTemplate:
             [f"{self.indent}'''{inc}'''," for inc in self.include_dirs]
         )
 
+    def c_args_substitution(self) -> None:
+        if self.macro_args:
+            self.substitutions["c_args"] = (
+                f"{self.indent}c_args: [{', '.join(self.macro_args)}],"
+            )
+        else:
+            self.substitutions["c_args"] = ""
+
     def fortran_args_substitution(self) -> None:
-        if self.fortran_args:
+        fortran_args = self.macro_args + self.fortran_args
+        if fortran_args:
             self.substitutions["fortran_args"] = (
-                f"{self.indent}fortran_args: [{', '.join(list(self.fortran_args))}],"
+                f"{self.indent}fortran_args: [{', '.join(fortran_args)}],"
             )
         else:
             self.substitutions["fortran_args"] = ""
@@ -186,6 +202,8 @@ class MesonBackend(Backend):
             self.fc_flags,
             self.build_type,
             sys.executable,
+            self.define_macros,
+            self.undef_macros,
         )
         src = meson_template.generate_meson_build()
         Path(build_dir).mkdir(parents=True, exist_ok=True)

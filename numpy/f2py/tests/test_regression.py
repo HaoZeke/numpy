@@ -186,6 +186,43 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\n1foo =" not in meson_build
 
 
+def test_meson_macros_reach_c_and_fortran():
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = MesonTemplate(
+        modulename="Blah",
+        sources=[Path("f90continuation.f90")],
+        deps=[],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=["-g"],
+        build_type="debug",
+        python_exe=sys.executable,
+        define_macros=[("NO_APPEND_FORTRAN", None),
+                       ("F2PY_REPORT_ON_ARRAY_COPY", "1")],
+        undef_macros=["NDEBUG"],
+    ).generate_meson_build()
+
+    mparser.Parser(meson_build, "meson.build").parse()
+    macros = ("'''-DNO_APPEND_FORTRAN''', '''-DF2PY_REPORT_ON_ARRAY_COPY=1''', "
+              "'''-UNDEBUG'''")
+    assert f"c_args: [{macros}]," in meson_build
+    assert f"fortran_args: [{macros}, '-g']," in meson_build
+
+
+@pytest.mark.slow
+class TestDefineMacros(util.F2PyTest):
+    # -D options must reach the compiled wrapper
+    sources = [util.getpath("tests", "src", "regression", "report_array_copy.f90")]
+    options = ["-DF2PY_REPORT_ON_ARRAY_COPY=1"]
+
+    def test_report_on_array_copy(self, capfd):
+        assert self.module.total(np.arange(4, dtype=np.int32)) == 6
+        assert "copied an array" in capfd.readouterr().err
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():
