@@ -636,6 +636,10 @@ fprintf(stderr, "try_pyarr_from_string(str='%s', len=%d, obj=%p)\\n",
         if (n > PyArray_NBYTES(arr)) {
             n = PyArray_NBYTES(arr);
         }
+        if (n > 0 &&
+                PyArray_FailUnlessWriteable(arr, "intent(inout) argument") < 0) {
+            return 0;
+        }
         STRINGCOPYN(buf, str, n);
         return 1;
     }
@@ -1222,6 +1226,9 @@ static int try_pyarr_from_character(PyObject* obj, character* v) {
     if (!obj) return -2;
     if (PyArray_Check(obj)) {
         if (F2PY_ARRAY_IS_CHARACTER_COMPATIBLE(arr))  {
+            if (PyArray_FailUnlessWriteable(arr, "intent(inout) argument") < 0) {
+                return 0;
+            }
             *(character *)(PyArray_DATA(arr)) = *v;
             return 1;
         }
