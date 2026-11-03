@@ -2658,8 +2658,11 @@ def analyzevars(block):
     setmesstext(block)
     implicitrules, attrrules = buildimplicitrules(block)
     vars = copy.copy(block['vars'])
-    if block['block'] == 'function' and block['name'] not in vars:
-        vars[block['name']] = {}
+    if block['block'] == 'function':
+        # The name of each ENTRY in a function is a result variable too.
+        for n in [block['name'], *block.get('entry', {})]:
+            if n not in vars:
+                vars[n] = {}
     if '' in block['vars']:
         del vars['']
         if 'attrspec' in block['vars']['']:
