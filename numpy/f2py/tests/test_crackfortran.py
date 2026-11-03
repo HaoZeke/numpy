@@ -1256,6 +1256,38 @@ class TestTypeNames:
         assert mod["vars"]["square"]["attrspec"] == ["extends(shape)"]
 
 
+class TestTypeGuards:
+    # a type guard of SELECT TYPE does not begin a type definition
+    def test_select_type(self, tmp_path):
+        fpath = tmp_path / "guards.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module guards
+              type :: base
+              end type base
+              type, extends(base) :: child
+              end type child
+            contains
+              integer function which(x)
+                class(base), intent(in) :: x
+                select type (x)
+                type is (child)
+                  which = 2
+                class default
+                  which = 1
+                end select
+              end function which
+              subroutine after(n)
+                integer, intent(out) :: n
+                n = 0
+              end subroutine after
+            end module guards
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        assert [b["name"] for b in mod["body"]] == [
+            "base", "child", "which", "after"]
+        assert mod["body"][2]["body"] == []
+
+
 class TestComponentHostParameters:
     # the components of a type see the parameters of its module, except
     # where a name of the type hides them
