@@ -664,20 +664,77 @@ def _topo_visit(tb, all_blocks, type_map, generated, gen_order):
                     break
     gen_order.append(tb)
 
-def _polymorphic_type_tags(type_blocks, type_map):
-    """Tag stored on each Python object and matched by SELECT CASE.
 
-    Parents come before children.
-    The first tag is 1.
+def _routine_args(routine):
+    """Return the dummy arguments of a routine as it declares them.
+
+    Wrapping a routine adds arguments to it: the result of a function, and
+    hidden extents and type tags.  prepare_routine keeps the declared ones.
     """
+    return routine.get('f2py_dt_args', routine.get('args', []))
+
+
+def _module_types(module):
+    """Return the derived types of a module that f2py wraps.
+
+    Returns (type_map, gen_order, type_tags): the wrappable type blocks by
+    lower case name, the same blocks with every type after the types it
+    depends on, and the tag of each type for class(T) dispatch, which is
+    its position in gen_order, so that parents have lower tags than their
+    extensions.
+    """
+    type_blocks = _find_derived_types(module)
+    type_map = {}
+    remaining = list(type_blocks)
+    progress = True
+    while remaining and progress:
+        progress = False
+        for tb in list(remaining):
+            if (_can_wrap_bindc(tb, type_map)
+                    or _can_wrap_opaque(tb, type_map)
+                    or _can_wrap_abstract(tb, type_map)):
+                type_map[tb['name'].lower()] = tb
+                remaining.remove(tb)
+                progress = True
     generated = set()
     gen_order = []
     for tb in type_blocks:
         _topo_visit(tb, type_blocks, type_map, generated, gen_order)
-    return {
-        tb['name'].lower(): i
-        for i, tb in enumerate(gen_order, start=1)
-    }
+    type_tags = {tb['name'].lower(): i
+                 for i, tb in enumerate(gen_order, start=1)}
+    return type_map, gen_order, type_tags
+
+
+def _describe_types(module):
+    """Describe how routines pass the wrapped derived types of a module.
+
+    Returns a dict from the lower case type names to what the rules for
+    derived type arguments and the routine wrappers need, see
+    _dt_routines.prepare_routine.
+    """
+    type_map, gen_order, type_tags = _module_types(module)
+    types = {}
+    for tb in gen_order:
+        name = tb['name'].lower()
+        kind_info = _get_kind_param_info(tb)
+        parent = _get_extends_parent(tb)
+        types[name] = {
+            'name': tb['name'],
+            'module': module['name'],
+            'block': tb,
+            'tag': type_tags[name],
+            'spec': _get_fortran_type_spec(tb),
+            'bindc': _can_wrap_bindc(tb, type_map),
+            'abstract': _is_abstract_type(tb),
+            'parent': parent.lower() if parent else None,
+            'specs': _enumerate_specializations(tb) if kind_info else [],
+            'kind_params': kind_info,
+            'len_params': _get_len_param_info(tb),
+            'type_param_order': [
+                n.lower() for n, v in get_type_members(tb).items()
+                if _is_type_parameter(v)],
+        }
+    return types
 
 
 def _get_char_len(var):

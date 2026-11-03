@@ -11,10 +11,12 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
 
+from ._dt_routines import wrapper_handles
 from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
     getfortranname,
+    hashandles,
     isexternal,
     isfunction,
     isfunction_wrap,
@@ -79,6 +81,16 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
         vardef = f"{vardef}({','.join(vars[a]['dimension'])})"
     return vardef
 
+def handle2fixfortran(vars, a, f90mode=None):
+    """Declare argument a of a wrapper, as a handle if of derived type."""
+    if 'f2py_dt' in vars[a]:
+        handle = {'typespec': 'type', 'typename': 'c_ptr'}
+        if 'dimension' in vars[a]:
+            handle['dimension'] = vars[a]['dimension']
+        return var2fixfortran({a: handle}, a, f90mode=f90mode)
+    return var2fixfortran(vars, a, f90mode=f90mode)
+
+
 def useiso_c_binding(rout):
     useisoc = False
     for value in rout['vars'].values():
@@ -139,10 +151,16 @@ def createfuncwrapper(rout, signature=0):
             charselect['*'] = '10'
 
     l1 = l_tmpl.replace('@@@NAME@@@', newname)
+    if 'f2py_dt' in vars[newname]:
+        l1 = handle2fixfortran(vars, newname, f90mode=f90mode)
     rl = None
 
-    useisoc = useiso_c_binding(rout)
+    handles = hashandles(rout)
+    useisoc = useiso_c_binding(rout) or handles
     useisof = useiso_fortran_env(rout)
+    if handles:
+        uses, locals_, pre, post, body, helpers = wrapper_handles(
+            rout, [a for a in args if a != name], result=newname)
     sargs = ', '.join(args)
     if f90mode:
         # gh-23598 fix warning
@@ -154,6 +172,9 @@ def createfuncwrapper(rout, signature=0):
         add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
         if not signature:
             add(f"use {rout['modulename']}, only : {fortranname}")
+            if handles:
+                for line in uses:
+                    add(line)
         if useisoc:
             add('use iso_c_binding')
         if useisof:
@@ -183,18 +204,18 @@ def createfuncwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(handle2fixfortran(vars, a, f90mode=f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
         if isintent_in(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(handle2fixfortran(vars, a, f90mode=f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
-        add(var2fixfortran(vars, a, f90mode=f90mode))
+        add(handle2fixfortran(vars, a, f90mode=f90mode))
 
     add(l1)
     if rl is not None:
@@ -209,10 +230,23 @@ def createfuncwrapper(rout, signature=0):
             add(rout['saved_interface'].lstrip())
             add('end interface')
 
-    sargs = ', '.join([a for a in args if a not in extra_args])
+    callargs = [a for a in args
+                if a not in extra_args and 'f2py_dt_hidden' not in vars[a]]
+    sargs = ', '.join(callargs)
 
     if not signature:
-        if islogicalfunction(rout):
+        if handles:
+            pointer = ('f2py_dt' in vars[newname]
+                       and 'pointer' in vars[newname].get('attrspec', []))
+
+            def call(names):
+                actual = ', '.join(names.get(a, a) for a in callargs)
+                target = names.get(newname, newname)
+                assign = '=>' if pointer else '='
+                return [f'{target} {assign} {fortranname}({actual})']
+            for line in locals_ + pre + body(call) + post:
+                add(line)
+        elif islogicalfunction(rout):
             add(f'{newname} = .not.(.not.{fortranname}({sargs}))')
         else:
             add(f'{newname} = {fortranname}({sargs})')
@@ -220,6 +254,9 @@ def createfuncwrapper(rout, signature=0):
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:
         add('end')
+    if handles and not signature:
+        for line in helpers:
+            add(line)
     return ret[0]
 
 
@@ -251,8 +288,11 @@ def createsubrwrapper(rout, signature=0):
 
     args = rout['args']
 
-    useisoc = useiso_c_binding(rout)
+    handles = hashandles(rout)
+    useisoc = useiso_c_binding(rout) or handles
     useisof = useiso_fortran_env(rout)
+    if handles:
+        uses, locals_, pre, post, body, helpers = wrapper_handles(rout, args)
     sargs = ', '.join(args)
     if f90mode:
         add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
@@ -262,6 +302,9 @@ def createsubrwrapper(rout, signature=0):
             add('use iso_fortran_env')
         if not signature:
             add(f"use {rout['modulename']}, only : {fortranname}")
+            if handles:
+                for line in uses:
+                    add(line)
     else:
         add(f'subroutine f2pywrap{name} ({sargs})')
         if useisoc:
@@ -285,12 +328,12 @@ def createsubrwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(handle2fixfortran(vars, a, f90mode=f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
-        add(var2fixfortran(vars, a, f90mode=f90mode))
+        add(handle2fixfortran(vars, a, f90mode=f90mode))
 
     if need_interface:
         if f90mode:
@@ -304,14 +347,26 @@ def createsubrwrapper(rout, signature=0):
                 add(line)
             add('end interface')
 
-    sargs = ', '.join([a for a in args if a not in extra_args])
+    callargs = [a for a in args
+                if a not in extra_args and 'f2py_dt_hidden' not in vars[a]]
+    sargs = ', '.join(callargs)
 
     if not signature:
-        add(f'call {fortranname}({sargs})')
+        if handles:
+            def call(names):
+                actual = ', '.join(names.get(a, a) for a in callargs)
+                return [f'call {fortranname}({actual})']
+            for line in locals_ + pre + body(call) + post:
+                add(line)
+        else:
+            add(f'call {fortranname}({sargs})')
     if f90mode:
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:
         add('end')
+    if handles and not signature:
+        for line in helpers:
+            add(line)
     return ret[0]
 
 

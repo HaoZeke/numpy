@@ -10,62 +10,56 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 
 import os
 
-from .auxfuncs import (
-    get_type_members,
-    hasbody,
-    isallocatable,
-    isfunction,
-    isroutine,
-    outmess,
-)
-
+from ._dt_codegen import _gen_operator_fortran_wrappers, _scan_operator_interfaces
 from ._dt_helpers import (
-    _C_TO_NPY_ENUM,
-    _C_TO_PYFORMAT,
-    _C_TO_PYOBJ,
-    _PYOBJ_TO_C,
     _can_wrap_abstract,
     _can_wrap_bindc,
     _can_wrap_opaque,
-    _fortran_sym,
+    _coarray_as_local,
+    _enumerate_specializations,
+    _eval_kind_expr,
     _get_all_members,
+    _get_alloc_ndim,
     _get_array_dims,
     _get_char_len,
     _get_extends_parent,
-    _get_member_ctype,
+    _get_fortran_type_spec,
+    _get_len_param_info,
     _get_member_isoc_type,
-    _get_alloc_ndim,
     _get_pointer_ndim,
-    _is_abstract_type,
     _is_allocatable_member,
     _is_array_member,
-    _is_coarray_member,
-    _coarray_as_local,
-    _has_coarray_members,
-    _is_private_member,
-    _is_pointer_member,
     _is_char_member,
+    _is_coarray_member,
     _is_deferred_char_member,
+    _is_len_sized_array,
+    _is_pointer_member,
+    _is_polymorphic_arg,
+    _is_private_member,
     _is_type_array_member,
     _is_type_member,
     _is_type_parameter,
-    _is_len_sized_array,
-    _get_fortran_type_spec,
-    _enumerate_specializations,
     _resolve_type_for_kind,
-    _get_kind_param_info,
-    _get_len_param_info,
-    _is_polymorphic_arg,
-    _polymorphic_type_tags,
-    _is_unlimited_polymorphic_arg,
-    _UNLIMITED_POLY_TAGS,
-    _get_type_extensions,
+    _routine_args,
 )
-
-from ._dt_codegen import (
-    _gen_operator_fortran_wrappers,
-    _scan_operator_interfaces,
+from .auxfuncs import (
+    get_type_members,
+    isallocatable,
+    isarray,
+    isderivedtype,
+    isfunction,
+    isintent_hide,
+    isintent_in,
+    isintent_inout,
+    isintent_nothide,
+    isintent_out,
+    isoptional,
+    isrequired,
+    isunlimitedpolymorphic,
+    outmess,
 )
+from .cfuncs import dt_any_intrinsics
+from .crackfortran import markoutercomma
 
 
 def generate_fortran_wrappers(modulename, type_blocks, routines=None,
@@ -98,18 +92,6 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
     opaque_types = [tb for tb in type_blocks
                     if _can_wrap_opaque(tb, type_map)]
 
-    type_tags = _polymorphic_type_tags(type_blocks, type_map)
-
-    # Find routines needing wrappers
-    routine_wrappers = []
-    if routines:
-        for routine in routines:
-            if _has_derived_type_args(routine):
-                wrapper_name, fortran_code = _gen_routine_fortran_wrapper(
-                    modulename, routine, type_map, type_tags)
-                if fortran_code is not None:
-                    routine_wrappers.append(fortran_code)
-
     # Find operator wrappers needed
     operator_wrappers = []
     if module_block and type_map:
@@ -125,7 +107,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 if op_lines:
                     operator_wrappers.extend(op_lines)
 
-    if not opaque_types and not routine_wrappers and not operator_wrappers:
+    if not opaque_types and not operator_wrappers:
         return None
 
     lines = []
@@ -986,10 +968,6 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  end subroutine f2py_set_{typename}_{mname}')
                 lines.append('')
 
-    # Add routine wrappers
-    for wrapper_code in routine_wrappers:
-        lines.append(wrapper_code)
-
     # Add operator wrappers
     lines.extend(operator_wrappers)
 
@@ -1053,13 +1031,13 @@ def write_fortran_wrappers(buildpath, modulename, type_blocks,
     return fname
 
 
-# --- Feature 4: Derived type arguments in routines ---
-
-def _is_array_type_arg(var):
-    """Check if a variable is an array of a derived type."""
-    return (var.get('typespec') == 'type'
-            and 'dimension' in var
-            and len(var['dimension']) > 0)
+# --- Derived type arguments of routines ---
+#
+# A derived type argument reaches Fortran as a handle, the c_ptr of the
+# object that its Python instance holds.  The rules for derived types in
+# rules.arg_rules turn instances into handles and back, and the wrapper
+# that func2subr writes for the routine points a pointer of the right type
+# at each handle with c_f_pointer before it calls the routine.
 
 
 def _has_derived_type_args(routine):
@@ -1076,944 +1054,450 @@ def _has_derived_type_args(routine):
     return False
 
 
-def _get_wrappable_routines(module, type_map):
-    """Find routines with derived type args where all types are wrappable.
+def _type_param_value(value, params):
+    """Evaluate a type parameter value, which may name a parameter."""
+    value = value.strip().lower()
+    seen = set()
+    while value in params and value not in seen:
+        seen.add(value)
+        value = str(params[value]).strip().lower()
+    return _eval_kind_expr(value)
 
-    type_map: dict mapping typename -> typeblock for wrappable types.
-    Returns list of routine blocks.
+
+def _dt_specialization(info, typeparams, params):
+    """Return (spec, capsule, kind_value) for a dummy of a wrapped type.
+
+    typeparams is the parameter list of the ``type(name(...))`` specifier
+    of the dummy, giving KIND parameters by position or by name, and
+    params maps module parameter names to their values.  Returns None
+    when the dummy selects a specialization that is not wrapped.
     """
-    if not hasbody(module):
-        return []
-    result = []
-    for b in module['body']:
-        if not isroutine(b):
+    if not info['specs']:
+        return info['spec'], f"f2py.{info['name']}", 0
+    values = {k['name']: k['default'] for k in info['kind_params']}
+    if typeparams:
+        order = info['type_param_order']
+        for i, item in enumerate(markoutercomma(typeparams).split('@,@')):
+            name, _, value = item.rpartition('=')
+            name = name.strip().lower()
+            if not name and i < len(order):
+                name = order[i]
+            if name in values:
+                values[name] = _type_param_value(value, params)
+    for kind_dict, suffix in info['specs']:
+        if all(values.get(k) == v for k, v in kind_dict.items()):
+            spec = _get_fortran_type_spec(info['block'],
+                                          kind_override=kind_dict)
+            kind_value = (next(iter(kind_dict.values()))
+                          if len(kind_dict) == 1 else 0)
+            return spec, f"f2py.{info['name']}{suffix}", kind_value
+    return None
+
+
+def _dt_cases(info, types):
+    """Return the concrete types a class(T) dummy of a wrapped type takes.
+
+    Each case is (tag, spec, module, name), the declared type first and
+    then its extensions in the module of the declared type.
+    """
+    cases = []
+    for t in types.values():
+        if t['module'] != info['module'] or t['abstract'] or t['specs']:
             continue
-        if not _has_derived_type_args(b):
+        parent = t
+        while parent is not None and parent is not info:
+            parent = types.get(parent['parent'])
+        if parent is info:
+            cases.append((t['tag'], t['spec'], t['module'], t['name']))
+    return sorted(cases)
+
+
+def prepare_routine(rout, types, params=None):
+    """Describe the derived type arguments of rout as handles.
+
+    types describes the wrapped derived types by their lower case names,
+    see derived_type_rules.describe_types, and params maps the names of
+    module parameters to their values.  Each derived type argument and
+    derived type function result gets an 'f2py_dt' entry, which
+    capi_maps.getdtmap and the wrapper that func2subr writes read.  The
+    dynamic type of a class(T) argument with extensions or of a class(*)
+    argument is passed in a hidden argument, f2py_<name>_tag.
+
+    Returns what f2py cannot pass, for the message that skips rout.
+    """
+    params = params or {}
+    missing = []
+    rout.setdefault('f2py_dt_args', list(rout['args']))
+    names = list(rout['args'])
+    if isfunction(rout):
+        names.append(rout.get('result', rout['name']))
+    module = rout.get('modulename')
+    for a in names:
+        var = rout['vars'].get(a, {})
+        if not isderivedtype(var) or 'f2py_dt' in var:
             continue
-        # Check all derived type args reference wrappable types
-        all_ok = True
-        for argname in b.get('args', []):
-            var = b['vars'].get(argname, {})
-            if var.get('typespec') == 'type':
-                tname = var.get('typename', '').lower()
-                if tname not in type_map:
-                    all_ok = False
-                    break
-        # Check function return type
-        if all_ok and isfunction(b):
-            result_var = b.get('result', b['name'])
-            rvar = b['vars'].get(result_var, {})
-            if rvar.get('typespec') == 'type':
-                tname = rvar.get('typename', '').lower()
-                if tname not in type_map:
-                    all_ok = False
-        if all_ok:
-            result.append(b)
-    return result
-
-
-def _gen_routine_fortran_wrapper(modulename, routine, type_map,
-                                   type_tags):
-    """Generate Fortran bind(c) wrapper for a routine with derived type args.
-
-    The wrapper accepts void* (c_ptr) for each derived type argument,
-    converts via c_f_pointer, and calls the original routine.
-    """
-    rname = routine['name']
-    is_func = isfunction(routine)
-    args = routine.get('args', [])
-
-    wrapper_name = f'f2py_wrap_{rname}'
-    wrapper_args = []
-    decls = []
-    local_decls = []
-    pre_call = []
-    post_call = []
-    call_args = []
-
-    result_var = None
-    result_type = None
-    returns_type = False
-    if is_func:
-        result_var = routine.get('result', rname)
-        rvar = routine['vars'].get(result_var, {})
-        if rvar.get('typespec') == 'type':
-            returns_type = True
-            result_type = 'type'
-            tname_ret = rvar.get('typename', '').lower()
-            tname_ret_tb = type_map.get(tname_ret)
-            tname_ret_spec = (_get_fortran_type_spec(tname_ret_tb)
-                              if tname_ret_tb else tname_ret)
-            local_decls.append(
-                f'    type({tname_ret_spec}), pointer :: f2py_temp_result')
+        out = isintent_out(var) and isintent_hide(var)
+        storage = _dt_storage(var)
+        if storage and (isunlimitedpolymorphic(var) or (
+                _is_polymorphic_arg(var) and (out or a not in rout['args']))):
+            # Python would need the dynamic type of what Fortran allocates
+            missing.append(f'the polymorphic {storage} {a}')
+            continue
+        if isunlimitedpolymorphic(var):
+            cases = [(tag, decl, None, None)
+                     for tag, decl, _ in dt_any_intrinsics]
+            cases += sorted((t['tag'], t['spec'], t['module'], t['name'])
+                            for t in types.values()
+                            if t['module'] == module and not t['abstract']
+                            and not t['specs'])
+            var['f2py_dt'] = {'any': True, 'poly': True, 'module': module,
+                              'bindc': False, 'cases': cases}
         else:
-            result_type = rvar.get('typespec', '')
-
-    for argname in args:
-        var = routine['vars'].get(argname, {})
-        if var.get('typespec') == 'type' and _is_array_type_arg(var):
-            tname = var.get('typename', '').lower()
-            tname_tb = type_map.get(tname)
-            tname_spec = (_get_fortran_type_spec(tname_tb)
-                          if tname_tb else tname)
-            dim_expr = var['dimension'][0]
-            intent = var.get('intent', [])
-            if 'out' in intent and isallocatable(var):
-                # Intent(out) allocatable array of derived type
-                # Fortran allocates; we extract heap copies post-call
-                wrapper_args.append(f'{argname}_ptrs')
-                wrapper_args.append(f'{argname}_n')
-                decls.append(
-                    f'    type(c_ptr) :: {argname}_ptrs(*)')
-                decls.append(
-                    f'    integer(c_int) :: {argname}_n')
-                local_decls.append(
-                    f'    type({tname_spec}), allocatable :: {argname}(:)')
-                local_decls.append(
-                    f'    type({tname_spec}), pointer :: {argname}_heap_tmp')
-                local_decls.append(f'    integer :: {argname}_i')
-                # Post-call: extract each element as heap copy
-                post_call.append(
-                    f'    {argname}_n = size({argname})')
-                post_call.append(
-                    f'    do {argname}_i = 1, {argname}_n')
-                post_call.append(
-                    f'      allocate({argname}_heap_tmp)')
-                post_call.append(
-                    f'      {argname}_heap_tmp = '
-                    f'{argname}({argname}_i)')
-                post_call.append(
-                    f'      {argname}_ptrs({argname}_i) = '
-                    f'c_loc({argname}_heap_tmp)')
-                post_call.append(
-                    f'    end do')
-                call_args.append(argname)
-            else:
-                # Input array of derived type argument
-                wrapper_args.append(f'{argname}_ptrs')
-                wrapper_args.append(f'{argname}_n')
-                decls.append(
-                    f'    type(c_ptr), intent(in) :: {argname}_ptrs(*)')
-                decls.append(
-                    f'    integer(c_int), value :: {argname}_n')
-                local_decls.append(
-                    f'    type({tname_spec}), pointer :: {argname}_tmp')
-                local_decls.append(
-                    f'    type({tname_spec}), allocatable :: {argname}(:)')
-                local_decls.append(f'    integer :: {argname}_i')
-                pre_call.append(
-                    f'    allocate({argname}({argname}_n))')
-                pre_call.append(
-                    f'    do {argname}_i = 1, {argname}_n')
-                pre_call.append(
-                    f'      call c_f_pointer('
-                    f'{argname}_ptrs({argname}_i), {argname}_tmp)')
-                pre_call.append(
-                    f'      {argname}({argname}_i) = {argname}_tmp')
-                pre_call.append(
-                    f'    end do')
-                call_args.append(argname)
-            # Skip the corresponding size arg from regular processing
-            # by noting the dimension expression
-        elif var.get('typespec') == 'type':
-            tname = var.get('typename', '').lower()
-            # Check for CLASS(*) -- unlimited polymorphism
-            if _is_unlimited_polymorphic_arg(var):
-                # F2018 7.3.2.3 p4: accept any type via tag dispatch
-                wrapper_args.append(f'{argname}_ptr')
-                wrapper_args.append(f'{argname}_tag')
-                decls.append(f'    type(c_ptr), value :: {argname}_ptr')
-                decls.append(
-                    f'    integer(c_int), value :: {argname}_tag')
-                call_args.append(argname)
-                # Store trampoline info
-                if '_f2py_unlimited_poly' not in routine:
-                    routine['_f2py_unlimited_poly'] = {}
-                routine['_f2py_unlimited_poly'][argname] = {
-                    'tag_arg': f'{argname}_tag',
-                    'ptr_arg': f'{argname}_ptr',
-                }
+            typename = var.get('typename', '')
+            info = types.get(typename.lower())
+            spec = (info and _dt_specialization(
+                info, var.get('typeparams'), params))
+            if spec is None:
+                missing.append(f'derived type {typename}, which f2py does '
+                               'not wrap')
                 continue
-            # Use parameterized type spec if available
-            tname_tb = type_map.get(tname)
-            tname_spec = (_get_fortran_type_spec(tname_tb)
-                          if tname_tb else tname)
-            is_poly = _is_polymorphic_arg(var)
-            if is_poly:
-                # F2018 7.3.2.3: polymorphic arg needs type tag
-                # for SELECT CASE dispatch
-                wrapper_args.append(f'{argname}_ptr')
-                wrapper_args.append(f'{argname}_type_tag')
-                decls.append(f'    type(c_ptr), value :: {argname}_ptr')
-                decls.append(
-                    f'    integer(c_int), value :: {argname}_type_tag')
-                # Find all types extending the base type
-                extensions = _get_type_extensions(tname, type_map)
-                if len(extensions) > 1:
-                    # Multiple types: generate SELECT CASE dispatch
-                    # Each extension gets its own local pointer
-                    for i, (ext_name, ext_tb) in enumerate(extensions):
-                        ext_spec = _get_fortran_type_spec(ext_tb)
-                        local_decls.append(
-                            f'    type({ext_spec}), pointer '
-                            f':: {argname}_v{i+1}')
-                    # The call_args entry is a placeholder; actual call
-                    # is generated via polymorphic_dispatch below
-                    call_args.append(argname)
-                    # Store dispatch info for later
-                    if not hasattr(routine, '_f2py_poly_dispatch'):
-                        routine['_f2py_poly_dispatch'] = {}
-                    routine['_f2py_poly_dispatch'][argname] = {
-                        'extensions': extensions,
-                        'tag_arg': f'{argname}_type_tag',
-                    }
-                else:
-                    # Only base type: no dispatch needed
-                    local_decls.append(
-                        f'    type({tname_spec}), pointer :: {argname}')
-                    pre_call.append(
-                        f'    call c_f_pointer({argname}_ptr, {argname})')
-                    call_args.append(argname)
+            spec, capsule, kind_value = spec
+            vector = out and isarray(var) and (
+                isallocatable(var) or 'pointer' in var.get('attrspec', []))
+            if (_is_polymorphic_arg(var) and not out and not vector
+                    and not info['specs']):
+                cases = _dt_cases(info, types)
+                poly = True
             else:
-                wrapper_args.append(f'{argname}_ptr')
-                decls.append(f'    type(c_ptr), value :: {argname}_ptr')
-                local_decls.append(
-                    f'    type({tname_spec}), pointer :: {argname}')
-                intent = var.get('intent', [])
-                if 'out' in intent:
-                    # For intent(out), allocate a new one, call, return ptr
-                    pre_call.append(f'    allocate({argname})')
-                    post_call.append(
-                        f'    {argname}_ptr = c_loc({argname})')
-                    # Rewrite decl: _ptr is inout (returns updated ptr)
-                    decls[-1] = f'    type(c_ptr) :: {argname}_ptr'
-                else:
-                    pre_call.append(
-                        f'    call c_f_pointer({argname}_ptr, {argname})')
-                call_args.append(argname)
-        else:
-            # Scalar arg -- pass through
-            isoc_type = _get_member_isoc_type(var)
-            if isoc_type is None:
-                return None, None
-            wrapper_args.append(argname)
-            intent = var.get('intent', [])
-            if 'out' in intent or 'inout' in intent:
-                decls.append(f'    {isoc_type} :: {argname}')
-            else:
-                decls.append(f'    {isoc_type}, value :: {argname}')
-            call_args.append(argname)
+                cases = [(info['tag'], spec, info['module'], info['name'])]
+                poly = False
+            if not cases or (out and info['abstract']):
+                missing.append(f'{a} of the abstract type {typename}')
+                continue
+            var['f2py_dt'] = {'any': False, 'poly': poly,
+                              'name': info['name'],
+                              'module': info['module'], 'spec': spec,
+                              'capsule': capsule, 'kind': kind_value,
+                              'tag': info['tag'], 'bindc': info['bindc'],
+                              'cases': cases}
+            if vector:
+                # Fortran gives a buffer of handles of copies of the
+                # elements, and their extents in hidden arguments
+                rank = len(var.pop('dimension'))
+                var['f2py_dt']['vector'] = rank
+                var['f2py_dt']['vector_free'] = (
+                    f"f2py_{module}_{rout['name']}_free_{a}".lower())
+                for k in range(1, rank + 1):
+                    extent = f'f2py_{a}_n{k}'
+                    rout['vars'][extent] = {'typespec': 'integer',
+                                            'intent': ['hide'],
+                                            'f2py_dt_hidden': a}
+                    rout['args'].append(extent)
+        if len(var['f2py_dt']['cases']) > 1 and a in rout['args']:
+            tag = f'f2py_{a}_tag'
+            rout['vars'][tag] = {'typespec': 'integer', 'intent': ['hide'],
+                                 '=': f'{a}_tag', 'depend': [a],
+                                 'f2py_dt_hidden': a}
+            rout['args'].append(tag)
+    return missing
 
-    wrapper_args_str = ', '.join(wrapper_args)
-    decls_str = '\n'.join(decls)
-    local_decls_str = '\n'.join(local_decls)
-    pre_call_str = '\n'.join(pre_call)
-    post_call_str = '\n'.join(post_call)
-    call_args_str = ', '.join(call_args)
 
+def _dt_loops(a, rank, body):
+    """Return nested loops over the elements of handle array a."""
     lines = []
-    if is_func:
-        if returns_type:
-            lines.append(
-                f'  function {wrapper_name}({wrapper_args_str}) '
-                f'result(retval) bind(c)')
-            lines.append(f'    type(c_ptr) :: retval')
-        else:
-            # Function returning scalar
-            ret_isoc = _get_member_isoc_type(
-                routine['vars'].get(result_var, {}))
-            if ret_isoc is None:
-                return None, None
-            lines.append(
-                f'  function {wrapper_name}({wrapper_args_str}) '
-                f'result(retval) bind(c)')
-            lines.append(f'    {ret_isoc} :: retval')
-    else:
-        lines.append(
-            f'  subroutine {wrapper_name}({wrapper_args_str}) bind(c)')
-
-    lines.append(decls_str)
-    if local_decls_str:
-        lines.append(local_decls_str)
-    if pre_call_str:
-        lines.append(pre_call_str)
-
-    # Check for polymorphic dispatch (F2018 7.3.2.3)
-    poly_dispatch = routine.get('_f2py_poly_dispatch', {})
-    if poly_dispatch:
-        # Generate SELECT CASE dispatch for polymorphic args.
-        # For simplicity, handle one polymorphic arg at a time.
-        poly_arg = list(poly_dispatch.keys())[0]
-        info = poly_dispatch[poly_arg]
-        extensions = info['extensions']
-        tag_arg = info['tag_arg']
-
-        lines.append(f'    select case ({tag_arg})')
-        for i, (ext_name, ext_tb) in enumerate(extensions):
-            ext_spec = _get_fortran_type_spec(ext_tb)
-            local_var = f'{poly_arg}_v{i+1}'
-            # Build call_args with the correct local variable
-            dispatch_call_args = []
-            for ca in call_args:
-                if ca == poly_arg:
-                    dispatch_call_args.append(local_var)
-                else:
-                    dispatch_call_args.append(ca)
-            dca_str = ', '.join(dispatch_call_args)
-            lines.append(f'    case ({type_tags[ext_name]})')
-            lines.append(
-                f'      call c_f_pointer({poly_arg}_ptr, {local_var})')
-            if is_func:
-                if returns_type:
-                    lines.append(f'      allocate(f2py_temp_result)')
-                    lines.append(
-                        f'      f2py_temp_result = {rname}({dca_str})')
-                    lines.append(
-                        f'      retval = c_loc(f2py_temp_result)')
-                else:
-                    lines.append(f'      retval = {rname}({dca_str})')
-            else:
-                lines.append(f'      call {rname}({dca_str})')
-        lines.append(f'    end select')
-    elif routine.get('_f2py_unlimited_poly'):
-        # F2018 7.3.2.3 p4: unlimited polymorphic dispatch
-        # Use SELECT CASE on tag to dispatch with correct intrinsic type
-        upoly = routine['_f2py_unlimited_poly']
-        upoly_arg = list(upoly.keys())[0]
-        info = upoly[upoly_arg]
-        tag_arg = info['tag_arg']
-        ptr_arg = info['ptr_arg']
-
-        # Local typed pointers for each intrinsic type
-        local_decls_extra = [
-            f'    integer, pointer :: {upoly_arg}_int',
-            f'    integer(8), pointer :: {upoly_arg}_int8',
-            f'    real, pointer :: {upoly_arg}_real',
-            f'    real(8), pointer :: {upoly_arg}_real8',
-        ]
-        # Insert before the call
-        for ld in local_decls_extra:
-            lines.insert(lines.index(decls_str) + 1, ld)
-
-        lines.append(f'    select case ({tag_arg})')
-        # integer(4): tag 1
-        int_call = ', '.join(
-            f'{upoly_arg}_int' if ca == upoly_arg else ca
-            for ca in call_args)
-        lines.append(f'    case (1)')
-        lines.append(
-            f'      call c_f_pointer({ptr_arg}, {upoly_arg}_int)')
-        lines.append(f'      call {rname}({int_call})')
-        # integer(8): tag 2
-        int8_call = ', '.join(
-            f'{upoly_arg}_int8' if ca == upoly_arg else ca
-            for ca in call_args)
-        lines.append(f'    case (2)')
-        lines.append(
-            f'      call c_f_pointer({ptr_arg}, {upoly_arg}_int8)')
-        lines.append(f'      call {rname}({int8_call})')
-        # real(4): tag 3
-        real_call = ', '.join(
-            f'{upoly_arg}_real' if ca == upoly_arg else ca
-            for ca in call_args)
-        lines.append(f'    case (3)')
-        lines.append(
-            f'      call c_f_pointer({ptr_arg}, {upoly_arg}_real)')
-        lines.append(f'      call {rname}({real_call})')
-        # real(8): tag 4
-        real8_call = ', '.join(
-            f'{upoly_arg}_real8' if ca == upoly_arg else ca
-            for ca in call_args)
-        lines.append(f'    case (4)')
-        lines.append(
-            f'      call c_f_pointer({ptr_arg}, {upoly_arg}_real8)')
-        lines.append(f'      call {rname}({real8_call})')
-        lines.append(f'    end select')
-    else:
-        if is_func:
-            if returns_type:
-                lines.append(f'    allocate(f2py_temp_result)')
-                lines.append(
-                    f'    f2py_temp_result = {rname}({call_args_str})')
-                lines.append(f'    retval = c_loc(f2py_temp_result)')
-            else:
-                lines.append(
-                    f'    retval = {rname}({call_args_str})')
-        else:
-            lines.append(f'    call {rname}({call_args_str})')
-
-    if post_call_str:
-        lines.append(post_call_str)
-
-    if is_func:
-        lines.append(f'  end function {wrapper_name}')
-    else:
-        lines.append(f'  end subroutine {wrapper_name}')
-    lines.append('')
-
-    return wrapper_name, '\n'.join(lines)
+    for k in range(rank, 0, -1):
+        lines.append('  ' * (rank - k)
+                     + f'do f2py_{a}_i{k} = 1, size({a}, {k})')
+    lines += ['  ' * rank + line for line in body]
+    for k in range(1, rank + 1):
+        lines.append('  ' * (rank - k) + 'end do')
+    return lines
 
 
-def _gen_routine_c_wrapper(modulename, routine, type_map):
-    """Generate C wrapper function for a routine with derived type args.
-
-    Returns (c_code, method_def_entry) or (None, None) if not wrappable.
-    """
-    rname = routine['name']
-    is_func = isfunction(routine)
-    args = routine.get('args', [])
-    wrapper_sym = f'f2py_wrap_{rname}'
-
-    # Build extern declaration
-    extern_args = []
-    # Track which scalar args are consumed as array size parameters
-    array_size_args = set()
-    for argname in args:
-        var = routine['vars'].get(argname, {})
-        if _is_array_type_arg(var):
-            # The dimension expression names the size arg
-            dim_expr = var['dimension'][0]
-            # Assumed-shape (:) has no named size variable
-            if dim_expr != ':':
-                array_size_args.add(dim_expr.lower())
-
-    for argname in args:
-        var = routine['vars'].get(argname, {})
-        if _is_array_type_arg(var):
-            intent = var.get('intent', [])
-            extern_args.append('void **')
-            if 'out' in intent and isallocatable(var):
-                # Intent(out): count is passed by reference (inout)
-                extern_args.append('int *')
-            else:
-                extern_args.append('int')
-        elif var.get('typespec') == 'type':
-            if _is_unlimited_polymorphic_arg(var):
-                extern_args.append('void *')  # data ptr
-                extern_args.append('int')     # type tag
-            else:
-                intent = var.get('intent', [])
-                if 'out' in intent:
-                    extern_args.append('void **')
-                else:
-                    extern_args.append('void *')
-                if _is_polymorphic_arg(var):
-                    extern_args.append('int')  # type_tag
-        elif argname.lower() in array_size_args:
-            # Size arg consumed by array-of-type; still passed to Fortran
-            ctype = _get_member_ctype(var)
-            if ctype is None:
-                return None, None
-            extern_args.append(ctype)
-        else:
-            ctype = _get_member_ctype(var)
-            if ctype is None:
-                return None, None
-            intent = var.get('intent', [])
-            if 'out' in intent or 'inout' in intent:
-                extern_args.append(f'{ctype} *')
-            else:
-                extern_args.append(ctype)
-
-    result_var = None
-    result_ctype = None
-    returns_type_name = None
-    if is_func:
-        result_var = routine.get('result', rname)
-        rvar = routine['vars'].get(result_var, {})
-        if rvar.get('typespec') == 'type':
-            returns_type_name = rvar.get('typename', '').lower()
-            extern_ret = 'void *'
-        else:
-            result_ctype = _get_member_ctype(rvar)
-            if result_ctype is None:
-                return None, None
-            extern_ret = result_ctype
-    else:
-        extern_ret = 'void'
-
-    extern_args_str = ', '.join(extern_args) if extern_args else 'void'
-    extern_line = f'extern {extern_ret} {wrapper_sym}({extern_args_str});'
-
-    # Build Python wrapper function
+def _dt_bound_loops(a, rank, body):
+    """Return nested loops over the elements of array f2py_<a>."""
     lines = []
-    lines.append(extern_line)
-    lines.append('')
-    lines.append(f'static PyObject *')
-    lines.append(
-        f'f2py_routine_{rname}(PyObject *self, PyObject *args, '
-        f'PyObject *kwds)')
-    lines.append('{')
+    for k in range(rank, 0, -1):
+        lines.append('  ' * (rank - k) + f'do f2py_{a}_i{k} = '
+                     f'lbound(f2py_{a}, {k}), ubound(f2py_{a}, {k})')
+    lines += ['  ' * rank + line for line in body]
+    for k in range(1, rank + 1):
+        lines.append('  ' * (rank - k) + 'end do')
+    return lines
 
-    # Build kwlist and format string
-    kwlist = []
-    fmt_parts = []
-    parse_args_decl = []
-    parse_args_ref = []
-    call_parts = []
 
-    for argname in args:
-        var = routine['vars'].get(argname, {})
-        if _is_array_type_arg(var):
-            tname = var.get('typename', '').lower()
-            intent = var.get('intent', [])
-            if 'out' in intent and isallocatable(var):
-                # Intent(out) allocatable array of type: output only
-                # No Python input needed; handled post-call
-                pass
-            else:
-                # Input array of derived type: accept Python list
-                kwlist.append(argname)
-                fmt_parts.append('O')
-                parse_args_decl.append(
-                    f'    PyObject *{argname}_list = NULL;')
-                parse_args_ref.append(f'&{argname}_list')
-        elif var.get('typespec') == 'type':
-            tname = var.get('typename', '').lower()
-            intent = var.get('intent', [])
-            if _is_unlimited_polymorphic_arg(var):
-                # F2018 7.3.2.3 p4: accept any Python object
-                kwlist.append(argname)
-                fmt_parts.append('O')
-                parse_args_decl.append(
-                    f'    PyObject *{argname}_obj = NULL;')
-                parse_args_ref.append(f'&{argname}_obj')
-                continue
-            kwlist.append(argname)
-            if 'out' in intent:
-                # intent(out) type arg: not passed from Python
-                # Actually we still need to pass something -- allocate on
-                # Fortran side. Skip from Python args; handled separately.
-                kwlist.pop()  # remove from kwlist
-                continue
-            fmt_parts.append('O')
-            parse_args_decl.append(f'    PyObject *{argname}_obj = NULL;')
-            parse_args_ref.append(f'&{argname}_obj')
-        elif argname.lower() in array_size_args:
-            # Size arg consumed by array-of-type; derived from list length
-            ctype = _get_member_ctype(var)
-            parse_args_decl.append(f'    {ctype} {argname} = 0;')
-            # Do NOT add to kwlist/fmt/refs -- computed from list length
-        else:
-            ctype = _get_member_ctype(var)
-            fmt = _C_TO_PYFORMAT.get(ctype)
-            if fmt is None:
-                return None, None
-            intent = var.get('intent', [])
-            kwlist.append(argname)
-            if 'out' in intent:
-                # Skip from Python args for intent(out) scalars
-                kwlist.pop()
-                fmt_parts.append('')  # placeholder
-                parse_args_decl.append(f'    {ctype} {argname} = 0;')
-                continue
-            fmt_parts.append(fmt)
-            parse_args_decl.append(f'    {ctype} {argname} = 0;')
-            parse_args_ref.append(f'&{argname}')
-
-    kwlist_str = ', '.join(f'"{k}"' for k in kwlist)
-    fmt_str = '|' + ''.join(fmt_parts)
-    parse_args_str = ', '.join(parse_args_ref)
-
-    for decl in parse_args_decl:
-        lines.append(decl)
-    lines.append('')
-
-    if kwlist:
-        lines.append(
-            f'    static char *kwlist[] = {{{kwlist_str}, NULL}};')
-        lines.append(
-            f'    if (!PyArg_ParseTupleAndKeywords(args, kwds, '
-            f'"{fmt_str}", kwlist,')
-        lines.append(f'                                     {parse_args_str}))')
-        lines.append('        return NULL;')
-    lines.append('')
-
-    # Extract capsule pointers for type args
-    # Track array-of-type args that need cleanup
-    array_type_cleanup = []
-    # Track intent(out) array-of-type args for post-call list building
-    out_array_type_args = []
-    for argname in args:
-        var = routine['vars'].get(argname, {})
-        if _is_array_type_arg(var):
-            tname = var.get('typename', '').lower()
-            intent = var.get('intent', [])
-            if 'out' in intent and isallocatable(var):
-                # Intent(out) allocatable array of type
-                # Allocate buffer for Fortran to fill with pointers
-                lines.append(
-                    f'    void *{argname}_ptrs[4096];')
-                lines.append(
-                    f'    int {argname}_n = 0;')
-                out_array_type_args.append((argname, tname))
-            else:
-                capsule_name = f'f2py.{tname}'
-                dim_expr = var['dimension'][0].lower()
-                lines.append(
-                    f'    if ({argname}_list == NULL || '
-                    f'!PyList_Check({argname}_list)) {{')
-                lines.append(
-                    f'        PyErr_SetString(PyExc_TypeError, '
-                    f'"{argname} must be a list of {tname} instances");')
-                lines.append('        return NULL;')
-                lines.append('    }')
-                lines.append(
-                    f'    Py_ssize_t {argname}_len = '
-                    f'PyList_GET_SIZE({argname}_list);')
-                # Set the size arg from the list length
-                # (skip for assumed-shape ':' -- no named size variable)
-                if dim_expr != ':':
-                    lines.append(
-                        f'    {dim_expr} = (int){argname}_len;')
-                lines.append(
-                    f'    void **{argname}_ptrs = (void **)malloc('
-                    f'sizeof(void *) * {argname}_len);')
-                lines.append(
-                    f'    if ({argname}_ptrs == NULL) {{')
-                lines.append(
-                    f'        PyErr_NoMemory();')
-                lines.append('        return NULL;')
-                lines.append('    }')
-                lines.append(
-                    f'    for (Py_ssize_t _i = 0; '
-                    f'_i < {argname}_len; _i++) {{')
-                lines.append(
-                    f'        PyObject *_item = '
-                    f'PyList_GET_ITEM({argname}_list, _i);')
-                lines.append(
-                    f'        if (!Py_IS_TYPE(_item, '
-                    f'&Py{tname}_Type)) {{')
-                lines.append(
-                    f'            free({argname}_ptrs);')
-                lines.append(
-                    f'            PyErr_SetString(PyExc_TypeError, '
-                    f'"{argname} items must be {tname} instances");')
-                lines.append('            return NULL;')
-                lines.append('        }')
-                lines.append(
-                    f'        Py{tname}Object *_typed = '
-                    f'(Py{tname}Object *)_item;')
-                lines.append(
-                    f'        if (_typed->capsule == NULL) {{')
-                lines.append(
-                    f'            free({argname}_ptrs);')
-                lines.append(
-                    f'            PyErr_SetString(PyExc_RuntimeError, '
-                    f'"{argname} item not initialized");')
-                lines.append('            return NULL;')
-                lines.append('        }')
-                lines.append(
-                    f'        {argname}_ptrs[_i] = PyCapsule_GetPointer('
-                    f'_typed->capsule, "{capsule_name}");')
-                lines.append(
-                    f'        if ({argname}_ptrs[_i] == NULL) {{')
-                lines.append(
-                    f'            free({argname}_ptrs);')
-                lines.append('            return NULL;')
-                lines.append('        }')
-                lines.append('    }')
-                array_type_cleanup.append(f'{argname}_ptrs')
-        elif var.get('typespec') == 'type' and _is_unlimited_polymorphic_arg(var):
-            # F2018 7.3.2.3 p4: unlimited polymorphic -- inspect Python type
-            lines.append(
-                f'    void *{argname}_ptr = NULL;')
-            lines.append(
-                f'    int {argname}_tag = 0;')
-            lines.append(
-                f'    int {argname}_int_tmp = 0;')
-            lines.append(
-                f'    long long {argname}_int8_tmp = 0;')
-            lines.append(
-                f'    float {argname}_real_tmp = 0;')
-            lines.append(
-                f'    double {argname}_real8_tmp = 0;')
-            lines.append(
-                f'    if (PyLong_Check({argname}_obj)) {{')
-            lines.append(
-                f'        {argname}_int_tmp = (int)PyLong_AsLong({argname}_obj);')
-            lines.append(
-                f'        {argname}_ptr = &{argname}_int_tmp;')
-            lines.append(
-                f'        {argname}_tag = 1;')
-            lines.append(
-                f'    }} else if (PyFloat_Check({argname}_obj)) {{')
-            lines.append(
-                f'        {argname}_real8_tmp = PyFloat_AsDouble({argname}_obj);')
-            lines.append(
-                f'        {argname}_ptr = &{argname}_real8_tmp;')
-            lines.append(
-                f'        {argname}_tag = 4;')
-            lines.append(
-                f'    }} else {{')
-            lines.append(
-                f'        PyErr_SetString(PyExc_TypeError,')
-            lines.append(
-                f'            "{argname}: unsupported type for class(*)");')
-            lines.append(
-                f'        return NULL;')
-            lines.append(f'    }}')
-        elif var.get('typespec') == 'type':
-            tname = var.get('typename', '').lower()
-            intent = var.get('intent', [])
-            capsule_name = f'f2py.{tname}'
-            is_poly = _is_polymorphic_arg(var)
-            if 'out' in intent:
-                lines.append(f'    void *{argname}_ptr = NULL;')
-            else:
-                lines.append(
-                    f'    if ({argname}_obj == NULL) {{')
-                lines.append(
-                    f'        PyErr_SetString(PyExc_TypeError, '
-                    f'"{argname} is required");')
-                lines.append('        return NULL;')
-                lines.append('    }')
-                if is_poly:
-                    # F2018 7.3.2.3: polymorphic -- use isinstance
-                    # to allow child types
-                    lines.append(
-                        f'    if (!PyObject_IsInstance({argname}_obj, '
-                        f'(PyObject *)&Py{tname}_Type)) {{')
-                else:
-                    lines.append(
-                        f'    if (!Py_IS_TYPE({argname}_obj, '
-                        f'&Py{tname}_Type)) {{')
-                lines.append(
-                    f'        PyErr_SetString(PyExc_TypeError, '
-                    f'"{argname} must be a {tname} instance");')
-                lines.append('        return NULL;')
-                lines.append('    }')
-                lines.append(
-                    f'    Py{tname}Object *{argname}_typed = '
-                    f'(Py{tname}Object *){argname}_obj;')
-                lines.append(
-                    f'    if ({argname}_typed->capsule == NULL) {{')
-                lines.append(
-                    f'        PyErr_SetString(PyExc_RuntimeError, '
-                    f'"{argname} not initialized");')
-                lines.append('        return NULL;')
-                lines.append('    }')
-                lines.append(
-                    f'    void *{argname}_ptr = PyCapsule_GetPointer('
-                    f'{argname}_typed->capsule, "{capsule_name}");')
-                lines.append(
-                    f'    if ({argname}_ptr == NULL) return NULL;')
-                if is_poly:
-                    lines.append(
-                        f'    int {argname}_type_tag = '
-                        f'{argname}_typed->type_tag;')
-    lines.append('')
-
-    # Build call
-    call_args = []
-    for argname in args:
-        var = routine['vars'].get(argname, {})
-        if _is_array_type_arg(var):
-            intent = var.get('intent', [])
-            if 'out' in intent and isallocatable(var):
-                # Intent(out): pass buffer + pointer to count
-                call_args.append(f'{argname}_ptrs')
-                call_args.append(f'&{argname}_n')
-            else:
-                # Input: pass void** array and int count
-                call_args.append(f'{argname}_ptrs')
-                call_args.append(f'(int){argname}_len')
-        elif var.get('typespec') == 'type':
-            if _is_unlimited_polymorphic_arg(var):
-                call_args.append(f'{argname}_ptr')
-                call_args.append(f'{argname}_tag')
-            else:
-                intent = var.get('intent', [])
-                if 'out' in intent:
-                    call_args.append(f'&{argname}_ptr')
-                else:
-                    call_args.append(f'{argname}_ptr')
-                if _is_polymorphic_arg(var):
-                    call_args.append(f'{argname}_type_tag')
-        elif argname.lower() in array_size_args:
-            # Size arg -- pass the value derived from list length
-            call_args.append(argname)
-        else:
-            intent = var.get('intent', [])
-            if 'out' in intent or 'inout' in intent:
-                call_args.append(f'&{argname}')
-            else:
-                call_args.append(argname)
-
-    call_args_str = ', '.join(call_args)
-
-    if is_func:
-        if returns_type_name:
-            tname = returns_type_name
-            capsule_name = f'f2py.{tname}'
-            lines.append(
-                f'    void *result = {wrapper_sym}({call_args_str});')
-            for cleanup_var in array_type_cleanup:
-                lines.append(f'    free({cleanup_var});')
-            lines.append(f'    if (result == NULL) {{')
-            lines.append(
-                f'        PyErr_SetString(PyExc_RuntimeError, '
-                f'"Fortran function returned NULL");')
-            lines.append('        return NULL;')
-            lines.append('    }')
-            lines.append(
-                f'    Py{tname}Object *out = (Py{tname}Object *)'
-                f'Py{tname}_Type.tp_alloc(&Py{tname}_Type, 0);')
-            lines.append('    if (out == NULL) return NULL;')
-            lines.append(
-                f'    out->capsule = PyCapsule_New('
-                f'result, "{capsule_name}", '
-                f'f2py_{tname}_capsule_destructor);')
-            lines.append(
-                '    if (out->capsule == NULL) { '
-                'Py_DECREF(out); return NULL; }')
-            lines.append('    return (PyObject *)out;')
-        else:
-            lines.append(
-                f'    {result_ctype} result = '
-                f'{wrapper_sym}({call_args_str});')
-            # Free array-of-type temporary arrays
-            for cleanup_var in array_type_cleanup:
-                lines.append(f'    free({cleanup_var});')
-            # Convert result to PyObject
-            pyobj_expr = _C_TO_PYOBJ.get(result_ctype)
-            if pyobj_expr:
-                lines.append(
-                    f'    return {pyobj_expr.format(val="result")};')
-            else:
-                lines.append('    Py_RETURN_NONE;')
+def _dt_vector_free(dt):
+    """Return a bind(c) subroutine that releases a buffer of handles."""
+    free = dt['vector_free']
+    lines = [f'subroutine {free}(h, n) bind(c)', 'use iso_c_binding']
+    if dt['bindc']:
+        lines.append(f"use {dt['module']}, only : {dt['name']}")
+    lines += ['type(c_ptr), value :: h', 'integer(c_int), value :: n',
+              'type(c_ptr), pointer :: f2py_h(:)']
+    if dt['bindc']:
+        # instances own copies of the elements of a bind(c) type
+        lines += [f"type({dt['spec']}), pointer :: f2py_e",
+                  'integer f2py_i',
+                  'call c_f_pointer(h, f2py_h, [n])',
+                  'do f2py_i = 1, n',
+                  '  call c_f_pointer(f2py_h(f2py_i), f2py_e)',
+                  '  deallocate(f2py_e)',
+                  'end do']
     else:
-        lines.append(f'    {wrapper_sym}({call_args_str});')
-        # Free array-of-type temporary arrays
-        for cleanup_var in array_type_cleanup:
-            lines.append(f'    free({cleanup_var});')
+        lines.append('call c_f_pointer(h, f2py_h, [n])')
+    lines += ['deallocate(f2py_h)', f'end subroutine {free}']
+    return lines
 
-        # Build return value -- collect intent(out) and intent(inout) args
-        out_parts = []
-        for argname in args:
-            var = routine['vars'].get(argname, {})
-            intent = var.get('intent', [])
-            if (_is_array_type_arg(var) and 'out' in intent
-                    and isallocatable(var)):
-                tname = var.get('typename', '').lower()
-                out_parts.append((argname, 'type_array', tname))
-            elif var.get('typespec') == 'type' and 'out' in intent:
-                tname = var.get('typename', '').lower()
-                out_parts.append((argname, 'type', tname))
-            elif 'out' in intent or 'inout' in intent:
-                ctype = _get_member_ctype(var)
-                out_parts.append((argname, 'scalar', ctype))
 
-        if not out_parts:
-            lines.append('    Py_RETURN_NONE;')
-        else:
-            # Helper: emit code for a single out_part into `lines`
-            def _emit_out_part(aname, kind, info, var_suffix=''):
-                """Emit lines to build a PyObject for one output part.
+def _dt_select(selects, names, call):
+    """Return the lines of call inside the selection of dynamic types."""
+    if not selects:
+        return call(names)
+    (a, cases), rest = selects[0], selects[1:]
+    lines = [f'select case (f2py_{a}_tag)']
+    for tag, local in cases:
+        lines.append(f'case ({tag})')
+        lines.append(f'  call c_f_pointer({a}, {local})')
+        lines += ['  ' + line
+                  for line in _dt_select(rest, {**names, a: local}, call)]
+    lines.append('end select')
+    return lines
 
-                var_suffix: suffix for local variable names (e.g. '0')
-                Returns the variable name holding the PyObject*.
-                """
-                if kind == 'scalar':
-                    pyobj_expr = _C_TO_PYOBJ.get(info)
-                    if pyobj_expr:
-                        vname = f'out_val{var_suffix}'
-                        lines.append(
-                            f'    PyObject *{vname} = '
-                            f'{pyobj_expr.format(val=aname)};')
-                        return vname
-                    return None
-                elif kind == 'type':
-                    tname = info
-                    capsule_name = f'f2py.{tname}'
-                    vname = f'out{var_suffix}'
-                    lines.append(
-                        f'    Py{tname}Object *{vname} = '
-                        f'(Py{tname}Object *)'
-                        f'Py{tname}_Type.tp_alloc('
-                        f'&Py{tname}_Type, 0);')
-                    lines.append(
-                        f'    if ({vname} == NULL) return NULL;')
-                    lines.append(
-                        f'    {vname}->capsule = PyCapsule_New('
-                        f'{aname}_ptr, "{capsule_name}", '
-                        f'f2py_{tname}_capsule_destructor);')
-                    lines.append(
-                        f'    if ({vname}->capsule == NULL) {{ '
-                        f'Py_DECREF({vname}); return NULL; }}')
-                    return f'(PyObject *){vname}'
-                elif kind == 'type_array':
-                    tname = info
-                    capsule_name = f'f2py.{tname}'
-                    vname = f'out_list{var_suffix}'
-                    lines.append(
-                        f'    PyObject *{vname} = '
-                        f'PyList_New({aname}_n);')
-                    lines.append(
-                        f'    if ({vname} == NULL) return NULL;')
-                    lines.append(
-                        f'    for (int _j = 0; '
-                        f'_j < {aname}_n; _j++) {{')
-                    lines.append(
-                        f'        Py{tname}Object *_item = '
-                        f'(Py{tname}Object *)'
-                        f'Py{tname}_Type.tp_alloc('
-                        f'&Py{tname}_Type, 0);')
-                    lines.append(
-                        f'        if (_item == NULL) {{ '
-                        f'Py_DECREF({vname}); return NULL; }}')
-                    lines.append(
-                        f'        _item->capsule = PyCapsule_New('
-                        f'{aname}_ptrs[_j], "{capsule_name}", '
-                        f'f2py_{tname}_capsule_destructor);')
-                    lines.append(
-                        f'        if (_item->capsule == NULL) {{ '
-                        f'Py_DECREF(_item); Py_DECREF({vname}); '
-                        f'return NULL; }}')
-                    lines.append(
-                        f'        PyList_SET_ITEM({vname}, _j, '
-                        f'(PyObject *)_item);')
-                    lines.append('    }')
-                    return vname
-                return None
 
-            if len(out_parts) == 1:
-                aname, kind, info = out_parts[0]
-                result_var_name = _emit_out_part(aname, kind, info)
-                if result_var_name:
-                    lines.append(
-                        f'    return {result_var_name};')
-                else:
-                    lines.append('    Py_RETURN_NONE;')
+_DT_MADE = {'allocatable': 'allocated', 'pointer': 'associated'}
+
+
+def _dt_storage(var):
+    """Return 'allocatable' or 'pointer' for such a dummy, else None."""
+    if isallocatable(var):
+        return 'allocatable'
+    if 'pointer' in var.get('attrspec', []):
+        return 'pointer'
+    return None
+
+
+def wrapper_handles(rout, args, result=None):
+    """Return the code that the f2py wrapper of rout needs for its handles.
+
+    args are the dummy arguments of the wrapper, including ``result``,
+    the one that returns the value of a function.  Returns (uses, decls,
+    pre, post, body, helpers): the use statements and declarations of
+    local variables the wrapper needs, the statements before and after the
+    call, body, and the lines of the procedures it needs besides.  body
+    takes a function from {argument: actual argument} to the lines of the
+    call, and returns these lines inside the selection of the dynamic
+    types of class(T) and class(*) arguments.
+
+    Allocatable and pointer dummies and results that Fortran gives back
+    are copied into new instances, or are None if not allocated or
+    associated.  An allocatable dummy gets an allocated copy of its
+    object, and an allocatable or pointer array copies of its elements,
+    which are copied back unless the dummy is intent(in), changed its
+    dynamic type or its shape.
+    """
+    vars = rout['vars']
+    uses, decls, pre, post, helpers = {}, [], [], [], []
+    names, selects = {}, []
+    for a in args:
+        dt = vars[a].get('f2py_dt')
+        if dt is None:
+            continue
+        var = vars[a]
+        for _, _, module, name in dt['cases']:
+            if module is not None:
+                uses.setdefault(module, set()).add(name)
+        out = isintent_out(var) and isintent_hide(var)
+        if 'vector' in dt:
+            rank = dt['vector']
+            idx = ', '.join(f'f2py_{a}_i{k}' for k in range(1, rank + 1))
+            if 'pointer' in var.get('attrspec', []):
+                storage, made = 'pointer', 'associated'
             else:
-                # Multiple outputs -- return tuple
-                lines.append(
-                    f'    PyObject *ret = '
-                    f'PyTuple_New({len(out_parts)});')
-                lines.append(
-                    '    if (ret == NULL) return NULL;')
-                for i, (aname, kind, info) in enumerate(out_parts):
-                    result_var_name = _emit_out_part(
-                        aname, kind, info, var_suffix=str(i))
-                    if result_var_name:
-                        lines.append(
-                            f'    PyTuple_SET_ITEM(ret, {i}, '
-                            f'{result_var_name});')
-                lines.append('    return ret;')
+                storage, made = 'allocatable', 'allocated'
+            decls.append(f"type({dt['spec']}), {storage} :: f2py_{a}"
+                         f"({','.join(':' * rank)})")
+            decls.append(f"type({dt['spec']}), pointer :: f2py_{a}_e")
+            decls.append(f'type(c_ptr), pointer :: f2py_{a}_h(:)')
+            decls.append(f'integer {idx}, f2py_{a}_k')
+            extents = [f'f2py_{a}_n{k} = size(f2py_{a}, {k})'
+                       for k in range(1, rank + 1)]
+            post += [f'{a} = c_null_ptr',
+                     f'f2py_{a}_n1 = -1',
+                     f'if ({made}(f2py_{a})) then',
+                     *['  ' + line for line in extents],
+                     f'  if (size(f2py_{a}) > 0) then',
+                     f'    allocate(f2py_{a}_h(size(f2py_{a})))',
+                     f'    f2py_{a}_k = 0',
+                     *['    ' + line for line in _dt_bound_loops(a, rank, [
+                         f'f2py_{a}_k = f2py_{a}_k + 1',
+                         f'allocate(f2py_{a}_e)',
+                         f'f2py_{a}_e = f2py_{a}({idx})',
+                         f'f2py_{a}_h(f2py_{a}_k) = c_loc(f2py_{a}_e)'])],
+                     f'    {a} = c_loc(f2py_{a}_h)',
+                     '  end if',
+                     'end if']
+            helpers += _dt_vector_free(dt)
+            names[a] = f'f2py_{a}'
+        elif isarray(var):
+            rank = len(var['dimension'])
+            idx = ', '.join(f'f2py_{a}_i{k}' for k in range(1, rank + 1))
+            storage = _dt_storage(var)
+            decls.append(f"type({dt['spec']}), pointer :: f2py_{a}_e")
+            decls.append(f'integer {idx}')
+            element = f'f2py_{a}({idx})'
+            if storage is None:
+                decls.append(f"type({dt['spec']}) f2py_{a}"
+                             f"({','.join(var['dimension'])})")
+            else:
+                # the dummy gets an allocated copy; it is copied back if it
+                # keeps its shape, whatever its bounds
+                deferred = ','.join(':' * rank)
+                store = f'f2py_{a}' if storage == 'allocatable' else (
+                    f'f2py_{a}_s')
+                decls.append(f"type({dt['spec']}), allocatable, target :: "
+                             f"{store}({deferred})")
+                pre.append(
+                    f"allocate({store}({','.join(var['dimension'])}))")
+                if storage == 'pointer':
+                    decls.append(f"type({dt['spec']}), pointer :: "
+                                 f"f2py_{a}({deferred})")
+                    pre.append(f'f2py_{a} => {store}')
+                element = f'f2py_{a}(' + ', '.join(
+                    f'lbound(f2py_{a}, {k}) + f2py_{a}_i{k} - 1'
+                    for k in range(1, rank + 1)) + ')'
+            if not out:
+                pre += _dt_loops(a, rank, [
+                    f'call c_f_pointer({a}({idx}), f2py_{a}_e)',
+                    f'f2py_{a}({idx}) = f2py_{a}_e'])
+            if out and not dt['bindc']:
+                post += _dt_loops(a, rank, [
+                    f'allocate(f2py_{a}_e)',
+                    f'f2py_{a}_e = f2py_{a}({idx})',
+                    f'{a}({idx}) = c_loc(f2py_{a}_e)'])
+            elif not (isintent_in(var) and not isintent_inout(var)):
+                back = _dt_loops(a, rank, [
+                    f'call c_f_pointer({a}({idx}), f2py_{a}_e)',
+                    f'f2py_{a}_e = {element}'])
+                if storage is not None:
+                    made = _DT_MADE[storage]
+                    back = ([f'if ({made}(f2py_{a})) then',
+                             f'  if (all(shape(f2py_{a}) == shape({a}))) then']
+                            + ['    ' + line for line in back]
+                            + ['  end if', 'end if'])
+                post += back
+            names[a] = f'f2py_{a}'
+        elif len(dt['cases']) > 1 or (
+                _is_polymorphic_arg(var) and _dt_storage(var)):
+            cases = []
+            for k, (tag, spec, module, _) in enumerate(dt['cases'], 1):
+                decl = f'type({spec})' if module is not None else spec
+                decls.append(f'{decl}, pointer :: f2py_{a}_{k}')
+                cases.append((tag, f'f2py_{a}_{k}'))
+            storage = _dt_storage(var)
+            if storage is None:
+                selects.append((a, cases))
+                continue
+            # a polymorphic allocatable or pointer dummy needs an actual of
+            # the same kind (F2018 15.5.2.5), which is made from the object
+            # of the dynamic type
+            decls.append(f"class({dt['spec']}), {storage} :: f2py_{a}")
+            if storage == 'pointer':
+                pre.append(f'nullify(f2py_{a})')
+                make = f'f2py_{a} => {{}}'
+            else:
+                make = f'allocate(f2py_{a}, source={{}})'
+            if len(cases) > 1:
+                made = _dt_select([(a, cases)], {},
+                                  lambda n: [make.format(n[a])])
+            else:
+                made = [f'call c_f_pointer({a}, {cases[0][1]})',
+                        make.format(cases[0][1])]
+            pre += [f'if (c_associated({a})) then',
+                    *['  ' + line for line in made], 'end if']
+            if storage == 'allocatable' and not (
+                    isintent_in(var) and not isintent_inout(var)):
+                # copied back if its dynamic type stays the same
+                back = []
+                for k, (tag, spec, _, _) in enumerate(dt['cases'], 1):
+                    back.append([f'call c_f_pointer({a}, f2py_{a}_{k})',
+                                 f'select type (f2py_{a}_v => f2py_{a})',
+                                 f'type is ({spec})',
+                                 f'  f2py_{a}_{k} = f2py_{a}_v',
+                                 'end select'])
+                if len(cases) > 1:
+                    back = ([f'select case (f2py_{a}_tag)']
+                            + [line for (tag, _), body in zip(cases, back)
+                               for line in [f'case ({tag})',
+                                            *['  ' + b for b in body]]]
+                            + ['end select'])
+                else:
+                    back = back[0]
+                post += [(f'if (c_associated({a}) .and. allocated(f2py_{a}))'
+                          ' then'), *['  ' + line for line in back], 'end if']
+            names[a] = f'f2py_{a}'
+        else:
+            spec = dt['cases'][0][1]
+            storage = _dt_storage(var)
+            if storage == 'allocatable' and a == result:
+                storage = None  # an allocatable result is allocated
+            made = _DT_MADE.get(storage)
+            if storage is None:
+                decls.append(f"type({spec}), pointer :: f2py_{a}")
+                if out and not dt['bindc']:
+                    pre.append(f'allocate(f2py_{a})')
+                    post.append(f'{a} = c_loc(f2py_{a})')
+                elif 'optional' in var.get('attrspec', []):
+                    pre.append(f'nullify(f2py_{a})')
+                    pre.append(f'if (c_associated({a})) '
+                               f'call c_f_pointer({a}, f2py_{a})')
+                else:
+                    pre.append(f'call c_f_pointer({a}, f2py_{a})')
+            elif out:
+                # an instance owns a copy of what the dummy or result is
+                # allocated as or associated with, or there is none
+                decls.append(f"type({spec}), {storage} :: f2py_{a}")
+                decls.append(f"type({spec}), pointer :: f2py_{a}_e")
+                if storage == 'pointer':
+                    pre.append(f'nullify(f2py_{a})')
+                if dt['bindc']:
+                    pre.append(f'call c_f_pointer({a}, f2py_{a}_e)')
+                    post += [f'if ({made}(f2py_{a})) then',
+                             f'  f2py_{a}_e = f2py_{a}',
+                             'else',
+                             f'  {a} = c_null_ptr',
+                             'end if']
+                else:
+                    post += [f'{a} = c_null_ptr',
+                             f'if ({made}(f2py_{a})) then',
+                             f'  allocate(f2py_{a}_e)',
+                             f'  f2py_{a}_e = f2py_{a}',
+                             f'  {a} = c_loc(f2py_{a}_e)',
+                             'end if']
+            elif storage == 'pointer':
+                decls.append(f"type({spec}), pointer :: f2py_{a}")
+                pre.append(f'nullify(f2py_{a})')
+                pre.append(f'if (c_associated({a})) '
+                           f'call c_f_pointer({a}, f2py_{a})')
+            else:
+                # the dummy gets an allocated copy of the object
+                decls.append(f"type({spec}), allocatable :: f2py_{a}")
+                decls.append(f"type({spec}), pointer :: f2py_{a}_e")
+                pre += [f'nullify(f2py_{a}_e)',
+                        f'if (c_associated({a})) then',
+                        f'  call c_f_pointer({a}, f2py_{a}_e)',
+                        f'  allocate(f2py_{a}, source=f2py_{a}_e)',
+                        'end if']
+                if not (isintent_in(var) and not isintent_inout(var)):
+                    post.append(f'if (associated(f2py_{a}_e) .and. '
+                                f'allocated(f2py_{a})) f2py_{a}_e = f2py_{a}')
+            names[a] = f'f2py_{a}'
+    use_lines = [f"use {module}, only : {', '.join(sorted(names_))}"
+                 for module, names_ in sorted(uses.items())]
 
-    lines.append('}')
-    lines.append('')
+    def body(call):
+        return _dt_select(selects, names, call)
 
-    c_code = '\n'.join(lines)
-
-    # Method definition entry
-    method_def = (
-        f'    {{"{rname}", (PyCFunction)f2py_routine_{rname}, '
-        f'METH_VARARGS | METH_KEYWORDS, '
-        f'"Wrapper for Fortran routine {rname}"}},'
-    )
-
-    return c_code, method_def
+    return use_lines, decls, pre, post, body, helpers
 
 
 def _statements(source_file):
@@ -2621,485 +2105,130 @@ Py{typename}_from_string(PyObject *cls, PyObject *args)
 def _resolve_binding_to_routine(binding_name, bound_procs, routine_map):
     """Resolve a binding name to its module routine through the chain."""
     resolved = binding_name
-    for _ in range(5):
-        if resolved in routine_map:
-            return routine_map[resolved]
+    seen = set()
+    while resolved not in routine_map and resolved not in seen:
+        seen.add(resolved)
         next_name = bound_procs.get(resolved)
-        if next_name is None or next_name == resolved:
-            break
         if isinstance(next_name, list):
             # Multi-binding generic; take first
             next_name = next_name[0]
+        if next_name is None:
+            break
         resolved = next_name
     return routine_map.get(resolved)
 
 
-def _get_non_self_arg_types(routine):
-    """Get (argname, ctype_or_typename) pairs for non-self args."""
-    args = routine.get('args', [])
-    if not args:
-        return []
-    result = []
-    for argname in args[1:]:
-        var = routine['vars'].get(argname, {})
-        if var.get('typespec') == 'type':
-            result.append((argname, 'type:' + var.get('typename', '')))
-        else:
-            ctype = _get_member_ctype(var)
-            result.append((argname, ctype))
-    return result
+def _python_args(routine):
+    """Return the arguments of a wrapped routine in the order Python takes
+    them by position: the required ones, then the optional ones."""
+    args = [a for a in _routine_args(routine)
+            if isintent_nothide(routine['vars'][a])]
+    return ([a for a in args if isrequired(routine['vars'][a])]
+            + [a for a in args if isoptional(routine['vars'][a])])
 
 
-def _gen_generic_dispatch_method(typename, method_name, binding_list,
-                                 bound_procs, routine_map, type_map):
-    """Generate a dispatch method for a generic TBP with multiple bindings.
+def _passed_object(routine, binding):
+    """Return (position, name) of the passed-object dummy of a binding in
+    the Python arguments of its routine, or (-1, None) for NOPASS.  The
+    passed-object dummy is the first dummy unless PASS names another
+    (F2018 7.5.4.5)."""
+    if binding['nopass'] or not _routine_args(routine):
+        return -1, None
+    name = binding['pass'] or _routine_args(routine)[0]
+    args = _python_args(routine)
+    if name not in args:
+        return -1, None
+    return args.index(name), name
 
-    The generated C function tries each binding's argument signature in
-    order and calls the first one that matches the Python argument types.
-    """
-    # Resolve each binding to its routine
-    candidates = []
-    for binding_name in binding_list:
-        routine = _resolve_binding_to_routine(
-            binding_name, bound_procs, routine_map)
-        if routine is None:
+
+def _dummy_signature(routine, passname):
+    """Return C initializers of f2py_dt_dummy entries for the Python
+    arguments of a routine, other than its passed-object dummy."""
+    kinds = {'integer': 'i', 'real': 'f', 'double precision': 'f',
+             'complex': 'c', 'double complex': 'c', 'logical': 'b',
+             'character': 's', 'type': 't'}
+    entries = []
+    for a in _python_args(routine):
+        if a == passname:
             continue
-        args = routine.get('args', [])
-        if not args:
-            continue
-        self_var = routine['vars'].get(args[0], {})
-        if self_var.get('typespec') != 'type':
-            continue
-        candidates.append((binding_name, routine))
-
-    if not candidates:
-        return None
-
-    # If only one candidate resolves, fall through to single dispatch
-    if len(candidates) == 1:
-        return None
-
-    mfunc_name = f'Py{typename}_method_{method_name}'
-    capsule_name = f'f2py.{typename.lower()}'
-
-    lines = []
-    lines.append(f'static PyObject *')
-    lines.append(
-        f'{mfunc_name}(PyObject *selfobj, PyObject *args, '
-        f'PyObject *kwds)')
-    lines.append('{')
-    lines.append(
-        f'    Py{typename}Object *self = '
-        f'(Py{typename}Object *)selfobj;')
-    lines.append(f'    if (self->capsule == NULL) {{')
-    lines.append(
-        f'        PyErr_SetString(PyExc_RuntimeError, '
-        f'"{typename} not initialized");')
-    lines.append('        return NULL;')
-    lines.append('    }')
-    lines.append(
-        f'    void *self_ptr = PyCapsule_GetPointer('
-        f'self->capsule, "{capsule_name}");')
-    lines.append('    if (self_ptr == NULL) return NULL;')
-    lines.append('')
-    lines.append('    Py_ssize_t nargs = PyTuple_Size(args);')
-    lines.append('')
-
-    # Generate a try-block for each candidate based on argument count
-    # and types. Order by number of args (most specific first).
-    candidates.sort(key=lambda c: len(c[1].get('args', [])), reverse=True)
-
-    for i, (binding_name, routine) in enumerate(candidates):
-        other_args = routine.get('args', [])[1:]
-        resolved_name = binding_name
-        # Resolve to actual routine name
-        r = routine
-        wrapper_sym = f'f2py_wrap_{r["name"].lower()}'
-        is_func = isfunction(routine)
-
-        # Build extern declaration
-        all_args = routine.get('args', [])
-        extern_args = []
-        for argname in all_args:
-            var = routine['vars'].get(argname, {})
-            if var.get('typespec') == 'type':
-                intent = var.get('intent', [])
-                if 'out' in intent:
-                    extern_args.append('void **')
-                else:
-                    extern_args.append('void *')
-                    if _is_polymorphic_arg(var):
-                        extern_args.append('int')
-            else:
-                ctype = _get_member_ctype(var)
-                if ctype:
-                    intent = var.get('intent', [])
-                    if 'out' in intent or 'inout' in intent:
-                        extern_args.append(f'{ctype} *')
-                    else:
-                        extern_args.append(ctype)
-
-        if is_func:
-            result_var = routine.get('result', binding_name)
-            rvar = routine['vars'].get(result_var, {})
-            result_ctype = _get_member_ctype(rvar)
-            extern_ret = result_ctype if result_ctype else 'void'
-        else:
-            extern_ret = 'void'
-
-        extern_args_str = ', '.join(extern_args) if extern_args else 'void'
-        lines.append(
-            f'    extern {extern_ret} {wrapper_sym}({extern_args_str});')
-
-    lines.append('')
-
-    # Dispatch logic: check nargs to select candidate
-    for i, (binding_name, routine) in enumerate(candidates):
-        other_args = routine.get('args', [])[1:]
-        n_required = len(other_args)
-        wrapper_sym = f'f2py_wrap_{routine["name"].lower()}'
-        is_func = isfunction(routine)
-
-        cond = f'nargs == {n_required}'
-        prefix = 'if' if i == 0 else '} else if'
-        lines.append(f'    {prefix} ({cond}) {{')
-
-        # Parse args for this candidate
-        call_args = ['self_ptr']
-        _self_var = routine['vars'].get(routine['args'][0], {})
-        if (_is_polymorphic_arg(_self_var)
-                and 'out' not in _self_var.get('intent', [])):
-            call_args.append('self->type_tag')
-        for j, argname in enumerate(other_args):
-            var = routine['vars'].get(argname, {})
-            if var.get('typespec') == 'type':
-                tname = var.get('typename', '').lower()
-                cap_name = f'f2py.{tname}'
-                lines.append(
-                    f'        PyObject *arg{j}_obj = '
-                    f'PyTuple_GetItem(args, {j});')
-                lines.append(
-                    f'        void *arg{j}_ptr = '
-                    f'PyCapsule_GetPointer(arg{j}_obj, "{cap_name}");')
-                lines.append(
-                    f'        if (arg{j}_ptr == NULL) goto dispatch_fail;')
-                call_args.append(f'arg{j}_ptr')
-                if _is_polymorphic_arg(var):
-                    call_args.append(
-                        f'((Py{tname}Object *)arg{j}_obj)->type_tag')
-            else:
-                ctype = _get_member_ctype(var)
-                fmt = _C_TO_PYFORMAT.get(ctype, 'd')
-                lines.append(f'        {ctype} arg{j} = 0;')
-                lines.append(
-                    f'        PyObject *arg{j}_obj = '
-                    f'PyTuple_GetItem(args, {j});')
-                if ctype in ('int', 'long', 'long long'):
-                    lines.append(
-                        f'        arg{j} = ({ctype})PyLong_AsLong('
-                        f'arg{j}_obj);')
-                elif ctype in ('float',):
-                    lines.append(
-                        f'        arg{j} = (float)PyFloat_AsDouble('
-                        f'arg{j}_obj);')
-                else:
-                    lines.append(
-                        f'        arg{j} = PyFloat_AsDouble(arg{j}_obj);')
-                lines.append(
-                    f'        if (PyErr_Occurred()) goto dispatch_fail;')
-                call_args.append(f'arg{j}')
-
-        call_str = ', '.join(call_args)
-        if is_func:
-            result_var = routine.get('result', binding_name)
-            rvar = routine['vars'].get(result_var, {})
-            result_ctype = _get_member_ctype(rvar)
-            lines.append(
-                f'        {result_ctype} result = '
-                f'{wrapper_sym}({call_str});')
-            if result_ctype in ('int', 'long', 'long long'):
-                lines.append(
-                    '        return PyLong_FromLong((long)result);')
-            else:
-                lines.append(
-                    '        return PyFloat_FromDouble((double)result);')
-        else:
-            lines.append(f'        {wrapper_sym}({call_str});')
-            lines.append('        Py_RETURN_NONE;')
-
-    lines.append('    } else {')
-    lines.append(
-        f'        PyErr_Format(PyExc_TypeError, '
-        f'"{method_name}() takes {{expected}} args, got %zd", nargs);')
-    # Build expected string from candidates
-    expected = ' or '.join(str(len(c[1].get('args', [])[1:]))
-                          for c in candidates)
-    lines[-1] = lines[-1].replace('{expected}', expected)
-    lines.append('        return NULL;')
-    lines.append('    }')
-    lines.append('')
-    lines.append('dispatch_fail:')
-    lines.append('    PyErr_Clear();')
-    lines.append(
-        f'    PyErr_SetString(PyExc_TypeError, '
-        f'"{method_name}(): argument type mismatch");')
-    lines.append('    return NULL;')
-    lines.append('}')
-
-    func_code = '\n'.join(lines)
-    method_entry = (
-        f'    {{"{method_name}", '
-        f'(PyCFunction){mfunc_name}, '
-        f'METH_VARARGS | METH_KEYWORDS, '
-        f'"{method_name} (generic dispatch)"}},')
-
-    return func_code, method_entry
+        var = routine['vars'][a]
+        dt = var.get('f2py_dt')
+        pytype = (f"&Py{dt['name']}_Type"
+                  if dt is not None and not dt['any'] else 'NULL')
+        kind = kinds.get(var.get('typespec', '').lower(), 'f')
+        if dt is not None and dt['any']:
+            kind = 'o'
+        entries.append(f'{{"{a}", \'{kind}\', '
+                       f"{len(var.get('dimension', []))}, {pytype}, "
+                       f'{int(isrequired(var))}}}')
+    entries.append('{NULL, 0, 0, NULL, 0}')
+    return entries
 
 
-def _gen_type_methods(typename, bound_procs, routines, type_map):
+def _gen_type_methods(typename, bound_procs, routines, type_map,
+                      modulename, attrs=None):
     """Generate PyMethodDef entries and C method functions for type-bound
     procedures.
 
-    Each method is a thin wrapper that calls the already-generated
-    module-level routine wrapper, automatically passing 'self' as the
-    first (derived type) argument.
+    Each method calls the wrapped routine of its binding, looked up in
+    the Fortran module object, with the instance as the passed-object
+    argument.  A generic binding calls the first of its specific bindings
+    that the arguments fit.
     """
     funcs = []
     method_entries = []
+    attrs = attrs or {}
+    no_pass = {'pass': None, 'nopass': False}
 
-    # Build lookup from routine name to routine block
-    routine_map = {}
-    for r in routines:
-        routine_map[r['name'].lower()] = r
+    # Build lookup from routine name to routine block, for the routines
+    # that are wrapped
+    routine_map = {r['name'].lower(): r for r in routines
+                   if not r.get('f2py_dt_missing')}
+
+    def call(binding_name):
+        routine = _resolve_binding_to_routine(
+            binding_name, bound_procs, routine_map)
+        if routine is None:
+            return None, None
+        pos, passname = _passed_object(
+            routine, attrs.get(binding_name, no_pass))
+        passarg = f'"{passname}"' if passname else 'NULL'
+        return routine, (f'f2py_dt_call_bound(#modulename#_module, '
+                         f'"{modulename}", "{routine["name"]}", selfobj, '
+                         f'{pos}, {passarg}, args, kwds)')
 
     for method_name, impl_name in bound_procs.items():
-        # For generic bindings with multiple implementations, generate
-        # a dispatch method that tries each binding's signature.
-        if isinstance(impl_name, list):
-            dispatch_code = _gen_generic_dispatch_method(
-                typename, method_name, impl_name,
-                bound_procs, routine_map, type_map)
-            if dispatch_code:
-                funcs.append(dispatch_code[0])
-                method_entries.append(dispatch_code[1])
+        if method_name.startswith('__'):
             continue
-
-        # Resolve binding chain: generic bindings map to specific
-        # binding names (F2018 7.5.5 R751), which in turn map to
-        # implementation names. Follow the chain until we find an
-        # actual module routine.
-        resolved_name = impl_name
-        max_chain_depth = 5  # prevent infinite loops
-        for _ in range(max_chain_depth):
-            if resolved_name in routine_map:
-                break
-            # Check if this is itself a binding name
-            next_name = bound_procs.get(resolved_name)
-            if next_name is None or next_name == resolved_name:
-                break
-            resolved_name = next_name
-        routine = routine_map.get(resolved_name)
-        if routine is None:
-            continue
-
-        args = routine.get('args', [])
-        if not args:
-            continue
-
-        # First arg should be the self/this type arg
-        self_arg = args[0]
-        self_var = routine['vars'].get(self_arg, {})
-        if self_var.get('typespec') != 'type':
-            continue
-
-        # Remaining args (non-self)
-        other_args = args[1:]
-
-        # Generate a C method that takes the type instance as self
-        # and remaining args as positional/keyword args
-        is_func = isfunction(routine)
-        # Use resolved_name for the wrapper symbol since that is the
-        # actual module routine whose C wrapper was generated
-        wrapper_sym = f'f2py_wrap_{resolved_name}'
-
-        # Generate extern declaration for the Fortran wrapper
-        extern_args = []
-        for argname in args:
-            var = routine['vars'].get(argname, {})
-            if var.get('typespec') == 'type':
-                intent = var.get('intent', [])
-                if 'out' in intent:
-                    extern_args.append('void **')
-                else:
-                    extern_args.append('void *')
-                    if _is_polymorphic_arg(var):
-                        extern_args.append('int')
-            else:
-                ctype = _get_member_ctype(var)
-                if ctype is None:
-                    break
-                intent = var.get('intent', [])
-                if 'out' in intent or 'inout' in intent:
-                    extern_args.append(f'{ctype} *')
-                else:
-                    extern_args.append(ctype)
-
-        if is_func:
-            result_var = routine.get('result', impl_name)
-            rvar = routine['vars'].get(result_var, {})
-            result_ctype = _get_member_ctype(rvar)
-            extern_ret = result_ctype if result_ctype else 'void'
-        else:
-            extern_ret = 'void'
-
-        extern_args_str = (', '.join(extern_args)
-                           if extern_args else 'void')
-
-        # Build the method C function
         mfunc_name = f'Py{typename}_method_{method_name}'
-        lines = []
-        lines.append(
-            f'extern {extern_ret} {wrapper_sym}({extern_args_str});')
-        lines.append('')
-        lines.append(f'static PyObject *')
-        lines.append(
-            f'{mfunc_name}(PyObject *selfobj, PyObject *args, '
-            f'PyObject *kwds)')
-        lines.append('{')
-        lines.append(
-            f'    Py{typename}Object *self = '
-            f'(Py{typename}Object *)selfobj;')
-
-        capsule_name = f'f2py.{typename.lower()}'
-        lines.append(f'    if (self->capsule == NULL) {{')
-        lines.append(
-            f'        PyErr_SetString(PyExc_RuntimeError, '
-            f'"{typename} not initialized");')
-        lines.append('        return NULL;')
-        lines.append('    }')
-        lines.append(
-            f'    void *self_ptr = PyCapsule_GetPointer('
-            f'self->capsule, "{capsule_name}");')
-        lines.append('    if (self_ptr == NULL) return NULL;')
-        lines.append('')
-
-        # Parse remaining args
-        kwlist = []
-        fmt_parts = []
-        parse_decls = []
-        parse_refs = []
-        call_args = ['self_ptr']
-        if (_is_polymorphic_arg(self_var)
-                and 'out' not in self_var.get('intent', [])):
-            call_args.append('self->type_tag')
-
-        for argname in other_args:
-            var = routine['vars'].get(argname, {})
-            if var.get('typespec') == 'type':
-                tname = var.get('typename', '').lower()
-                intent = var.get('intent', [])
-                if 'out' in intent:
-                    call_args.append(f'&{argname}_ptr')
-                    lines.append(f'    void *{argname}_ptr = NULL;')
+        lines = ['static PyObject *',
+                 f'{mfunc_name}(PyObject *selfobj, PyObject *args, PyObject *kwds)',
+                 '{']
+        if isinstance(impl_name, list):
+            # F2018 15.4.3.4.5: the specific binding whose dummies the
+            # actual arguments fit
+            for k, binding_name in enumerate(impl_name):
+                routine, call_expr = call(binding_name)
+                if routine is None:
                     continue
-                kwlist.append(argname)
-                fmt_parts.append('O')
-                parse_decls.append(
-                    f'    PyObject *{argname}_obj = NULL;')
-                parse_refs.append(f'&{argname}_obj')
-                # Will extract pointer below
-            else:
-                ctype = _get_member_ctype(var)
-                fmt = _C_TO_PYFORMAT.get(ctype)
-                if fmt is None:
-                    break  # skip this method
-                intent = var.get('intent', [])
-                if 'out' in intent:
-                    parse_decls.append(f'    {ctype} {argname} = 0;')
-                    call_args.append(f'&{argname}')
-                    continue
-                kwlist.append(argname)
-                fmt_parts.append(fmt)
-                parse_decls.append(f'    {ctype} {argname} = 0;')
-                parse_refs.append(f'&{argname}')
-                intent = var.get('intent', [])
-                if 'out' in intent or 'inout' in intent:
-                    call_args.append(f'&{argname}')
-                else:
-                    call_args.append(argname)
-
-        for decl in parse_decls:
-            lines.append(decl)
-
-        if kwlist:
-            kwlist_str = ', '.join(f'"{k}"' for k in kwlist)
-            fmt_str = '|' + ''.join(fmt_parts)
-            parse_refs_str = ', '.join(parse_refs)
-            lines.append(
-                f'    static char *kwlist[] = {{{kwlist_str}, NULL}};')
-            lines.append(
-                f'    if (!PyArg_ParseTupleAndKeywords(args, kwds, '
-                f'"{fmt_str}", kwlist,')
-            lines.append(
-                f'                                     {parse_refs_str}))')
-            lines.append('        return NULL;')
-        lines.append('')
-
-        # Extract capsule pointers for type args (non-self)
-        for argname in other_args:
-            var = routine['vars'].get(argname, {})
-            if var.get('typespec') == 'type':
-                tname = var.get('typename', '').lower()
-                intent = var.get('intent', [])
-                if 'out' in intent:
-                    continue
-                cap_name = f'f2py.{tname}'
-                lines.append(
-                    f'    if ({argname}_obj == NULL || '
-                    f'!Py_IS_TYPE({argname}_obj, &Py{tname}_Type)) {{')
-                lines.append(
-                    f'        PyErr_SetString(PyExc_TypeError, '
-                    f'"{argname} must be a {tname} instance");')
-                lines.append('        return NULL;')
-                lines.append('    }')
-                lines.append(
-                    f'    void *{argname}_ptr = PyCapsule_GetPointer('
-                    f'((Py{tname}Object *){argname}_obj)->capsule, '
-                    f'"{cap_name}");')
-                lines.append(
-                    f'    if ({argname}_ptr == NULL) return NULL;')
-                call_args.append(f'{argname}_ptr')
-                if _is_polymorphic_arg(var):
-                    call_args.append(
-                        f'((Py{tname}Object *){argname}_obj)->type_tag')
-
-        call_args_str = ', '.join(call_args)
-
-        if is_func:
-            result_var = routine.get('result', impl_name)
-            rvar = routine['vars'].get(result_var, {})
-            result_ctype = _get_member_ctype(rvar)
-            if result_ctype:
-                lines.append(
-                    f'    {result_ctype} result = '
-                    f'{wrapper_sym}({call_args_str});')
-                pyobj_expr = _C_TO_PYOBJ.get(result_ctype)
-                if pyobj_expr:
-                    lines.append(
-                        f'    return '
-                        f'{pyobj_expr.format(val="result")};')
-                else:
-                    lines.append('    Py_RETURN_NONE;')
-            else:
-                lines.append(f'    {wrapper_sym}({call_args_str});')
-                lines.append('    Py_RETURN_NONE;')
+                passname = _passed_object(
+                    routine, attrs.get(binding_name, no_pass))[1]
+                sig = ',\n        '.join(_dummy_signature(routine, passname))
+                lines.append(f'    static const f2py_dt_dummy sig{k}[] = {{\n'
+                             f'        {sig}}};')
+                lines.append(f'    if (f2py_dt_args_match(args, kwds, sig{k}))')
+                lines.append(f'        return {call_expr};')
+            lines.append('    PyErr_SetString(PyExc_TypeError, '
+                         f'"{method_name}(): no specific procedure matches '
+                         f'the arguments");')
+            lines.append('    return NULL;')
         else:
-            lines.append(f'    {wrapper_sym}({call_args_str});')
-            lines.append('    Py_RETURN_NONE;')
-
+            routine, call_expr = call(method_name)
+            if routine is None:
+                continue
+            lines.append(f'    return {call_expr};')
         lines.append('}')
         lines.append('')
-
         funcs.append('\n'.join(lines))
         method_entries.append(
             f'    {{"{method_name}", (PyCFunction){mfunc_name}, '
@@ -3107,34 +2236,3 @@ def _gen_type_methods(typename, bound_procs, routines, type_map):
             f'"Type-bound procedure {method_name}"}},')
 
     return funcs, method_entries
-
-
-def _gen_routine_method_table(modulename, method_entries):
-    """Generate PyMethodDef table for wrapped routines."""
-    lines = []
-    lines.append(
-        f'static PyMethodDef f2py_{modulename}_derived_methods[] = {{')
-    for entry in method_entries:
-        lines.append(entry)
-    lines.append('    {NULL, NULL, 0, NULL}')
-    lines.append('};')
-    return '\n'.join(lines)
-
-
-def _gen_routine_init_code(modulename, method_entries):
-    """Generate module init code to register wrapped routine methods."""
-    if not method_entries:
-        return []
-    lines = []
-    lines.append('\t{')
-    lines.append(f'\t\tPyMethodDef *mdef = f2py_{modulename}_derived_methods;')
-    lines.append('\t\twhile (mdef->ml_name != NULL) {')
-    lines.append('\t\t\tPyObject *func = PyCFunction_New(mdef, NULL);')
-    lines.append('\t\t\tif (func != NULL) {')
-    lines.append('\t\t\t\tPyDict_SetItemString(d, mdef->ml_name, func);')
-    lines.append('\t\t\t\tPy_DECREF(func);')
-    lines.append('\t\t\t}')
-    lines.append('\t\t\tmdef++;')
-    lines.append('\t\t}')
-    lines.append('\t}')
-    return lines

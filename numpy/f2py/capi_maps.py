@@ -247,6 +247,9 @@ def getctype(var):
                             f'{{{kind!r}: "<C typespec>"}}}} '
                             f'in {os.getcwd()}/.f2py_f2cmap '
                             f'file).\n')
+    elif isderivedtype(var):
+        # passed as a handle of the Fortran object, see sign2map
+        pass
     elif not isexternal(var):
         errmess(f'getctype: No C-type found in "{var}", assuming void.\n')
     return ctype
@@ -383,7 +386,19 @@ def getpydocsign(a, var):
     if hasinitvalue(var):
         init, showinit = getinit(a, var)
         init = f', optional\\n    Default: {showinit}'
-    if isscalar(var):
+    if isderivedtype(var):
+        typename = var.get('typename', '')
+        if 'vector' in var.get('f2py_dt', {}):
+            typename = f"rank-{var['f2py_dt']['vector']} sequence of {typename}"
+        elif isarray(var):
+            dim = var['dimension']
+            typename = (f"rank-{len(dim)} sequence of {typename} with bounds "
+                        f"({','.join(dim)})")
+        elif isnullable_derivedtype(var):
+            typename = f'{typename} or None'
+        sig = f'{a} : {opt} {typename}'
+        sigout = f'{out_a} : {typename}'
+    elif isscalar(var):
         if isintent_inout(var):
             sig = (f"{a} : {opt} rank-0 array({c2py_map[ctype]},"
                    f"'{c2pycode_map[ctype]}'){init}")
@@ -591,6 +606,45 @@ def sign2map(a, var):
     ret['pydocsign'], ret['pydocsignout'] = getpydocsign(a, var)
     if hasnote(var):
         ret['note'] = var['note']
+    if isderivedtype(var):
+        ret.update(getdtmap(a, var))
+    return ret
+
+
+def getdtmap(a, var):
+    """Return the names the rules for a derived type argument use.
+
+    derived_type_rules describes the Python type of the argument in
+    ``var['f2py_dt']``, and the argument is passed as a handle of the
+    Fortran object of its instance.
+    """
+    if 'f2py_dt' not in var:
+        raise ValueError(f'getdtmap: no Python type for derived type '
+                         f'argument "{a}" of type "{var.get("typename")}"')
+    dt = var['f2py_dt']
+    ret = {'varrformat': 'N'}
+    if dt['any']:
+        ret['dtanytypes'] = f"f2py_{dt['module']}_any_types"
+        return ret
+    ret['dtpytype'] = f"Py{dt['name']}_Type"
+    ret['dttag'] = str(dt['tag'])
+    ret['dtkind'] = str(dt['kind'])
+    ret['dtcapname'] = f'"{dt["capsule"]}"'
+    ret['dtdestructor'] = f"f2py_{dt['name']}_capsule_destructor"
+    if dt['poly']:
+        ret['dtwanttag'] = '-1'
+        ret['dtwantcapname'] = 'NULL'
+    else:
+        ret['dtwanttag'] = ret['dttag']
+        ret['dtwantcapname'] = ret['dtcapname']
+    if dt['bindc']:
+        ret['dtsize'] = f"sizeof(f2py_{dt['name']}_t)"
+    if 'vector' in dt:
+        extents = ', '.join(f'f2py_{a}_n{k}'
+                            for k in range(1, dt['vector'] + 1))
+        ret['dtvectorextents'] = f"{dt['vector']}, (npy_intp[]){{{extents}}}"
+        ret['dtvectorfree'] = dt['vector_free']
+        ret['dtcopysize'] = ret.get('dtsize', '0')
     return ret
 
 

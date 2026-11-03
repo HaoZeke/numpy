@@ -46,7 +46,8 @@ __all__ = [
     'isparameter', 'islong_doublearray',
     'isderivedtype', 'isbindctype', 'get_type_members',
     'is_simple_derived_type', 'is_fixed_array', 'get_type_by_name',
-    'isvalidintrinsicmod'
+    'isvalidintrinsicmod', 'isunlimitedpolymorphic', 'isbindc_derivedtype',
+    'hashandles', 'isderivedtype_vector', 'isnullable_derivedtype'
 ]
 
 
@@ -325,7 +326,7 @@ def issubroutine(rout):
 def issubroutine_wrap(rout):
     if isintent_c(rout):
         return 0
-    return issubroutine(rout) and hasassumedshape(rout)
+    return issubroutine(rout) and (hasassumedshape(rout) or hashandles(rout))
 
 def isattr_value(var):
     return 'value' in var.get('attrspec', [])
@@ -621,6 +622,32 @@ def containsderivedtypes(rout):
 def isderivedtype(var):
     """Check if a variable declaration has typespec == 'type'."""
     return var.get('typespec') == 'type'
+
+
+def isunlimitedpolymorphic(var):
+    return 'unlimited_polymorphic' in var.get('attrspec', [])
+
+
+def isbindc_derivedtype(var):
+    return var.get('f2py_dt', {}).get('bindc', False)
+
+
+def isderivedtype_vector(var):
+    """Check if an argument is an allocatable or pointer array of derived
+    type that Fortran makes, passed as a buffer of handles."""
+    return 'vector' in var.get('f2py_dt', {})
+
+
+def isnullable_derivedtype(var):
+    """Check if an argument is an allocatable or pointer scalar of derived
+    type, which None passes unallocated or disassociated."""
+    return ('f2py_dt' in var and not isarray(var)
+            and (isallocatable(var) or 'pointer' in var.get('attrspec', [])))
+
+
+def hashandles(rout):
+    """Check if a routine takes derived type arguments as handles."""
+    return any('f2py_dt' in v for v in rout['vars'].values())
 
 
 def isbindctype(block):

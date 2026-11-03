@@ -24,64 +24,6 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 
 import os
 
-from .auxfuncs import (
-    get_type_members,
-    isroutine,
-    outmess,
-)
-
-# Re-export everything from submodules for backward compatibility
-from ._dt_helpers import (  # noqa: F401
-    _C_TO_NPY_ENUM,
-    _C_TO_PYFORMAT,
-    _C_TO_PYOBJ,
-    _FORTRAN_ARITH_OPS,
-    _FORTRAN_CMP_OPS,
-    _FORTRAN_TO_C,
-    _FORTRAN_TO_ISOC,
-    _PYOBJ_TO_C,
-    _can_wrap_abstract,
-    _can_wrap_bindc,
-    _can_wrap_opaque,
-    _eval_kind_expr,
-    _find_derived_types,
-    _fortran_sym,
-    _get_all_members,
-    _get_fortran_type_spec,
-    _get_array_dims,
-    _get_c_return_type,
-    _get_char_len,
-    _get_extends_parent,
-    _get_member_ctype,
-    _get_member_isoc_type,
-    _get_alloc_ndim,
-    _get_pointer_ndim,
-    _has_len_params,
-    _has_unresolved_kind_params,
-    _is_abstract_type,
-    _is_allocatable_member,
-    _is_array_member,
-    _is_char_member,
-    _is_coarray_member,
-    _coarray_as_local,
-    _is_complex_member,
-    _is_deferred_char_member,
-    _is_pointer_member,
-    _is_private_member,
-    _is_type_array_member,
-    _is_type_member,
-    _is_type_parameter,
-    _resolve_kind_params,
-    _resolve_parameterized_type,
-    _resolve_type_for_kind,
-    _enumerate_specializations,
-    _get_kind_param_info,
-    _get_len_param_info,
-    _is_len_sized_array,
-    _polymorphic_type_tags,
-    _topo_visit,
-)
-
 from ._dt_codegen import (  # noqa: F401
     _gen_array_from_any_helper,
     _gen_bindc_struct,
@@ -104,28 +46,119 @@ from ._dt_codegen import (  # noqa: F401
     _scan_operator_interfaces,
 )
 
+# Re-export everything from submodules for backward compatibility
+from ._dt_helpers import (  # noqa: F401
+    _C_TO_NPY_ENUM,
+    _C_TO_PYFORMAT,
+    _C_TO_PYOBJ,
+    _FORTRAN_ARITH_OPS,
+    _FORTRAN_CMP_OPS,
+    _FORTRAN_TO_C,
+    _FORTRAN_TO_ISOC,
+    _PYOBJ_TO_C,
+    _can_wrap_abstract,
+    _can_wrap_bindc,
+    _can_wrap_opaque,
+    _coarray_as_local,
+    _describe_types,
+    _enumerate_specializations,
+    _eval_kind_expr,
+    _find_derived_types,
+    _fortran_sym,
+    _get_all_members,
+    _get_alloc_ndim,
+    _get_array_dims,
+    _get_c_return_type,
+    _get_char_len,
+    _get_extends_parent,
+    _get_fortran_type_spec,
+    _get_kind_param_info,
+    _get_len_param_info,
+    _get_member_ctype,
+    _get_member_isoc_type,
+    _get_pointer_ndim,
+    _has_len_params,
+    _has_unresolved_kind_params,
+    _is_abstract_type,
+    _is_allocatable_member,
+    _is_array_member,
+    _is_char_member,
+    _is_coarray_member,
+    _is_complex_member,
+    _is_deferred_char_member,
+    _is_len_sized_array,
+    _is_pointer_member,
+    _is_private_member,
+    _is_type_array_member,
+    _is_type_member,
+    _is_type_parameter,
+    _module_types,
+    _resolve_kind_params,
+    _resolve_parameterized_type,
+    _resolve_type_for_kind,
+    _topo_visit,
+)
 from ._dt_routines import (  # noqa: F401
-    _gen_routine_c_wrapper,
-    _gen_routine_fortran_wrapper,
-    _gen_routine_init_code,
-    _gen_routine_method_table,
-    _gen_type_methods,
-    _get_wrappable_routines,
-    _has_derived_type_args,
-    _is_array_type_arg,
-    _scan_final_subroutines,
-    _scan_proc_pointer_components,
-    _gen_proc_pointer_fortran_wrappers,
-    _gen_proc_pointer_c_methods,
     _find_interface_block,
-    _scan_type_bound_procedures,
     _gen_defined_io_fortran_wrapper,
+    _gen_defined_io_from_string,
     _gen_defined_io_read_fortran_wrapper,
     _gen_defined_io_tp_str,
-    _gen_defined_io_from_string,
+    _gen_proc_pointer_c_methods,
+    _gen_proc_pointer_fortran_wrappers,
+    _gen_type_methods,
+    _has_derived_type_args,
+    _scan_final_subroutines,
+    _scan_proc_pointer_components,
+    _scan_type_bound_procedures,
     generate_fortran_wrappers,
+    prepare_routine,
     write_fortran_wrappers,
 )
+from .auxfuncs import get_type_members, isroutine, outmess
+
+
+def _source_file(module):
+    """Return the source file of a module, for scanning what crackfortran
+    does not record: type-bound procedures, finalizers and procedure
+    pointer components.
+
+    The 'from' field is the file for crackfortran, and is prefixed with
+    ':modulename:' in the full f2py pipeline.
+    """
+    source_file = module.get('from', '')
+    if ':' in source_file:
+        for part in reversed(source_file.split(':')):
+            if part and os.path.isfile(part):
+                return part
+        return ''
+    return source_file
+
+
+def describe_types(pymod):
+    """Describe the wrapped derived types of all modules of pymod.
+
+    Routines take derived type arguments as handles of their Fortran
+    objects; _dt_routines.prepare_routine reads these descriptions.
+    """
+    from .f90mod_rules import findf90modules
+    types = {}
+    for m in findf90modules(pymod):
+        types.update(_describe_types(m))
+    return types
+
+
+def final_subroutines(module):
+    """Return the lower case names of the FINAL subroutines of a module.
+
+    They run when f2py destroys the Fortran object of an instance
+    (F2018 7.5.6.3), so they are not wrapped as routines.
+    """
+    source_file = _source_file(module)
+    names = set()
+    for tb in _module_types(module)[1]:
+        names.update(_scan_final_subroutines(source_file, tb['name']))
+    return names
 
 
 def buildhooks(pymod):
@@ -135,10 +168,13 @@ def buildhooks(pymod):
     - C struct typedefs
     - Python type objects with getters/setters
     - Module init registration code
-    - Wrapper functions for routines with derived type arguments
+
+    Routines with derived type arguments are wrapped by f90mod_rules,
+    with the arguments prepared by _dt_routines.prepare_routine.
 
     Returns a dict with 'f90modhooks' and 'initf90modhooks' keys
-    compatible with the existing f90mod_rules pipeline.
+    compatible with the existing f90mod_rules pipeline, which puts the
+    former ahead of the routine wrappers that use the types.
     """
     ret = {
         'f90modhooks': [],
@@ -149,79 +185,26 @@ def buildhooks(pymod):
     from .f90mod_rules import findf90modules
     for m in findf90modules(pymod):
         modulename = m['name']
-        type_blocks = _find_derived_types(m)
 
         # Collect module-level routines (for TBP and routine wrapping)
         all_routines = [b for b in m.get('body', [])
                         if isroutine(b)]
 
-        # Get source file for TBP scanning
-        # The 'from' field format varies:
-        #   direct crackfortran: '/path/to/file.f90'
-        #   full f2py pipeline: ':modulename:/path/to/file.f90'
-        source_file = m.get('from', '')
-        if ':' in source_file:
-            parts = source_file.split(':')
-            for part in reversed(parts):
-                if part and os.path.isfile(part):
-                    source_file = part
-                    break
-            else:
-                source_file = ''
-
-        # Multi-pass type resolution: resolve leaf types first, then
-        # types with nested type members (dependency ordering)
-        type_map = {}
-        remaining = list(type_blocks)
-        max_passes = len(type_blocks) + 1
-        for _ in range(max_passes):
-            if not remaining:
-                break
-            still_remaining = []
-            for tb in remaining:
-                typename = tb['name']
-                if (_can_wrap_bindc(tb, type_map)
-                        or _can_wrap_opaque(tb, type_map)
-                        or _can_wrap_abstract(tb, type_map)):
-                    type_map[typename.lower()] = tb
-                else:
-                    still_remaining.append(tb)
-            if len(still_remaining) == len(remaining):
-                break  # no progress, stop
-            remaining = still_remaining
-
-        # Generate type wrappers in dependency order (leaf types first)
-        generated = set()
-        gen_order = []
-        for tb in type_blocks:
-            _topo_visit(tb, type_blocks, type_map,
-                        generated, gen_order)
-
-        # Assign type tags for polymorphic dispatch (F2018 7.3.2.3).
-        # Each wrappable type gets a unique integer tag. Tags are
-        # ordered so parent types have lower tags than children.
-        type_tags = _polymorphic_type_tags(type_blocks, type_map)
-
-        # Collect all final subroutine names across types.
-        # These must be excluded from routine wrapping since they
-        # are called automatically during deallocation (F2018 7.5.6.3)
-        # and should not be exposed as Python-callable wrappers.
-        final_subroutine_names = set()
-        for tb in gen_order:
-            finals = _scan_final_subroutines(
-                source_file, tb['name'])
-            final_subroutine_names.update(finals)
+        source_file = _source_file(m)
+        type_map, gen_order, type_tags = _module_types(m)
 
         # Track bound_procs and proc_ptrs per type for inheritance merging
         all_bound_procs = {}
+        all_binding_attrs = {}
         all_proc_ptrs = {}
 
         for tb in gen_order:
             typename = tb['name']
 
             # Scan for type-bound procedures
+            binding_attrs = {}
             bound_procs = _scan_type_bound_procedures(
-                source_file, typename)
+                source_file, typename, binding_attrs)
 
             # Scan for procedure pointer components (F2018 7.5.4.4)
             proc_ptrs = _scan_proc_pointer_components(
@@ -234,16 +217,18 @@ def buildhooks(pymod):
                 merged = dict(parent_bp)
                 merged.update(bound_procs)  # child overrides parent
                 bound_procs = merged
+                binding_attrs = {**all_binding_attrs.get(parent_name, {}),
+                                 **binding_attrs}
                 # Inherit proc ptrs from parent
                 parent_pp = all_proc_ptrs.get(parent_name, [])
                 if parent_pp:
-                    parent_names = {p['name'] for p in parent_pp}
                     own_names = {p['name'] for p in proc_ptrs}
                     inherited = [p for p in parent_pp
                                  if p['name'] not in own_names]
                     proc_ptrs = inherited + proc_ptrs
 
             all_bound_procs[typename.lower()] = bound_procs
+            all_binding_attrs[typename.lower()] = binding_attrs
             all_proc_ptrs[typename.lower()] = proc_ptrs
 
             if bound_procs:
@@ -260,13 +245,15 @@ def buildhooks(pymod):
                 outmess(f'\t\tGenerating abstract type skeleton '
                         f'for "{typename}"...\n')
                 _generate_abstract_hooks(
-                    ret, typename, tb, modulename)
+                    ret, typename, tb, modulename,
+                    type_tag=type_tags.get(typename.lower(), 0))
             elif _can_wrap_bindc(tb, type_map):
                 outmess(f'\t\tGenerating bind(c) type wrapper '
                         f'for "{typename}"...\n')
                 _generate_bindc_hooks(
                     ret, typename, tb, modulename, m,
                     bound_procs=bound_procs,
+                    binding_attrs=binding_attrs,
                     routines=all_routines,
                     type_map=type_map,
                     type_tag=type_tags.get(typename.lower(), 0))
@@ -276,45 +263,30 @@ def buildhooks(pymod):
                 _generate_opaque_hooks(
                     ret, typename, tb, modulename, m,
                     bound_procs=bound_procs,
+                    binding_attrs=binding_attrs,
                     routines=all_routines,
                     type_map=type_map,
                     proc_ptrs=proc_ptrs,
                     type_tag=type_tags.get(typename.lower(), 0))
-            else:
-                outmess(f'\t\tSkipping derived type "{typename}" '
-                        f'(not wrappable yet)...\n')
 
-        # Process routines with derived type arguments
-        if type_map:
-            wrappable_routines = _get_wrappable_routines(m, type_map)
-            # Exclude final subroutines (F2018 7.5.6.1) from
-            # routine wrapping -- they run via deallocate, not
-            # as user-callable Python methods
-            wrappable_routines = [
-                routine for routine in wrappable_routines
-                if routine['name'].lower() not in final_subroutine_names
-            ]
-            method_entries = []
-            for routine in wrappable_routines:
-                rname = routine['name']
-                outmess(f'\t\tGenerating derived type routine wrapper '
-                        f'for "{rname}"...\n')
-                c_code, method_def = _gen_routine_c_wrapper(
-                    modulename, routine, type_map)
-                if c_code is not None:
-                    ret['f90modhooks'].append(c_code)
-                    method_entries.append(method_def)
-            if method_entries:
-                ret['f90modhooks'].append(
-                    _gen_routine_method_table(modulename, method_entries))
-                ret['initf90modhooks'].extend(
-                    _gen_routine_init_code(modulename, method_entries))
+        # The derived types a class(*) argument of a routine may have
+        if any(var.get('f2py_dt', {}).get('any')
+               for r in all_routines for var in r['vars'].values()):
+            entries = ''.join(
+                f'    {{&Py{tb["name"]}_Type, {type_tags[tb["name"].lower()]}}},\n'
+                for tb in gen_order if not _is_abstract_type(tb)
+                and not _enumerate_specializations(tb))
+            ret['f90modhooks'].append(
+                f'static const f2py_dt_any_type f2py_{modulename}_any_types[] = '
+                f'{{\n{entries}    {{NULL, 0}}\n}};\n')
+            ret.setdefault('need', []).append('f2py_dt_any')
 
     # Prepend the Array API / DLPack helper function (used by all
     # array setters in both bind(c) and opaque code paths).
     if ret['f90modhooks']:
         ret['f90modhooks'][0] = (
             _gen_array_from_any_helper() + ret['f90modhooks'][0])
+        ret.setdefault('need', []).append('f2py_dt_object')
 
     # Complex members use npy_cfloat/npy_cdouble (MSVC-compatible) with
     # npy_creal/npy_cpack helpers from npy_math.h. The type definitions
@@ -338,7 +310,7 @@ def buildhooks(pymod):
 
 def _generate_bindc_hooks(ret, typename, typeblock, modulename,
                           module_block, bound_procs=None, routines=None,
-                          type_map=None, type_tag=0):
+                          type_map=None, type_tag=0, binding_attrs=None):
     """Generate hooks for a bind(c) derived type."""
     members = {
         name: var for name, var in get_type_members(typeblock).items()
@@ -359,7 +331,11 @@ def _generate_bindc_hooks(ret, typename, typeblock, modulename,
     has_methods = False
     if bound_procs and routines and type_map:
         method_funcs, method_entries = _gen_type_methods(
-            typename, bound_procs, routines, type_map)
+            typename, bound_procs, routines, type_map, modulename,
+            binding_attrs)
+        if method_funcs:
+            ret.setdefault('need', []).extend(
+                ['f2py_dt_call_bound', 'f2py_dt_args_match'])
         if method_funcs:
             code_parts.extend(method_funcs)
             methods_table = (
@@ -387,7 +363,8 @@ def _generate_bindc_hooks(ret, typename, typeblock, modulename,
     ret['initf90modhooks'].extend(_gen_init_code(typename, modulename))
 
 
-def _generate_abstract_hooks(ret, typename, typeblock, modulename):
+def _generate_abstract_hooks(ret, typename, typeblock, modulename,
+                             type_tag=0):
     """Generate a skeleton PyTypeObject for an abstract Fortran type.
 
     Abstract types (F2003 4.5.7) cannot be instantiated, but their
@@ -402,12 +379,10 @@ def _generate_abstract_hooks(ret, typename, typeblock, modulename):
     """
     code_parts = []
 
-    # Minimal PyObject struct (no capsule member)
+    # The struct of every derived type, without a capsule
     code_parts.append(f"""\
 /* Abstract type {typename} -- skeleton for isinstance() support */
-typedef struct {{
-    PyObject_HEAD
-}} Py{typename}Object;
+typedef f2py_dt_object Py{typename}Object;
 """)
 
     # tp_new -- standard allocator
@@ -417,6 +392,9 @@ Py{typename}_tp_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {{
     Py{typename}Object *self;
     self = (Py{typename}Object *)type->tp_alloc(type, 0);
+    if (self != NULL) {{
+        self->type_tag = {type_tag};
+    }}
     return (PyObject *)self;
 }}
 """)
@@ -479,7 +457,8 @@ static PyTypeObject Py{typename}_Type = {{
 
 def _generate_opaque_hooks(ret, typename, typeblock, modulename,
                            module_block, bound_procs=None, routines=None,
-                           type_map=None, proc_ptrs=None, type_tag=0):
+                           type_map=None, proc_ptrs=None, type_tag=0,
+                           binding_attrs=None):
     """Generate hooks for a non-bind(c) derived type via opaque pointers.
 
     Uses the 3-layer approach: Python -> C wrapper -> Fortran accessor.
@@ -592,7 +571,11 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
     all_method_entries = []
     if bound_procs and routines and type_map:
         method_funcs, method_entries = _gen_type_methods(
-            typename, bound_procs, routines, type_map)
+            typename, bound_procs, routines, type_map, modulename,
+            binding_attrs)
+        if method_funcs:
+            ret.setdefault('need', []).extend(
+                ['f2py_dt_call_bound', 'f2py_dt_args_match'])
         all_method_funcs.extend(method_funcs)
         all_method_entries.extend(method_entries)
     # Procedure pointer components (F2018 7.5.4.4)

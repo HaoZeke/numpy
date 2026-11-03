@@ -28,6 +28,7 @@ __all__ = [
     "hascallstatement",
     "hascommon",
     "hasexternals",
+    "hashandles",
     "hasinitvalue",
     "hasnote",
     "hasresultnote",
@@ -35,6 +36,7 @@ __all__ = [
     "isarray",
     "isarrayofstrings",
     "isattr_value",
+    "isbindc_derivedtype",
     "ischaracter",
     "ischaracter_or_characterarray",
     "ischaracterarray",
@@ -43,6 +45,7 @@ __all__ = [
     "iscomplexfunction",
     "iscomplexfunction_warn",
     "iscstyledirective",
+    "isderivedtype_vector",
     "isdouble",
     "isdummyroutine",
     "isexternal",
@@ -73,6 +76,7 @@ __all__ = [
     "islong_longfunction",
     "ismodule",
     "ismoduleroutine",
+    "isnullable_derivedtype",
     "isoptional",
     "isparameter",
     "isprivate",
@@ -87,6 +91,7 @@ __all__ = [
     "issubroutine",
     "issubroutine_wrap",
     "isthreadsafe",
+    "isunlimitedpolymorphic",
     "isunsigned",
     "isunsigned_char",
     "isunsigned_chararray",
@@ -174,6 +179,11 @@ def isunsigned_long_long(var: _Var) -> _Bool: ...
 def isunsigned_long_longarray(var: _Var) -> bool: ...
 def issigned_long_longarray(var: _Var) -> bool: ...
 def islong_doublearray(var: _Var) -> bool: ...
+def isunlimitedpolymorphic(var: _Var) -> bool: ...
+def isbindc_derivedtype(var: _Var) -> bool: ...
+def hashandles(rout: _ROut) -> bool: ...
+def isderivedtype_vector(var: _Var) -> bool: ...
+def isnullable_derivedtype(var: _Var) -> bool: ...
 def isdouble(var: _Var) -> _Bool: ...
 def islong_double(var: _Var) -> _Bool: ...
 def islong_complex(var: _Var) -> _Bool: ...

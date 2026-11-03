@@ -81,7 +81,8 @@ fgetdims2_sa = """\
 
 def buildhooks(pymod):
     from . import rules
-    ret = {'f90modhooks': [], 'initf90modhooks': [], 'body': [],
+    ret = {'f90modhooks': [], 'f90modtypes': [], 'initf90modhooks': [],
+           'body': [],
            'need': ['F_FUNC', 'arrayobject.h'],
            'separatorsfor': {'includes0': '\n', 'includes': '\n'},
            'docs': ['"Fortran 90/95 modules:\\n"'],
@@ -125,6 +126,7 @@ def buildhooks(pymod):
         s[0] = f'{s[0]}\n{line}'
 
     usenames = getuseblocks(pymod)
+    dt_types = derived_type_rules.describe_types(pymod)
     for m in findf90modules(pymod):
         sargs, fargs, efargs, modobjs, notvars, onlyvars = [], [], [], [], [
             m['name']], []
@@ -245,23 +247,37 @@ def buildhooks(pymod):
                             f"\tf2py_{m['name']}_def[i_f2py++].data = {n};"))
         if onlyvars:
             dadd('\\end{description}')
+        dt_routines = []
         if hasbody(m):
             m_name = m['name']
+            finals = derived_type_rules.final_subroutines(m)
+            params = {n: v['='] for n, v in m['vars'].items()
+                      if isparameter(v) and '=' in v}
             for b in m['body']:
                 b_name = b['name']
                 if not isroutine(b):
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b['block']} {b_name}\n")
                     continue
-                # Skip routines with derived type args -- they are handled
-                # by derived_type_rules instead of the standard pipeline
-                if derived_type_rules._has_derived_type_args(b):
+                if b_name.lower() in finals:
                     outmess("f90mod_rules.buildhooks:"
-                            f" skipping {b_name} (has derived type args,"
-                            f" handled by derived_type_rules)\n")
+                            f" skipping {b_name}, which finalizes a"
+                            " derived type\n")
                     continue
-                modobjs.append(f"{b_name}()")
                 b['modulename'] = m_name
+                # derived_type_rules passes derived type arguments as
+                # handles of their Fortran objects
+                if derived_type_rules._has_derived_type_args(b):
+                    missing = derived_type_rules.prepare_routine(
+                        b, dt_types, params)
+                    if missing:
+                        outmess("f90mod_rules.buildhooks:"
+                                f" skipping {b_name}, as f2py cannot pass"
+                                f" {'; '.join(missing)}\n")
+                        b['f2py_dt_missing'] = missing
+                        continue
+                    dt_routines.append(b_name)
+                modobjs.append(f"{b_name}()")
                 api, wrap = rules.buildapi(b)
                 if isfunction(b):
                     fhooks[0] = fhooks[0] + wrap
@@ -304,12 +320,21 @@ def buildhooks(pymod):
              f'F2PYINIT{m_name.upper()})(f2py_setup_{m_name});')
         iadd('}\n')
         ret['f90modhooks'] = ret['f90modhooks'] + chooks + ihooks
+        # routines with derived type arguments are attributes of the
+        # module too, as the derived types are
+        aliases = [
+            f'\t\tif (PyDict_GetItemString(d, "{n}") == NULL'
+            f' && PyDict_SetItemString(d, "{n}",'
+            f' PyDict_GetItemString(((PyFortranObject *)tmp)->dict, "{n}"))'
+            ' < 0) {Py_DECREF(tmp); return -1;}'
+            for n in dt_routines]
         ret['initf90modhooks'] = [
             '\t{',
             ('\t\tPyObject *tmp = '
             f'PyFortranObject_New(f2py_{m_name}_def,f2py_init_{m_name});'),
             '\t\tif (tmp == NULL) return -1;',
             f'\t\tPyDict_SetItemString(d, "{m_name}", tmp);',
+            *aliases,
             '\t\tPy_XDECREF(tmp);',
             '\t}',
         ] + ret["initf90modhooks"]
@@ -337,7 +362,7 @@ def buildhooks(pymod):
 
     # Merge derived type hooks (opaque pointer types, routine wrappers)
     dt_hooks = derived_type_rules.buildhooks(pymod)
-    ret['f90modhooks'].extend(dt_hooks.get('f90modhooks', []))
+    ret['f90modtypes'].extend(dt_hooks.get('f90modhooks', []))
     ret['initf90modhooks'].extend(dt_hooks.get('initf90modhooks', []))
     ret['need'].extend(dt_hooks.get('need', []))
 
