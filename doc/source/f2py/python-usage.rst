@@ -342,6 +342,10 @@ In Python:
 .. literalinclude:: ./code/results/moddata_session.dat
   :language: python
 
+Variables and parameters that a module accesses with ``use`` from another
+module wrapped in the same extension are attributes of the using module too,
+following ``only`` lists, renames and ``private`` statements.
+
 
 Allocatable arrays
 ===================
