@@ -200,6 +200,11 @@ def build_module(source_files, options=[], skip=[], only=[], module_name=None):
     Compile and import a f2py module, built from the given files.
 
     """
+    if module_name in sys.modules:
+        # A new build cannot replace it in this process: import_module
+        # returns the cached module and the dynamic loader reuses the
+        # shared object it already mapped from the same path.
+        raise RuntimeError(f"Module name {module_name!r} already in use.")
 
     code = f"import sys; sys.path = {sys.path!r}; import numpy.f2py; numpy.f2py.main()"
 
