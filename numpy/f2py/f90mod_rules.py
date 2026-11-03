@@ -193,7 +193,7 @@ def buildhooks(pymod):
         for i, n in enumerate(onlyvars):
             var = m['vars'][n]
             modobjs.append(n)
-            ct = capi_maps.getctype(var)
+            ct = capi_maps.getctype(var, n)
             at = capi_maps.c2capi_map[ct]
             dm = capi_maps.getarrdims(n, var)
             dms = dm['dims'].replace('*', '-1').strip()

@@ -11,20 +11,32 @@ from . import __version__
 f2py_version = __version__.version
 
 import copy
+import functools
 import os
 import re
 
 import numpy as np
 
 from . import cb_rules
-from ._isocbind import iso_c2py_map, iso_c_binding_map, isoc_c2pycode_map
-from ._isofenv import iso_fortran_env_map
+from ._isocbind import (
+    iso_c2py_map,
+    iso_c_binding_map,
+    iso_c_kind_numbers,
+    isoc_c2pycode_map,
+)
+from ._isofenv import iso_f_kind_numbers, iso_fortran_env_map
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
 # code, it is safest to use import * pending a major refactoring of f2py.
 from .auxfuncs import *
-from .crackfortran import markoutercomma
+from .crackfortran import (
+    _BINARY64_NMANT,
+    _BINARY128_NMANT,
+    _IEEE_DOUBLE_MAXEXP,
+    _X87_NMANT,
+    markoutercomma,
+)
 
 __all__ = [
     'getctype', 'getstrlength', 'getarrdims', 'getpydocsign',
@@ -41,6 +53,7 @@ lcb2_map = {}
 c2py_map = {'double': 'float',
             'float': 'float',                          # forced casting
             'long_double': 'float',                    # forced casting
+            'float16': 'float',                        # forced casting
             'char': 'int',                             # forced casting
             'signed_char': 'int',                      # forced casting
             'unsigned_char': 'int',                    # forced casting
@@ -50,6 +63,7 @@ c2py_map = {'double': 'float',
             'long': 'int',
             'long_long': 'long',
             'unsigned': 'int',                         # forced casting
+            'unsigned_long_long': 'long',              # forced casting
             'complex_float': 'complex',                # forced casting
             'complex_double': 'complex',
             'complex_long_double': 'complex',          # forced casting
@@ -60,6 +74,7 @@ c2py_map = {'double': 'float',
 c2capi_map = {'double': 'NPY_DOUBLE',
                 'float': 'NPY_FLOAT',
                 'long_double': 'NPY_LONGDOUBLE',
+                'float16': 'NPY_HALF',
                 'char': 'NPY_BYTE',
                 'unsigned_char': 'NPY_UBYTE',
                 'signed_char': 'NPY_BYTE',
@@ -80,6 +95,7 @@ c2capi_map = {'double': 'NPY_DOUBLE',
 c2pycode_map = {'double': 'd',
                 'float': 'f',
                 'long_double': 'g',
+                'float16': 'e',
                 'char': 'b',
                 'unsigned_char': 'B',
                 'signed_char': 'b',
@@ -110,36 +126,97 @@ c2buildvalue_map = {'double': 'd',
                     'complex_double': 'N',
                     'complex_long_double': 'N',
                     'long_double': 'N',
+                    'float16': 'N',
+                    'unsigned_char': 'B',
+                    'unsigned_short': 'H',
+                    'unsigned': 'I',
+                    'unsigned_long_long': 'K',
                     'string': 'y',
                     'character': 'c'}
 
 f2cmap_all = {'real': {'': 'float', '4': 'float', '8': 'double',
-                       '12': 'long_double', '16': 'long_double'},
+                       '2': 'float16'},
               'integer': {'': 'int', '1': 'signed_char', '2': 'short',
                           '4': 'int', '8': 'long_long',
                           '-1': 'unsigned_char', '-2': 'unsigned_short',
                           '-4': 'unsigned', '-8': 'unsigned_long_long'},
               'complex': {'': 'complex_float', '8': 'complex_float',
-                          '16': 'complex_double', '24': 'complex_long_double',
-                          '32': 'complex_long_double'},
+                          '16': 'complex_double'},
               'complexkind': {'': 'complex_float', '4': 'complex_float',
-                              '8': 'complex_double', '12': 'complex_long_double',
-                              '16': 'complex_long_double'},
+                              '8': 'complex_double'},
               'logical': {'': 'int', '1': 'char', '2': 'short', '4': 'int',
                           '8': 'long_long'},
               'double complex': {'': 'complex_double'},
               'double precision': {'': 'double'},
               'byte': {'': 'char'},
               }
+_long_double = np.finfo(np.longdouble)
 # real(10) is the x87 extended type, which long double is on x86
-if np.finfo(np.longdouble).nmant == 63:
+if _long_double.nmant == _X87_NMANT:
     f2cmap_all['real']['10'] = 'long_double'
     f2cmap_all['complex']['20'] = 'complex_long_double'
     f2cmap_all['complexkind']['10'] = 'complex_long_double'
+# real*12 is long double only where that type is stored in 12 bytes
+if np.dtype(np.longdouble).itemsize == 12:
+    f2cmap_all['real']['12'] = 'long_double'
+    f2cmap_all['complex']['24'] = 'complex_long_double'
+    f2cmap_all['complexkind']['12'] = 'complex_long_double'
+# real(16) is long double where that type is binary128 or IBM double-double
+if (_long_double.nmant == _BINARY128_NMANT
+        or (_long_double.maxexp == _IEEE_DOUBLE_MAXEXP
+            and _long_double.nmant > _BINARY64_NMANT)):
+    f2cmap_all['real']['16'] = 'long_double'
+    f2cmap_all['complex']['32'] = 'complex_long_double'
+    f2cmap_all['complexkind']['16'] = 'complex_long_double'
 
 # Add ISO_C handling
 c2pycode_map.update(isoc_c2pycode_map)
 c2py_map.update(iso_c2py_map)
+
+
+# The static map says short and int. The compiler is asked only when a
+# fast integer kind is resolved, and the answer is kept for that compiler.
+_FAST_INTEGER_DEFAULT = {
+    'c_int_fast16_t': 'short',
+    'c_int_fast32_t': 'int',
+}
+_fast_user_override = set()
+_signed_for_width = {1: 'signed_char', 2: 'short', 4: 'int', 8: 'long_long'}
+
+
+@functools.cache
+def _fast_integer_ctype(name, compiler):
+    """The C type of one fast ISO integer for ``compiler``, or None."""
+    from .crackfortran import _fortran_compiles
+    for kind in (8, 4, 2, 1):
+        code = (
+            "program p\n"
+            f"  use, intrinsic :: iso_c_binding, only: {name}\n"
+            "  integer, parameter :: check = 1 / merge(1, 0, "
+            f"{name} == {kind})\n"
+            "end program p\n")
+        if _fortran_compiles(compiler, code):
+            return _signed_for_width[kind]
+    return None
+
+
+def _fast_c_type(name):
+    """The probed C type, unless a ``.f2py_f2cmap`` entry names this kind."""
+    if name in _fast_user_override:
+        return None
+    from .crackfortran import _compiler_key
+    ctype = _fast_integer_ctype(name, _compiler_key())
+    if ctype is not None:
+        f2cmap_all['integer'][name] = ctype
+    return ctype
+
+
+# c_size_t has the width of size_t. NumPy's uintp is that type.
+_unsigned_for_width = {1: 'unsigned_char', 2: 'unsigned_short', 4: 'unsigned',
+                       8: 'unsigned_long_long'}
+iso_c_binding_map['integer']['c_size_t'] = _unsigned_for_width[
+    np.dtype(np.uintp).itemsize]
+
 f2cmap_all, _ = process_f2cmap_dict(f2cmap_all, iso_c_binding_map, c2py_map)
 f2cmap_all, _ = process_f2cmap_dict(f2cmap_all, iso_fortran_env_map, c2py_map)
 # End ISO_C handling
@@ -148,9 +225,10 @@ f2cmap_default = copy.deepcopy(f2cmap_all)
 f2cmap_mapped = []
 
 def load_f2cmap_file(f2cmap_file):
-    global f2cmap_all, f2cmap_mapped
+    global f2cmap_all, f2cmap_mapped, _fast_user_override
 
     f2cmap_all = copy.deepcopy(f2cmap_default)
+    _fast_user_override = set()
 
     if f2cmap_file is None:
         # Default value
@@ -167,6 +245,9 @@ def load_f2cmap_file(f2cmap_file):
         outmess(f'Reading f2cmap from {f2cmap_file!r} ...\n')
         with open(f2cmap_file) as f:
             d = eval(f.read().lower(), {}, {})
+        integer = d.get('integer', {})
+        _fast_user_override = {
+            name for name in _FAST_INTEGER_DEFAULT if name in integer}
         f2cmap_all, f2cmap_mapped = process_f2cmap_dict(f2cmap_all, d, c2py_map, True)
         outmess('Successfully applied user defined f2cmap changes\n')
     except Exception as msg:
@@ -176,6 +257,8 @@ def load_f2cmap_file(f2cmap_file):
 cformat_map = {'double': '%g',
                'float': '%g',
                'long_double': '%Lg',
+               'float16': '%g',
+               'unsigned_long_long': '%llu',
                'char': '%d',
                'signed_char': '%d',
                'unsigned_char': '%hhu',
@@ -195,64 +278,143 @@ cformat_map = {'double': '%g',
 
 # Auxiliary functions
 
+# Kind names reported once per run when they stay the default C type.
+_defaulted_kinds = set()
 
-def getctype(var):
+
+def _named_kind(typespec, name):
+    """The kind number of an ISO name, or None when ``name`` is not one."""
+    for table in (iso_c_kind_numbers, iso_f_kind_numbers):
+        kind = table.get(typespec, {}).get(name)
+        if kind is not None:
+            return kind
+    return None
+
+
+def _mapped_ctype(typespec, key):
+    """The C type for a kind or a star length, without the other map.
+
+    A ``complex`` kind that is not in ``complexkind`` is not a byte count.
+    ``complex(kind=16)`` must not become ``complex*16``.
     """
-    Determines C type
+    kind_map = typespec + 'kind'
+    if kind_map in f2cmap_all:
+        return f2cmap_all[kind_map].get(key)
+    return f2cmap_all.get(typespec, {}).get(key)
+
+
+def _missing_ctype(typespec, kind, name):
+    who = f" {name!r}" if name else ""
+    where = os.path.join(os.getcwd(), '.f2py_f2cmap')
+    raise ValueError(
+        f"getctype: {typespec}(kind={kind}){who} has no NumPy type on this "
+        f"platform (to override define {{'{typespec}': {{'{kind}': "
+        f"\"<C typespec>\"}}}} in {where} file).")
+
+
+def _character_kind(var, name):
+    """Reject a character kind other than 1.
+
+    ``f2py`` passes characters as bytes, so a wide character would be
+    read back as its first byte.
     """
-    ctype = 'void'
+    selector = var.get('charselector') or {}
+    kind = selector.get('kind')
+    if kind is None:
+        kind = (var.get('kindselector') or {}).get('kind')
+    if kind is None:
+        return
+    kind = str(kind)
+    if kind in ('1', 'c_char'):
+        return
+    who = f" {name!r}" if name else ""
+    raise ValueError(
+        f"getctype: character(kind={kind}){who} is not supported, "
+        f"as f2py passes characters as bytes.")
+
+
+def _kind_ctype(typespec, kind, default, name):
+    """Return the C type of one kind, or the default for a name not known."""
+    if typespec == 'integer' and kind in _FAST_INTEGER_DEFAULT:
+        ctype = _fast_c_type(kind)
+        if ctype is not None:
+            return ctype
+    mapped = _mapped_ctype(typespec, kind)
+    if mapped is not None:
+        return mapped
+    number = _named_kind(typespec, kind)
+    if number is not None and str(number) != kind:
+        mapped = _mapped_ctype(typespec, str(number))
+        if mapped is not None:
+            return mapped
+        _missing_ctype(typespec, kind, name)
+    if kind.lstrip('-').isdigit() or number is not None:
+        # a kind number is never the default kind: those are in the map
+        _missing_ctype(typespec, kind, name)
+    token = (typespec, kind)
+    if token not in _defaulted_kinds:
+        _defaulted_kinds.add(token)
+        errmess(f'getctype: "{typespec}(kind={kind})" is mapped to C '
+                f'"{default}" (to override define {{{typespec!r}: '
+                f'{{{kind!r}: "<C typespec>"}}}} '
+                f'in {os.getcwd()}/.f2py_f2cmap file).\n')
+    return default
+
+
+def _resolve_ctype(var, name):
     if isfunction(var):
-        if 'result' in var:
-            a = var['result']
-        else:
-            a = var['name']
+        a = var['result'] if 'result' in var else var['name']
         if a in var['vars']:
-            return getctype(var['vars'][a])
-        else:
-            errmess(f'getctype: function {a} has no return value?!\n')
-    elif issubroutine(var):
-        return ctype
-    elif ischaracter_or_characterarray(var):
+            return _resolve_ctype(var['vars'][a], a)
+        errmess(f'getctype: function {a} has no return value?!\n')
+        return 'void'
+    if issubroutine(var):
+        return 'void'
+    if var.get('typespec') == 'character' and not isexternal(var):
+        _character_kind(var, name)
+        if 'charselector' in var:
+            return 'string'
         return 'character'
-    elif isstring_or_stringarray(var):
-        return 'string'
-    elif 'typespec' in var and var['typespec'].lower() in f2cmap_all:
+    if 'typespec' in var and var['typespec'].lower() in f2cmap_all:
         typespec = var['typespec'].lower()
-        f2cmap = f2cmap_all[typespec]
-        ctype = f2cmap['']  # default type
-        if 'kindselector' in var:
-            if '*' in var['kindselector']:
-                try:
-                    ctype = f2cmap[var['kindselector']['*']]
-                except KeyError:
-                    raw_typespec = var['typespec']
-                    star = var['kindselector']['*']
-                    errmess(f'getctype: "{raw_typespec} * {star}" not supported.\n')
-            elif 'kind' in var['kindselector']:
-                if typespec + 'kind' in f2cmap_all:
-                    f2cmap = f2cmap_all[typespec + 'kind']
-                try:
-                    ctype = f2cmap[var['kindselector']['kind']]
-                except KeyError:
-                    if typespec in f2cmap_all:
-                        f2cmap = f2cmap_all[typespec]
-                    try:
-                        ctype = f2cmap[str(var['kindselector']['kind'])]
-                    except KeyError:
-                        kind = var['kindselector']['kind']
-                        errmess(
-                            f'getctype: "{typespec}({kind=})" is '
-                            f'mapped to C "{ctype}" (to override '
-                            f'define {{{typespec!r}: '
-                            f'{{{kind!r}: "<C typespec>"}}}} '
-                            f'in {os.getcwd()}/.f2py_f2cmap '
-                            f'file).\n')
-    elif isderivedtype(var):
+        default = f2cmap_all[typespec]['']
+        selector = var.get('kindselector') or {}
+        if '*' in selector:
+            star = str(selector['*'])
+            mapped = f2cmap_all[typespec].get(star)
+            if mapped is None:
+                _missing_ctype(typespec, star, name)
+            return mapped
+        if 'kind' in selector:
+            return _kind_ctype(typespec, str(selector['kind']), default, name)
+        return default
+    if isderivedtype(var):
         # passed as a handle of the Fortran object, see sign2map
         pass
     elif not isexternal(var):
         errmess(f'getctype: No C-type found in "{var}", assuming void.\n')
-    return ctype
+    return 'void'
+
+
+def ctype_of(var):
+    """Return the C type of ``var``, or None when its kind has none."""
+    try:
+        return _resolve_ctype(var, None)
+    except ValueError:
+        return None
+
+
+def getctype(var, name=None):
+    """
+    Determines C type.
+
+    A kind number with no C type raises ``ValueError``. A kind that
+    ``f2py`` could not evaluate keeps the default type, and the message
+    is printed once per kind.
+    """
+    if name is None:
+        name = var.get('name')
+    return _resolve_ctype(var, name)
 
 
 def f2cexpr(expr):
@@ -381,7 +543,7 @@ def getpydocsign(a, var):
                 out_a = k[4:]
                 break
     init = ''
-    ctype = getctype(var)
+    ctype = getctype(var, a)
 
     if hasinitvalue(var):
         init, showinit = getinit(a, var)
@@ -441,7 +603,7 @@ def getpydocsign(a, var):
 
 
 def getarrdocsign(a, var):
-    ctype = getctype(var)
+    ctype = getctype(var, a)
     if isstring(var) and (not isarray(var)):
         sig = f'{a} : rank-0 array(string(len={getstrlength(var)}),\'c\')'
     elif isscalar(var):
@@ -519,7 +681,9 @@ def sign2map(a, var):
             if k[:4] == 'out=':
                 out_a = k[4:]
                 break
-    ret = {'varname': a, 'outvarname': out_a, 'ctype': getctype(var)}
+    ret = {'varname': a, 'outvarname': out_a, 'ctype': getctype(var, a)}
+    # printf cannot take a _Float16, so check() prints it as a double
+    ret['showvaluearg'] = f'(double){a}' if ret['ctype'] == 'float16' else a
     intent_flags = []
     for f, s in isintent_dict.items():
         if f(var):
@@ -701,7 +865,7 @@ def routsign2map(rout):
             a = rout['name']
         ret['rname'] = a
         ret['pydocsign'], ret['pydocsignout'] = getpydocsign(a, rout)
-        ret['ctype'] = getctype(rout['vars'][a])
+        ret['ctype'] = getctype(rout['vars'][a], a)
         if hasresultnote(rout):
             ret['resultnote'] = rout['vars'][a]['note']
             rout['vars'][a]['note'] = ['See elsewhere.']
@@ -763,7 +927,8 @@ def modsign2map(m):
 def cb_sign2map(a, var, index=None):
     ret = {'varname': a}
     ret['varname_i'] = ret['varname']
-    ret['ctype'] = getctype(var)
+    ret['ctype'] = getctype(var, a)
+    ret['showvaluearg'] = (f'(double){a}' if ret['ctype'] == 'float16' else a)
     if ret['ctype'] in c2capi_map:
         ret['atype'] = c2capi_map[ret['ctype']]
         ret['elsize'] = get_elsize(var)
@@ -798,7 +963,7 @@ def cb_routsign2map(rout, um):
     ret['argname'] = rout['name']
     ret['begintitle'] = gentitle(ret['name'])
     ret['endtitle'] = gentitle(f"end of {ret['name']}")
-    ret['ctype'] = getctype(rout)
+    ret['ctype'] = getctype(rout, rout.get('name'))
     ret['rctype'] = 'void'
     if ret['ctype'] == 'string':
         ret['rctype'] = 'void'
@@ -856,7 +1021,8 @@ void
 
 
 def common_sign2map(a, var):  # obsolete
-    ret = {'varname': a, 'ctype': getctype(var)}
+    ret = {'varname': a, 'ctype': getctype(var, a)}
+    ret['showvaluearg'] = (f'(double){a}' if ret['ctype'] == 'float16' else a)
     if isstringarray(var):
         ret['ctype'] = 'char'
     if ret['ctype'] in c2capi_map:
