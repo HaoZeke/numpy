@@ -121,8 +121,9 @@ def has_fortran_compiler():
     return (checker.has_f90 and checker.has_f77)
 
 
-def fortran_builds(code):
-    """Return whether the Fortran compiler builds ``code`` into an object.
+def fortran_builds(code, args=()):
+    """Return whether the Fortran compiler builds ``code`` into an object,
+    with the compiler arguments ``args``.
 
     ``compiler.compiles()`` cannot answer this: its result is not checked by
     ``check_language``, and for LLVM flang Meson adds clang-only
@@ -135,7 +136,8 @@ def fortran_builds(code):
     try:
         with open(os.path.join(tmpdir, "meson.build"), "w") as f:
             f.write("project('check_build', 'fortran')\n")
-            f.write("static_library('check', 'check.f90')\n")
+            f.write(f"static_library('check', 'check.f90', "
+                    f"fortran_args: {list(args)!r})\n")
         with open(os.path.join(tmpdir, "check.f90"), "w") as f:
             f.write(code)
         for cmd in (["meson", "setup", "btmp"],
