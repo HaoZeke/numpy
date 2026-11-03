@@ -507,3 +507,16 @@ class TestSymbolic(util.F2PyTest):
             assert fromstring(str(s)) == s
         assert fromstring('4_"ABC"') == as_string('"ABC"', 4)
         assert fromstring('1_"ABC"') == as_string('"ABC"')
+
+    def test_concat_string_kinds(self):
+        ab, cd = as_string('"AB"'), as_string('"CD"')
+        ab4, cd4 = as_string('"AB"', 4), as_string('"CD"', 4)
+        assert ab // cd == as_string('"ABCD"')
+        assert ab4 // cd4 == as_string('"ABCD"', 4)
+        assert ab // cd4 == Expr(Op.CONCAT, (ab, cd4))
+
+        e = fromstring('"AB" // 1_"CD"', language=Language.Fortran)
+        assert normalize(e) == as_string('"ABCD"')
+        e = fromstring('"AB" // MYSTRKIND_"CD"', language=Language.Fortran)
+        assert normalize(e) == e
+        assert e.substitute({}) == e
