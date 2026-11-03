@@ -571,3 +571,23 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+
+class TestModuleNames:
+    def test_name_beginning_with_procedure(self, tmp_path):
+        # a module named procedure_args was read as a MODULE PROCEDURE
+        # statement, which made its contents a program
+        fpath = tmp_path / "procs.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module procedure_args
+            contains
+              subroutine run(x)
+                integer, intent(inout) :: x
+                x = x + 1
+              end subroutine run
+            end module procedure_args
+            """))
+        mods = crackfortran.crackfortran([str(fpath)])
+        assert [(m["block"], m["name"]) for m in mods] == [
+            ("module", "procedure_args")]
+        assert [b["name"] for b in mods[0]["body"]] == ["run"]
