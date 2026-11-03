@@ -350,6 +350,28 @@ def build_meson(source_files, module_name=None, **kwargs):
     return import_module(module_name)
 
 
+def build_fortran_library(source_files, name):
+    """
+    Compile Fortran sources into a static library with Meson, without F2PY.
+
+    Returns the directories holding the library and its module files.
+    """
+    d = Path(tempfile.mkdtemp(dir=get_module_dir()))
+    for fn in source_files:
+        shutil.copyfile(fn, d / Path(fn).name)
+    srcs = ", ".join(f"'{Path(fn).name}'" for fn in source_files)
+    (d / "meson.build").write_text(
+        f"project('{name}', 'fortran')\n"
+        f"static_library('{name}', [{srcs}], pic: true)\n"
+    )
+    for cmd in (["meson", "setup", "build"], ["meson", "compile", "-C", "build"]):
+        p = subprocess.run(cmd, cwd=d, capture_output=True, text=True)
+        if p.returncode != 0:
+            raise RuntimeError(f"Running {cmd} failed:\n{p.stdout}{p.stderr}")
+    build_dir = d / "build"
+    return build_dir, next(build_dir.rglob("*.mod")).parent
+
+
 #
 # Unittest convenience
 #

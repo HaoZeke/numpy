@@ -7,7 +7,7 @@ import pytest
 
 import numpy as np
 import numpy.testing as npt
-from numpy.f2py._backends._meson import MesonTemplate
+from numpy.f2py._backends._meson import MesonBackend, MesonTemplate
 
 from . import util
 
@@ -184,6 +184,68 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\nscalapack-openmpi =" not in meson_build
     assert "\nfoo-bar =" not in meson_build
     assert "\n1foo =" not in meson_build
+
+
+def test_meson_paths_relative_to_cwd(tmp_path, monkeypatch):
+    # Command line paths are relative to the current directory, while the
+    # meson.build file is written to, and resolved from, the build directory
+    monkeypatch.chdir(tmp_path)
+    build_dir = tmp_path / "bbuild"
+    (build_dir / "inc").mkdir(parents=True)
+    backend = MesonBackend(
+        modulename="Blah",
+        sources=[],
+        extra_objects=["obj/extra.o"],
+        build_dir=build_dir,
+        include_dirs=["mods", build_dir / "inc"],
+        library_dirs=["lib"],
+        libraries=["foo"],
+        define_macros=[],
+        undef_macros=[],
+        f2py_flags=[],
+        sysinfo_flags=[],
+        fc_flags=[],
+        flib_flags=[],
+        setup_flags=[],
+        remove_build_dir=False,
+        extra_dat={},
+    )
+    meson_build = backend.write_meson_build(build_dir).read_text()
+
+    assert f"'''{Path('mods').resolve()}'''" in meson_build
+    assert f"'''-L{Path('lib').absolute()}'''" in meson_build
+    assert f"'''{Path('obj', 'extra.o').absolute()}'''" in meson_build
+    # meson only accepts relative paths to directories in the build directory
+    assert "'''inc'''" in meson_build
+
+
+@pytest.mark.slow
+class TestPrecompiledModuleData(util.F2PyTest):
+    # gh-19162: wrap the data of a module compiled into a library without
+    # f2py, passing -I, -L and -l relative to the current directory
+    module_name = "gh19162_ext"
+    sources = [util.getpath("tests", "src", "regression", "gh19162", "gh19162.pyf")]
+
+    @classmethod
+    def setup_class(cls):
+        super().setup_class()
+        if not cls._has_fortran_compiler:
+            pytest.skip("No Fortran compiler available")
+        lib_dir, mod_dir = util.build_fortran_library(
+            [util.getpath("tests", "src", "regression", "gh19162", "gh19162_lib.f90")],
+            "gh19162",
+        )
+        module_dir = util.get_module_dir()
+        cls.options = [
+            f"-I{os.path.relpath(mod_dir, module_dir)}",
+            f"-L{os.path.relpath(lib_dir, module_dir)}",
+            "-lgh19162",
+        ]
+
+    def test_gh19162(self):
+        mod = self.module.gh19162_mod
+        mod.x = [1, 2, 3]
+        assert mod.total() == 6
 
 
 @pytest.mark.slow

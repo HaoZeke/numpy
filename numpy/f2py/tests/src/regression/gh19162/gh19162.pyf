@@ -1,0 +1,11 @@
+!    -*- f90 -*-
+python module gh19162_ext
+  interface
+    module gh19162_mod
+      real(kind=8), allocatable, dimension(:) :: x
+      subroutine total(s)
+        real(kind=8), intent(out) :: s
+      end subroutine total
+    end module gh19162_mod
+  end interface
+end python module gh19162_ext
