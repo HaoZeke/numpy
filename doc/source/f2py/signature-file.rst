@@ -21,7 +21,8 @@ library is built.
   Currently, F2PY may fail with some valid Fortran constructs. If this happens,
   you can check the `NumPy GitHub issue tracker
   <https://github.com/numpy/numpy/issues>`_ for possible workarounds or
-  work-in-progress ideas.
+  work-in-progress ideas. :ref:`f2py-support` lists the constructs that F2PY
+  is known to handle.
 
 In general, the contents of the signature files are case-sensitive. When
 scanning Fortran codes to generate a signature file, F2PY lowers all cases
