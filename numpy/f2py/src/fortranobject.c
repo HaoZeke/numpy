@@ -1323,7 +1323,7 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                 PyExc_ValueError,
                 "unexpected array size: size=%" NPY_INTP_FMT
                 ", arr_size=%" NPY_INTP_FMT
-                ", rank=%d, effrank=%d, arr.nd=%d, dims=[%U]"
+                ", rank=%d, effrank=%d, arr.nd=%d, dims=[%U ]"
                 ", arr.dims=[%U ]\n",
                 size, arr_size, rank, effrank, PyArray_NDIM(arr),
                 dims_str, arr_dims_str);

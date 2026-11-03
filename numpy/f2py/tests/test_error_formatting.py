@@ -27,3 +27,27 @@ class TestScalarDescribe(util.F2PyTest):
             "character -- expected str|bytes|sequence-of-str-or-bytes, "
             "got f8-numpy.float64-scalar"
         )
+
+
+@pytest.mark.slow
+class TestRestoredStrings(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "regression", "gh31584_errors.f90"),
+    ]
+
+    def test_character_inout_copy_back(self):
+        with pytest.raises(ValueError) as caught:
+            self.module.io_char(b"Z")
+        assert str(caught.value) == (
+            "try_pyarr_from_character failed -- expected bytes "
+            "array-scalar|array, got 1-bytes"
+        )
+
+    def test_unexpected_size_keeps_bracket_space(self):
+        arr = np.zeros((0, 4), dtype=np.float32)
+        with pytest.raises(ValueError) as caught:
+            self.module.dim_vec(arr)
+        assert str(caught.value) == (
+            "unexpected array size: size=4, arr_size=0, rank=1, "
+            "effrank=1, arr.nd=2, dims=[ 4 ], arr.dims=[ 0 4 ]\n"
+        )
