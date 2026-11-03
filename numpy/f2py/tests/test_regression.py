@@ -232,6 +232,24 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.j_max == 72)
 
 
+@pytest.mark.slow
+class TestFunctionWrapperDimensions(util.F2PyTest):
+    # C dimension expressions from signature files must be written in
+    # Fortran syntax in the Fortran wrappers of functions
+    sources = [
+        util.getpath("tests", "src", "regression", "function_dims.pyf"),
+        util.getpath("tests", "src", "regression", "function_dims.f90"),
+    ]
+    module_name = "_function_dims"
+
+    def test_pow(self):
+        assert self.module.sum_pow(2, np.arange(4, dtype=np.float32)) == 6
+
+    def test_ternary(self):
+        assert self.module.sum_merge(3, np.arange(3, dtype=np.float32)) == 3
+        assert self.module.sum_merge(0, np.ones(1, dtype=np.float32)) == 1
+
+
 def _wrap_f90(funcwrappers2):
     """Reproduce the F90 line-wrapping logic from rules.py buildmodule."""
     lines = []

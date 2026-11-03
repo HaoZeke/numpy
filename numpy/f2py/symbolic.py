@@ -348,7 +348,7 @@ class Expr:
                                                language=language)
                         factor = f'pow({factor}, {exp})'
                 else:
-                    factor = base.tostring(Precedence.POWER,
+                    factor = base.tostring(Precedence.ATOM,
                                            language=language) + f' ** {exp}'
                 if factors:
                     factors.append(op)
@@ -361,12 +361,27 @@ class Expr:
             precedence = Precedence.PRODUCT if factors else Precedence.ATOM
         elif self.op is Op.APPLY:
             name, args, kwargs = self.data
-            if name is ArithOp.DIV and language is Language.C:
+            if name is ArithOp.DIV and language in (Language.C,
+                                                    Language.Fortran):
                 numer, denom = [arg.tostring(Precedence.PRODUCT,
                                              language=language)
                                 for arg in args]
                 r = f'{numer} / {denom}'
                 precedence = Precedence.PRODUCT
+            elif name is ArithOp.POW and language is Language.C:
+                base, exponent = [arg.tostring(Precedence.TUPLE,
+                                               language=language)
+                                  for arg in args]
+                r = f'pow({base}, {exponent})'
+                precedence = Precedence.ATOM
+            elif name is ArithOp.POW:
+                # `**` is right-associative: parenthesize a power base.
+                base, exponent = args
+                base = base.tostring(Precedence.ATOM, language=language)
+                exponent = exponent.tostring(Precedence.POWER,
+                                             language=language)
+                r = f'{base} ** {exponent}'
+                precedence = Precedence.POWER
             else:
                 args = [arg.tostring(Precedence.TUPLE, language=language)
                         for arg in args]
@@ -1500,6 +1515,10 @@ class _FromStringWorker:
                 kwargs = {a.left: a.right for a in args
                               if isinstance(a, _Pair)}
                 args = tuple(a for a in args if not isinstance(a, _Pair))
+                if (self.language is Language.C
+                        and target == as_symbol('pow')
+                        and len(args) == 2 and not kwargs):
+                    return args[0] ** args[1]
                 # Warning: this could also be Fortran indexing operation..
                 return as_apply(target, *args, **kwargs)
             else:

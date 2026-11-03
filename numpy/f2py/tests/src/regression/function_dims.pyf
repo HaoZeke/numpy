@@ -1,0 +1,14 @@
+python module _function_dims
+    interface
+        function sum_pow(n, a) result(total)
+            integer intent(in) :: n
+            real intent(in), dimension(pow(2,n)), depend(n) :: a
+            real :: total
+        end function sum_pow
+        function sum_merge(n, a) result(total)
+            integer intent(in) :: n
+            real intent(in), dimension((n>0?n:1)), depend(n) :: a
+            real :: total
+        end function sum_merge
+    end interface
+end python module _function_dims

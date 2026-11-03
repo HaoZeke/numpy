@@ -171,6 +171,18 @@ class TestSymbolic(util.F2PyTest):
         assert str(Expr(Op.APPLY, ("f", (x, y), {}))) == "f(x, y)"
         assert str(Expr(Op.INDEXING, ("f", x))) == "f[x]"
 
+        assert str(as_apply(ArithOp.DIV, x, y)) == "x / y"
+        assert str(as_apply(ArithOp.POW, x, y)) == "x ** y"
+        assert str(as_apply(ArithOp.POW, x, y + z)) == "x ** (y + z)"
+        assert str(as_apply(ArithOp.POW, as_number(-2), x)) == "(-2) ** x"
+        assert (str(as_apply(ArithOp.POW, x, as_apply(ArithOp.POW, y, z)))
+                == "x ** y ** z")
+        assert (str(as_apply(ArithOp.POW, as_apply(ArithOp.POW, x, y), z))
+                == "(x ** y) ** z")
+        assert (str(Expr(Op.FACTORS, {as_apply(ArithOp.POW, x, y): 2}))
+                == "(x ** y) ** 2")
+        assert str(y * as_apply(ArithOp.POW, x, z)) == "y * x ** z"
+
         assert str(as_ternary(x, y, z)) == "merge(y, z, x)"
         assert str(as_eq(x, y)) == "x .eq. y"
         assert str(as_ne(x, y)) == "x .ne. y"
@@ -202,6 +214,13 @@ class TestSymbolic(util.F2PyTest):
                          y).tostring(language=language) == "(x - y) / (x + y)")
         assert (x + (x - y) / (x + y) +
                 n).tostring(language=language) == "123 + x + (x - y) / (x + y)"
+
+        assert as_apply(ArithOp.POW, x,
+                        y).tostring(language=language) == "pow(x, y)"
+        assert (as_apply(ArithOp.POW, x, y + z).tostring(language=language)
+                == "pow(x, y + z)")
+        assert (Expr(Op.FACTORS, {as_apply(ArithOp.POW, x, y): 2})
+                .tostring(language=language) == "pow(x, y) * pow(x, y)")
 
         assert as_ternary(x, y, z).tostring(language=language) == "(x?y:z)"
         assert as_eq(x, y).tostring(language=language) == "x == y"
@@ -313,6 +332,12 @@ class TestSymbolic(util.F2PyTest):
         assert fromstring("x / y") == x / y
         assert fromstring("x ** 2", language=Language.Python) == x**2
         assert fromstring("x ** 2 ** 3", language=Language.Python) == x**2**3
+        assert fromstring("pow(x, y)") == as_apply(ArithOp.POW, x, y)
+        assert fromstring("pow(x, 12)") == x**12
+        assert fromstring(Expr(Op.FACTORS, {x: 12}).tostring(
+            language=Language.C)) == x**12
+        assert fromstring("pow(x, y)", language=Language.Fortran) == as_apply(
+            as_symbol("pow"), x, y)
         assert fromstring("(x + y) * z") == (x + y) * z
 
         assert fromstring("f(x)") == f(x)

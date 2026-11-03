@@ -11,6 +11,7 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
 
+from . import symbolic
 from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
@@ -73,7 +74,17 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
 
     vardef = f'{vardef} {fa}'
     if 'dimension' in vars[a]:
-        vardef = f"{vardef}({','.join(vars[a]['dimension'])})"
+        dims = []
+        for d in vars[a]['dimension']:
+            if d not in ('*', ':', '(*)', '(:)'):
+                # Dimensions are C expressions, e.g. `pow(2, n)`. Rewrite
+                # only those that symbolic reproduces verbatim: it
+                # reorders integer divisions such as `n / k * m`.
+                expr = symbolic.Expr.parse(d, language=symbolic.Language.C)
+                if expr.tostring(language=symbolic.Language.C) == d:
+                    d = expr.tostring(language=symbolic.Language.Fortran)
+            dims.append(d)
+        vardef = f"{vardef}({','.join(dims)})"
     return vardef
 
 def useiso_c_binding(rout):
