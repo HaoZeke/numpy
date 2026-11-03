@@ -937,16 +937,24 @@ if (#varname#_cb.capi==Py_None) {
           #varname#_xa_capi = Py_BuildValue(\"()\");
         }
         if (#varname#_xa_capi==NULL) {
+          Py_DECREF(#varname#_cb.capi);
           PyErr_SetString(#modulename#_error,\"Failed to convert #modulename#.#varname#_extra_args to tuple.\\n\");
           return NULL;
         }
       }
+    }
+    else {
+      Py_INCREF(#varname#_xa_capi);
     }
   }
   if (#varname#_cb.capi==NULL) {
     PyErr_SetString(#modulename#_error,\"Callback #varname# not defined (as an argument or module #modulename# attribute).\\n\");
     return NULL;
   }
+}
+else {
+  Py_INCREF(#varname#_cb.capi);
+  Py_XINCREF(#varname#_xa_capi);
 }
 """},
             """\
@@ -960,12 +968,16 @@ if (#varname#_cb.capi==Py_None) {
         CFUNCSMESS(\"Saving callback variables for `#varname#`.\\n\");
         #varname#_cb_ptr = swap_active_#cbname#(#varname#_cb_ptr);""",
         ],
-        'cleanupfrompyobj':
-        """\
+        'cleanupfrompyobj': [  # note that this list will be reversed
+            {isintent_callback: """\
+    Py_DECREF(#varname#_cb.capi);
+    Py_XDECREF(#varname#_xa_capi);"""},
+            """\
         CFUNCSMESS(\"Restoring callback variables for `#varname#`.\\n\");
         #varname#_cb_ptr = swap_active_#cbname#(#varname#_cb_ptr);
         Py_DECREF(#varname#_cb.args_capi);
     }""",
+        ],
         'need': ['SWAP', 'create_cb_arglist'],
         '_check': isexternal,
         '_depend': ''
