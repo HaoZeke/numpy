@@ -46,13 +46,13 @@ from ._dt_codegen import (  # noqa: F401
 
 # Re-export everything from submodules for backward compatibility
 from ._dt_helpers import (  # noqa: F401
+    _C_TO_ISOC,
     _C_TO_NPY_ENUM,
     _C_TO_PYFORMAT,
     _C_TO_PYOBJ,
     _FORTRAN_ARITH_OPS,
     _FORTRAN_CMP_OPS,
     _FORTRAN_TO_C,
-    _FORTRAN_TO_ISOC,
     _PYOBJ_TO_C,
     _can_wrap_abstract,
     _can_wrap_bindc,
@@ -507,7 +507,10 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
 
     code_parts = []
     if specializations:
-        # Multi-kind: generate dispatch-aware code
+        # Multi-kind: generate dispatch-aware code, for the members with
+        # the kinds of the first specialization, as a member of kind k
+        # has no C type of its own
+        all_members = specializations[0][2]
         code_parts.append(
             _gen_opaque_extern_decls(typename, all_members,
                                      specializations=specializations))

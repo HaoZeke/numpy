@@ -12,8 +12,6 @@ import os
 
 from ._dt_codegen import _gen_operator_fortran_wrappers, _scan_operator_interfaces
 from ._dt_helpers import (
-    _can_wrap_abstract,
-    _can_wrap_bindc,
     _can_wrap_opaque,
     _coarray_as_local,
     _enumerate_specializations,
@@ -40,8 +38,11 @@ from ._dt_helpers import (
     _is_type_array_member,
     _is_type_member,
     _is_type_parameter,
+    _member_assign,
+    _member_value,
     _resolve_type_for_kind,
     _routine_args,
+    _wrap_types,
 )
 from .auxfuncs import (
     get_type_members,
@@ -106,12 +107,11 @@ def _initial_state(ref, components, type_map, skip=(), depth=0):
             inner = type_map.get(var.get('typename', '').lower())
             if inner is None:
                 continue
-            parent_members, own_members = _get_all_members(inner, type_map)
             rank = len(var.get('dimension', []))
             indices = [f'f2py_i{depth + r}' for r in range(1, rank + 1)]
             element = f'{part}({", ".join(indices)})' if rank else part
             body, used = _initial_state(
-                element, {**parent_members, **own_members}, type_map,
+                element, _all_components(inner, type_map), type_map,
                 depth=depth + rank)
             if not body:
                 continue
@@ -137,6 +137,16 @@ _NUMERIC_TYPESPECS = ('integer', 'real', 'double precision', 'complex',
                       'double complex')
 
 
+def _all_components(tb, type_map):
+    """Return all components of a type, inherited ones first, including
+    those that f2py does not expose."""
+    parent = (_get_extends_parent(tb) or '').lower()
+    inherited = (_all_components(type_map[parent], type_map)
+                 if parent in type_map else {})
+    return {**inherited, **{name: var for name, var in tb['vars'].items()
+                            if not _is_type_parameter(var)}}
+
+
 def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                               module_block=None):
     """Generate Fortran wrapper source code for opaque pointer types,
@@ -145,27 +155,10 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
     Returns the complete Fortran source as a string, or None if no
     wrappers are needed.
     """
-    # Multi-pass type resolution (same as buildhooks)
-    type_map = {}
-    remaining = list(type_blocks)
-    for _ in range(len(type_blocks) + 1):
-        if not remaining:
-            break
-        still_remaining = []
-        for tb in remaining:
-            tname = tb['name'].lower()
-            if (_can_wrap_bindc(tb, type_map)
-                    or _can_wrap_opaque(tb, type_map)
-                    or _can_wrap_abstract(tb, type_map)):
-                type_map[tname] = tb
-            else:
-                still_remaining.append(tb)
-        if len(still_remaining) == len(remaining):
-            break
-        remaining = still_remaining
-
+    type_map = _wrap_types(type_blocks)
     opaque_types = [tb for tb in type_blocks
-                    if _can_wrap_opaque(tb, type_map)]
+                    if tb['name'].lower() in type_map
+                    and _can_wrap_opaque(tb, type_map)]
 
     # Find operator wrappers needed
     operator_wrappers = []
@@ -275,7 +268,8 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 continue
             args.append(mname)
             decls.append(f'    {isoc_type}, intent(in), value :: {mname}')
-            assigns.append(f'    obj%{mname} = {mname}')
+            assigns.append(
+                '    ' + _member_assign(mvar, f'obj%{mname}', mname))
 
         args_str = ', '.join(args)
         decls_str = '\n'.join(decls)
@@ -291,7 +285,8 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
             alloc_stmt = f'    allocate(obj)'
 
         init_lines, loop_depth = _initial_state(
-            'obj', members, type_map, skip=set(args))
+            'obj', _all_components(orig_tb, type_map), type_map,
+            skip=set(args))
         lines.append(
             f'  function f2py_create_{typename}({args_str}) '
             f'result(cptr) bind(c)')
@@ -762,7 +757,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'      call c_f_pointer(src, src_arr, '
                     f'[{cf_shape}])')
                 lines.append(
-                    f'      obj%{mname} = src_arr')
+                    '      ' + _member_assign(mvar, f'obj%{mname}', 'src_arr'))
                 lines.append(f'    end if')
                 lines.append(
                     f'  end subroutine f2py_set_{typename}_{mname}')
@@ -933,7 +928,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'    call c_f_pointer(src, src_arr, '
                     f'[{cf_shape}])')
                 lines.append(
-                    f'    obj%{mname} = src_arr')
+                    '    ' + _member_assign(mvar, f'obj%{mname}', 'src_arr'))
                 lines.append(
                     f'  end subroutine f2py_set_{typename}_{mname}')
                 lines.append('')
@@ -978,10 +973,11 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(f'    integer :: i')
                 lines.append(f'    call c_f_pointer(cptr, obj)')
                 if len(dims) == 1:
-                    lines.append(f'    obj%{mname} = arr')
-                else:
                     lines.append(
-                        f'    obj%{mname} = reshape(arr, (/{dim_str}/))')
+                        '    ' + _member_assign(mvar, f'obj%{mname}', 'arr'))
+                else:
+                    lines.append('    ' + _member_assign(
+                        mvar, f'obj%{mname}', f'reshape(arr, (/{dim_str}/))'))
                 lines.append(
                     f'  end subroutine f2py_set_{typename}_{mname}')
                 lines.append('')
@@ -997,7 +993,8 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(f'    {isoc_type} :: val')
                 lines.append(f'    type({type_spec}), pointer :: obj')
                 lines.append(f'    call c_f_pointer(cptr, obj)')
-                lines.append(f'    val = obj%{mname}')
+                lines.append(
+                    f'    val = {_member_value(mvar, f"obj%{mname}")}')
                 lines.append(
                     f'  end function f2py_get_{typename}_{mname}')
                 lines.append('')
@@ -1012,7 +1009,8 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(f'    {isoc_type}, value :: val')
                 lines.append(f'    type({type_spec}), pointer :: obj')
                 lines.append(f'    call c_f_pointer(cptr, obj)')
-                lines.append(f'    obj%{mname} = val')
+                lines.append(
+                    '    ' + _member_assign(mvar, f'obj%{mname}', 'val'))
                 lines.append(
                     f'  end subroutine f2py_set_{typename}_{mname}')
                 lines.append('')
