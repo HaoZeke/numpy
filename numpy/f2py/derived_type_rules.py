@@ -11,9 +11,12 @@ For non-bind(c) types (opaque pointer path): auto-generated Fortran wrappers
 with bind(c) provide constructor/destructor/getters/setters operating on
 c_ptr. Python classes call these through PyCapsule.
 
-Polymorphic arguments declared as ``class(T)`` are normalized to ``type(T)``
-by crackfortran (see crackfortran.py line ~1636). Dynamic dispatch is lost;
-the wrapped code treats ``class(T)`` identically to ``type(T)``.
+Routines take instances as handles of their Fortran objects, see
+_dt_routines.prepare_routine.  A ``class(T)`` or ``class(*)`` dummy keeps
+the dynamic type of its argument: the instance passes its type tag, and the
+wrapper selects the matching type (F2018 7.3.2.3).  Components that f2py
+cannot expose to Python are hidden like PRIVATE ones, and types whose
+objects cannot be pointers are not wrapped, see _dt_helpers._wrap_types.
 
 Copyright 2011 -- present NumPy Developers.
 Permission to use, modify, and distribute this software is given under the
