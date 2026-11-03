@@ -1,0 +1,12 @@
+python module _gh21161_test
+    interface
+        subroutine incr(n, a, b, c, d, s)
+            integer, intent(hide), depend(a) :: n = len(a)
+            integer(kind=-1), dimension(n), intent(inout) :: a
+            integer(kind=-2), dimension(n), intent(inout) :: b
+            integer(kind=-4), dimension(n), intent(inout) :: c
+            integer(kind=-8), dimension(n), intent(inout) :: d
+            integer(kind=8), intent(in, out) :: s
+        end subroutine incr
+    end interface
+end python module _gh21161_test

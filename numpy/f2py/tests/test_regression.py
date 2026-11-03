@@ -247,6 +247,42 @@ class TestScalarCheckMessage(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestNpyIntegerTypes(util.F2PyTest):
+    # The unsigned kinds and long_long map to the npy_common.h types (gh-21161)
+    sources = [
+        util.getpath("tests", "src", "regression", "gh21161.pyf"),
+        util.getpath("tests", "src", "regression", "gh21161.f90"),
+    ]
+    module_name = "_gh21161_test"
+
+    def test_unsigned_arrays_and_long_long(self):
+        a = np.array([1, 2**8 - 2], dtype=np.uint8)
+        b = np.array([1, 2**16 - 2], dtype=np.uint16)
+        c = np.array([1, 2**32 - 2], dtype=np.uint32)
+        d = np.array([1, 2**63], dtype=np.uint64)
+        assert self.module.incr(a, b, c, d, 2**40) == 2**40 + 1
+        npt.assert_array_equal(a, [2, 2**8 - 1])
+        npt.assert_array_equal(b, [2, 2**16 - 1])
+        npt.assert_array_equal(c, [2, 2**32 - 1])
+        npt.assert_array_equal(d, [2, 2**63 + 1])
+
+
+def test_gh21161_typedefs_from_npy_common(tmp_path):
+    # f2py's integer type names alias the npy_common.h types, without
+    # platform branches of their own
+    pyf = util.getpath("tests", "src", "regression", "gh21161.pyf")
+    ret = np.f2py.run_main([str(pyf), "--build-dir", str(tmp_path)])
+    csrc = Path(ret["_gh21161_test"]["csrc"][0]).read_text()
+    assert "#include <numpy/npy_common.h>" in csrc
+    for typedef in ["typedef npy_ubyte unsigned_char;",
+                    "typedef npy_ushort unsigned_short;",
+                    "typedef npy_longlong long_long;",
+                    "typedef npy_ulonglong unsigned_long_long;"]:
+        assert csrc.count(typedef) == 1
+    assert "__int64" not in csrc
+
+
+@pytest.mark.slow
 class TestAssignmentOnlyModules(util.F2PyTest):
     # Ensure that variables are exposed without functions or subroutines in a module
     sources = [util.getpath("tests", "src", "regression", "assignOnlyModule.f90")]
