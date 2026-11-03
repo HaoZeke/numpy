@@ -716,7 +716,7 @@ def cb_sign2map(a, var, index=None):
 def cb_routsign2map(rout, um):
     """
     name,begintitle,endtitle,argname
-    ctype,rctype,maxnofargs,nofoptargs,returncptr
+    ctype,rctype,maxnofargs,nofoptargs,nofrets,returncptr
     """
     ret = {'name': f"cb_{rout['name']}_in_{um}",
            'returncptr': ''}
@@ -775,6 +775,7 @@ void
         rout['note'] = ['See elsewhere.']
     nofargs = 0
     nofoptargs = 0
+    nofrets = 1 if isfunction(rout) else 0
     if 'args' in rout and 'vars' in rout:
         for a in rout['args']:
             var = rout['vars'][a]
@@ -782,8 +783,11 @@ void
                 nofargs = nofargs + 1
                 if isoptional(var):
                     nofoptargs = nofoptargs + 1
+            if isintent_out(var):
+                nofrets = nofrets + 1
     ret['maxnofargs'] = repr(nofargs)
     ret['nofoptargs'] = repr(nofoptargs)
+    ret['nofrets'] = repr(nofrets)
     if hasnote(rout) and isfunction(rout) and 'result' in rout:
         ret['routnote'] = rout['note']
         rout['note'] = ['See elsewhere.']
