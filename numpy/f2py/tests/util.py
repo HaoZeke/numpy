@@ -11,6 +11,7 @@ import concurrent.futures
 import contextlib
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -212,6 +213,65 @@ def has_pdt_len_support():
             'end module pdt_len_check\n'
         )
     return _pdt_len_support
+
+
+_polymorphic_support = None
+
+# LLVM flang 18 exits here; flang 20 and gfortran compile this module.
+_POLYMORPHIC_PROBE = (
+    'module class_check\n'
+    '  implicit none\n'
+    '  type :: item\n'
+    '    integer :: n\n'
+    '  end type item\n'
+    'contains\n'
+    '  subroutine touch(x)\n'
+    '    class(item), intent(inout) :: x\n'
+    '    x%n = 1\n'
+    '  end subroutine touch\n'
+    'end module class_check\n'
+)
+
+
+def fortran_source_text(text):
+    """Return free-form Fortran with comments removed and lines joined."""
+    pending = ''
+    code = []
+    for line in text.splitlines():
+        line = line.split('!')[0].rstrip()
+        if line.lstrip().startswith('&'):
+            line = line.lstrip()[1:]
+        if line.endswith('&'):
+            pending += line[:-1]
+            continue
+        code.append(pending + line)
+        pending = ''
+    if pending:
+        code.append(pending)
+    return '\n'.join(code)
+
+
+def fortran_declares_class(text):
+    """Return whether free-form Fortran declares a ``class`` entity.
+
+    Comments are dropped and continuation lines are joined first, so a
+    routine that only mentions ``class`` in a comment does not count.
+    """
+    return re.search(r'\bclass\s*\(', fortran_source_text(text), re.I) is not None
+
+
+def has_polymorphic_support():
+    """Return whether the Fortran compiler lowers a ``class`` dummy.
+
+    LLVM flang 18 aborts while lowering polymorphic types, with
+    ``not yet implemented: support for polymorphic types``.  flang 20
+    and gfortran compile the same snippet.  The probe runs once and is
+    cached for the rest of the session.
+    """
+    global _polymorphic_support
+    if _polymorphic_support is None:
+        _polymorphic_support = fortran_builds(_POLYMORPHIC_PROBE)
+    return _polymorphic_support
 
 
 #
@@ -492,6 +552,20 @@ class F2PyTest:
             pytest.skip("No Fortran 90 compiler available")
         if needs_pyf and not self._has_fortran_compiler:
             pytest.skip("No Fortran compiler available")
+
+        # class is required for a passed-object dummy and for defined
+        # I/O.  Other dummies can be type.  Flang 18 aborts on class.
+        blobs = []
+        if self.code:
+            blobs.append(self.code)
+        for src in self.sources or []:
+            path = Path(src)
+            if path.suffix.lower() in {'.f', '.f90', '.for', '.ftn', '.pyf'}:
+                blobs.append(path.read_text(encoding='utf-8'))
+        if (any(fortran_declares_class(blob) for blob in blobs)
+                and not has_polymorphic_support()):
+            pytest.skip("Fortran compiler cannot lower polymorphic "
+                        "types (CLASS)")
 
         # Build the module
         if self.code is not None:

@@ -1,5 +1,6 @@
 """Tests for derived type wrapping support in f2py."""
 
+import re
 import textwrap
 
 import pytest
@@ -1702,6 +1703,19 @@ class TestPolymorphicDispatch(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestUnlimitedBox(util.F2PyTest):
+    """A container and its tag do not need ``class(*)``."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "poly_box.f90")]
+
+    def test_default_tag(self):
+        c = self.module.container()
+        assert self.module.get_tag(c) == 0
+        assert (c.stored_tag, c.stored_int) == (0, 0)
+        assert c.stored_real == 0.0
+
+
+@pytest.mark.slow
 class TestUnlimitedPolymorphic(util.F2PyTest):
     """class(*) dummies take Python scalars and derived type instances
     (F2018 7.3.2.3)."""
@@ -1756,10 +1770,10 @@ class TestPrivateModule(util.F2PyTest):
 
 
 @pytest.mark.slow
-class TestProcPointerComponents(util.F2PyTest):
-    """Procedure pointer components are methods (F2018 7.5.4.1)."""
-    sources = [util.getpath("tests", "src", "derived_types", name)
-               for name in ("proc_pointer_comp.f90", "proc_pointer_pass.f90")]
+class TestProcPointerNopass(util.F2PyTest):
+    """A nopass procedure pointer does not need ``class``."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "proc_pointer_comp.f90")]
 
     def test_nopass(self):
         o = self.module.with_proc_ptr(id=1)
@@ -1770,6 +1784,13 @@ class TestProcPointerComponents(util.F2PyTest):
         assert o.func(3.0) == 9
         self.module.set_func_double(o)
         assert o.func(x=3.0) == 6
+
+
+@pytest.mark.slow
+class TestProcPointerComponents(util.F2PyTest):
+    """Procedure pointer components are methods (F2018 7.5.4.1)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "proc_pointer_pass.f90")]
 
     def test_pass(self):
         c = self.module.counter()
@@ -1785,6 +1806,18 @@ class TestProcPointerComponents(util.F2PyTest):
         self.module.arm(d)
         d.step(3)
         assert (d.id, d.n) == (7, 3)
+
+
+@pytest.mark.slow
+class TestPointSet(util.F2PyTest):
+    """Assigning components with ``type`` does not need ``class``."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "point_set.f90")]
+
+    def test_set_point(self):
+        p = self.module.point()
+        self.module.set_point(p, 1.0, 2.0, 3.0)
+        assert (p.x, p.y, p.z) == (1.0, 2.0, 3.0)
 
 
 @pytest.mark.slow
@@ -1812,6 +1845,16 @@ class TestDefinedIO(util.F2PyTest):
     def test_from_string_fails(self):
         with pytest.raises(ValueError, match="iostat"):
             self.module.formatted_point.from_string("not numbers")
+
+
+@pytest.mark.slow
+class TestArrayTotal(util.F2PyTest):
+    """An assumed-shape argument with no ``class`` in the source."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "array_total.f90")]
+
+    def test_total(self):
+        assert self.module.array_total.total([1, 2, 3]) == 6
 
 
 @pytest.mark.slow
@@ -1899,6 +1942,13 @@ class TestStorageArguments(util.F2PyTest):
         assert [o.n for o in v] == [4, 5]
         assert self.module.total(v) == 9
 
+
+@pytest.mark.slow
+class TestStoragePolymorphic(util.F2PyTest):
+    """``class`` allocatable and pointer dummies need a polymorphic actual."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "storage_poly.f90")]
+
     def test_polymorphic(self):
         t = self.module.tagged(tag=1)
         assert self.module.kind_of(self.module.item()) == 1
@@ -1977,6 +2027,13 @@ class TestTypeNames(util.F2PyTest):
         assert isinstance(s, self.module.shape)
         assert s.area() == 9
         assert self.module.total_area(s) == 9
+
+
+@pytest.mark.slow
+class TestTypeIndex(util.F2PyTest):
+    """``index`` keeps a name crackfortran renames, and does not need ``class``."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "type_index.f90")]
 
     def test_index(self):
         i = self.module.index()
@@ -3076,6 +3133,42 @@ class TestParameterizedKindCodeGen:
         # But data members should be present in getset
         assert 'Pyrealvec_get_x' in realvec_code
         assert 'Pyrealvec_set_x' in realvec_code
+
+
+_CLASS_DECL = re.compile(r'\bclass\s*\(', re.I)
+# class(T) on the same declaration as allocatable or pointer.
+_POLY_STORAGE = re.compile(
+    r'\bclass\s*\([^)]*\)[^:\n]*\b(?:allocatable|pointer)\b'
+    r'|\b(?:allocatable|pointer)\b[^:\n]*\bclass\s*\(',
+    re.I,
+)
+
+
+def test_wrappers_declare_class_only_when_type_does_not_suffice(tmp_path):
+    """Generated Fortran declares ``class`` only for a polymorphic
+    allocatable or pointer dummy (F2018 15.5.2.5)."""
+    root = util.getpath('tests', 'src', 'derived_types')
+    for src in sorted(root.glob('*.f90')):
+        code = util.fortran_source_text(src.read_text(encoding='utf-8'))
+        needs_class = _POLY_STORAGE.search(code) is not None
+        build = tmp_path / src.stem
+        build.mkdir()
+        _, wrappers = _generated(build, src, name='m')
+        mod = crackfortran.crackfortran([str(src)])
+        extra = ''
+        if mod and mod[0].get('block') == 'module':
+            blocks = [b for b in mod[0].get('body', [])
+                      if b.get('block') == 'type']
+            for tb in blocks:
+                tb['parent_block'] = mod[0]
+            routines = [b for b in mod[0].get('body', [])
+                        if b.get('block') in ('function', 'subroutine')]
+            extra = derived_type_rules.generate_fortran_wrappers(
+                mod[0]['name'], blocks, routines=routines,
+                module_block=mod[0]) or ''
+        emitted = bool(
+            _CLASS_DECL.search(wrappers) or _CLASS_DECL.search(extra))
+        assert emitted is needs_class, src.name
 
 
 @pytest.mark.slow
