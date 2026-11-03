@@ -422,9 +422,10 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                                    see f2py generated code for more
                                    details ) */
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = -1;
-                if ((arr = array_from_pyobj(fp->defs[i].type, dims,
-                                            fp->defs[i].rank, F2PY_INTENT_IN,
-                                            v)) == NULL)
+                if ((arr = ndarray_from_pyobj(fp->defs[i].type,
+                                              fp->defs[i].elsize, dims,
+                                              fp->defs[i].rank, F2PY_INTENT_IN,
+                                              v, NULL)) == NULL)
                     return -1;
                 (*(fp->defs[i].func))(&fp->defs[i].rank, PyArray_DIMS(arr),
                                       set_data, &flag);
@@ -439,9 +440,9 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                    fp->defs[i].rank * sizeof(npy_intp));
         }
         else { /* not allocatable array */
-            if ((arr = array_from_pyobj(fp->defs[i].type, fp->defs[i].dims.d,
-                                        fp->defs[i].rank, F2PY_INTENT_IN,
-                                        v)) == NULL)
+            if ((arr = ndarray_from_pyobj(fp->defs[i].type, fp->defs[i].elsize,
+                                          fp->defs[i].dims.d, fp->defs[i].rank,
+                                          F2PY_INTENT_IN, v, NULL)) == NULL)
                 return -1;
         }
         if (fp->defs[i].data !=
