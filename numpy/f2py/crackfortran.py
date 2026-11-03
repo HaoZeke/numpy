@@ -2987,12 +2987,6 @@ def analyzevars(block):
                             m.group('this'), m.group('after'))
                         kindselect, charselect, typename = cracktypespec(
                             typespec, selector)
-                        vars[n]['typespec'] = typespec
-                        try:
-                            if block['result']:
-                                vars[block['result']]['typespec'] = typespec
-                        except Exception:
-                            pass
                         if kindselect:
                             if 'kind' in kindselect:
                                 try:
@@ -3000,11 +2994,20 @@ def analyzevars(block):
                                         kindselect['kind'], {}, params))
                                 except Exception:
                                     pass
-                            vars[n]['kindselector'] = kindselect
-                        if charselect:
-                            vars[n]['charselector'] = charselect
-                        if typename:
-                            vars[n]['typename'] = typename
+                        # The prefix gives the type and type parameters of
+                        # the function result (F2018 15.6.2.2), which is the
+                        # RESULT variable when there is one. It replaces any
+                        # implicit type given to that variable above.
+                        decl = {'typespec': typespec,
+                                'kindselector': kindselect,
+                                'charselector': charselect,
+                                'typename': typename}
+                        for r in {n, block.get('result', n)}:
+                            for k, v in decl.items():
+                                if v:
+                                    vars[r][k] = v
+                                else:
+                                    vars[r].pop(k, None)
                         if ispure:
                             vars[n] = setattrspec(vars[n], 'pure')
                         if isrec:
