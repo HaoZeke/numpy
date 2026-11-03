@@ -17,9 +17,11 @@ incdir_f2py = run_command(py,
 ).stdout().strip()
 
 # f2py include dir (for fortranobject.h) is not in dependency('numpy'),
-# so add it separately
+# so add it separately. Pass it as a flag like dependency('numpy') does:
+# include_directories() rejects absolute paths into the source tree, which
+# is where it points when the virtual environment lives in the project.
 f2py_dep = declare_dependency(
-  include_directories : incdir_f2py,
+  compile_args : '-I' + incdir_f2py,
 )
 
 # Generate the f2py wrappers
