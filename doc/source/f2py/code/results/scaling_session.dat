@@ -1,0 +1,5 @@
+>>> import pyscaling
+>>> pyscaling.scaling.x = [1, 2, 3]  # this is x of module store
+>>> pyscaling.scaling.scale(2)
+>>> pyscaling.scaling.x
+array([2., 4., 6.])
