@@ -895,7 +895,7 @@ arg_rules = [
         'latexdocstropt': {isintent_nothide: '\\item[]{{}\\verb@#varname#_extra_args := () input tuple@{}} --- Extra arguments for call-back function {{}\\verb@#varname#@{}}.'},
         'decl': ['    #cbname#_t #varname#_cb = { Py_None, NULL, 0 };',
                  '    #cbname#_t *#varname#_cb_ptr = &#varname#_cb;',
-                 '    PyTupleObject *#varname#_xa_capi = NULL;',
+                 '    PyObject *#varname#_xa_capi = NULL;',
                  {l_not(isintent_callback):
                   '    #cbname#_typedef #varname#_cptr;'}
                  ],
@@ -926,11 +926,11 @@ if (#varname#_cb.capi==Py_None) {
       if (PyObject_HasAttrString(#modulename#_module,\"#varname#_extra_args\")) {
         PyObject* capi_tmp = PyObject_GetAttrString(#modulename#_module,\"#varname#_extra_args\");
         if (capi_tmp) {
-          #varname#_xa_capi = (PyTupleObject *)PySequence_Tuple(capi_tmp);
+          #varname#_xa_capi = PySequence_Tuple(capi_tmp);
           Py_DECREF(capi_tmp);
         }
         else {
-          #varname#_xa_capi = (PyTupleObject *)Py_BuildValue(\"()\");
+          #varname#_xa_capi = Py_BuildValue(\"()\");
         }
         if (#varname#_xa_capi==NULL) {
           PyErr_SetString(#modulename#_error,\"Failed to convert #modulename#.#varname#_extra_args to tuple.\\n\");
