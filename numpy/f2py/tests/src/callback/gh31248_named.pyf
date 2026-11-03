@@ -1,0 +1,27 @@
+python module gh31248_named__user__routines
+    interface
+        subroutine on_step(step, x)
+            intent(callback) on_step
+            integer intent(in) :: step
+            double precision intent(in) :: x
+        end subroutine on_step
+    end interface
+end python module gh31248_named__user__routines
+
+python module gh31248_named
+    interface
+        subroutine run(n)
+            use gh31248_named__user__routines
+            integer intent(in) :: n
+            intent(callback, hide) on_step
+            external on_step
+        end subroutine run
+        subroutine report(step, x)
+            use gh31248_named__user__routines
+            integer intent(in) :: step
+            double precision intent(in) :: x
+            intent(callback, hide) on_step
+            external on_step
+        end subroutine report
+    end interface
+end python module gh31248_named
