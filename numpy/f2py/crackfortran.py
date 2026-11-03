@@ -2698,6 +2698,40 @@ class _Character(str):
         return self
 
 
+class _Complex:
+    """A complex of a kind, its parts held exactly as that kind holds them."""
+
+    __slots__ = ('real', 'imag', 'kind')
+
+    def __init__(self, real, imag, kind=None):
+        self.real = _round(Fraction(real), kind)
+        self.imag = _round(Fraction(imag), kind)
+        self.kind = kind
+
+    def __eq__(self, other):
+        if isinstance(other, _Complex):
+            return (self.real, self.imag) == (other.real, other.imag)
+        if (isinstance(other, (int, float, complex))
+                and not isinstance(other, bool)):
+            other = complex(other)
+            return self.real == other.real and self.imag == other.imag
+        return NotImplemented
+
+    def __hash__(self):
+        if not self.imag:
+            return hash(self.real)
+        return hash(complex(self))
+
+    def __complex__(self):
+        return complex(float(_Real(self.real)), float(_Real(self.imag)))
+
+    def __str__(self):
+        return (f'({_real_text(self.real, self.kind)}, '
+                f'{_real_text(self.imag, self.kind)})')
+
+    __repr__ = __str__
+
+
 class _Unknown:
     """A name of known type and kind but unknown value, such as a variable,
     which only inquiries take."""
@@ -2712,9 +2746,9 @@ class _Unknown:
         raise TypeError('the value is not known')
 
 
-_value_types = {_Integer: 'integer', _Real: 'real', _Logical: 'logical',
-                _Character: 'character'}
-_numeric_types = ('integer', 'real')
+_value_types = {_Integer: 'integer', _Real: 'real', _Complex: 'complex',
+                _Logical: 'logical', _Character: 'character'}
+_numeric_types = ('integer', 'real', 'complex')
 
 
 def _type_kind(x):
@@ -2763,7 +2797,14 @@ def _exact(x):
         return x.value
     if isinstance(x, _Integer):
         return Fraction(int(x))
-    raise TypeError(f'{x!r} is not a number')
+    raise TypeError(f'{x!r} is not an integer or real')
+
+
+def _parts(x):
+    # the exact real and imaginary parts of a number
+    if isinstance(x, _Complex):
+        return x.real, x.imag
+    return _exact(x), Fraction(0)
 
 
 def _exponent(a):
@@ -2883,12 +2924,16 @@ def _promote(ta, ka, tb, kb):
 
 
 def _convert(x, typespec, kind):
-    """Convert a value to a type and kind, as assignment does."""
+    """Convert a value to a type and kind, as assignment does, an integer
+    or real taking the real part of a complex."""
     t = _type_kind(x)[0]
-    if typespec == 'integer' and t in _numeric_types:
-        return _integer(math.trunc(_exact(x)), kind)
-    if typespec == 'real' and t in _numeric_types:
-        return _Real(_exact(x), kind)
+    if typespec in _numeric_types and t in _numeric_types:
+        real, imag = _parts(x)
+        if typespec == 'integer':
+            return _integer(math.trunc(real), kind)
+        if typespec == 'real':
+            return _Real(real, kind)
+        return _Complex(real, imag, kind)
     if typespec == t == 'logical':
         return _Logical(x.value, kind)
     if typespec == t == 'character':
@@ -2916,7 +2961,12 @@ def _binary(op, a, b):
     typespec, kind = _promote(ta, ka, tb, kb)
     if op == 'Pow' and tb == 'integer' and ta != 'integer':
         # an integer power is of the type and kind of its base
+        if ta == 'complex':
+            return _complex_power(*_parts(a), int(b), ka)
         return _real_power(_exact(a), int(b), ka)
+    if typespec == 'complex':
+        return _complex_binary(op, *_parts(_convert(a, typespec, kind)),
+                               *_parts(_convert(b, typespec, kind)), kind)
     x = _exact(_convert(a, typespec, kind))
     y = _exact(_convert(b, typespec, kind))
     if op == 'Pow':
@@ -2939,6 +2989,48 @@ def _binary(op, a, b):
     if typespec == 'integer':
         return _integer(int(_arithmetic[op](x, y)), kind)
     return _Real(_arithmetic[op](x, y), kind)
+
+
+def _complex_binary(op, p, q, r, s, kind):
+    # the operation on p + q i and r + s i, each part rounded once
+    if op == 'Add':
+        return _Complex(p + r, q + s, kind)
+    if op == 'Sub':
+        return _Complex(p - r, q - s, kind)
+    if op == 'Mult':
+        return _Complex(p * r - q * s, p * s + q * r, kind)
+    if op == 'Div':
+        d = r * r + s * s
+        if not d:
+            raise ZeroDivisionError('division by zero')
+        return _Complex((p * r + q * s) / d, (q * r - p * s) / d, kind)
+    raise TypeError(f'{op} of a complex is not supported')
+
+
+def _complex_power(p, q, n, kind):
+    """Raise p + q i to an integer power n, for a complex of a kind."""
+    if not (p or q):
+        if n < 0:
+            raise ZeroDivisionError('0 to a negative power')
+        return _Complex(Fraction(not n), 0, kind)
+    m = p * p + q * q
+    if m != 1:
+        # a power far outside the kind's exponents overflows or rounds to
+        # zero, and need not be computed
+        low, high = _exponent_bounds(kind)
+        log2 = n * (math.log2(m.numerator) - math.log2(m.denominator)) / 2
+        if log2 > high:
+            raise OverflowError(f'({p}, {q})**{n} overflows complex({kind})')
+        if log2 < low:
+            return _Complex(0, 0, kind)
+    if n < 0:
+        p, q, n = p / m, -q / m, -n
+    real, imag = Fraction(1), Fraction(0)
+    while n:
+        if n % 2:
+            real, imag = real * p - imag * q, real * q + imag * p
+        p, q, n = p * p - q * q, 2 * p * q, n // 2
+    return _Complex(real, imag, kind)
 
 
 def _integer_power(x, n, kind):
@@ -2970,6 +3062,8 @@ def _unary(op, a):
         return a
     if typespec == 'integer':
         return _integer(-int(a), kind)
+    if typespec == 'complex':
+        return _Complex(-a.real, -a.imag, kind)
     return _Real(-a.value, kind)
 
 
@@ -2989,8 +3083,12 @@ def _relational(op, a, b):
         x, y = a.ljust(n), b.ljust(n)
     elif ta in _numeric_types and tb in _numeric_types:
         typespec, kind = _promote(ta, ka, tb, kb)
-        x = _exact(_convert(a, typespec, kind))
-        y = _exact(_convert(b, typespec, kind))
+        x = _parts(_convert(a, typespec, kind))
+        y = _parts(_convert(b, typespec, kind))
+        if typespec != 'complex':
+            x, y = x[0], y[0]
+        elif op not in ('Eq', 'NotEq'):
+            raise TypeError('complex values are not ordered')
     else:
         raise TypeError(f'{ta} and {tb} do not compare')
     return _Logical(_relations[op](x, y), _default_kinds['logical'])
@@ -3007,8 +3105,25 @@ def _logical(op, *values):
     return _Logical(value, kind)
 
 
+def _complex_literal(real, imag):
+    """Return the complex literal (real, imag), of the kind of its real part
+    of greater precision, or of the default real if both are integers."""
+    (tr, kr), (ti, ki) = _type_kind(real), _type_kind(imag)
+    if not {tr, ti} <= {'integer', 'real'}:
+        raise TypeError('the parts of a complex literal are numbers')
+    kinds = [k for t, k in ((tr, kr), (ti, ki)) if t == 'real']
+    if not kinds:
+        kind = _default_kinds['real']
+    elif None in kinds:
+        kind = None
+    else:
+        kind = max(kinds, key=lambda k: (_precision(k), k))
+    return _Complex(_exact(real), _exact(imag), kind)
+
+
 _operations = {'_binary': _binary, '_unary': _unary,
-               '_relational': _relational, '_logical': _logical}
+               '_relational': _relational, '_logical': _logical,
+               '_complex_literal': _complex_literal}
 
 
 def _operation(name, op, *args):
@@ -3021,8 +3136,8 @@ class _FortranOperations(ast.NodeTransformer):
     Python that is not also Fortran is refused."""
 
     _nodes = (ast.Expression, ast.Name, ast.Load, ast.Call, ast.keyword,
-              ast.List, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
-              ast.operator, ast.unaryop, ast.boolop, ast.cmpop)
+              ast.List, ast.Tuple, ast.BinOp, ast.UnaryOp, ast.BoolOp,
+              ast.Compare, ast.operator, ast.unaryop, ast.boolop, ast.cmpop)
 
     def generic_visit(self, node):
         if not isinstance(node, self._nodes):
@@ -3035,7 +3150,12 @@ class _FortranOperations(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_Tuple(self, node):
-        raise TypeError('complex constants are not supported')
+        # (re, im) is a complex literal
+        self.generic_visit(node)
+        if len(node.elts) != 2:
+            raise TypeError('a complex literal has two parts')
+        return ast.Call(ast.Name('_complex_literal', ast.Load()), node.elts,
+                        [])
 
     def visit_BinOp(self, node):
         self.generic_visit(node)
@@ -3322,6 +3442,29 @@ def _inquired(x):
     return _type_kind(x)
 
 
+def _complex_arg(z):
+    if isinstance(z, (list, dict)) or _type_kind(z)[0] != 'complex':
+        raise TypeError(f'{z!r} is not a complex')
+    return z
+
+
+def _cmplx(x, y=None, kind=None):
+    # without kind=, of the default real kind, whatever the kinds of x and y
+    kind = _kind_arg(kind, 'real')
+    if _type_kind(x)[0] == 'complex':
+        if y is not None:
+            raise TypeError('cmplx of a complex takes no y')
+        return _convert(x, 'complex', kind)
+    return _Complex(_exact(x), 0 if y is None else _exact(y), kind)
+
+
+def _real(a, kind=None):
+    # of the kind of a complex a without kind=
+    if kind is None and _type_kind(a)[0] == 'complex':
+        return _convert(a, 'real', a.kind)
+    return _convert(a, 'real', _kind_arg(kind, 'real'))
+
+
 def _kind_func(x):
     kind = _inquired(x)[1]
     if kind is None:
@@ -3350,9 +3493,15 @@ _intrinsics = {
                                              _kind_arg(kind, 'integer')),
     'floor': lambda a, kind=None: _integer(math.floor(_real_arg(a)),
                                            _kind_arg(kind, 'integer')),
-    'real': lambda a, kind=None: _convert(a, 'real', _kind_arg(kind, 'real')),
+    'real': _real,
     'float': lambda a: _convert(a, 'real', _default_kinds['real']),
     'dble': lambda a: _convert(a, 'real', _default_kinds['double precision']),
+    'cmplx': _cmplx,
+    # an extension of gfortran, of double precision
+    'dcmplx': lambda x, y=None: _cmplx(
+        x, y, _default_integer(_default_kinds['double precision'])),
+    'aimag': lambda z: _Real(_complex_arg(z).imag, z.kind),
+    'conjg': lambda z: _Complex(_complex_arg(z).real, -z.imag, z.kind),
     'abs': lambda a: _convert(_Real(abs(_exact(a))), *_type_kind(a)),
     'max': lambda *a: _extremum(max, a),
     'min': lambda *a: _extremum(min, a),
@@ -3515,16 +3664,6 @@ def get_parameters(vars, global_params={}, implicitrules=None):
             dimspec = ([s.removeprefix('dimension').strip()
                         for s in vars[n]['attrspec']
                        if s.startswith('dimension')] or [None])[0]
-            # Currently this will not work for complex numbers.
-            # There is missing code for extracting a complex number,
-            # which may be defined in either of these:
-            #  a) (Re, Im)
-            #  b) cmplx(Re, Im)
-            #  c) dcmplx(Re, Im)
-            #  d) cmplx(Re, Im, <prec>)
-            if iscomplex(vars[n]):
-                outmess(f'get_parameters[TODO]: '
-                        f'implement evaluation of complex expression {v}\n')
             try:
                 params[n] = param_eval(v, g_params, params, dimspec=dimspec)
             except Exception as msg:
@@ -3582,7 +3721,9 @@ def _eval_length(length, params):
 
 
 _real_literal = r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[dDeEqQ][-+]?\d+)?(?:_\w+)?'
-_real_literal_re = re.compile(rf'\s*{_real_literal}\s*')
+_real_literal_re = re.compile(
+    rf'\s*(?:{_real_literal}|\(\s*{_real_literal}\s*,\s*{_real_literal}\s*\))'
+    r'\s*')
 
 
 def _eval_scalar(value, params, c_literals=False):
@@ -3597,13 +3738,16 @@ def _eval_scalar(value, params, c_literals=False):
         return value
     if isinstance(result, (list, dict)):
         return value
-    if isinstance(result, _Real):
+    if isinstance(result, (_Real, _Complex)):
         if _real_literal_re.fullmatch(value):
             # a literal already is its value, and keeps its kind as written
             return value.strip()
         if not c_literals and result.kind not in (None, _default_kinds['real']):
             # without its kind, Fortran would read the value as a default real
-            return f'{result}_{result.kind}'
+            if isinstance(result, _Real):
+                return f'{result}_{result.kind}'
+            parts = (_real_text(x, result.kind) for x in _parts(result))
+            return '({}_{k}, {}_{k})'.format(*parts, k=result.kind)
     return (repr if isinstance(result, str) else str)(result)
 
 
@@ -4612,14 +4756,7 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             vardef = f"{vardef}{c}depend({','.join(vars[a]['depend'])})"
             c = ','
         if '=' in vars[a]:
-            v = vars[a]['=']
-            if vars[a]['typespec'] in ['complex', 'double complex']:
-                try:
-                    v = eval(v)
-                    v = f'({v.real},{v.imag})'
-                except Exception:
-                    pass
-            vardef = f'{vardef} :: {a}={v}'
+            vardef = f"{vardef} :: {a}={vars[a]['=']}"
         else:
             vardef = f'{vardef} :: {a}'
         ret = f'{ret}{tab}{vardef}'

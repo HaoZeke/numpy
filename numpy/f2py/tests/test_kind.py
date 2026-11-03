@@ -66,6 +66,8 @@ def _compiled(value):
         return value.decode()
     if isinstance(value, np.floating):
         return Fraction(*value.as_integer_ratio())
+    if isinstance(value, np.complexfloating):
+        return _compiled(value.real), _compiled(value.imag)
     return int(value)
 
 
@@ -73,6 +75,8 @@ def _cracked(value):
     # a parameter as crackfortran evaluates it
     if isinstance(value, crackfortran._Real):
         return value.value
+    if isinstance(value, crackfortran._Complex):
+        return value.real, value.imag
     if isinstance(value, (str, crackfortran._Logical)):
         return value if isinstance(value, str) else int(value.value)
     return int(value)
