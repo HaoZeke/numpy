@@ -216,18 +216,32 @@ def isdouble(var):
     return get_kind(var) == '8'
 
 
+def _ctype(var):
+    # the C type the maps give this variable, or None when the kind has none
+    from .capi_maps import ctype_of
+    return ctype_of(var)
+
+
 def islong_double(var):
     if not isscalar(var):
         return 0
     if not var.get('typespec') == 'real':
         return 0
-    return get_kind(var) in ('10', '16')
+    return _ctype(var) == 'long_double'
+
+
+def ishalf(var):
+    if not isscalar(var):
+        return 0
+    if not var.get('typespec') == 'real':
+        return 0
+    return _ctype(var) == 'float16'
 
 
 def islong_complex(var):
     if not iscomplex(var):
         return 0
-    return get_kind(var) == '32'
+    return _ctype(var) == 'complex_long_double'
 
 
 def iscomplexarray(var):
@@ -282,7 +296,12 @@ def issigned_long_longarray(var):
 
 def islong_doublearray(var):
     return isarray(var) and var.get('typespec') == 'real'\
-        and get_kind(var) in ('10', '16')
+        and _ctype(var) == 'long_double'
+
+
+def ishalfarray(var):
+    return isarray(var) and var.get('typespec') == 'real'\
+        and _ctype(var) == 'float16'
 
 
 def isallocatable(var):
@@ -371,16 +390,51 @@ def islong_longfunction(rout):
     return 0
 
 
-def islong_doublefunction(rout):
-    if not isfunction(rout):
-        return 0
+def _result_var(rout):
     if 'result' in rout:
         a = rout['result']
     else:
         a = rout['name']
-    if a in rout['vars']:
-        return islong_double(rout['vars'][a])
-    return 0
+    if a in rout.get('vars', {}):
+        return rout['vars'][a]
+    return None
+
+
+def islong_doublefunction(rout):
+    if not isfunction(rout):
+        return 0
+    var = _result_var(rout)
+    return islong_double(var) if var is not None else 0
+
+
+def ishalffunction(rout):
+    if not isfunction(rout):
+        return 0
+    var = _result_var(rout)
+    return ishalf(var) if var is not None else 0
+
+
+def _unsigned_result(rout, predicate):
+    if not isfunction(rout):
+        return 0
+    var = _result_var(rout)
+    return predicate(var) if var is not None else 0
+
+
+def isunsigned_charfunction(rout):
+    return _unsigned_result(rout, isunsigned_char)
+
+
+def isunsigned_shortfunction(rout):
+    return _unsigned_result(rout, isunsigned_short)
+
+
+def isunsignedfunction(rout):
+    return _unsigned_result(rout, isunsigned)
+
+
+def isunsigned_long_longfunction(rout):
+    return _unsigned_result(rout, isunsigned_long_long)
 
 
 def iscomplexfunction(rout):
@@ -748,7 +802,7 @@ def getcallprotoargument(rout, cb_map={}):
         if n in cb_map:
             ctype = cb_map[n] + '_typedef'
         else:
-            ctype = getctype(var)
+            ctype = getctype(var, n)
             if l_and(isintent_c, l_or(isscalar, iscomplex))(var):
                 pass
             elif isstring(var):
