@@ -219,6 +219,34 @@ def test_meson_paths_relative_to_cwd(tmp_path, monkeypatch):
     assert "'''inc'''" in meson_build
 
 
+def test_meson_library_files_after_objects():
+    # Libraries given as files must follow the objects that use them on the
+    # link line, which meson does for link_args but not for objects
+    meson_build = MesonTemplate(
+        modulename="Blah",
+        sources=[Path("f90continuation.f90")],
+        deps=[],
+        libraries=["bar"],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[Path("/x/extra.o"), Path("/x/libfoo.a"), Path("/x/libbaz.so")],
+        linker_args=[],
+        fortran_args=[],
+        build_type="debug",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+
+    objects = meson_build.split("objects: [")[1].split("]")[0]
+    assert "'''/x/extra.o'''" in objects
+    assert "libfoo.a" not in objects
+    assert "libbaz.so" not in objects
+    assert "declare_dependency(link_args : ['''/x/libfoo.a'''])" in meson_build
+    assert "declare_dependency(link_args : ['''/x/libbaz.so'''])" in meson_build
+    deps = meson_build.split("dependencies : [")[1]
+    assert (deps.index("lib_file_0_libfoo_a") < deps.index("lib_file_1_libbaz_so")
+            < deps.index("lib_0_bar"))
+
+
 @pytest.mark.slow
 class TestPrecompiledModuleData(util.F2PyTest):
     # gh-19162: wrap the data of a module compiled into a library without
@@ -246,6 +274,29 @@ class TestPrecompiledModuleData(util.F2PyTest):
         mod = self.module.gh19162_mod
         mod.x = [1, 2, 3]
         assert mod.total() == 6
+
+
+@pytest.mark.slow
+class TestPrecompiledModuleUse(util.F2PyTest):
+    # gh-19162: a module that uses one from a static library given as a file,
+    # exposing a variable of the used module through an !f2py declaration
+    sources = [util.getpath("tests", "src", "regression", "gh19162", "gh19162_use.f90")]
+
+    @classmethod
+    def setup_class(cls):
+        super().setup_class()
+        if not cls._has_fortran_compiler:
+            pytest.skip("No Fortran compiler available")
+        lib_dir, mod_dir = util.build_fortran_library(
+            [util.getpath("tests", "src", "regression", "gh19162", "gh19162_lib.f90")],
+            "gh19162",
+        )
+        cls.options = [f"-I{mod_dir}", str(lib_dir / "libgh19162.a")]
+
+    def test_gh19162(self):
+        mod = self.module.gh19162_use
+        mod.x = [1, 2, 3]
+        assert mod.scaled_total(2) == 12
 
 
 @pytest.mark.slow
