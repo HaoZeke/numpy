@@ -473,67 +473,6 @@ static int
             )
             continue
 
-        if _is_char_member(mvar):
-            char_len = _get_char_len(mvar)
-            getter_name = f'Py{typename}_get_{mname}'
-            funcs.append(f"""\
-static PyObject *
-{getter_name}(PyObject *selfobj, void *closure)
-{{
-    Py{typename}Object *self = (Py{typename}Object *)selfobj;
-    if (self->capsule == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError,
-                        "{typename} object not initialized");
-        return NULL;
-    }}
-    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
-    if (ptr == NULL) return NULL;
-    char buf[{char_len + 1}];
-    memset(buf, 0, {char_len + 1});
-    f2py_get_{sym}_{mname}(ptr, buf, {char_len});
-    /* Trim trailing spaces */
-    int len = {char_len};
-    while (len > 0 && buf[len - 1] == ' ') len--;
-    return PyUnicode_FromStringAndSize(buf, len);
-}}
-""")
-
-            setter_name = f'Py{typename}_set_{mname}'
-            funcs.append(f"""\
-static int
-{setter_name}(PyObject *selfobj, PyObject *value, void *closure)
-{{
-    Py{typename}Object *self = (Py{typename}Object *)selfobj;
-    if (value == NULL) {{
-        PyErr_SetString(PyExc_TypeError,
-                        "Cannot delete {mname} attribute");
-        return -1;
-    }}
-    if (self->capsule == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError,
-                        "{typename} object not initialized");
-        return -1;
-    }}
-    if (!PyUnicode_Check(value)) {{
-        PyErr_SetString(PyExc_TypeError,
-                        "{mname} must be a string");
-        return -1;
-    }}
-    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
-    if (ptr == NULL) return -1;
-    Py_ssize_t slen;
-    const char *str = PyUnicode_AsUTF8AndSize(value, &slen);
-    if (str == NULL) return -1;
-    f2py_set_{sym}_{mname}(ptr, str, (int)slen);
-    return 0;
-}}
-""")
-
-            getset_entries.append(
-                f'    {{"{mname}", {getter_name}, {setter_name}, '
-                f'"{mname} member", NULL}},'
-            )
-            continue
 
         if _is_complex_member(mvar):
             ctype = _get_member_ctype(mvar)

@@ -743,10 +743,11 @@ def _describe_types(module):
 
 def _get_char_len(var):
     """Extract fixed character length as int, or None."""
-    cs = var.get('charselector', {})
+    cs = var.get('charselector') or {}
     char_len = cs.get('len') or cs.get('*')
     if char_len is None:
-        return None
+        # a length that is not specified is 1 (F2018 7.4.4.2)
+        return 1
     try:
         return int(char_len)
     except (ValueError, TypeError):
@@ -1137,7 +1138,8 @@ def _can_wrap_bindc(typeblock, type_map=None):
     for name, var in get_type_members(typeblock).items():
         if _is_type_parameter(var):
             continue
-        if _member_problem(var) is not None:
+        # the struct has no C type for characters, which opaque types handle
+        if _member_problem(var) is not None or _is_char_member(var):
             return False
         if var.get('typespec') == 'type':
             inner = var.get('typename', '').lower()
