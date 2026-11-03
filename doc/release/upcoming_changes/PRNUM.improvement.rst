@@ -8,3 +8,6 @@
   macros documented in the ``f2py`` usage text for the C wrapper, such as
   ``-DF2PY_REPORT_ON_ARRAY_COPY=<int>``, and macros used when preprocessing
   Fortran sources.
+* ``--debug`` selects a debug build again. It used to be dropped, while any
+  ``--f77flags`` or ``--f90flags`` value containing the word ``debug``
+  selected a debug build instead.
