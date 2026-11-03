@@ -115,6 +115,7 @@ class TestSymbolic(util.F2PyTest):
         assert v == v
         assert w != v
         assert hash(v) is not None
+        assert as_factors(2 * x) == Expr(Op.FACTORS, {x: 1, as_number(2): 1})
 
         t = as_ternary(x, y, z)
         u = as_ternary(x, z, y)
@@ -364,6 +365,7 @@ class TestSymbolic(util.F2PyTest):
             )
 
         assert fromstring("x?y:z") == as_ternary(x, y, z)
+        assert fromstring("x * (1 ? 2 * y : z)") == 2 * x * y
 
         assert fromstring("*x") == as_deref(x)
         assert fromstring("**x") == as_deref(as_deref(x))
