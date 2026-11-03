@@ -1390,13 +1390,13 @@ def analyzeline(m, case, line):
                 for r in markoutercomma(m1.group('after')).split('@,@'):
                     if '-' in r:
                         try:
-                            begc, endc = [x.strip() for x in r.split('-')]
+                            begc, endc = [x.strip().lower() for x in r.split('-')]
                         except Exception:
                             outmess(
                                 f'analyzeline: expected "<char>-<char>" instead of "{r}" in range list of implicit statement\n')
                             continue
                     else:
-                        begc = endc = r.strip()
+                        begc = endc = r.strip().lower()
                     if not len(begc) == len(endc) == 1:
                         outmess(
                             f'analyzeline: expected "<char>-<char>" instead of "{r}" in range list of implicit statement (2)\n')

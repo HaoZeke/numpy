@@ -586,3 +586,12 @@ class TestImplicitRules:
         mod = crackfortran.crackfortran([str(fpath)])
         sub = mod[0]["body"][0]
         assert sub["vars"]["x"]["typespec"] == "double precision"
+
+    def test_uppercase_letters(self, monkeypatch):
+        # gh-13356: without -h, ``f2py -m`` keeps the case of the source
+        monkeypatch.setattr(crackfortran, "dolowercase", 0)
+        fpath = util.getpath("tests", "src", "crackfortran", "implicit_upper.f")
+        fvars = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        for name in ("TK", "X", "ETA1"):
+            assert fvars[name]["typespec"] == "double precision"
+        assert fvars["KK"]["typespec"] == "integer"
