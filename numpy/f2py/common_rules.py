@@ -87,7 +87,7 @@ def buildhooks(m):
         cadd(f'static FortranDataDef f2py_{name}_def[] = {{')
         idims = []
         for n in inames:
-            ct = capi_maps.getctype(vars[n])
+            ct = capi_maps.getctype(vars[n], n)
             elsize = capi_maps.get_elsize(vars[n])
             at = capi_maps.c2capi_map[ct]
             dm = capi_maps.getarrdims(n, vars[n])
