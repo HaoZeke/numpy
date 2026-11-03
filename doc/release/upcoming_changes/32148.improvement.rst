@@ -1,33 +1,40 @@
-``f2py`` module parameters keep their values with LLVM ``flang``
-----------------------------------------------------------------
-Named constants in Fortran 90 modules wrapped by ``f2py`` are now copied when
-the module is initialized rather than read through the pointer the compiler
-passed in. LLVM ``flang`` passes a temporary there, so these values used to
-read as garbage. Implied-shape arrays such as ``x(*)`` and assumed-length
-strings such as ``character(len=*)`` now take their size from their value;
-they used to crash the import or fail to read. A parameter array used from
-another module keeps its bounds there, so a dimension such as ``sizes(1)``
-now refers to the right element. Outside Windows, the meson backend now lets
-LLVM ``flang`` link the extension module, so modules that need its runtime
-library, such as ones with allocatable arrays, no longer fail to import. A real
-parameter now keeps its value when it sizes another variable, so
+``f2py`` keeps module parameter values with LLVM ``flang``.
+-----------------------------------------------------------
+``f2py`` now copies named constants in Fortran 90 modules when the module is initialized.
+It used to read them through the pointer the compiler passed in.
+LLVM ``flang`` passes a temporary there, so these values used to read as garbage.
+An implied-shape array such as ``x(*)`` now takes its size from its value.
+An assumed-length string such as ``character(len=*)`` does the same.
+Such declarations used to crash the import or fail to read.
+A parameter array used from another module keeps its bounds there.
+A dimension such as ``sizes(1)`` now refers to the right element.
+Outside Windows, the meson backend now lets LLVM ``flang`` link the extension module.
+Those modules import, including ones with allocatable arrays that need the ``flang`` runtime.
+A real parameter now keeps its value when it sizes another variable.
 ``n = int(ratio * 2)`` with ``ratio = 1.5`` is 3 rather than 8.
 
 ``f2py`` also evaluates more of Fortran's constant expressions in parameters.
-Integer division and negative integer powers truncate, intrinsics such as
-``nint``, ``mod``, ``achar``, ``size``, ``len`` and ``sum`` are understood,
-array constructors may use implied-do loops, and parameter arrays may have rank
-two or more, including ones built by ``reshape``. So ``k = nint(2.5)`` is 3
-rather than 4. Character parameters are blank padded or cut to their declared
-length, as Fortran stores them. Arithmetic on array constructors and complex
-constants, which Python would repeat or join, is left unevaluated, as is a
-value such as ``huge(1.0)``, which used to read as the kind 4.
+Integer division truncates.
+A negative integer power truncates too.
+``f2py`` understands ``nint``, ``mod``, ``achar``, ``size``, ``len`` and ``sum``.
+Array constructors may use implied-do loops.
+Parameter arrays may have rank two or more.
+``reshape`` can build those arrays.
+``k = nint(2.5)`` is 3.
+Character parameters are blank padded or cut to their declared length, as Fortran stores them.
+Arithmetic on array constructors is left unevaluated.
+Python would repeat that arithmetic.
+Complex constants are left unevaluated.
+Python would join those.
+``huge(1.0)`` is the largest default real.
+That call used to read as the kind 4.
 
-Where ``long double`` is the x87 extended type, as on x86, ``real(10)`` and
-``complex(10)`` now map to it instead of reading as zero. ``long double``
-scalars can now be passed with ``intent(inout)`` and returned from functions
-and ``intent(out)`` arguments. They are returned, and passed to Python
-callbacks, as NumPy ``longdouble`` and ``clongdouble`` scalars, so they keep
-the precision that a Python ``float`` or ``complex`` would round away. Module
-variables of derived type are skipped with a message, rather than stopping
-``f2py`` with ``KeyError: 'void'``.
+``real(10)`` and ``complex(10)`` now map to ``long double`` where that type is the x87 extended format, as on x86.
+They used to read as zero.
+``long double`` scalars can now be passed with ``intent(inout)``.
+Functions can return them, and so can ``intent(out)`` arguments.
+NumPy returns those scalars as ``longdouble`` and ``clongdouble``.
+Python callbacks receive the same scalars.
+A Python ``float`` or ``complex`` would round that precision away.
+``f2py`` skips module variables of derived type and prints a message.
+It used to stop with ``KeyError: 'void'``.
