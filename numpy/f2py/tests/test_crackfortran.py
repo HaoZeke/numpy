@@ -920,10 +920,19 @@ class TestInquiries:
             end module names
             """))
         vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        # Default real on this platform: precision 15, range 307, digits 53.
+        # Default integer digits() is 31. huge(integer) / 2**30 is 1.
+        _real_precision = "15"
+        _real_range = "307"
+        _real_digits = "53"
+        _integer_digits = "31"
+        # real(8) is double precision in the f2py kind map.
+        _kind_double = "8"
         dims = [vs[n]["dimension"] for n in ("a", "b", "c", "d", "e")]
-        assert dims == [["15"], ["307"], ["53"], ["1"], ["15"]]
-        assert vs["f"]["kindselector"]["kind"] == "8"
-        assert vs["s"]["charselector"]["len"] == "31"
+        assert dims == [[_real_precision], [_real_range], [_real_digits],
+                        ["1"], [_real_precision]]
+        assert vs["f"]["kindselector"]["kind"] == _kind_double
+        assert vs["s"]["charselector"]["len"] == _integer_digits
 
 
 class TestParameterStatements:
@@ -1318,12 +1327,19 @@ class TestComponentHostParameters:
     # the components of a type see the parameters of its module, except
     # where a name of the type hides them
     def test_kinds_and_sizes(self, tmp_path):
+        # selected_real_kind(15, 307) selects binary64, whose kind is 8.
+        # nlen and npts are the sizes the component declarations use.
+        _p64 = 15
+        _r64 = 307
+        _kind_double = "8"
+        _name_len = "6"
+        _npts = "3"
         fpath = tmp_path / "host.f90"
-        fpath.write_text(textwrap.dedent("""\
+        fpath.write_text(textwrap.dedent(f"""\
             module host
               implicit none
-              integer, parameter :: dp = selected_real_kind(15, 307)
-              integer, parameter :: k = kind(1.0), nlen = 6, npts = 3
+              integer, parameter :: dp = selected_real_kind({_p64}, {_r64})
+              integer, parameter :: k = kind(1.0), nlen = {_name_len}, npts = {_npts}
               type :: sample
                 real(dp) :: a
                 character(len=nlen) :: name
@@ -1337,10 +1353,10 @@ class TestComponentHostParameters:
             """))
         sample, vec = crackfortran.crackfortran([str(fpath)])[0]["body"]
         vs = sample["vars"]
-        assert vs["a"]["kindselector"] == {"kind": "8"}
-        assert vs["name"]["charselector"] == {"len": "6"}
-        assert vs["pts"]["kindselector"] == {"kind": "8"}
-        assert vs["pts"]["dimension"] == ["3"]
+        assert vs["a"]["kindselector"] == {"kind": _kind_double}
+        assert vs["name"]["charselector"] == {"len": _name_len}
+        assert vs["pts"]["kindselector"] == {"kind": _kind_double}
+        assert vs["pts"]["dimension"] == [_npts]
         assert vec["vars"]["x"]["kindselector"] == {"kind": "k"}
 
 

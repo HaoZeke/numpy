@@ -11,6 +11,36 @@ from numpy.f2py.f2py2e import run_main
 
 from . import util
 
+# Absolute tolerances for a value that has round-tripped through Fortran.
+# A default real keeps about seven digits, real32 is coarser, and real64
+# keeps more.  The proton-mass case needs a bound below the value itself.
+_ABS_TOL_LARGE_REAL = 1e-1
+_ABS_TOL_COARSE = 1e-3
+_ABS_TOL_REAL32 = 1e-5
+_ABS_TOL_DEFAULT_REAL = 1e-6
+_ABS_TOL_PI = 1e-8
+_ABS_TOL_KIND = 1e-10
+_ABS_TOL_REAL64 = 1e-12
+_ABS_TOL_TINY_MASS = 1e-33
+
+# character(len=32) :: name in char_member.f90.  A longer value is truncated.
+_PERSON_NAME_LEN = 32
+_NAME_LONGER_THAN_FIELD = 100
+
+# defined_io long_record is this many characters.  A fixed format buffer
+# would cut the repr off before this length.
+_LONG_RECORD_LEN = 10000
+
+# default_init.f90 declares max_iterations = 100 and tolerance = 1.0d-6.
+# The override is a different value so the test can tell it from the default.
+_CONFIG_MAX_ITERATIONS = 100
+_CONFIG_FEWER_ITERATIONS = 50
+_CONFIG_DEFAULT_TOLERANCE = 1.0e-6
+_CONFIG_OVERRIDE_TOLERANCE = 0.01
+
+# hidden_components.f90 census adds this when the character codes match fill.
+_CENSUS_CODE_BONUS = 100
+
 
 def _generated(tmp_path, fpath, name="m"):
     """Return the C module and the Fortran 90 wrappers f2py writes."""
@@ -184,16 +214,16 @@ class TestSimpleBindCType(util.F2PyTest):
     def test_opaque_point_construct(self):
         """Non-bind(c) Point uses opaque pointer path."""
         p = self.module.point(3.0, 4.0)
-        assert abs(p.x - 3.0) < 1e-6
-        assert abs(p.y - 4.0) < 1e-6
+        assert abs(p.x - 3.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.y - 4.0) < _ABS_TOL_DEFAULT_REAL
 
     def test_opaque_point_set(self):
         """Set members on opaque type."""
         p = self.module.point()
         p.x = 7.0
         p.y = 8.0
-        assert abs(p.x - 7.0) < 1e-6
-        assert abs(p.y - 8.0) < 1e-6
+        assert abs(p.x - 7.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.y - 8.0) < _ABS_TOL_DEFAULT_REAL
 
     def test_opaque_point_repr(self):
         p = self.module.point(1.5, 2.5)
@@ -204,10 +234,10 @@ class TestSimpleBindCType(util.F2PyTest):
         """Multiple opaque instances should be independent."""
         p1 = self.module.point(1.0, 0.0)
         p2 = self.module.point(0.0, 2.0)
-        assert abs(p1.x - 1.0) < 1e-6
-        assert abs(p2.x - 0.0) < 1e-6
+        assert abs(p1.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p2.x - 0.0) < _ABS_TOL_DEFAULT_REAL
         p1.x = 99.0
-        assert abs(p2.x - 0.0) < 1e-6
+        assert abs(p2.x - 0.0) < _ABS_TOL_DEFAULT_REAL
 
 
 @pytest.mark.slow
@@ -221,10 +251,10 @@ class TestMixedScalarTypes(util.F2PyTest):
 
     def test_particle_construct(self):
         p = self.module.particle(1.0, 2.0, 3.0, 9.8, 42)
-        assert abs(p.x - 1.0) < 1e-6
-        assert abs(p.y - 2.0) < 1e-6
-        assert abs(p.z - 3.0) < 1e-6
-        assert abs(p.mass - 9.8) < 1e-6
+        assert abs(p.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.y - 2.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.z - 3.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.mass - 9.8) < _ABS_TOL_DEFAULT_REAL
         assert p.id == 42
 
     def test_particle_set_integer(self):
@@ -235,7 +265,7 @@ class TestMixedScalarTypes(util.F2PyTest):
     def test_particle_set_float(self):
         p = self.module.particle()
         p.mass = 1.67e-27
-        assert abs(p.mass - 1.67e-27) < 1e-33
+        assert abs(p.mass - 1.67e-27) < _ABS_TOL_TINY_MASS
 
     def test_gridindex(self):
         g = self.module.gridindex(10, 20, 30)
@@ -250,9 +280,9 @@ class TestMixedScalarTypes(util.F2PyTest):
 
     def test_vector3d_double(self):
         v = self.module.vector3d(1.1, 2.2, 3.3)
-        assert abs(v.vx - 1.1) < 1e-12
-        assert abs(v.vy - 2.2) < 1e-12
-        assert abs(v.vz - 3.3) < 1e-12
+        assert abs(v.vx - 1.1) < _ABS_TOL_REAL64
+        assert abs(v.vy - 2.2) < _ABS_TOL_REAL64
+        assert abs(v.vz - 3.3) < _ABS_TOL_REAL64
 
     def test_multiple_types_coexist(self):
         """All three types should work simultaneously."""
@@ -261,7 +291,7 @@ class TestMixedScalarTypes(util.F2PyTest):
         v = self.module.vector3d(0.1, 0.2, 0.3)
         assert p.id == 5
         assert g.k == 30
-        assert abs(v.vz - 0.3) < 1e-12
+        assert abs(v.vz - 0.3) < _ABS_TOL_REAL64
 
 
 class TestSequenceTypeCodeGen:
@@ -423,7 +453,7 @@ class TestArrayMemberBindC(util.F2PyTest):
 
     def test_matrix2x2_array_and_scalar(self):
         m = self.module.matrix2x2(scale=2.5)
-        assert abs(m.scale - 2.5) < 1e-12
+        assert abs(m.scale - 2.5) < _ABS_TOL_REAL64
         arr = m.data
         assert arr.shape == (4,)
         np.testing.assert_array_equal(arr, [0.0, 0.0, 0.0, 0.0])
@@ -553,30 +583,30 @@ class TestTypeAsArg(util.F2PyTest):
     def test_translate_particle(self):
         p = self.module.particle(1.0, 2.0, 3.0, 10.0)
         self.module.translate_particle(p, 0.5, 0.5, 0.5)
-        assert abs(p.x - 1.5) < 1e-6
-        assert abs(p.y - 2.5) < 1e-6
-        assert abs(p.z - 3.5) < 1e-6
+        assert abs(p.x - 1.5) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.y - 2.5) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.z - 3.5) < _ABS_TOL_DEFAULT_REAL
 
     def test_particle_distance(self):
         p1 = self.module.particle(0.0, 0.0, 0.0, 1.0)
         p2 = self.module.particle(3.0, 4.0, 0.0, 1.0)
         dist = self.module.particle_distance(p1, p2)
-        assert abs(dist - 5.0) < 1e-6
+        assert abs(dist - 5.0) < _ABS_TOL_DEFAULT_REAL
 
     def test_make_particle(self):
         p = self.module.make_particle(1.0, 2.0, 3.0, 9.8)
-        assert abs(p.x - 1.0) < 1e-6
-        assert abs(p.mass - 9.8) < 1e-6
+        assert abs(p.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.mass - 9.8) < _ABS_TOL_DEFAULT_REAL
 
     def test_create_particle_exists(self):
         assert hasattr(self.module, 'create_particle')
 
     def test_create_particle_function(self):
         p = self.module.create_particle(1.0, 2.0, 3.0, 9.8)
-        assert abs(p.x - 1.0) < 1e-6
-        assert abs(p.y - 2.0) < 1e-6
-        assert abs(p.z - 3.0) < 1e-6
-        assert abs(p.mass - 9.8) < 1e-6
+        assert abs(p.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.y - 2.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.z - 3.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.mass - 9.8) < _ABS_TOL_DEFAULT_REAL
 
     def test_create_particle_returns_correct_type(self):
         p = self.module.create_particle(0.0, 0.0, 0.0, 1.0)
@@ -586,18 +616,18 @@ class TestTypeAsArg(util.F2PyTest):
     def test_create_particle_independent_instances(self):
         p1 = self.module.create_particle(1.0, 2.0, 3.0, 10.0)
         p2 = self.module.create_particle(4.0, 5.0, 6.0, 20.0)
-        assert abs(p1.x - 1.0) < 1e-6
-        assert abs(p2.x - 4.0) < 1e-6
+        assert abs(p1.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p2.x - 4.0) < _ABS_TOL_DEFAULT_REAL
 
     def test_create_particle_mutable(self):
         p = self.module.create_particle(1.0, 2.0, 3.0, 10.0)
         p.x = 99.0
-        assert abs(p.x - 99.0) < 1e-6
+        assert abs(p.x - 99.0) < _ABS_TOL_DEFAULT_REAL
 
     def test_create_particle_usable_as_arg(self):
         p = self.module.create_particle(1.0, 2.0, 3.0, 10.0)
         self.module.translate_particle(p, 0.5, 0.5, 0.5)
-        assert abs(p.x - 1.5) < 1e-6
+        assert abs(p.x - 1.5) < _ABS_TOL_DEFAULT_REAL
 
 
 @pytest.mark.slow
@@ -922,22 +952,22 @@ class TestInheritanceOpaque(util.F2PyTest):
 
     def test_particle_members(self):
         p = self.module.particle(mass=1.5, charge=0)
-        assert abs(p.mass - 1.5) < 1e-6
+        assert abs(p.mass - 1.5) < _ABS_TOL_DEFAULT_REAL
         assert p.charge == 0
 
     def test_charged_own_member(self):
         cp = self.module.chargedparticle(mass=0.0, charge=1, spin=0.5)
-        assert abs(cp.spin - 0.5) < 1e-6
+        assert abs(cp.spin - 0.5) < _ABS_TOL_DEFAULT_REAL
 
     def test_charged_inherited_members(self):
         cp = self.module.chargedparticle(mass=938.0, charge=1, spin=0.5)
-        assert abs(cp.mass - 938.0) < 1e-1
+        assert abs(cp.mass - 938.0) < _ABS_TOL_LARGE_REAL
         assert cp.charge == 1
 
     def test_charged_set_inherited_member(self):
         cp = self.module.chargedparticle(mass=0.0, charge=0, spin=0.0)
         cp.mass = 105.7
-        assert abs(cp.mass - 105.7) < 1e-1
+        assert abs(cp.mass - 105.7) < _ABS_TOL_LARGE_REAL
 
     def test_charged_isinstance_particle(self):
         """ChargedParticle should be an instance of Particle."""
@@ -948,9 +978,9 @@ class TestInheritanceOpaque(util.F2PyTest):
     def test_electron_all_members(self):
         e = self.module.electron(
             mass=0.511, charge=-1, spin=0.5, shell_num=2)
-        assert abs(e.mass - 0.511) < 1e-3
+        assert abs(e.mass - 0.511) < _ABS_TOL_COARSE
         assert e.charge == -1
-        assert abs(e.spin - 0.5) < 1e-6
+        assert abs(e.spin - 0.5) < _ABS_TOL_DEFAULT_REAL
         assert e.shell_num == 2
 
     def test_electron_isinstance_chain(self):
@@ -966,7 +996,7 @@ class TestInheritanceOpaque(util.F2PyTest):
         e = self.module.electron(
             mass=0.0, charge=0, spin=0.0, shell_num=0)
         e.mass = 99.0
-        assert abs(e.mass - 99.0) < 1e-6
+        assert abs(e.mass - 99.0) < _ABS_TOL_DEFAULT_REAL
 
     def test_repr_shows_all_members(self):
         cp = self.module.chargedparticle(mass=1.0, charge=2, spin=3.0)
@@ -1033,15 +1063,15 @@ class TestOperatorOverload(util.F2PyTest):
         v1 = self.module.vec2(x=1.0, y=2.0)
         v2 = self.module.vec2(x=3.0, y=4.0)
         v3 = v1 + v2
-        assert abs(v3.x - 4.0) < 1e-6
-        assert abs(v3.y - 6.0) < 1e-6
+        assert abs(v3.x - 4.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(v3.y - 6.0) < _ABS_TOL_DEFAULT_REAL
 
     def test_vec2_sub(self):
         v1 = self.module.vec2(x=5.0, y=8.0)
         v2 = self.module.vec2(x=2.0, y=3.0)
         v3 = v1 - v2
-        assert abs(v3.x - 3.0) < 1e-6
-        assert abs(v3.y - 5.0) < 1e-6
+        assert abs(v3.x - 3.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(v3.y - 5.0) < _ABS_TOL_DEFAULT_REAL
 
     def test_vec2_eq_true(self):
         v1 = self.module.vec2(x=1.0, y=2.0)
@@ -1058,8 +1088,8 @@ class TestOperatorOverload(util.F2PyTest):
         v2 = self.module.vec2(x=3.0, y=4.0)
         v3 = v1 + v2
         # v1 and v2 should be unchanged
-        assert abs(v1.x - 1.0) < 1e-6
-        assert abs(v2.x - 3.0) < 1e-6
+        assert abs(v1.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(v2.x - 3.0) < _ABS_TOL_DEFAULT_REAL
         # v3 is a new object
         assert v3 is not v1 and v3 is not v2
 
@@ -1073,8 +1103,8 @@ class TestOperatorOverload(util.F2PyTest):
         v2 = self.module.vec2(x=3.0, y=4.0)
         v3 = self.module.vec2(x=5.0, y=6.0)
         v4 = v1 + v2 + v3
-        assert abs(v4.x - 9.0) < 1e-6
-        assert abs(v4.y - 12.0) < 1e-6
+        assert abs(v4.x - 9.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(v4.y - 12.0) < _ABS_TOL_DEFAULT_REAL
 
 
 class TestTypeArrayArgCodeGen:
@@ -1133,9 +1163,9 @@ class TestTypeArrayArgOpaque(util.F2PyTest):
         a2 = self.module.atom(x=4.0, y=5.0, z=6.0, atomic_num=8)
         a3 = self.module.atom(x=7.0, y=8.0, z=9.0, atomic_num=1)
         tx, ty, tz = self.module.sum_positions([a1, a2, a3])
-        assert abs(tx - 12.0) < 1e-6
-        assert abs(ty - 15.0) < 1e-6
-        assert abs(tz - 18.0) < 1e-6
+        assert abs(tx - 12.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(ty - 15.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(tz - 18.0) < _ABS_TOL_DEFAULT_REAL
 
     def test_count_element_basic(self):
         a1 = self.module.atom(x=0.0, y=0.0, z=0.0, atomic_num=1)
@@ -1152,16 +1182,16 @@ class TestTypeArrayArgOpaque(util.F2PyTest):
 
     def test_sum_positions_empty_list(self):
         tx, ty, tz = self.module.sum_positions([])
-        assert abs(tx) < 1e-6
-        assert abs(ty) < 1e-6
-        assert abs(tz) < 1e-6
+        assert abs(tx) < _ABS_TOL_DEFAULT_REAL
+        assert abs(ty) < _ABS_TOL_DEFAULT_REAL
+        assert abs(tz) < _ABS_TOL_DEFAULT_REAL
 
     def test_sum_positions_single_element(self):
         a = self.module.atom(x=3.14, y=2.72, z=1.41, atomic_num=6)
         tx, ty, tz = self.module.sum_positions([a])
-        assert abs(tx - 3.14) < 1e-5
-        assert abs(ty - 2.72) < 1e-5
-        assert abs(tz - 1.41) < 1e-5
+        assert abs(tx - 3.14) < _ABS_TOL_REAL32
+        assert abs(ty - 2.72) < _ABS_TOL_REAL32
+        assert abs(tz - 1.41) < _ABS_TOL_REAL32
 
     def test_wrong_type_in_list(self):
         with pytest.raises(TypeError):
@@ -1210,15 +1240,15 @@ class TestAssumedShapeOpaque(util.F2PyTest):
         v1 = self.module.vec3(x=1.0, y=2.0, z=3.0)
         v2 = self.module.vec3(x=4.0, y=5.0, z=6.0)
         tx, ty, tz = self.module.sum_vectors([v1, v2])
-        assert abs(tx - 5.0) < 1e-6
-        assert abs(ty - 7.0) < 1e-6
-        assert abs(tz - 9.0) < 1e-6
+        assert abs(tx - 5.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(ty - 7.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(tz - 9.0) < _ABS_TOL_DEFAULT_REAL
 
     def test_sum_vectors_empty(self):
         tx, ty, tz = self.module.sum_vectors([])
-        assert abs(tx) < 1e-6
-        assert abs(ty) < 1e-6
-        assert abs(tz) < 1e-6
+        assert abs(tx) < _ABS_TOL_DEFAULT_REAL
+        assert abs(ty) < _ABS_TOL_DEFAULT_REAL
+        assert abs(tz) < _ABS_TOL_DEFAULT_REAL
 
     def test_sum_vectors_type_error(self):
         with pytest.raises(TypeError):
@@ -1292,10 +1322,10 @@ class TestCharMember(util.F2PyTest):
 
     def test_long_string_truncated(self):
         p = self.module.person(age=20)
-        long_name = "A" * 100
+        long_name = "A" * _NAME_LONGER_THAN_FIELD
         p.name = long_name
         # Should truncate to character(len=32)
-        assert len(p.name) == 32
+        assert len(p.name) == _PERSON_NAME_LEN
 
     def test_empty_string(self):
         p = self.module.person(age=20)
@@ -1304,10 +1334,10 @@ class TestCharMember(util.F2PyTest):
 
     def test_exact_length_string(self):
         p = self.module.person(age=20)
-        exact = "A" * 32
+        exact = "A" * _PERSON_NAME_LEN
         p.name = exact
         assert p.name == exact
-        assert len(p.name) == 32
+        assert len(p.name) == _PERSON_NAME_LEN
 
     def test_name_with_scalar_member(self):
         p = self.module.person(age=42)
@@ -1833,7 +1863,8 @@ class TestDefinedIO(util.F2PyTest):
 
     def test_long_record(self):
         assert str(self.module.long_record(n=0)) == ""
-        assert str(self.module.long_record(n=10000)) == "x" * 10000
+        assert str(self.module.long_record(n=_LONG_RECORD_LEN)) == (
+            "x" * _LONG_RECORD_LEN)
 
     def test_from_string(self):
         p = self.module.formatted_point.from_string("4 5 6")
@@ -2078,7 +2109,7 @@ class TestHiddenComponents(util.F2PyTest):
         for name in ("tiny", "codes", "nodes", "grid"):
             assert not hasattr(h, name)
         self.module.fill(h, 3)
-        assert self.module.census(h) == 3 + 3 + 4 * 3 + 100
+        assert self.module.census(h) == 3 + 3 + 4 * 3 + _CENSUS_CODE_BONUS
 
     def test_exposed(self):
         h = self.module.holder(flag=True, small=-2, z=1 + 2j)
@@ -2088,7 +2119,7 @@ class TestHiddenComponents(util.F2PyTest):
         assert h.flag == 0
         assert h.flags.tolist() == [1, 0, 1]
         self.module.fill(h, 1)
-        assert self.module.census(h) == 1 + 1 + 4 + 100
+        assert self.module.census(h) == 1 + 1 + 4 + _CENSUS_CODE_BONUS
 
 
 class TestDefaultInitCodeGen:
@@ -2105,7 +2136,7 @@ class TestDefaultInitCodeGen:
                 module['name'], type_blocks)
         assert src is not None
         # Default values should appear in the constructor
-        assert '100' in src  # max_iterations default
+        assert str(_CONFIG_MAX_ITERATIONS) in src  # max_iterations default
         assert '1.0d-6' in src  # tolerance default
 
 
@@ -2120,20 +2151,22 @@ class TestDefaultInit(util.F2PyTest):
 
     def test_defaults_applied(self):
         cfg = self.module.config()
-        assert cfg.max_iterations == 100
-        assert abs(cfg.tolerance - 1.0e-6) < 1e-12
+        assert cfg.max_iterations == _CONFIG_MAX_ITERATIONS
+        assert abs(cfg.tolerance - _CONFIG_DEFAULT_TOLERANCE) < _ABS_TOL_REAL64
         assert cfg.scale_factor == 1.0
 
     def test_override_defaults(self):
-        cfg = self.module.config(max_iterations=50, tolerance=0.01)
-        assert cfg.max_iterations == 50
-        assert abs(cfg.tolerance - 0.01) < 1e-10
+        cfg = self.module.config(
+            max_iterations=_CONFIG_FEWER_ITERATIONS,
+            tolerance=_CONFIG_OVERRIDE_TOLERANCE)
+        assert cfg.max_iterations == _CONFIG_FEWER_ITERATIONS
+        assert abs(cfg.tolerance - _CONFIG_OVERRIDE_TOLERANCE) < _ABS_TOL_KIND
         # Non-overridden defaults should still apply
         assert cfg.scale_factor == 1.0
 
     def test_partial_override(self):
         cfg = self.module.config(scale_factor=2.5)
-        assert cfg.max_iterations == 100  # default
+        assert cfg.max_iterations == _CONFIG_MAX_ITERATIONS  # default
         assert cfg.scale_factor == 2.5    # overridden
 
 
@@ -2274,12 +2307,12 @@ class TestGenericTBP(util.F2PyTest):
     def test_scale_int_method(self):
         scl = self.module.scaler(value=10.0)
         scl.scale_int(3)
-        assert abs(scl.value - 30.0) < 1e-10
+        assert abs(scl.value - 30.0) < _ABS_TOL_KIND
 
     def test_scale_real_method(self):
         scl = self.module.scaler(value=10.0)
         scl.scale_real(2.5)
-        assert abs(scl.value - 25.0) < 1e-10
+        assert abs(scl.value - 25.0) < _ABS_TOL_KIND
 
     def test_scale_method_exists(self):
         """Generic 'scale' should be accessible as a method."""
@@ -2290,7 +2323,7 @@ class TestGenericTBP(util.F2PyTest):
         """Generic 'scale' dispatches to first specific (scale_int)."""
         scl = self.module.scaler(value=10.0)
         scl.scale(2)  # calls scale_int (first specific)
-        assert abs(scl.value - 20.0) < 1e-10
+        assert abs(scl.value - 20.0) < _ABS_TOL_KIND
 
     def test_scale_generic_dispatches_on_type(self):
         """A float argument selects scale_real (F2018 15.4.3.4.5)."""
@@ -2470,11 +2503,11 @@ class TestIntentOutTypeArray(util.F2PyTest):
         assert nresults == 3
         assert isinstance(results, list)
         assert len(results) == 3
-        assert abs(results[0].value - 1.0) < 1e-6
+        assert abs(results[0].value - 1.0) < _ABS_TOL_DEFAULT_REAL
         assert results[0].idx == 1
-        assert abs(results[1].value - 2.0) < 1e-6
+        assert abs(results[1].value - 2.0) < _ABS_TOL_DEFAULT_REAL
         assert results[1].idx == 2
-        assert abs(results[2].value - 3.0) < 1e-6
+        assert abs(results[2].value - 3.0) < _ABS_TOL_DEFAULT_REAL
         assert results[2].idx == 3
 
     def test_make_sequence_empty(self):
@@ -2489,7 +2522,7 @@ class TestIntentOutTypeArray(util.F2PyTest):
         results, nresults = result
         assert nresults == 1
         assert len(results) == 1
-        assert abs(results[0].value - 5.0) < 1e-6
+        assert abs(results[0].value - 5.0) < _ABS_TOL_DEFAULT_REAL
         assert results[0].idx == 1
 
     def test_result_members_accessible(self):
@@ -2498,7 +2531,7 @@ class TestIntentOutTypeArray(util.F2PyTest):
         r = results[0]
         assert hasattr(r, 'value')
         assert hasattr(r, 'idx')
-        assert abs(r.value - 10.0) < 1e-6
+        assert abs(r.value - 10.0) < _ABS_TOL_DEFAULT_REAL
         assert r.idx == 1
 
 
@@ -2795,8 +2828,8 @@ class TestComplexMemberBindC(util.F2PyTest):
 
     def test_signal_sample_float_complex(self):
         s = self.module.signal_sample(value=1.5 + 2.5j, timestamp=0.1)
-        assert abs(s.value - (1.5 + 2.5j)) < 1e-6
-        assert abs(s.timestamp - 0.1) < 1e-6
+        assert abs(s.value - (1.5 + 2.5j)) < _ABS_TOL_DEFAULT_REAL
+        assert abs(s.timestamp - 0.1) < _ABS_TOL_DEFAULT_REAL
 
 
 @pytest.mark.slow
@@ -2975,7 +3008,7 @@ class TestAbstractTypeOpaque(util.F2PyTest):
 
     def test_circle_can_instantiate(self):
         c = self.module.disk(area=0.0, radius=1.0)
-        assert abs(c.radius - 1.0) < 1e-10
+        assert abs(c.radius - 1.0) < _ABS_TOL_KIND
 
     def test_circle_has_area(self):
         c = self.module.disk(area=0.0, radius=1.0)
@@ -3301,12 +3334,12 @@ class TestParameterizedKindNoDefaultCompilation(util.F2PyTest):
 
     def test_genericvec_k8(self):
         v = self.module.genericvec(k=8, x=1.0, y=2.0, z=3.0)
-        assert abs(v.x - 1.0) < 1e-10
-        assert abs(v.y - 2.0) < 1e-10
+        assert abs(v.x - 1.0) < _ABS_TOL_KIND
+        assert abs(v.y - 2.0) < _ABS_TOL_KIND
 
     def test_genericvec_k4(self):
         v = self.module.genericvec(k=4, x=1.0, y=2.0, z=3.0)
-        assert abs(v.x - 1.0) < 1e-5
+        assert abs(v.x - 1.0) < _ABS_TOL_REAL32
 
     def test_genericvec_k_required(self):
         """Should raise TypeError when k is not provided."""
@@ -3386,9 +3419,9 @@ class TestParameterizedKindCompilation(util.F2PyTest):
     def test_realvec_construct_with_args(self):
         v = self.module.realvec(length=3, x=1.0, y=2.0, z=3.0)
         assert v.length == 3
-        assert abs(v.x - 1.0) < 1e-10
-        assert abs(v.y - 2.0) < 1e-10
-        assert abs(v.z - 3.0) < 1e-10
+        assert abs(v.x - 1.0) < _ABS_TOL_KIND
+        assert abs(v.y - 2.0) < _ABS_TOL_KIND
+        assert abs(v.z - 3.0) < _ABS_TOL_KIND
 
     def test_realvec_set_members(self):
         v = self.module.realvec()
@@ -3396,9 +3429,9 @@ class TestParameterizedKindCompilation(util.F2PyTest):
         v.y = 5.5
         v.z = 6.5
         v.length = 10
-        assert abs(v.x - 4.5) < 1e-10
-        assert abs(v.y - 5.5) < 1e-10
-        assert abs(v.z - 6.5) < 1e-10
+        assert abs(v.x - 4.5) < _ABS_TOL_KIND
+        assert abs(v.y - 5.5) < _ABS_TOL_KIND
+        assert abs(v.z - 6.5) < _ABS_TOL_KIND
         assert v.length == 10
 
     def test_realvec_kind_param_readonly(self):
@@ -3557,13 +3590,13 @@ class TestParameterizedLenCompilation(util.F2PyTest):
     def test_flexvec_construct(self):
         v = self.module.flexvec(n=5)
         assert v.n == 5
-        assert abs(v.scale) < 1e-10
+        assert abs(v.scale) < _ABS_TOL_KIND
 
     def test_flexvec_scale_member(self):
         v = self.module.flexvec(n=3, scale=2.5)
-        assert abs(v.scale - 2.5) < 1e-10
+        assert abs(v.scale - 2.5) < _ABS_TOL_KIND
         v.scale = 7.0
-        assert abs(v.scale - 7.0) < 1e-10
+        assert abs(v.scale - 7.0) < _ABS_TOL_KIND
 
     def test_flexvec_data_getter(self):
         v = self.module.flexvec(n=4)
@@ -3575,9 +3608,9 @@ class TestParameterizedLenCompilation(util.F2PyTest):
         v = self.module.flexvec(n=3, scale=1.0)
         v.data = np.array([1.0, 2.0, 3.0])
         data = v.data
-        assert abs(data[0] - 1.0) < 1e-10
-        assert abs(data[1] - 2.0) < 1e-10
-        assert abs(data[2] - 3.0) < 1e-10
+        assert abs(data[0] - 1.0) < _ABS_TOL_KIND
+        assert abs(data[1] - 2.0) < _ABS_TOL_KIND
+        assert abs(data[2] - 3.0) < _ABS_TOL_KIND
 
     def test_flexvec_n_readonly(self):
         v = self.module.flexvec(n=5)
@@ -3597,14 +3630,14 @@ class TestSequenceTypeCompilation(util.F2PyTest):
 
     def test_seq_point_members(self):
         p = self.module.seq_point(x=1.0, y=2.0, z=3.0)
-        assert abs(p.x - 1.0) < 1e-12
-        assert abs(p.y - 2.0) < 1e-12
-        assert abs(p.z - 3.0) < 1e-12
+        assert abs(p.x - 1.0) < _ABS_TOL_REAL64
+        assert abs(p.y - 2.0) < _ABS_TOL_REAL64
+        assert abs(p.z - 3.0) < _ABS_TOL_REAL64
 
     def test_seq_point_setter(self):
         p = self.module.seq_point(x=0.0, y=0.0, z=0.0)
         p.x = 5.0
-        assert abs(p.x - 5.0) < 1e-12
+        assert abs(p.x - 5.0) < _ABS_TOL_REAL64
 
     def test_seq_with_array_exists(self):
         assert hasattr(self.module, 'seq_with_array')
@@ -3616,9 +3649,9 @@ class TestSequenceTypeCompilation(util.F2PyTest):
     def test_translate_subroutine(self):
         p = self.module.seq_point(x=1.0, y=2.0, z=3.0)
         self.module.translate(p, 0.1, 0.2, 0.3)
-        assert abs(p.x - 1.1) < 1e-12
-        assert abs(p.y - 2.2) < 1e-12
-        assert abs(p.z - 3.3) < 1e-12
+        assert abs(p.x - 1.1) < _ABS_TOL_REAL64
+        assert abs(p.y - 2.2) < _ABS_TOL_REAL64
+        assert abs(p.z - 3.3) < _ABS_TOL_REAL64
 
 
 # ---- Deferred TBP tests (F2018 7.5.5, R752) ----
@@ -3646,7 +3679,7 @@ class TestDeferredTBPAbstractCompilation(util.F2PyTest):
     def test_disk_compute_area_callable(self):
         d = self.module.disk(area=0.0, radius=2.0)
         d.compute_area()
-        assert abs(d.area - 3.14159265358979 * 4.0) < 1e-8
+        assert abs(d.area - 3.14159265358979 * 4.0) < _ABS_TOL_PI
 
 
 class TestDeferredTBPCodeGen:
@@ -3702,7 +3735,7 @@ class TestDeferredTBPCompilation(util.F2PyTest):
         m = self.module.midpointrule(npoints=1)
         # Integrates x^2 from 0 to 1: midpoint = 0.5, result = 1*0.25 = 0.25
         result = m.integrate(0.0, 1.0)
-        assert abs(result - 0.25) < 1e-10
+        assert abs(result - 0.25) < _ABS_TOL_KIND
 
     def test_midpoint_get_order(self):
         m = self.module.midpointrule(npoints=1)
@@ -3713,7 +3746,7 @@ class TestDeferredTBPCompilation(util.F2PyTest):
         # h=1, mid=0.5, result = 1*0.25 + 1/24 = 0.291666...
         result = c.integrate(0.0, 1.0)
         expected = 0.25 + 1.0 / 24.0
-        assert abs(result - expected) < 1e-10
+        assert abs(result - expected) < _ABS_TOL_KIND
 
     def test_corrected_inherits_get_order(self):
         c = self.module.correctedmidpoint(npoints=1)
@@ -3765,12 +3798,12 @@ class TestArrayAPIInput(util.F2PyTest):
     def test_numpy_array_input(self):
         v = self.module.vec3()
         v.v = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        assert abs(v.v[0] - 1.0) < 1e-5
+        assert abs(v.v[0] - 1.0) < _ABS_TOL_REAL32
 
     def test_list_input(self):
         v = self.module.vec3()
         v.v = [4.0, 5.0, 6.0]
-        assert abs(v.v[0] - 4.0) < 1e-5
+        assert abs(v.v[0] - 4.0) < _ABS_TOL_REAL32
 
     def test_dlpack_array_input(self):
         src = np.array([7.0, 8.0, 9.0], dtype=np.float32)
@@ -3778,7 +3811,7 @@ class TestArrayAPIInput(util.F2PyTest):
         dlpack_arr = np.from_dlpack(src)
         v = self.module.vec3()
         v.v = dlpack_arr
-        assert abs(v.v[0] - 7.0) < 1e-5
+        assert abs(v.v[0] - 7.0) < _ABS_TOL_REAL32
 
 
 # ---- Coarray member skip tests ----
