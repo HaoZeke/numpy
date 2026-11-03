@@ -12,4 +12,5 @@ F2PY reference manual
    buildtools/index
    advanced/use_cases.rst
    advanced/boilerplating.rst
+   f2py-debugging
    f2py-testing

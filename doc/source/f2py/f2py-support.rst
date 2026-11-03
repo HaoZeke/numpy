@@ -363,6 +363,8 @@ Fortran 2018
        ``DIMENSION(..)`` does not compile.
      -
 
+.. _f2py-compilers:
+
 Compilers
 =========
 
