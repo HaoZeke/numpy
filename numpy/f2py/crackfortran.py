@@ -637,9 +637,11 @@ subroutinepattern = re.compile(beforethisafter % (
 groupbegins77 = r'program|block\s*data'
 beginpattern77 = re.compile(
     beforethisafter % ('', groupbegins77, groupbegins77, '.*'), re.I), 'begin'
+# "type is (...)" is a type guard of SELECT TYPE (F2018 11.1.11), not the
+# definition of a type named is
 groupbegins90 = groupbegins77 + \
     r'|module(?!\s*procedure)|python\s*module|(abstract|)\s*interface|'\
-    r'type(?!\s*\()'
+    r'type(?!\s*\()(?!\s*is\s*\()'
 beginpattern90 = re.compile(
     beforethisafter % ('', groupbegins90, groupbegins90, '.*'), re.I), 'begin'
 groupends = (r'end|endprogram|endblockdata|endmodule|endpythonmodule|'
