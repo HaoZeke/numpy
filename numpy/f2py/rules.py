@@ -687,7 +687,7 @@ rout_rules = [
                  {islong_doublefunction: 'long_double'}],
         'returnformat': {l_not(isintent_hide): '#rformat#'},
         'return': {iscomplexfunction: ',#name#_return_value_capi',
-                   l_not(l_or(iscomplexfunction, isintent_hide)): ',#name#_return_value'},
+                   l_not(l_or(iscomplexfunction, isintent_hide)): ',#rcast##name#_return_value'},
         '_check': l_and(isfunction, l_not(isstringfunction), l_not(isfunction_wrap))
     }, {  # String function # in use for --no-wrap
         'declfortranroutine': 'extern void #F_FUNC#(#fortranname#,#FORTRANNAME#)(#callprotoargument#);',
@@ -774,7 +774,7 @@ aux_rules = [
         '_check': l_and(isscalar, l_not(iscomplex)),
     },
     {
-        'return': ',#varname#',
+        'return': ',#varrcast##varname#',
         'docstrout': '#pydocsignout#',
         'docreturn': '#outvarname#,',
         'returnformat': '#varrformat#',
@@ -971,7 +971,7 @@ if (#varname#_cb.capi==Py_None) {
         'decl': '    #ctype# #varname# = 0;',
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#);'},
         'callfortran': {l_or(isintent_c, isattr_value): '#varname#,', l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
-        'return': {isintent_out: ',#varname#'},
+        'return': {isintent_out: ',#varrcast##varname#'},
         '_check': l_and(isscalar, l_not(iscomplex))
     }, {
         'need': {hasinitvalue: 'math.h'},
