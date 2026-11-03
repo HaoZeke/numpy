@@ -889,6 +889,22 @@ class TestInquiries:
         assert vs["s"]["charselector"]["len"] == "31"
 
 
+class TestParameterStatements:
+    # a parameter statement is evaluated as a declaration is, by Fortran's
+    # rules, where Python's left 3.5 or dropped the parameter
+    def test_values(self, tmp_path):
+        fpath = tmp_path / "statements.f"
+        fpath.write_text(
+            "      subroutine statements(a, b, c)\n"
+            "      parameter (n = 7 / 2, x = 1, m = int(x / 2 * 10))\n"
+            "      parameter (big = huge(1.0), k = kind(big))\n"
+            "      real a(n), b(m), c(k)\n"
+            "      end\n")
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        dims = [vs[n]["dimension"] for n in ("a", "b", "c")]
+        assert dims == [["3"], ["5"], ["4"]]
+
+
 class TestIntegerDivision:
     # the quotient of two integers is truncated, as in Fortran
     def test_extents(self, tmp_path):

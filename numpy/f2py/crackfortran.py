@@ -1324,36 +1324,20 @@ def analyzeline(m, case, line):
         last_name = None
         for e in markoutercomma(ll).split('@,@'):
             try:
-                k, initexpr = [x.strip() for x in e.split('=')]
+                k, initexpr = [x.strip() for x in e.split('=', 1)]
             except Exception:
                 outmess(
                     f'analyzeline: could not extract name,expr in parameter statement "{e}" of "{ll}\"\n')
                 continue
-            params = get_parameters(edecl)
             k = rmbadname1(k)
             if k not in edecl:
                 edecl[k] = {}
             if '=' in edecl[k] and (not edecl[k]['='] == initexpr):
                 outmess(f'analyzeline: Overwriting the value of parameter "{k}" '
                         f'("{edecl[k]["="]}") with "{initexpr}".\n')
-            t = determineexprtype(initexpr, params)
-            if t:
-                if t.get('typespec') == 'real':
-                    tt = list(initexpr)
-                    for m in real16pattern.finditer(initexpr):
-                        tt[m.start():m.end()] = list(
-                            initexpr[m.start():m.end()].lower().replace('d', 'e'))
-                    initexpr = ''.join(tt)
-                elif t.get('typespec') == 'complex':
-                    initexpr = initexpr[1:].lower().replace('d', 'e').\
-                        replace(',', '+1j*(')
-            try:
-                v = eval(initexpr, {}, params)
-            except (SyntaxError, NameError, TypeError) as msg:
-                errmess(f'analyzeline: Failed to evaluate {initexpr!r}. '
-                        f'Ignoring: {msg}\n')
-                continue
-            edecl[k]['='] = repr(v)
+            # get_parameters evaluates it with the other parameters, by the
+            # rules of Fortran, as for a parameter declared with its type
+            edecl[k]['='] = initexpr
             if 'attrspec' in edecl[k]:
                 edecl[k]['attrspec'].append('parameter')
             else:
