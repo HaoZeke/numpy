@@ -807,6 +807,42 @@ test_ndarray_string_elsize(void **state)
 }
 
 static void
+test_failed_array_creation_keeps_dtype(void **state)
+{
+    (void)state;
+    PyArray_Descr *dtype = PyArray_DescrFromType(NPY_DOUBLE);
+    Py_ssize_t refcnt = Py_REFCNT(dtype);
+
+    /* PyArray_FromAny fails on an input of inhomogeneous shape. */
+    PyObject *ragged = Py_BuildValue("[[d][dd]]", 1.0, 1.0, 2.0);
+    npy_intp dims[] = {-1};
+    assert_null(ndarray_from_pyobj(NPY_DOUBLE, sizeof(double), dims, 1,
+                                   F2PY_INTENT_IN, ragged, NULL));
+    check_pyerr(PyExc_ValueError, NULL);
+    Py_DECREF(ragged);
+    assert_int_equal(Py_REFCNT(dtype), refcnt);
+
+    /* PyArray_NewFromDescr fails on an array that is too big. */
+    npy_intp huge[] = {NPY_MAX_INTP};
+    assert_null(ndarray_from_pyobj(NPY_DOUBLE, sizeof(double), huge, 1,
+                                   F2PY_INTENT_HIDE, Py_None, NULL));
+    check_pyerr(PyExc_ValueError, NULL);
+    assert_int_equal(Py_REFCNT(dtype), refcnt);
+
+    /* PyFortranObject_New fails on module data of undefined shape. */
+    static double data[1];
+    static FortranDataDef defs[] = {
+        {"undefined", 1, {{-1}}, NPY_DOUBLE, sizeof(double), (char *)data},
+        {NULL},
+    };
+    assert_null(PyFortranObject_New(defs, NULL));
+    check_pyerr(PyExc_ValueError, NULL);
+    assert_int_equal(Py_REFCNT(dtype), refcnt);
+
+    Py_DECREF(dtype);
+}
+
+static void
 test_copy_ND_array(void **state)
 {
     (void)state;
@@ -930,6 +966,7 @@ run(PyObject *Py_UNUSED(self), PyObject *Py_UNUSED(args))
         cmocka_unit_test(test_ndarray_intent_cache),
         cmocka_unit_test(test_ndarray_dimensions),
         cmocka_unit_test(test_ndarray_string_elsize),
+        cmocka_unit_test(test_failed_array_creation_keeps_dtype),
         cmocka_unit_test(test_copy_ND_array),
         cmocka_unit_test(test_f2py_size),
         cmocka_unit_test(test_describe_obj),
