@@ -235,7 +235,13 @@ def _gh31249_host_library(target, tmp_path):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("target", ["static_library"])
+@pytest.mark.parametrize("target", [
+    "static_library",
+    # No soname, so the module records the library by its path
+    pytest.param("shared_module", marks=pytest.mark.skipif(
+        sys.platform != "linux",
+        reason="relies on ELF load-time binding of the library's callback")),
+])
 def test_gh31249(target, tmp_path):
     # A prebuilt library passed on the command line calls back into Python
     if not util.has_fortran_compiler():
