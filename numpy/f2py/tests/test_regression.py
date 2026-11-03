@@ -283,6 +283,20 @@ def test_gh21161_typedefs_from_npy_common(tmp_path):
 
 
 @pytest.mark.slow
+def test_debugcapi_long_long_format(capfd, monkeypatch):
+    # --debug-capi prints long_long with NPY_LONGLONG_FMT, not %ld
+    monkeypatch.setenv("CFLAGS", f"{os.environ.get('CFLAGS', '')} -Werror=format")
+    module = util.build_module(
+        [util.getpath("tests", "src", "regression", "scalar_check.f90")],
+        options=["--debug-capi"],
+        module_name="_debugcapi_long_long",
+    )
+    capfd.readouterr()
+    module.chk(1, 1, 1, 1, 1, 2**40, b"a")
+    assert f"debug-capi:i8={2**40}\n" in capfd.readouterr().err
+
+
+@pytest.mark.slow
 class TestAssignmentOnlyModules(util.F2PyTest):
     # Ensure that variables are exposed without functions or subroutines in a module
     sources = [util.getpath("tests", "src", "regression", "assignOnlyModule.f90")]

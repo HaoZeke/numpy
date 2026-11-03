@@ -9,4 +9,6 @@ instead of repeating their platform-specific definitions. The names can
 still be used in ``callstatement`` and ``callprotoargument`` code of
 signature files and in ``.f2py_f2cmap`` files. This fixes building
 wrappers with ``integer(kind=-8)`` arguments on 32-bit Windows without
-MinGW.
+MinGW. Wrappers built with ``--debug-capi`` now print ``long_long``
+values with ``NPY_LONGLONG_FMT`` instead of ``%ld``, which printed
+values outside the range of ``long`` wrongly on Windows.
