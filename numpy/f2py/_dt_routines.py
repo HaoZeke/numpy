@@ -62,6 +62,63 @@ from .cfuncs import dt_any_intrinsics
 from .crackfortran import markoutercomma
 
 
+def _initial_state(ref, components, type_map, skip=(), depth=0):
+    """Return statements that define every component of ``ref`` right
+    after ALLOCATE, and the number of DO variables they use.
+
+    ALLOCATE applies default initialization and leaves allocatable
+    components unallocated (F2018 7.5.4.6); every other component is
+    undefined.  Pointers are nullified, since ASSOCIATED must not be given
+    a pointer with undefined association status (F2018 16.9.16); other
+    components are zeroed or blanked.  Elements of arrays of derived type
+    are visited with DO variables ``f2py_i1``, ``f2py_i2``, ...
+    """
+    lines = []
+    deepest = depth
+    for name, var in components.items():
+        attrs = var.get('attrspec', [])
+        if (name in skip or '=' in var or 'allocatable' in attrs
+                or _is_type_parameter(var) or _is_private_member(var)):
+            continue
+        part = f'{ref}%{name}'
+        typespec = var.get('typespec', '')
+        if 'pointer' in attrs:
+            lines.append(f'nullify({part})')
+        elif typespec == 'type':
+            inner = type_map.get(var.get('typename', '').lower())
+            if inner is None:
+                continue
+            parent_members, own_members = _get_all_members(inner, type_map)
+            rank = len(var.get('dimension', []))
+            indices = [f'f2py_i{depth + r}' for r in range(1, rank + 1)]
+            element = f'{part}({", ".join(indices)})' if rank else part
+            body, used = _initial_state(
+                element, {**parent_members, **own_members}, type_map,
+                depth=depth + rank)
+            if not body:
+                continue
+            deepest = max(deepest, used)
+            # Column-major order: the first subscript varies fastest
+            heads = [f'do {index} = lbound({part}, {r}), ubound({part}, {r})'
+                     for r, index in reversed(list(enumerate(indices, 1)))]
+            lines.extend('  ' * level + head
+                         for level, head in enumerate(heads))
+            lines.extend('  ' * rank + line for line in body)
+            lines.extend('  ' * level + 'end do'
+                         for level in reversed(range(rank)))
+        elif typespec == 'character':
+            lines.append(f"{part} = ' '")
+        elif typespec == 'logical':
+            lines.append(f'{part} = .false.')
+        elif typespec in _NUMERIC_TYPESPECS:
+            lines.append(f'{part} = 0')
+    return lines, deepest
+
+
+_NUMERIC_TYPESPECS = ('integer', 'real', 'double precision', 'complex',
+                      'double complex')
+
+
 def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                               module_block=None):
     """Generate Fortran wrapper source code for opaque pointer types,
@@ -215,45 +272,19 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
         else:
             alloc_stmt = f'    allocate(obj)'
 
+        init_lines, loop_depth = _initial_state(
+            'obj', members, type_map, skip=set(args))
         lines.append(
             f'  function f2py_create_{typename}({args_str}) '
             f'result(cptr) bind(c)')
         lines.append(f'    type(c_ptr) :: cptr')
         lines.append(decls_str)
         lines.append(f'    type({type_spec}), pointer :: obj')
+        if loop_depth:
+            lines.append('    integer :: ' + ', '.join(
+                f'f2py_i{d}' for d in range(1, loop_depth + 1)))
         lines.append(alloc_stmt)
-        # Zero-initialize all members (arrays default to 0 from allocate)
-        for mname, mvar in members.items():
-            if _is_type_array_member(mvar):
-                inner = mvar.get('typename', '').lower()
-                inner_tb = type_map.get(inner)
-                if inner_tb:
-                    dims = _get_array_dims(mvar)
-                    total = 1
-                    for d in dims:
-                        total *= d
-                    for idx in range(1, total + 1):
-                        for imname, imvar in get_type_members(
-                                inner_tb).items():
-                            if _is_type_parameter(imvar):
-                                continue
-                            if not _is_array_member(imvar):
-                                lines.append(
-                                    f'    obj%{mname}({idx})%'
-                                    f'{imname} = 0')
-            elif _is_type_member(mvar):
-                inner = mvar.get('typename', '').lower()
-                inner_tb = type_map.get(inner)
-                if inner_tb:
-                    for imname, imvar in get_type_members(
-                            inner_tb).items():
-                        if _is_type_parameter(imvar):
-                            continue
-                        if not _is_array_member(imvar):
-                            lines.append(
-                                f'    obj%{mname}%{imname} = 0')
-            elif _is_char_member(mvar):
-                lines.append(f'    obj%{mname} = \' \'')
+        lines.extend('    ' + line for line in init_lines)
         # Apply declared default values (F2018 7.5.4.1 R739
         # component-initialization). These run before user-provided
         # arguments so that defaults are used when args are omitted.
