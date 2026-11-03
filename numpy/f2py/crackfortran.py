@@ -155,6 +155,8 @@ except ImportError:
     charset_normalizer = None
 
 from . import __version__, symbolic
+from ._isocbind import isoc_kindmap
+from ._isofenv import isof_kindmap
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -2008,6 +2010,13 @@ def get_usedict(block):
     return usedict
 
 
+# Named kinds of the intrinsic modules that the kind maps know by name
+_intrinsic_kinds = {
+    'iso_c_binding': isoc_kindmap,
+    'iso_fortran_env': isof_kindmap,
+}
+
+
 def get_useparameters(block, param_map=None):
     global f90modulevars
 
@@ -2018,6 +2027,14 @@ def get_useparameters(block, param_map=None):
         return param_map
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
+        if usename in _intrinsic_kinds and usename not in f90modulevars:
+            # A kind imported under a local name (dp => real64) stands
+            # for the intrinsic name
+            for local, name in mapping.get('map', {}).items():
+                name = name.lower()
+                if local != name and name in _intrinsic_kinds[usename]:
+                    param_map[local] = name
+            continue
         if usename not in f90modulevars:
             outmess(f'get_useparameters: no module {usename} info used by '
                     f'{block.get("name")}\n')

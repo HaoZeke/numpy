@@ -1,7 +1,7 @@
 import pytest
 
 import numpy as np
-from numpy.testing import assert_allclose
+from numpy.testing import assert_allclose, assert_array_equal
 
 from . import util
 
@@ -65,6 +65,52 @@ class TestIOSF(util.F2PyTest):
         exp_out = a + b
         assert_allclose(out, exp_out)
         assert out.dtype == exp_out.dtype
+
+
+@pytest.mark.slow
+class TestRenamedKindsSignature(util.F2PyTest):
+    # gh-17563: the signature file of the issue, with renamed kinds split
+    # over two USE statements
+    module_name = "gh17563"
+    sources = [
+        util.getpath('tests', 'src', 'isofenv', 'gh17563.pyf'),
+        util.getpath('tests', 'src', 'isofenv', 'gh17563.f90'),
+    ]
+
+    def test_renamed_real64(self):
+        assert self.module.func(1) == 1 / 3
+
+
+@pytest.mark.slow
+class TestRenamedKindsModule(util.F2PyTest):
+    # gh-17563: renamed kinds used by module procedures through host
+    # association, including the generated Fortran wrappers
+    sources = [
+        util.getpath('tests', 'src', 'isofenv', 'gh17563_mod.f90'),
+    ]
+    # exact in double precision, rounded away in single precision
+    eps = 2.0 ** -30
+
+    def test_assumed_shape(self):
+        v = np.array([1.0, 2.0, 3.0])
+        n = self.module.gh17563_mod.rescale(v, 1 + self.eps)
+        assert_array_equal(v, np.array([1.0, 2.0, 3.0]) * (1 + self.eps))
+        assert n == 3
+
+    def test_function_result(self):
+        v = np.array([1 + self.eps, 2.0, 3.0])
+        assert self.module.gh17563_mod.total(v) == 6 + self.eps
+
+    # gh-30352
+    def test_complex(self):
+        arr = np.zeros(4, dtype=np.complex128)
+        self.module.gh17563_mod.fill(arr)
+        assert_array_equal(arr, np.full(4, 1 - 1j))
+
+    def test_iso_c_binding(self):
+        z = np.array([1 + 1j, 2 - 1j])
+        self.module.gh17563_mod.cscale(z, 1 + self.eps)
+        assert_array_equal(z, np.array([1 + 1j, 2 - 1j]) * (1 + self.eps))
 
 
 @pytest.mark.parametrize("kind, ctype", [
