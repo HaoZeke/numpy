@@ -3,6 +3,10 @@ import tempfile
 
 import pytest
 
+import numpy as np
+from numpy.f2py import crackfortran
+from numpy.testing import assert_array_equal
+
 from . import util
 
 
@@ -50,3 +54,41 @@ class TestF2cmapOption(TestAssumedShapeSumExample):
 
     def teardown_method(self):
         os.unlink(self.f2cmap_file.name)
+
+
+LOWER_BOUND_SRC = util.getpath("tests", "src", "assumed_shape", "lower_bound.f90")
+
+
+def test_lower_bound_is_assumed_shape():
+    # gh-25421: an explicit lower bound such as x(0:) produced the
+    # dimension "1 + ", which ended up verbatim in the generated C
+    mod = crackfortran.crackfortran([str(LOWER_BOUND_SRC)])
+    routines = {b["name"]: b["vars"] for b in mod[0]["body"]}
+    assert routines["bounds"]["x"]["dimension"] == [":"]
+    assert routines["bounds_2d"]["x"]["dimension"] == [":", ":"]
+    assert routines["add_index"]["x"]["dimension"] == [":"]
+    assert routines["first_sum"]["a"]["dimension"] == [":"]
+    assert routines["first_sum"]["c"]["dimension"] == [":"]
+
+
+@pytest.mark.slow
+class TestAssumedShapeLowerBound(util.F2PyTest):
+    sources = [LOWER_BOUND_SRC]
+
+    def test_bounds(self):
+        lb, ub = self.module.lower_bound.bounds(np.arange(5.0))
+        assert (lb, ub) == (0, 4)
+
+    def test_bounds_2d(self):
+        lb, ub = self.module.lower_bound.bounds_2d(np.zeros((2, 3), order="F"))
+        assert_array_equal(lb, [0, -1])
+        assert_array_equal(ub, [1, 1])
+
+    def test_variable_lower_bound(self):
+        x = np.zeros(4)
+        self.module.lower_bound.add_index(x, 3)
+        assert_array_equal(x, [3, 4, 5, 6])
+
+    def test_function(self):
+        r = self.module.lower_bound.first_sum([1 + 2j, 5], [3 + 4j])
+        assert r == 4 + 6j

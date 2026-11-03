@@ -2804,6 +2804,11 @@ def analyzevars(block):
                     if len(dl) == 2 and '*' in dl:  # e.g. dimension(5:*)
                         dl = ['*']
                         d = '*'
+                    elif len(dl) == 2 and not dl[1].strip():
+                        # e.g. dimension(0:): assumed shape, the lower
+                        # bound is applied by the Fortran callee
+                        dl = [':']
+                        d = dim_char = ':'
                     if len(dl) == 1 and dl[0] != dim_char:
                         dl = ['1', dl[0]]
                     if len(dl) == 2:
