@@ -289,6 +289,17 @@ class TestCharacter(util.F2PyTest):
         else:
             raise SystemError(f'{f.__name__} should have failed on int value')
 
+    def test_input_unicode_array(self):
+        f = getattr(self.module, self.fprefix + '_input')
+
+        # Only the first code point of a unicode array is converted
+        assert_equal(f(np.array('ab')), ord('a'))
+        assert_equal(f(np.array(['a\u00e9'])), ord('a'))
+        assert_equal(f(np.array([], dtype='U1')), 0)
+        a = np.frombuffer(b'\0' + np.array('c').tobytes(), dtype='U1', offset=1)
+        assert not a.flags.aligned
+        assert_equal(f(a), ord('c'))
+
     @pytest.mark.parametrize("dtype", ['c', 'S1', 'U1'])
     def test_array_input(self, dtype):
         f = getattr(self.module, self.fprefix + '_array_input')

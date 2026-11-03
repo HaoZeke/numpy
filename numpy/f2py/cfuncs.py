@@ -436,7 +436,7 @@ cppmacros['GETSTRFROMPYTUPLE'] = """
             goto capi_fail;\\
         if (PyBytes_Check(rv_cb_str)) {\\
             str[len-1]='\\0';\\
-            STRINGCOPYN((str),PyBytes_AS_STRING((PyBytesObject*)rv_cb_str),(len));\\
+            STRINGCOPYN((str),PyBytes_AsString(rv_cb_str),(len));\\
         } else {\\
             PRINTPYOBJERR(rv_cb_str);\\
             PyErr_SetString(#modulename#_error,\"string object expected\");\\
@@ -747,8 +747,8 @@ fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
             }
         }
         if (tmp == NULL) goto capi_fail;
-        n = PyBytes_GET_SIZE(tmp);
-        buf = PyBytes_AS_STRING(tmp);
+        n = PyBytes_Size(tmp);
+        buf = PyBytes_AsString(tmp);
     }
     if (*len == -1) {
         /* TODO: change the type of `len` so that we can remove this */
@@ -796,12 +796,12 @@ static int
 character_from_pyobj(character* v, PyObject *obj, const char *errmess) {
     if (PyBytes_Check(obj)) {
         /* empty bytes has trailing null, so dereferencing is always safe */
-        *v = PyBytes_AS_STRING(obj)[0];
+        *v = PyBytes_AsString(obj)[0];
         return 1;
     } else if (PyUnicode_Check(obj)) {
         PyObject* tmp = PyUnicode_AsASCIIString(obj);
         if (tmp != NULL) {
-            *v = PyBytes_AS_STRING(tmp)[0];
+            *v = PyBytes_AsString(tmp)[0];
             Py_DECREF(tmp);
             return 1;
         }
@@ -811,12 +811,23 @@ character_from_pyobj(character* v, PyObject *obj, const char *errmess) {
             *v = PyArray_BYTES(arr)[0];
             return 1;
         } else if (F2PY_IS_UNICODE_ARRAY(arr)) {
-            // TODO: update when numpy will support 1-byte and
-            // 2-byte unicode dtypes
-            PyObject* tmp = PyUnicode_FromKindAndData(
-                              PyUnicode_4BYTE_KIND,
-                              PyArray_BYTES(arr),
-                              (PyArray_NBYTES(arr)>0?1:0));
+            /* First code point, in the dtype's byte order. A later
+             * non-ASCII code point must not reject the value. */
+            PyObject* tmp;
+            if (PyArray_SIZE(arr) > 0) {
+                npy_ucs4 c;
+                memcpy(&c, PyArray_BYTES(arr), sizeof(c));
+                if (!PyArray_ISNBO(PyArray_DESCR(arr)->byteorder)) {
+                    c = ((c & 0x000000FFu) << 24) |
+                        ((c & 0x0000FF00u) << 8) |
+                        ((c & 0x00FF0000u) >> 8) |
+                        ((c & 0xFF000000u) >> 24);
+                }
+                tmp = PyUnicode_FromOrdinal((int)c);
+            }
+            else {
+                tmp = PyUnicode_FromStringAndSize(NULL, 0);
+            }
             if (tmp != NULL) {
                 if (character_from_pyobj(v, tmp, errmess)) {
                     Py_DECREF(tmp);
@@ -1171,11 +1182,9 @@ needs['complex_double_from_pyobj'] = ['complex_double', 'npy_math.h']
 cfuncs['complex_double_from_pyobj'] = """
 static int
 complex_double_from_pyobj(complex_double* v, PyObject *obj, const char *errmess) {
-    Py_complex c;
     if (PyComplex_Check(obj)) {
-        c = PyComplex_AsCComplex(obj);
-        npy_csetreal(&v->_npy, c.real);
-        npy_csetimag(&v->_npy, c.imag);
+        npy_csetreal(&v->_npy, PyComplex_RealAsDouble(obj));
+        npy_csetimag(&v->_npy, PyComplex_ImagAsDouble(obj));
         return 1;
     }
     if (PyArray_IsScalar(obj, ComplexFloating)) {
