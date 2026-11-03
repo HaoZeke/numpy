@@ -1845,6 +1845,17 @@ class TestBindCCharacter(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestLongRepr(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "long_repr.f90")]
+
+    def test_not_cut(self):
+        r = repr(self.module.record())
+        assert r.endswith(")")
+        assert r.count("=-1.25e-300") == 24
+
+
+@pytest.mark.slow
 class TestStorageArguments(util.F2PyTest):
     """Allocatable and pointer dummies and results of derived type."""
     sources = [util.getpath("tests", "src", "derived_types",
