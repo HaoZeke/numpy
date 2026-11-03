@@ -82,6 +82,7 @@ and the corresponding <C type>. The <C type> can be one of the following::
     double
     float
     long_double
+    float16
     char
     signed_char
     unsigned_char
@@ -91,6 +92,7 @@ and the corresponding <C type>. The <C type> can be one of the following::
     long
     long_long
     unsigned
+    unsigned_long_long
     complex_float
     complex_double
     complex_long_double
