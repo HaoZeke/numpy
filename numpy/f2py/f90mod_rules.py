@@ -110,7 +110,6 @@ def buildhooks(pymod):
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
                 onlyvars.append(n)
-                mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
         if len(onlyvars) == 0 and len(notvars) == 1 and m['name'] in notvars:
             outmess(f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n")
@@ -185,6 +184,7 @@ def buildhooks(pymod):
                 fadd(f'end subroutine {fargs[-1]}')
             else:
                 fargs.append(n)
+                mfargs.append(n)
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
                 iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
