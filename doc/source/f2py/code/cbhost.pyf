@@ -1,0 +1,20 @@
+python module cbhost__user__routines
+    interface
+        subroutine on_step(step, x)
+            intent(callback) on_step
+            integer intent(in) :: step
+            double precision intent(in) :: x
+        end subroutine on_step
+    end interface
+end python module cbhost__user__routines
+
+python module cbhost
+    interface
+        subroutine run(n)
+            use cbhost__user__routines
+            integer intent(in) :: n
+            intent(callback, hide) on_step
+            external on_step
+        end subroutine run
+    end interface
+end python module cbhost

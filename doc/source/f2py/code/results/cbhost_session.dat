@@ -1,0 +1,14 @@
+>>> import cbhost
+>>> cbhost.run(3)
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+cbhost.error: Callback on_step not defined (as an argument or module cbhost attribute).
+
+>>> def on_step(step, x):
+...     print(f"step {step}: x = {x}")
+...
+>>> cbhost.on_step = on_step
+>>> cbhost.run(3)
+step 1: x = 0.5
+step 2: x = 0.25
+step 3: x = 0.125

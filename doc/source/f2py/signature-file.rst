@@ -482,6 +482,9 @@ The following attributes can be used by F2PY.
       of the F2PY generated extension module where it can be set as a module
       attribute by a user.
 
+      See :ref:`f2py-callbacks-separate-build` for providing such a function to
+      Fortran code that is built separately from the extension module.
+
   * ``aux``
       Defines an auxiliary C variable in the F2PY generated wrapper function.
       Useful to save parameter values so that they can be accessed in

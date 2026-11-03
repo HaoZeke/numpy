@@ -296,6 +296,107 @@ following rules are applied:
 * If ``k < l``, then ``y_{k + 1}, ..., y_l`` are ignored.
 * If ``k > l``, then only ``x_1, ..., x_l`` are set.
 
+.. _f2py-callbacks-separate-build:
+
+Call-backs from separately built Fortran code
+---------------------------------------------
+
+The Fortran code that calls a Python function does not have to be compiled by
+F2PY. A larger program can be built on its own, for example into a static
+library by its existing build system, and wrapped in a second step. The
+signature file then only needs the routines that are called from Python and
+the signatures of their call-back functions. The rest of the Fortran code is
+linked unchanged.
+
+Fortran code can call a Python function while a wrapped routine whose
+signature declares it is running. The wrapper makes the Python function
+available before it calls Fortran and withdraws it when the call returns.
+During the call, any Fortran code that calls the call-back, including routines
+that F2PY never saw, reaches the Python function, and the arguments are
+converted as described by the call-back signature. If the Python function
+raises an exception, F2PY abandons the Fortran call and the wrapper raises the
+exception.
+
+The following library takes the user routine as a procedure argument.
+``solve`` passes ``monitor`` on to ``advance``, which calls it:
+
+.. literalinclude:: ./code/cbsolve.f90
+  :language: fortran
+
+When F2PY reads Fortran source, it derives the signature of a call-back from
+the calls it finds in the routine, and ``solve`` never calls ``monitor``
+itself. The signature file therefore declares ``monitor`` in a ``__user__``
+module, as described above, and wraps only ``solve``:
+
+.. include:: ./code/cbsolve.pyf
+  :literal:
+
+Build the library first, then the extension module from the signature file,
+where ``/path/to/lib`` is the directory that contains ``libcbsolve.a``::
+
+    gfortran -c -fPIC cbsolve.f90
+    ar rcs libcbsolve.a cbsolve.o
+    python -m numpy.f2py -c cbsolve.pyf -L/path/to/lib -lcbsolve
+
+In Python:
+
+.. literalinclude:: ./code/results/cbsolve_session.dat
+  :language: python
+
+Because ``monitor`` is passed to the library as an argument, the library can
+also be a shared library, as long as the dynamic loader finds it when the
+extension module is imported.
+
+Other libraries call a user-supplied routine by a fixed name, as ``report``
+does with ``on_step`` here:
+
+.. literalinclude:: ./code/cbhost.f90
+  :language: fortran
+
+To provide ``on_step`` from Python, declare its signature in a ``__user__``
+module with the ``intent(callback)`` attribute, so that F2PY defines a C
+function with that Fortran name. Then declare it ``intent(callback, hide)`` in
+the signature of the routine that is called from Python. Only ``run`` is
+wrapped; ``report`` stays library code:
+
+.. include:: ./code/cbhost.pyf
+  :literal:
+
+Build it as before::
+
+    gfortran -c -fPIC cbhost.f90
+    ar rcs libcbhost.a cbhost.o
+    python -m numpy.f2py -c cbhost.pyf -L/path/to/lib -lcbhost
+
+The wrapper of ``run`` looks up ``on_step`` as an attribute of the extension
+module:
+
+.. literalinclude:: ./code/results/cbhost_session.dat
+  :language: python
+
+For a call-back with a fixed name:
+
+* Link the library into the extension module, as a static library or as object
+  files. The library refers to ``on_step`` by name, and extension modules
+  normally export only their ``PyInit_<modulename>`` function, so a separate
+  shared library cannot find the definition.
+* Declare the call-back on every wrapped routine that can lead to it, all using
+  the same ``__user__`` module. When the library calls ``on_step`` while no
+  such routine is running, F2PY still calls the module attribute, but without
+  arguments, and an exception raised by it does not stop the Fortran code; it
+  is raised once the wrapped call returns. The ``pfromf.f1()`` call above works
+  this way because ``fpy`` takes no arguments.
+
+In both cases:
+
+* If the wrapped routines are module procedures, or sources passed to
+  ``f2py -c`` use modules of the library, also pass the directory that contains
+  the ``.mod`` files with ``-I``. The library and its ``.mod`` files must be
+  built with the Fortran compiler that ``f2py -c`` uses, which is selected with
+  the ``FC`` environment variable.
+* The Fortran code must call the call-back from the thread that called the
+  wrapped routine; for example, not from inside an OpenMP parallel region.
+
 
 Common blocks
 ==============

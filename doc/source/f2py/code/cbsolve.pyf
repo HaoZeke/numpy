@@ -1,0 +1,18 @@
+python module cbsolve__user__routines
+    interface
+        subroutine monitor(step, x)
+            integer intent(in) :: step
+            double precision intent(in) :: x
+        end subroutine monitor
+    end interface
+end python module cbsolve__user__routines
+
+python module cbsolve
+    interface
+        subroutine solve(n, monitor)
+            use cbsolve__user__routines
+            integer intent(in) :: n
+            external monitor
+        end subroutine solve
+    end interface
+end python module cbsolve

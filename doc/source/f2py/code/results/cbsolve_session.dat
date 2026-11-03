@@ -1,0 +1,8 @@
+>>> import cbsolve
+>>> def monitor(step, x):
+...     print(f"step {step}: x = {x}")
+...
+>>> cbsolve.solve(3, monitor)
+step 1: x = 0.5
+step 2: x = 0.25
+step 3: x = 0.125
