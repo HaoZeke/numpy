@@ -1288,6 +1288,32 @@ class TestTypeGuards:
         assert mod["body"][2]["body"] == []
 
 
+class TestCoarraySpecs:
+    # a coarray-spec is kept as a codimension attribute, and brackets in
+    # an initialization still construct an array
+    def test_entities(self, tmp_path):
+        fpath = tmp_path / "coarrays.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module coarrays
+              real :: x(3)[*]
+              type :: field
+                real, allocatable :: values(:)[:]
+                integer :: a(3) = [1, 2, 3]
+                integer :: b(size([1, 2]))[*]
+              end type field
+            end module coarrays
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        x = mod["vars"]["x"]
+        assert (x["attrspec"], x["dimension"]) == (["codimension[*]"], ["3"])
+        vs = mod["body"][0]["vars"]
+        assert vs["values"]["attrspec"] == ["codimension[:]", "allocatable"]
+        assert vs["values"]["dimension"] == [":"]
+        assert vs["a"]["="] == "[1, 2, 3]"
+        assert vs["b"]["attrspec"] == ["codimension[*]"]
+        assert vs["b"]["dimension"] == ["2"]
+
+
 class TestComponentHostParameters:
     # the components of a type see the parameters of its module, except
     # where a name of the type hides them
