@@ -23,7 +23,8 @@ __all__ = [
     'getfortranname', 'getpymethoddef', 'getrestdoc', 'getusercode',
     'getusercode1', 'getdimension', 'hasbody', 'hascallstatement', 'hascommon',
     'hasexternals', 'hasinitvalue', 'hasnote', 'hasresultnote',
-    'isallocatable', 'isarray', 'isarrayofstrings',
+    'isallocatable', 'isallocatablearray', 'isallocatablearray_hide',
+    'isallocatablearray_out', 'isarray', 'isarrayofstrings',
     'ischaracter', 'ischaracterarray', 'ischaracter_or_characterarray',
     'iscomplex', 'iscstyledirective',
     'iscomplexarray', 'iscomplexfunction', 'iscomplexfunction_warn',
@@ -281,6 +282,20 @@ def issigned_long_longarray(var):
 
 def isallocatable(var):
     return 'attrspec' in var and 'allocatable' in var['attrspec']
+
+
+def isallocatablearray(var):
+    return isarray(var) and isallocatable(var) and var.get('typespec') in (
+        'integer', 'real', 'double precision', 'complex', 'double complex',
+        'logical')
+
+
+def isallocatablearray_hide(var):
+    return isallocatablearray(var) and isintent_hide(var)
+
+
+def isallocatablearray_out(var):
+    return isallocatablearray(var) and (isintent_out(var) or isintent_inout(var))
 
 
 def ismutable(var):
@@ -749,7 +764,10 @@ def getcallprotoargument(rout, cb_map={}):
                  or isarrayofstrings(var)  # obsolete?
                  or isstringarray(var)):
                 arg_types2.append('size_t')
-        arg_types.append(ctype)
+        if not isallocatablearray_hide(var):
+            arg_types.append(ctype)
+        if isallocatablearray_out(var):
+            arg_types.extend(['f2py_allocatable_setter', 'f2py_allocatable*'])
 
     proto_args = ','.join(arg_types + arg_types2)
     if not proto_args:

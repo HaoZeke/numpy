@@ -541,7 +541,9 @@ The following attributes can be used by F2PY.
 
 ``allocatable``
   The corresponding variable is a Fortran 90 allocatable array defined as
-  Fortran 90 module data.
+  Fortran 90 module data, an allocatable array dummy argument, or an
+  allocatable array function result. See :ref:`Allocatable array arguments`
+  for how allocatable arguments are passed.
 
 .. _external:
 
