@@ -55,6 +55,7 @@ commonhooks = {'commonhooks': '/*need_commonhooks*/',
 includes0['math.h'] = '#include <math.h>'
 includes0['string.h'] = '#include <string.h>'
 includes0['setjmp.h'] = '#include <setjmp.h>'
+includes0['limits.h'] = '#include <limits.h>'
 
 includes['arrayobject.h'] = '''#define PY_ARRAY_UNIQUE_SYMBOL PyArray_API
 #include "arrayobject.h"'''
@@ -88,6 +89,12 @@ typedefs['long_double'] = """
 #ifndef _LONG_DOUBLE
 typedef long double long_double;
 #endif
+"""
+typedefs['float16'] = """
+#ifndef __FLT16_MANT_DIG__
+#error real(kind=2) needs _Float16, which this C compiler does not provide
+#endif
+typedef _Float16 float16;
 """
 typedefs['complex_long_double'] = 'typedef union { struct {long double r,i;}; npy_clongdouble _npy; } complex_long_double;'
 typedefs['complex_float'] = 'typedef union { struct {float r,i;}; npy_cfloat _npy; } complex_float;'
@@ -281,6 +288,32 @@ cppmacros['pyobj_from_long_long1'] = """
 #endif
 """
 # A Python float or complex would round a long double to a double
+needs['pyobj_from_float161'] = ['float16', 'string.h']
+cfuncs['pyobj_from_float161'] = """
+static PyObject *
+pyobj_from_float161(float16 v)
+{
+    npy_half h;
+    memcpy(&h, &v, sizeof(h));
+    PyArray_Descr *descr = PyArray_DescrFromType(NPY_HALF);
+    PyObject *obj = PyArray_Scalar(&h, descr, NULL);
+    Py_DECREF(descr);
+    return obj;
+}
+"""
+cppmacros['pyobj_from_unsigned_char1'] = """
+#define pyobj_from_unsigned_char1(v) (PyLong_FromUnsignedLong((unsigned long)(v)))
+"""
+cppmacros['pyobj_from_unsigned_short1'] = """
+#define pyobj_from_unsigned_short1(v) (PyLong_FromUnsignedLong((unsigned long)(v)))
+"""
+cppmacros['pyobj_from_unsigned1'] = """
+#define pyobj_from_unsigned1(v) (PyLong_FromUnsignedLong((unsigned long)(v)))
+"""
+needs['pyobj_from_unsigned_long_long1'] = ['unsigned_long_long']
+cppmacros['pyobj_from_unsigned_long_long1'] = """
+#define pyobj_from_unsigned_long_long1(v) (PyLong_FromUnsignedLongLong(v))
+"""
 needs['pyobj_from_long_double1'] = ['long_double']
 cfuncs['pyobj_from_long_double1'] = """
 static PyObject *
@@ -1151,6 +1184,104 @@ float_from_pyobj(float* v, PyObject *obj, const char *errmess)
 """
 
 
+needs['float16_from_pyobj'] = ['double_from_pyobj', 'float16', 'string.h']
+cfuncs['float16_from_pyobj'] = """
+static int
+float16_from_pyobj(float16* v, PyObject *obj, const char *errmess)
+{
+    double d = 0.0;
+    if (PyArray_IsScalar(obj, Half)) {
+        npy_half h = PyArrayScalar_VAL(obj, Half);
+        memcpy(v, &h, sizeof(*v));
+        return 1;
+    }
+    if (double_from_pyobj(&d, obj, errmess)) {
+        *v = (float16)d;
+        return 1;
+    }
+    return 0;
+}
+"""
+
+
+needs['unsigned_long_long_from_pyobj'] = ['unsigned_long_long']
+cfuncs['unsigned_long_long_from_pyobj'] = """
+static int
+_f2py_ulonglong_from_pyobj(unsigned long long *v, PyObject *obj, const char *errmess)
+{
+    PyObject *tmp = NULL;
+    if (PyLong_Check(obj)) {
+        *v = PyLong_AsUnsignedLongLong(obj);
+        return !(*v == (unsigned long long)-1 && PyErr_Occurred());
+    }
+    tmp = PyNumber_Long(obj);
+    if (tmp) {
+        *v = PyLong_AsUnsignedLongLong(tmp);
+        Py_DECREF(tmp);
+        return !(*v == (unsigned long long)-1 && PyErr_Occurred());
+    }
+    if (PySequence_Check(obj) && !PyBytes_Check(obj) && !PyUnicode_Check(obj)) {
+        PyErr_Clear();
+        tmp = PySequence_GetItem(obj, 0);
+        if (tmp) {
+            int ok = _f2py_ulonglong_from_pyobj(v, tmp, errmess);
+            Py_DECREF(tmp);
+            return ok;
+        }
+    }
+    {
+        PyObject *err = PyErr_Occurred();
+        if (err == NULL) {
+            err = #modulename#_error;
+        }
+        PyErr_SetString(err, errmess);
+    }
+    return 0;
+}
+static int
+unsigned_long_long_from_pyobj(unsigned_long_long *v, PyObject *obj, const char *errmess)
+{
+    unsigned long long x = 0;
+    if (!_f2py_ulonglong_from_pyobj(&x, obj, errmess)) {
+        return 0;
+    }
+    *v = x;
+    return 1;
+}
+"""
+
+
+def _unsigned_from_pyobj(ctype, limit):
+    return f"""
+static int
+{ctype}_from_pyobj({ctype} *v, PyObject *obj, const char *errmess)
+{{
+    unsigned long long x = 0;
+    if (!_f2py_ulonglong_from_pyobj(&x, obj, errmess)) {{
+        return 0;
+    }}
+    if (x > (unsigned long long)({limit})) {{
+        PyErr_SetString(PyExc_OverflowError, errmess);
+        return 0;
+    }}
+    *v = ({ctype})x;
+    return 1;
+}}
+"""
+
+
+needs['unsigned_char_from_pyobj'] = [
+    'unsigned_char', 'unsigned_long_long_from_pyobj', 'limits.h']
+cfuncs['unsigned_char_from_pyobj'] = _unsigned_from_pyobj(
+    'unsigned_char', 'UCHAR_MAX')
+needs['unsigned_short_from_pyobj'] = [
+    'unsigned_short', 'unsigned_long_long_from_pyobj', 'limits.h']
+cfuncs['unsigned_short_from_pyobj'] = _unsigned_from_pyobj(
+    'unsigned_short', 'USHRT_MAX')
+needs['unsigned_from_pyobj'] = ['unsigned_long_long_from_pyobj', 'limits.h']
+cfuncs['unsigned_from_pyobj'] = _unsigned_from_pyobj('unsigned', 'UINT_MAX')
+
+
 needs['complex_long_double_from_pyobj'] = ['complex_long_double', 'long_double',
                                            'complex_double_from_pyobj', 'npy_math.h']
 cfuncs['complex_long_double_from_pyobj'] = """
@@ -1310,9 +1441,25 @@ static int try_pyarr_from_character(PyObject* obj, character* v) {
 needs['try_pyarr_from_char'] = ['pyobj_from_char1', 'TRYPYARRAYTEMPLATE']
 cfuncs[
     'try_pyarr_from_char'] = 'static int try_pyarr_from_char(PyObject* obj,char* v) {\n    TRYPYARRAYTEMPLATE(char,\'c\');\n}\n'
-needs['try_pyarr_from_signed_char'] = ['TRYPYARRAYTEMPLATE', 'unsigned_char']
+needs['try_pyarr_from_unsigned_char'] = [
+    'pyobj_from_unsigned_char1', 'TRYPYARRAYTEMPLATE', 'unsigned_char']
 cfuncs[
     'try_pyarr_from_unsigned_char'] = 'static int try_pyarr_from_unsigned_char(PyObject* obj,unsigned_char* v) {\n    TRYPYARRAYTEMPLATE(unsigned_char,\'b\');\n}\n'
+needs['try_pyarr_from_unsigned_short'] = [
+    'pyobj_from_unsigned_short1', 'TRYPYARRAYTEMPLATE', 'unsigned_short']
+cfuncs[
+    'try_pyarr_from_unsigned_short'] = 'static int try_pyarr_from_unsigned_short(PyObject* obj,unsigned_short* v) {\n    TRYPYARRAYTEMPLATE(unsigned_short,\'H\');\n}\n'
+needs['try_pyarr_from_unsigned'] = ['pyobj_from_unsigned1', 'TRYPYARRAYTEMPLATE']
+cfuncs[
+    'try_pyarr_from_unsigned'] = 'static int try_pyarr_from_unsigned(PyObject* obj,unsigned* v) {\n    TRYPYARRAYTEMPLATE(unsigned,\'I\');\n}\n'
+needs['try_pyarr_from_unsigned_long_long'] = [
+    'pyobj_from_unsigned_long_long1', 'TRYPYARRAYTEMPLATE', 'unsigned_long_long']
+cfuncs[
+    'try_pyarr_from_unsigned_long_long'] = 'static int try_pyarr_from_unsigned_long_long(PyObject* obj,unsigned_long_long* v) {\n    TRYPYARRAYTEMPLATE(unsigned_long_long,\'Q\');\n}\n'
+needs['try_pyarr_from_float16'] = [
+    'pyobj_from_float161', 'TRYPYARRAYTEMPLATE', 'float16']
+cfuncs[
+    'try_pyarr_from_float16'] = 'static int try_pyarr_from_float16(PyObject* obj,float16* v) {\n    TRYPYARRAYTEMPLATE(float16,\'e\');\n}\n'
 needs['try_pyarr_from_signed_char'] = ['TRYPYARRAYTEMPLATE', 'signed_char']
 cfuncs[
     'try_pyarr_from_signed_char'] = 'static int try_pyarr_from_signed_char(PyObject* obj,signed_char* v) {\n    TRYPYARRAYTEMPLATE(signed_char,\'1\');\n}\n'
