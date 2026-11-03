@@ -828,53 +828,6 @@ def _get_pointer_ndim(var):
     return len(var.get('dimension', []))
 
 
-def _get_type_extensions(base_name, type_map):
-    """Find all types that extend base_name (directly or transitively).
-
-    Returns a list of (typename, typeblock) pairs for all types in
-    type_map that are extensions of base_name, including base_name
-    itself.  Ordered with base type first, then children.
-    """
-    base_name = base_name.lower()
-    result = []
-    if base_name in type_map:
-        result.append((base_name, type_map[base_name]))
-    for tname, tb in type_map.items():
-        if tname == base_name:
-            continue
-        # Walk up the parent chain to see if this type extends base_name
-        current = tname
-        for _ in range(10):  # prevent infinite loops
-            parent = _get_extends_parent(type_map.get(current, {}))
-            if parent is None:
-                break
-            if parent.lower() == base_name:
-                result.append((tname, tb))
-                break
-            current = parent.lower()
-    return result
-
-
-# F2018 7.3.2.3: type tags for unlimited polymorphic dispatch.
-# Intrinsic types get fixed tags; derived types get 100 + type_tag.
-_UNLIMITED_POLY_TAGS = {
-    'integer_4': 1, 'integer_8': 2,
-    'real_4': 3, 'real_8': 4,
-    'complex_4': 5, 'complex_8': 6,
-    'logical_4': 7,
-    'character': 8,
-}
-
-
-def _is_unlimited_polymorphic_arg(var):
-    """Check if a variable was declared with CLASS(*) (unlimited polymorphic).
-
-    Per F2018 7.3.2.3 paragraph 4, CLASS(*) accepts any type including
-    intrinsic types. crackfortran adds 'unlimited_polymorphic' to attrspec.
-    """
-    return 'unlimited_polymorphic' in var.get('attrspec', [])
-
-
 def _is_polymorphic_arg(var):
     """Check if a variable was declared with CLASS(T) (polymorphic).
 
@@ -907,54 +860,6 @@ def _is_coarray_member(var):
         if isinstance(attr, str) and attr.lower().startswith('codimension'):
             return True
     return False
-
-
-def _get_coarray_compile_flag():
-    """Return the Fortran compiler flag needed for coarray support.
-
-    Uses -fcoarray=single (gfortran) which is a zero-dependency mode
-    making all coarray syntax valid.  In single-image mode,
-    this_image()=1 and num_images()=1.  For multi-image execution,
-    the user provides their own runtime flags.
-
-    Returns the flag string, or empty string if detection fails.
-    """
-    import subprocess
-    import tempfile
-    test_src = "program t; integer :: x[*]; x = this_image(); end\n"
-    # Try gfortran -fcoarray=single
-    try:
-        with tempfile.NamedTemporaryFile(suffix='.f90', mode='w',
-                                         delete=False) as f:
-            f.write(test_src)
-            f.flush()
-            result = subprocess.run(
-                ['gfortran', '-fcoarray=single', '-fsyntax-only', f.name],
-                capture_output=True, timeout=10)
-            if result.returncode == 0:
-                return '-fcoarray=single'
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        pass
-    # ifort/ifx have built-in coarray support (no flag needed for single)
-    for compiler in ['ifort', 'ifx']:
-        try:
-            with tempfile.NamedTemporaryFile(suffix='.f90', mode='w',
-                                             delete=False) as f:
-                f.write(test_src)
-                f.flush()
-                result = subprocess.run(
-                    [compiler, '-coarray=single', '-syntax-only', f.name],
-                    capture_output=True, timeout=10)
-                if result.returncode == 0:
-                    return '-coarray=single'
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            pass
-    return ''
-
-
-def _has_coarray_members(members):
-    """Check if any member in the dict is a coarray component."""
-    return any(_is_coarray_member(v) for v in members.values())
 
 
 def _coarray_as_local(var):
