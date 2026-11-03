@@ -164,6 +164,27 @@ def test_gh22819_many_pyf(capfd, gh22819_cli, monkeypatch):
             f2pycli()
 
 
+@pytest.mark.parametrize("with_fortran", [False, True])
+def test_gh25654_pyf_defines_module(capfd, tmp_path, monkeypatch, with_fortran):
+    """The signature file alone defines the module, as with -c
+    gh-25654
+    CLI :: -m with a .pyf file, with and without Fortran sources
+    """
+    ipyf = util.getpath("tests", "src", "cli", "gh25654.pyf")
+    ifor = util.getpath("tests", "src", "cli", "gh25654.f")
+    argv = ["f2py", "-m", "fibx", "--lower", str(ipyf)]
+    if with_fortran:
+        argv.append(str(ifor))
+    monkeypatch.setattr(sys, "argv", argv)
+    with util.switchdir(tmp_path):
+        f2pycli()
+        out, _ = capfd.readouterr()
+        assert out.count('Building module "fibx"') == 1
+        assert (f"Ignoring {ifor}." in out) == with_fortran
+        # a is intent(out) only in the .pyf
+        assert "a = fib(n)" in Path("fibxmodule.c").read_text()
+
+
 def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
     foutl = get_io_paths(gh23598_warn, mname="test")
     ipath = foutl.f90inp

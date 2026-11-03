@@ -469,6 +469,17 @@ def run_main(comline_list):
     # gh-22819 -- end
     files, options = scaninputline(comline_list)
     auxfuncs.options = options
+    signature_files, sources = filter_files("", "[.]pyf([.]src|)", files)
+    if signature_files and 'signsfile' not in options:
+        # As with -c, the signature files alone define the modules. An -m
+        # module or the Fortran sources would be built into a second module
+        # of the same name, overwriting the files written for the first.
+        options.pop('module', None)
+        if sources:
+            outmess(f"Ignoring {', '.join(sources)}.\n"
+                    f"Wrappers are generated from {', '.join(signature_files)}; "
+                    "Fortran sources are only used with -c.\n")
+            files = signature_files
     capi_maps.load_f2cmap_file(options['f2cmap_file'])
     postlist = callcrackfortran(files, options)
     isusedby = {}
