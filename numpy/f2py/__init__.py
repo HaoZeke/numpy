@@ -47,13 +47,14 @@ def get_include():
 
     * Step 1: run ``python -m numpy.f2py mymod.pyf --quiet``. This
       generates ``mymodmodule.c`` and (if needed)
-      ``mymod-f2pywrappers.f`` files next to ``mymod.pyf``.
+      ``mymod-f2pywrappers.f`` files in the current directory.
     * Step 2: build your Python extension module. This requires the
       following source files:
 
       * ``mymodmodule.c``
       * ``mymod-f2pywrappers.f`` (if it was generated in Step 1)
       * ``fortranobject.c``
+      * the Fortran sources that ``mymod.pyf`` describes
 
     See Also
     --------
