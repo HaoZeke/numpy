@@ -29,7 +29,7 @@ from numpy.testing import IS_IOS, IS_WASM, temppath
 # Check if compilers are available at all...
 #
 
-def check_language(lang, code_snippet=None):
+def check_language(lang, code_snippet=None, *, require_snippet=False):
     if sys.platform == "win32":
         pytest.skip("No Fortran tests on Windows (Issue #25134)", allow_module_level=True)
     tmpdir = tempfile.mkdtemp()
@@ -46,6 +46,9 @@ def check_language(lang, code_snippet=None):
                     f"{lang}_compiler.compiles({lang}_code,"
                     f" name: '{lang} feature check')\n"
                 )
+                # compiles() alone never fails the setup
+                if require_snippet:
+                    f.write(f"assert(_have_{lang}_feature)\n")
         try:
             runmeson = subprocess.run(
                 ["meson", "setup", "btmp"],
