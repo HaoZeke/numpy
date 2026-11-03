@@ -290,6 +290,9 @@ evaluates the call-back argument ``gun``:
 * If ``n + p`` is less than the number of required arguments to ``gun`` then an
   exception is raised.
 
+If ``gun`` also takes ``*args``, then ``m`` is unbounded and
+``gun(a_1, ..., a_n, e_1, ..., e_p)`` is called.
+
 If the function ``gun`` may return any number of objects as a tuple; then the
 following rules are applied:
 

@@ -260,3 +260,35 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestCallbackArity(util.F2PyTest):
+    # call_two(fun) returns fun(1, 2)
+    sources = [util.getpath("tests", "src", "callback", "arity.f90")]
+
+    def test_varargs(self):
+        # gh-16357
+        calls = []
+
+        def fun(*args):
+            calls.append(args)
+            return 0
+
+        class A:
+            def meth(self, a, *args):
+                calls.append((a, *args))
+                return 0
+
+        for cb in [fun, A().meth]:
+            self.module.call_two(cb)
+            self.module.call_two(cb, fun_extra_args=(7,))
+        assert calls == [(1, 2), (1, 2, 7)] * 2
+
+    def test_varargs_too_many_required(self):
+        def fun(a, b, c, *args):
+            return 0
+
+        err = getattr(self.module, f"_{self.module.__name__}_error")
+        with pytest.raises(err, match="call-back fun"):
+            self.module.call_two(fun)
