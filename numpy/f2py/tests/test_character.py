@@ -85,6 +85,16 @@ class TestCharacterString(util.F2PyTest):
 
         assert_array_equal(f(a), np.array(list(map(ord, a)), dtype='u1'))
 
+    @pytest.mark.parametrize("order", ['<', '>'])
+    @pytest.mark.parametrize("length", length_list)
+    def test_input_str_array(self, length, order):
+        f = getattr(self.module, self.fprefix + '_input_' + length)
+
+        a = {'1': 'a', '3': 'abc', 'star': 'abcde' * 3}[length]
+
+        assert_array_equal(f(np.array(a, dtype=f'{order}U{len(a)}')),
+                           np.array(list(map(ord, a)), dtype='u1'))
+
     @pytest.mark.parametrize("length", length_list[:-1])
     def test_output(self, length):
         fsuffix = length
