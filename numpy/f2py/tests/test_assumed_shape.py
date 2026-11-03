@@ -32,6 +32,19 @@ class TestAssumedShapeSumExample(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestAssumedShapeFunctionResult(util.F2PyTest):
+    # The function name is the result variable when there is no
+    # result clause.
+    sources = [
+        util.getpath("tests", "src", "assumed_shape", "function_result.f90"),
+    ]
+
+    def test_function_result(self):
+        assert self.module.sum_noresult([1, -2, 3]) == 2
+        assert self.module.count_noresult([1, -2, 3]) == 2
+
+
+@pytest.mark.slow
 class TestF2cmapOption(TestAssumedShapeSumExample):
     def setup_method(self):
         # Use a custom file name for .f2py_f2cmap
