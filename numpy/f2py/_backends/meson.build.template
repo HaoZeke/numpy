@@ -48,6 +48,9 @@ ${source_list},
                      # gh-30804: only the Fortran compiler driver knows its
                      # runtime libraries and their run paths
                      link_language: 'fortran',
+                     # gh-30804: ifx also applies -fvisibility=hidden to
+                     # references, which then cannot bind to shared libraries
+                     gnu_symbol_visibility: 'default',
                      include_directories: [
                      inc_np,
 ${inc_list}

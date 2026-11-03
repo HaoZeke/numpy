@@ -186,7 +186,9 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\n1foo =" not in meson_build
 
 
-@pytest.mark.parametrize("kwarg", ["link_language: 'fortran'"])
+@pytest.mark.parametrize(
+    "kwarg", ["link_language: 'fortran'", "gnu_symbol_visibility: 'default'"]
+)
 def test_meson_extension_module_kwargs(kwarg):
     # gh-30804
     mparser = pytest.importorskip("mesonbuild.mparser")
