@@ -7,7 +7,7 @@ import pytest
 
 import numpy as np
 import numpy.testing as npt
-from numpy.f2py._backends._meson import MesonTemplate
+from numpy.f2py._backends._meson import MesonBackend, MesonTemplate
 
 from . import util
 
@@ -202,6 +202,55 @@ def test_gh25784():
         )
     except ImportError as rerr:
         assert "unknown_subroutine_" in str(rerr)
+
+
+def test_meson_build_has_macros(tmp_path):
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    backend = MesonBackend(
+        modulename="Blah",
+        sources=[Path("f90continuation.f90")],
+        extra_objects=[],
+        build_dir=tmp_path,
+        include_dirs=[],
+        library_dirs=[],
+        libraries=[],
+        define_macros=[("F2PY_REPORT_ON_ARRAY_COPY", "1"), ("NO_APPEND_FORTRAN", None)],
+        undef_macros=["NDEBUG"],
+        f2py_flags=[],
+        sysinfo_flags=[],
+        fc_flags=[],
+        flib_flags=[],
+        setup_flags=[],
+        remove_build_dir=False,
+        extra_dat={},
+    )
+    meson_build = backend.write_meson_build(tmp_path).read_text()
+    mparser.Parser(meson_build, "meson.build").parse()
+    args = ("'''-DF2PY_REPORT_ON_ARRAY_COPY=1''', '''-DNO_APPEND_FORTRAN''', "
+            "'''-UNDEBUG'''")
+    assert f"c_args: [{args}]," in meson_build
+    assert f"fortran_args: [{args}]," in meson_build
+
+
+@pytest.mark.slow
+class TestDefineMacros(util.F2PyTest):
+    # -D options must reach the generated C code
+    suffix = ".f90"
+    code = """
+subroutine total(x, n, s)
+  integer, intent(in) :: n
+  real(8), intent(in) :: x(n)
+  real(8), intent(out) :: s
+  s = sum(x)
+end subroutine total
+"""
+    options = ["-DF2PY_REPORT_ON_ARRAY_COPY=1"]
+
+    def test_report_on_array_copy(self, capfd):
+        assert self.module.total(np.arange(4.0)) == 6
+        assert "copied an array" not in capfd.readouterr().err
+        assert self.module.total(np.arange(4)) == 6
+        assert "copied an array: size=4, elsize=8" in capfd.readouterr().err
 
 
 @pytest.mark.slow
