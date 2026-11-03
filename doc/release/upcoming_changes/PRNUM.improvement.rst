@@ -14,3 +14,6 @@
 * Relative ``-I`` and ``-L`` directories and extra object files in other
   directories are now found. They are resolved against the working directory,
   as the rest of the command line is, instead of the build directory.
+* ``-I`` and ``--include-paths`` directories are searched in the order they are
+  given. They were reordered at random, so an include file present in more
+  than one of them could be taken from any of them.
