@@ -614,6 +614,24 @@ class TestLongDoubleFormats:
         assert crackfortran._real_formats == got
 
 
+class TestKindSelectors:
+    # a kind or a dimension may be a call of a kind intrinsic
+    def test_declarations(self, tmp_path):
+        fpath = tmp_path / "selectors.f90"
+        fpath.write_text(textwrap.dedent("""\
+            subroutine twice(x, y, i, buf)
+              real(kind=selected_real_kind(15)), intent(in) :: x
+              real(kind(1.0d0)), intent(out) :: y
+              integer(selected_int_kind(18)), intent(in) :: i
+              real, intent(out) :: buf(kind(1.0d0))
+            end subroutine twice
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        kinds = [vs[n]["kindselector"]["kind"] for n in ("x", "y", "i")]
+        assert kinds == ["8", "8", "8"]
+        assert vs["buf"]["dimension"] == ["8"]
+
+
 class TestUseParameters:
     # parameter arrays keep their bounds in the modules that use them
     def test_array_bounds(self, tmp_path):
