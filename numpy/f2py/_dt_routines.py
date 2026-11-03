@@ -18,6 +18,7 @@ from ._dt_helpers import (
     _coarray_as_local,
     _enumerate_specializations,
     _eval_kind_expr,
+    _fortran_sym,
     _get_all_members,
     _get_alloc_ndim,
     _get_array_dims,
@@ -60,6 +61,23 @@ from .auxfuncs import (
 )
 from .cfuncs import dt_any_intrinsics
 from .crackfortran import markoutercomma
+
+
+def _source_file(module):
+    """Return the source file of a module, for scanning what crackfortran
+    does not record: type-bound procedures, finalizers and procedure
+    pointer components.
+
+    The 'from' field is the file for crackfortran, and is prefixed with
+    ':modulename:' in the full f2py pipeline.
+    """
+    source_file = module.get('from', '')
+    if ':' in source_file:
+        for part in reversed(source_file.split(':')):
+            if part and os.path.isfile(part):
+                return part
+        return ''
+    return source_file
 
 
 def _initial_state(ref, components, type_map, skip=(), depth=0):
@@ -1004,7 +1022,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
 
     # Add procedure pointer component wrappers (F2018 7.5.4.4)
     if module_block:
-        source_file = module_block.get('from', '')
+        source_file = _source_file(module_block)
         for tb in opaque_types:
             typename = tb['name']
             proc_ptrs = _scan_proc_pointer_components(source_file, typename)
@@ -1019,7 +1037,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
 
     # Add defined I/O wrappers (F2018 12.6.4.8)
     if module_block:
-        source_file = module_block.get('from', '')
+        source_file = _source_file(module_block)
         for tb in opaque_types:
             typename = tb['name']
             bound_procs = _scan_type_bound_procedures(source_file, typename)
@@ -1033,8 +1051,9 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append('')
                 lines.append(
                     f'  ! Defined I/O read wrapper for {typename}')
-                lines.append(
-                    _gen_defined_io_read_fortran_wrapper(typename))
+                lines.append(_gen_defined_io_read_fortran_wrapper(
+                    typename, *_initial_state(
+                        'obj', _all_components(tb, type_map), type_map)))
 
     lines.append(f'end module f2py_{modulename}_derived_wrappers')
     lines.append('')
@@ -1886,7 +1905,7 @@ def _gen_proc_pointer_fortran_wrappers(typename, proc_ptrs, module_body):
 
 def _gen_proc_pointer_c_methods(typename, proc_ptrs, module_body):
     """Generate C method wrappers and PyMethodDef entries for proc ptrs."""
-    from ._dt_helpers import _fortran_sym, _get_member_ctype
+    from ._dt_helpers import _get_member_ctype
 
     funcs = []
     method_entries = []
@@ -2023,50 +2042,103 @@ static PyObject *
 
 
 def _gen_defined_io_fortran_wrapper(typename):
-    """Generate Fortran bind(c) wrapper that invokes defined I/O.
+    """Generate Fortran bind(c) wrappers that invoke defined I/O.
 
     Uses the DT edit descriptor (F2018 13.7.6) to call the type's
-    write(formatted) routine via internal file WRITE.
+    write(formatted) routine.  The length of the record is not known
+    before it is written, and an internal file of a guessed length can
+    fail in ways that do not tell running out of room apart from other
+    errors, so the record goes to a scratch file, whose characters are
+    counted by nonadvancing input up to the end of the record (F2018
+    12.11.4).  The text is returned in an allocation that the second
+    wrapper frees.
     """
-    wrapper_name = f'f2py_str_{typename}'
+    sym = _fortran_sym(typename)
     return f"""\
-  subroutine {wrapper_name}(cptr, buf, buflen, actual_len) bind(c)
+  subroutine f2py_str_{sym}(cptr, text, n, iostat) bind(c)
     use iso_c_binding
+    use iso_fortran_env, only: iostat_eor
     type(c_ptr), value :: cptr
-    character(kind=c_char), intent(out) :: buf(*)
-    integer(c_int), value :: buflen
-    integer(c_int), intent(out) :: actual_len
+    type(c_ptr), intent(out) :: text
+    integer(c_int), intent(out) :: n, iostat
     type({typename}), pointer :: obj
-    character(len=buflen) :: tmp
-    integer :: iostat, i
+    character(kind=c_char, len=:), pointer :: record
+    character(kind=c_char) :: c
+    integer :: unit
     call c_f_pointer(cptr, obj)
-    write(tmp, '(DT)', iostat=iostat) obj
-    actual_len = len_trim(tmp)
-    do i = 1, min(actual_len, buflen)
-      buf(i) = tmp(i:i)
-    end do
-  end subroutine {wrapper_name}
+    text = c_null_ptr
+    n = 0
+    open(newunit=unit, status='scratch', form='formatted', &
+         action='readwrite', iostat=iostat)
+    if (iostat /= 0) return
+    write(unit, '(DT)', iostat=iostat) obj
+    if (iostat == 0) then
+      rewind(unit)
+      do
+        read(unit, '(a)', advance='no', iostat=iostat) c
+        if (iostat /= 0) exit
+        n = n + 1
+      end do
+      if (iostat == iostat_eor) then
+        ! c_loc needs a string that is not of zero length (F2018 18.2.3.6)
+        allocate(character(kind=c_char, len=max(n, 1)) :: record)
+        iostat = 0
+        if (n > 0) then
+          rewind(unit)
+          read(unit, '(a)', iostat=iostat) record
+        end if
+        if (iostat == 0) then
+          text = c_loc(record)
+        else
+          deallocate(record)
+        end if
+      end if
+    end if
+    close(unit)
+  end subroutine f2py_str_{sym}
+
+  subroutine f2py_str_free_{sym}(text, n) bind(c)
+    use iso_c_binding
+    type(c_ptr), value :: text
+    integer(c_int), value :: n
+    character(kind=c_char, len=max(n, 1)), pointer :: record
+    call c_f_pointer(text, record)
+    deallocate(record)
+  end subroutine f2py_str_free_{sym}
 """
 
 
-def _gen_defined_io_read_fortran_wrapper(typename):
-    """Generate Fortran bind(c) wrapper for read(formatted) -> from_string."""
-    wrapper_name = f'f2py_from_str_{typename}'
+def _gen_defined_io_read_fortran_wrapper(typename, init_lines=(),
+                                         loop_depth=0):
+    """Generate Fortran bind(c) wrapper for read(formatted) -> from_string.
+
+    The new object starts as the constructor makes it, see _initial_state,
+    and is destroyed again if the READ fails.
+    """
+    wrapper_name = f'f2py_from_str_{_fortran_sym(typename)}'
+    init = ''.join(f'    {line}\n' for line in init_lines)
+    loops = ''.join(f', f2py_i{d}' for d in range(1, loop_depth + 1))
     return f"""\
-  subroutine {wrapper_name}(buf, buflen, cptr) bind(c)
+  subroutine {wrapper_name}(buf, buflen, cptr, iostat) bind(c)
     use iso_c_binding
     character(kind=c_char), intent(in) :: buf(*)
     integer(c_int), value :: buflen
-    type(c_ptr) :: cptr
+    type(c_ptr), intent(out) :: cptr
+    integer(c_int), intent(out) :: iostat
     type({typename}), pointer :: obj
     character(len=buflen) :: tmp
-    integer :: iostat, i
+    integer :: i{loops}
     allocate(obj)
-    do i = 1, buflen
+{init}    do i = 1, buflen
       tmp(i:i) = buf(i)
     end do
     read(tmp, '(DT)', iostat=iostat) obj
-    cptr = c_loc(obj)
+    if (iostat == 0) then
+      cptr = c_loc(obj)
+    else
+      deallocate(obj)
+      cptr = c_null_ptr
+    end if
   end subroutine {wrapper_name}
 """
 
@@ -2074,9 +2146,10 @@ def _gen_defined_io_read_fortran_wrapper(typename):
 def _gen_defined_io_tp_str(typename):
     """Generate C tp_str function using Fortran defined I/O."""
     capsule_name = f'f2py.{typename}'
-    wrapper_name = f'f2py_str_{typename}'
+    sym = _fortran_sym(typename)
     return f"""\
-extern void {wrapper_name}(void *, char *, int, int *);
+extern void f2py_str_{sym}(void *, void **, int *, int *);
+extern void f2py_str_free_{sym}(void *, int);
 
 static PyObject *
 Py{typename}_tp_str(PyObject *selfobj)
@@ -2087,15 +2160,21 @@ Py{typename}_tp_str(PyObject *selfobj)
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
-    char buf[4096];
-    int actual_len = 0;
-    {wrapper_name}(ptr, buf, 4096, &actual_len);
-    if (actual_len <= 0) {{
-        return PyUnicode_FromString("{typename}()");
+    void *text = NULL;
+    int n = 0, iostat = 0;
+    f2py_str_{sym}(ptr, &text, &n, &iostat);
+    if (text == NULL) {{
+        PyErr_Format(PyExc_ValueError,
+                     "write(formatted) of {typename} failed with iostat=%d",
+                     iostat);
+        return NULL;
     }}
     /* Trim trailing spaces */
-    while (actual_len > 0 && buf[actual_len-1] == ' ') actual_len--;
-    return PyUnicode_FromStringAndSize(buf, actual_len);
+    int len = n;
+    while (len > 0 && ((const char *)text)[len - 1] == ' ') len--;
+    PyObject *result = PyUnicode_FromStringAndSize((const char *)text, len);
+    f2py_str_free_{sym}(text, n);
+    return result;
 }}
 """
 
@@ -2103,9 +2182,10 @@ Py{typename}_tp_str(PyObject *selfobj)
 def _gen_defined_io_from_string(typename):
     """Generate C class method from_string() using Fortran defined I/O read."""
     capsule_name = f'f2py.{typename}'
-    wrapper_name = f'f2py_from_str_{typename}'
+    wrapper_name = f'f2py_from_str_{_fortran_sym(typename)}'
+    destroy = f'f2py_destroy_{_fortran_sym(typename)}'
     return f"""\
-extern void {wrapper_name}(const char *, int, void **);
+extern void {wrapper_name}(const char *, int, void **, int *);
 
 static PyObject *
 Py{typename}_from_string(PyObject *cls, PyObject *args)
@@ -2114,20 +2194,33 @@ Py{typename}_from_string(PyObject *cls, PyObject *args)
     Py_ssize_t text_len;
     if (!PyArg_ParseTuple(args, "s#", &text, &text_len))
         return NULL;
-    void *ptr = NULL;
-    {wrapper_name}(text, (int)text_len, &ptr);
-    if (ptr == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError,
-                        "Failed to parse {typename} from string");
+    if (text_len > INT_MAX) {{
+        PyErr_SetString(PyExc_OverflowError, "string too long");
         return NULL;
     }}
-    /* Create new Python object wrapping the Fortran-allocated data */
-    Py{typename}Object *self = (Py{typename}Object *)
-        ((PyTypeObject *)cls)->tp_alloc((PyTypeObject *)cls, 0);
-    if (self == NULL) return NULL;
+    void *ptr = NULL;
+    int iostat = 0;
+    {wrapper_name}(text, (int)text_len, &ptr, &iostat);
+    if (ptr == NULL) {{
+        PyErr_Format(PyExc_ValueError,
+                     "read(formatted) of {typename} failed with iostat=%d",
+                     iostat);
+        return NULL;
+    }}
+    /* tp_new gives the instance its type tag */
+    Py{typename}Object *self = (Py{typename}Object *)Py{typename}_tp_new(
+        (PyTypeObject *)cls, NULL, NULL);
+    if (self == NULL) {{
+        {destroy}(ptr);
+        return NULL;
+    }}
     self->capsule = PyCapsule_New(ptr, "{capsule_name}",
-                                  Py{typename}_capsule_destructor);
-    self->type_tag = 0;
+                                  f2py_{typename}_capsule_destructor);
+    if (self->capsule == NULL) {{
+        {destroy}(ptr);
+        Py_DECREF(self);
+        return NULL;
+    }}
     return (PyObject *)self;
 }}
 """
