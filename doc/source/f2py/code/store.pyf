@@ -1,0 +1,14 @@
+!    -*- f90 -*-
+python module pystore
+  interface
+    module store
+      real(kind=8), allocatable, dimension(:) :: x
+      subroutine fill(n)
+        integer intent(in) :: n
+      end subroutine fill
+      function total()
+        real(kind=8) :: total
+      end function total
+    end module store
+  end interface
+end python module pystore
