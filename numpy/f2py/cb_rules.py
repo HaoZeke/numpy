@@ -17,6 +17,7 @@ from .auxfuncs import (
     getargs,
     hasnote,
     isarray,
+    ischaracter_or_characterarray,
     iscomplex,
     iscomplexarray,
     iscomplexfunction,
@@ -31,6 +32,7 @@ from .auxfuncs import (
     isrequired,
     isscalar,
     isstring,
+    isstring_or_stringarray,
     isstringfunction,
     issubroutine,
     l_and,
@@ -252,10 +254,10 @@ cb_rout_rules = [
         '_check': l_and(isfunction, l_not(isstringfunction), l_not(iscomplexfunction))
     },
     {  # String function
-        'pyobjfrom': {debugcapi: '    fprintf(stderr,"debug-capi:cb:#name#:%d:\\n",return_value_len);'},
-        'args': '#ctype# return_value,int return_value_len',
-        'args_nm': 'return_value,&return_value_len',
-        'args_td': '#ctype# ,int',
+        'pyobjfrom': {debugcapi: '    fprintf(stderr,"debug-capi:cb:#name#:%zu:\\n",return_value_len);'},
+        'args': '#ctype# return_value,size_t return_value_len',
+        'args_nm': 'return_value,return_value_len',
+        'args_td': '#ctype# ,size_t',
         'frompyobj': [
             {debugcapi: '    CFUNCSMESS("cb:Getting return_value->\\"");'},
             """\
@@ -375,11 +377,13 @@ cb_arg_rules = [
             isstring: '#ctype#'
         },
         'need': {l_or(isscalar, isarray, isstring): '#ctype#'},
-        # untested with multiple args
-        'strarglens': {isstring: ',int #varname_i#_cb_len'},
-        'strarglens_td': {isstring: ',int'},  # untested with multiple args
-        # untested with multiple args
-        'strarglens_nm': {isstring: ',#varname_i#_cb_len'},
+    },
+    {  # Hidden lengths: Fortran passes a size_t for every CHARACTER
+        # dummy, in argument order, after all other arguments
+        'strarglens': ',size_t #varname_i#_cb_len',
+        'strarglens_td': ',size_t',
+        'strarglens_nm': ',#varname_i#_cb_len',
+        '_check': l_or(isstring_or_stringarray, ischaracter_or_characterarray),
     },
     {  # Scalars
         'decl': {l_not(isintent_c): '    #ctype# #varname_i#=(*#varname_i#_cb_capi);'},
@@ -420,7 +424,7 @@ cb_arg_rules = [
                       """    if (capi_j>capi_i)
         GETSTRFROMPYTUPLE(capi_return,capi_i++,#varname_i#,#varname_i#_cb_len);""",
                       {debugcapi:
-                       '    fprintf(stderr,"#showvalueformat#\\":%d:.\\n",#varname_i#,#varname_i#_cb_len);'},
+                       '    fprintf(stderr,"#showvalueformat#\\":%zu:.\\n",#varname_i#,#varname_i#_cb_len);'},
                       ],
         'need': ['#ctype#', 'GETSTRFROMPYTUPLE',
                  {debugcapi: 'CFUNCSMESS'}, 'string.h'],
@@ -429,14 +433,14 @@ cb_arg_rules = [
         'pyobjfrom': [
             {debugcapi:
              ('    fprintf(stderr,"debug-capi:cb:#varname#=#showvalueformat#:'
-              '%d:\\n",#varname_i#,#varname_i#_cb_len);')},
+              '%zu:\\n",#varname_i#,#varname_i#_cb_len);')},
             {isintent_in: """\
     if (cb->nofargs>capi_i)
         if (CAPI_ARGLIST_SETITEM(capi_i++,pyobj_from_#ctype#1size(#varname_i#,#varname_i#_cb_len)))
             goto capi_fail;"""},
                       {isintent_inout: """\
     if (cb->nofargs>capi_i) {
-        int #varname_i#_cb_dims[] = {#varname_i#_cb_len};
+        npy_intp #varname_i#_cb_dims[] = {#varname_i#_cb_len};
         if (CAPI_ARGLIST_SETITEM(capi_i++,pyarr_from_p_#ctype#1(#varname_i#,#varname_i#_cb_dims)))
             goto capi_fail;
     }"""}],

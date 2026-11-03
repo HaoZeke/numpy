@@ -1,0 +1,47 @@
+python module gh13809__user__routines
+    interface
+        function string_array_cb(a, s) result (n)
+            character*3, dimension(2), intent(in) :: a
+            character*(*), intent(in) :: s
+            integer :: n
+        end function string_array_cb
+        subroutine character_cb(flag, s)
+            character, intent(out) :: flag
+            character*(*), intent(in) :: s
+        end subroutine character_cb
+        subroutine string_inout_cb(s)
+            character*(*), intent(inout) :: s
+        end subroutine string_inout_cb
+        function string_function_cb() result (r)
+            character*5 :: r
+        end function string_function_cb
+    end interface
+end python module gh13809__user__routines
+
+python module _gh13809_callback
+    interface
+        subroutine string_array_arg(fun, a, s, n)
+            use gh13809__user__routines, fun=>string_array_cb
+            external fun
+            character*3, dimension(2), intent(in) :: a
+            character*(*), intent(in) :: s
+            integer, intent(out) :: n
+        end subroutine string_array_arg
+        subroutine character_arg(fun, s, flag)
+            use gh13809__user__routines, fun=>character_cb
+            external fun
+            character*(*), intent(in) :: s
+            character, intent(out) :: flag
+        end subroutine character_arg
+        subroutine string_inout_arg(fun, s)
+            use gh13809__user__routines, fun=>string_inout_cb
+            external fun
+            character*(*), intent(inout) :: s
+        end subroutine string_inout_arg
+        subroutine string_function(fun, s)
+            use gh13809__user__routines, fun=>string_function_cb
+            external fun
+            character*5, intent(out) :: s
+        end subroutine string_function
+    end interface
+end python module _gh13809_callback

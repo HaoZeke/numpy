@@ -260,3 +260,33 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestCallbackHiddenLength(util.F2PyTest):
+    # gh-13809: the call-back takes a size_t hidden length for every
+    # CHARACTER dummy, in the order the Fortran caller passes them
+    sources = [util.getpath("tests", "src", "callback", "gh13809.f"),
+               util.getpath("tests", "src", "callback", "gh13809.pyf")]
+    module_name = "_gh13809_callback"
+
+    def test_string_array_arg(self):
+        n = self.module.string_array_arg(lambda a, s: len(s),
+                                         [b"abc", b"def"], b"hello")
+        assert n == 5
+
+    def test_character_arg(self):
+        flag = self.module.character_arg(
+            lambda s: b"Y" if s == "hello" else b"N", b"hello")
+        assert flag == b"Y"
+
+    def test_string_inout_arg(self):
+        def fun(s):
+            s[0] = b"H"
+
+        s = np.array(b"hello", dtype="S5")
+        self.module.string_inout_arg(fun, s)
+        assert s.tobytes() == b"Hello"
+
+    def test_string_function(self):
+        assert self.module.string_function(lambda: b"hello") == b"hello"
