@@ -141,8 +141,8 @@ TODO:
 """
 import ast
 import codecs
+import collections.abc
 import copy
-import decimal
 import fileinput
 import functools
 import itertools
@@ -2486,17 +2486,6 @@ def get_sorted_names(vars):
     return [name for name in names if name in vars]
 
 
-def _kind_func(string):
-    # XXX: return something sensible.
-    if string[0] in "'\"":
-        string = string[1:-1]
-    if real16pattern.match(string):
-        return 8
-    elif real8pattern.match(string):
-        return 4
-    return 'kind(' + string + ')'
-
-
 # Fortran 2018 16.4 describes the numbers of each kind by a model: integers
 # by their radix and digits, reals by their radix, digits and exponent
 # range.  gfortran, whose kinds f2py maps to C types, stores integer(k) as a
@@ -2537,8 +2526,11 @@ _real_formats = _real_formats_for_long_double(
     _ldinfo.nmant, _ldinfo.nexp, _ldinfo.maxexp)
 # character kinds by the names selected_char_kind takes
 _character_kinds = {'ascii': 1, 'iso_10646': 4}
+# Logical kinds f2py holds, the same byte widths as the integer kinds.
+# Any other kind is rejected, because f2py has no representation for it.
+_logical_kinds = (1, 2, 4, 8, 16)
 _default_kinds = {'integer': 4, 'real': 4, 'complex': 4, 'logical': 4,
-                  'character': 1}
+                  'character': 1, 'double precision': 8}
 
 
 @functools.cache
@@ -2593,14 +2585,19 @@ def _range(typespec, kind):
     return min(huge, _decimal_exponent(Fraction(radix) ** (1 - emin)))
 
 
+def _default_integer(value):
+    return _Integer(value, _default_kinds['integer'])
+
+
 def _selected_int_kind_func(r):
     # 2**q - 1 holds all of -10**r < n < 10**r exactly when its decimal
     # range is at least r
     kinds = [k for k in _integer_kinds if _range('integer', k) >= r]
     if not kinds:
-        return -1
+        return _default_integer(-1)
     # of those the one of least range, and then the least kind
-    return min(kinds, key=lambda k: (_range('integer', k), k))
+    return _default_integer(min(kinds,
+                                key=lambda k: (_range('integer', k), k)))
 
 
 def _selected_real_kind_func(p=None, r=None, radix=None):
@@ -2614,70 +2611,547 @@ def _selected_real_kind_func(p=None, r=None, radix=None):
     with_r = {k for k in kinds if _range('real', k) >= r}
     if with_p & with_r:
         # the one of least precision, and then the least kind
-        return min(with_p & with_r, key=lambda k: (_precision(k), k))
+        return _default_integer(min(with_p & with_r,
+                                    key=lambda k: (_precision(k), k)))
     if not kinds:
-        return -5
+        return _default_integer(-5)
     if with_p and with_r:
-        return -4
-    return -1 if with_r else -2 if with_p else -3
+        return _default_integer(-4)
+    return _default_integer(-1 if with_r else -2 if with_p else -3)
 
 
 def _selected_char_kind_func(name):
     # the name is read without regard to case or trailing blanks
     name = name.rstrip(' ').lower()
     if name == 'default':
-        return _default_kinds['character']
-    return _character_kinds.get(name, -1)
+        return _default_integer(_default_kinds['character'])
+    return _default_integer(_character_kinds.get(name, -1))
 
 
-# a number with an optional exponent and kind, e.g. 1.5d0 or 2_int64
-_fortran_number_re = re.compile(
-    r'(?<![\w.])(\d+\.?\d*|\.\d+)(?:[dDeE]([-+]?\d+))?(?:_\w+)?')
+class _Integer(int):
+    """An integer of a kind, which is None for a kind f2py does not know."""
+
+    def __new__(cls, value, kind=None):
+        self = super().__new__(cls, value)
+        self.kind = kind
+        return self
 
 
-def _python_number(m):
-    return m[1] + (f'e{m[2]}' if m[2] else '')
+class _Real:
+    """A real of a kind, held exactly as that kind holds it."""
+
+    __slots__ = ('value', 'kind')
+
+    def __init__(self, value, kind=None):
+        self.value = _round(Fraction(value), kind)
+        self.kind = kind
+
+    def __eq__(self, other):
+        if isinstance(other, _Real):
+            return self.value == other.value
+        if isinstance(other, (int, float)) and not isinstance(other, bool):
+            return self.value == other
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(self.value)
+
+    def __float__(self):
+        try:
+            return float(self.value)
+        except OverflowError:
+            return math.copysign(math.inf, self.value)
+
+    def __str__(self):
+        return _real_text(self.value, self.kind)
+
+    __repr__ = __str__
 
 
-# a character literal, which doubles its delimiter instead of escaping it,
-# or the concatenation operator
-_char_literal_re = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|//")
+class _Logical:
+    """A logical of a kind."""
+
+    __slots__ = ('value', 'kind')
+
+    def __init__(self, value, kind=None):
+        if kind is not None and kind not in _logical_kinds:
+            raise TypeError(f'f2py knows no logical of kind {kind!r}')
+        self.value = bool(value)
+        self.kind = kind
+
+    def __bool__(self):
+        return self.value
+
+    def __eq__(self, other):
+        if isinstance(other, (_Logical, bool)):
+            return self.value == bool(other)
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(self.value)
+
+    def __str__(self):
+        return '.true.' if self.value else '.false.'
+
+    __repr__ = __str__
 
 
-def _python_string(m):
-    s = m[0]
-    return '+' if s == '//' else repr(s[1:-1].replace(2 * s[0], s[0]))
+class _Character(str):
+    """A character value of a kind."""
+
+    def __new__(cls, value, kind=None):
+        if kind is not None and kind not in _character_kinds.values():
+            raise TypeError(f'f2py knows no character of kind {kind!r}')
+        self = super().__new__(cls, value)
+        self.kind = kind
+        return self
 
 
-_fortran_ops = {ast.Div: '_fortran_div', ast.Pow: '_fortran_pow'}
+_value_types = {_Integer: 'integer', _Real: 'real', _Logical: 'logical',
+                _Character: 'character'}
+_numeric_types = ('integer', 'real')
 
 
-class _FortranArithmetic(ast.NodeTransformer):
-    # Fortran truncates integer quotients, so 7 / 2 is 3 and 2**(-1) is 0
+def _type_kind(x):
+    """Return the type and kind of a value, or of the elements of an
+    array."""
+    if isinstance(x, (dict, list)):
+        elements = list(x.values()) if isinstance(x, dict) else x
+        if not elements:
+            raise TypeError('an empty array has no type f2py knows')
+        x = elements[0]
+    for cls, typespec in _value_types.items():
+        if isinstance(x, cls):
+            return typespec, x.kind
+    raise TypeError(f'{x!r} is not a Fortran value')
+
+
+def _typed(value):
+    """Give a value from Python, such as a parameter that a caller passes,
+    its Fortran type, of a kind f2py does not know."""
+    if isinstance(value, bool):
+        return _Logical(value)
+    if isinstance(value, int) and not isinstance(value, _Integer):
+        return _Integer(value)
+    if isinstance(value, float):
+        return _Real(value)
+    if isinstance(value, dict) and not isinstance(value, _ParameterArray):
+        return _ParameterArray({k: _typed(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return [_typed(v) for v in value]
+    return value
+
+
+def _integer(value, kind):
+    """Return an integer of a kind, which must hold it."""
+    if kind is not None:
+        digits = _model('integer', kind)[1]
+        # two's complement holds -huge - 1 as well
+        if not -2 ** digits <= value < 2 ** digits:
+            raise OverflowError(f'{value} overflows integer({kind})')
+    return _Integer(value, kind)
+
+
+def _exact(x):
+    # the exact value of an integer or real
+    if isinstance(x, _Real):
+        return x.value
+    if isinstance(x, _Integer):
+        return Fraction(int(x))
+    raise TypeError(f'{x!r} is not a number')
+
+
+def _exponent(a):
+    # the exponent e of a > 0 in the model, 2**(e - 1) <= a < 2**e
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    return e + 1 if a >= Fraction(2) ** e else e
+
+
+def _round(x, kind):
+    """Round x to the nearest real of a kind, from halfway to even, as
+    IEEE 754 rounds."""
+    if kind is None or not x:
+        return x
+    radix, digits, emin, _ = _model('real', kind)
+    a = abs(x)
+    # below the least exponent the numbers are spaced as at it
+    spacing = Fraction(radix) ** (max(_exponent(a), emin) - digits)
+    n, rest = divmod(a, spacing)
+    if 2 * rest > spacing or 2 * rest == spacing and n % 2:
+        n += 1
+    if n * spacing > _huge_number('real', kind):
+        raise OverflowError(f'{x} overflows real({kind})')
+    return n * spacing if x > 0 else -n * spacing
+
+
+def _real_text(x, kind):
+    """Write a real as Python writes a float, with the fewest digits that
+    read back as the same real of its kind."""
+    if kind is None:
+        try:
+            return repr(float(x))
+        except OverflowError:
+            return repr(math.copysign(math.inf, x))
+    if not x:
+        return '0.0'
+    radix, digits, emin, _ = _model('real', kind)
+    a = abs(x)
+    e = _exponent(a)
+    spacing = Fraction(radix) ** (max(e, emin) - digits)
+    # the reals that read as a lie up to halfway to its neighbours, the one
+    # below being nearer at a power of the radix, and halfway reads as
+    # whichever is even
+    below = spacing
+    if a == Fraction(radix) ** (e - 1) and e > emin:
+        below = spacing / radix
+    low, high = a - below / 2, a + spacing / 2
+    closed = (a / spacing) % 2 == 0
+    point = _decimal_exponent(a) + 1
+    for n in itertools.count(1):
+        scale = Fraction(10) ** (point - n)
+        least = (math.ceil(low / scale) if closed
+                 else math.floor(low / scale) + 1)
+        most = (math.floor(high / scale) if closed
+                else math.ceil(high / scale) - 1)
+        if least <= most:
+            d = str(min(max(round(a / scale), least), most))
+            break
+    # a is 0.<significand> * 10**decimal_point
+    significand = d.rstrip('0')
+    decimal_point = point - n + len(d)
+    text = _float_text(significand, decimal_point)
+    return '-' + text if x < 0 else text
+
+
+def _float_text(digits, point):
+    # as repr writes a float, positionally from 1e-4 to below 1e16
+    if -4 < point <= 16:
+        if point <= 0:
+            return '0.' + '0' * -point + digits
+        if point >= len(digits):
+            return digits + '0' * (point - len(digits)) + '.0'
+        return digits[:point] + '.' + digits[point:]
+    mantissa = digits[0] + ('.' + digits[1:] if len(digits) > 1 else '')
+    return f'{mantissa}e{point - 1:+03d}'
+
+
+def _exponent_bounds(kind):
+    # the exponents of the powers of 2 outside of which a real of the kind,
+    # or of any kind if kind is None, overflows or rounds to zero
+    kinds = _real_formats if kind is None else [kind]
+    models = [_model('real', k) for k in kinds]
+    return (min(emin - digits - 1 for _, digits, emin, _ in models),
+            max(emax + 1 for _, _, _, emax in models))
+
+
+def _real_power(x, n, kind):
+    """Raise an exact real x to an integer power n, for a real of a
+    kind."""
+    if not x:
+        if n < 0:
+            raise ZeroDivisionError('0 to a negative power')
+        return _Real(Fraction(not n), kind)
+    if abs(x) != 1:
+        # a power far outside the kind's exponents overflows or rounds to
+        # zero, and need not be computed
+        low, high = _exponent_bounds(kind)
+        log2 = n * (math.log2(abs(x.numerator)) - math.log2(x.denominator))
+        if log2 > high:
+            raise OverflowError(f'{x}**{n} overflows real({kind})')
+        if log2 < low:
+            return _Real(0, kind)
+    return _Real(x ** n, kind)
+
+
+def _promote(ta, ka, tb, kb):
+    """Return the type and kind of the result of a numeric operation: the
+    kind of the operand of greater range of integers and of greater
+    precision of reals (Fortran 2018 10.1.5.2.1)."""
+    typespec = max(ta, tb, key=_numeric_types.index)
+    kinds = [k for t, k in ((ta, ka), (tb, kb))
+             if t != 'integer' or typespec == 'integer']
+    if None in kinds:
+        return typespec, None
+    if typespec == 'integer':
+        return typespec, max(kinds, key=lambda k: (_range('integer', k), k))
+    return typespec, max(kinds, key=lambda k: (_precision(k), k))
+
+
+def _convert(x, typespec, kind):
+    """Convert a value to a type and kind, as assignment does."""
+    t = _type_kind(x)[0]
+    if typespec == 'integer' and t in _numeric_types:
+        return _integer(math.trunc(_exact(x)), kind)
+    if typespec == 'real' and t in _numeric_types:
+        return _Real(_exact(x), kind)
+    if typespec == t == 'logical':
+        return _Logical(x.value, kind)
+    if typespec == t == 'character':
+        return _Character(x, kind)
+    raise TypeError(f'{t} does not convert to {typespec}')
+
+
+_arithmetic = {'Add': lambda x, y: x + y, 'Sub': lambda x, y: x - y,
+               'Mult': lambda x, y: x * y}
+
+
+def _binary(op, a, b):
+    """Apply a binary operator to two values, as Fortran does."""
+    if isinstance(a, (list, dict)) or isinstance(b, (list, dict)):
+        # Python would repeat or join lists, where Fortran works elementwise
+        raise TypeError('array arithmetic is not supported')
+    (ta, ka), (tb, kb) = _type_kind(a), _type_kind(b)
+    if op == 'MatMult':
+        # the // of Fortran joins characters of one kind
+        if not ta == tb == 'character' or ka != kb:
+            raise TypeError('// joins characters of one kind')
+        return _Character(str(a) + str(b), ka)
+    if ta not in _numeric_types or tb not in _numeric_types:
+        raise TypeError(f'{op} is not defined for {ta} and {tb}')
+    typespec, kind = _promote(ta, ka, tb, kb)
+    if op == 'Pow' and tb == 'integer' and ta != 'integer':
+        # an integer power is of the type and kind of its base
+        return _real_power(_exact(a), int(b), ka)
+    x = _exact(_convert(a, typespec, kind))
+    y = _exact(_convert(b, typespec, kind))
+    if op == 'Pow':
+        if typespec == 'integer':
+            return _integer_power(int(x), int(y), kind)
+        # a real power is evaluated only when it is an integer, and Fortran
+        # forbids a negative base
+        if y.denominator != 1 or x < 0:
+            raise TypeError(f'{x}**{y} is not supported')
+        return _real_power(x, int(y), kind)
+    if op == 'Div':
+        if not y:
+            raise ZeroDivisionError('division by zero')
+        if typespec == 'integer':
+            # the quotient of integers is truncated
+            return _integer(math.trunc(x / y), kind)
+        return _Real(x / y, kind)
+    if op not in _arithmetic:
+        raise TypeError(f'{op} is not Fortran')
+    if typespec == 'integer':
+        return _integer(int(_arithmetic[op](x, y)), kind)
+    return _Real(_arithmetic[op](x, y), kind)
+
+
+def _integer_power(x, n, kind):
+    if n < 0:
+        # 1 / x**-n truncated is 0 unless x is 1 or -1
+        if not x:
+            raise ZeroDivisionError('0 to a negative power')
+        return _integer(x ** (n % 2) if abs(x) == 1 else 0, kind)
+    # a power of at least 2 beyond the bits of the widest integer overflows
+    # it, and need not be computed
+    bits = _model('integer', max(_integer_kinds) if kind is None else kind)[1]
+    if abs(x) > 1 and n > bits:
+        raise OverflowError(f'{x}**{n} overflows integer({kind})')
+    return _integer(x ** n, kind)
+
+
+def _unary(op, a):
+    """Apply a unary operator to a value, as Fortran does."""
+    if isinstance(a, (list, dict)):
+        raise TypeError('array arithmetic is not supported')
+    typespec, kind = _type_kind(a)
+    if op == 'Not':
+        if typespec != 'logical':
+            raise TypeError('.not. takes a logical')
+        return _Logical(not a, kind)
+    if typespec not in _numeric_types:
+        raise TypeError(f'{op} is not defined for {typespec}')
+    if op == 'UAdd':
+        return a
+    if typespec == 'integer':
+        return _integer(-int(a), kind)
+    return _Real(-a.value, kind)
+
+
+_relations = {'Eq': lambda x, y: x == y, 'NotEq': lambda x, y: x != y,
+              'Lt': lambda x, y: x < y, 'LtE': lambda x, y: x <= y,
+              'Gt': lambda x, y: x > y, 'GtE': lambda x, y: x >= y}
+
+
+def _relational(op, a, b):
+    """Compare two values, as Fortran does."""
+    if isinstance(a, (list, dict)) or isinstance(b, (list, dict)):
+        raise TypeError('array comparison is not supported')
+    (ta, ka), (tb, kb) = _type_kind(a), _type_kind(b)
+    if ta == tb == 'character' and ka == kb:
+        # the shorter is compared as if it were padded with blanks
+        n = max(len(a), len(b))
+        x, y = a.ljust(n), b.ljust(n)
+    elif ta in _numeric_types and tb in _numeric_types:
+        typespec, kind = _promote(ta, ka, tb, kb)
+        x = _exact(_convert(a, typespec, kind))
+        y = _exact(_convert(b, typespec, kind))
+    else:
+        raise TypeError(f'{ta} and {tb} do not compare')
+    return _Logical(_relations[op](x, y), _default_kinds['logical'])
+
+
+def _logical(op, *values):
+    """Apply .and. or .or. to logical values."""
+    if any(isinstance(v, (list, dict)) or _type_kind(v)[0] != 'logical'
+           for v in values):
+        raise TypeError(f'{op} takes logicals')
+    kinds = {v.kind for v in values}
+    value = all(values) if op == 'And' else any(values)
+    kind = kinds.pop() if len(kinds) == 1 else _default_kinds['logical']
+    return _Logical(value, kind)
+
+
+_operations = {'_binary': _binary, '_unary': _unary,
+               '_relational': _relational, '_logical': _logical}
+
+
+def _operation(name, op, *args):
+    return ast.Call(ast.Name(name, ast.Load()), [ast.Constant(op), *args], [])
+
+
+class _FortranOperations(ast.NodeTransformer):
+    """Make each operation of an expression a call of one of _operations,
+    which follow Fortran's rules for the types and kinds of operands.
+    Python that is not also Fortran is refused."""
+
+    _nodes = (ast.Expression, ast.Name, ast.Load, ast.Call, ast.keyword,
+              ast.List, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
+              ast.operator, ast.unaryop, ast.boolop, ast.cmpop)
+
+    def generic_visit(self, node):
+        if not isinstance(node, self._nodes):
+            raise TypeError(f'{type(node).__name__} is not Fortran')
+        return super().generic_visit(node)
+
+    def visit_Call(self, node):
+        if not isinstance(node.func, ast.Name):
+            raise TypeError('only named functions are called')
+        return self.generic_visit(node)
+
+    def visit_Tuple(self, node):
+        raise TypeError('complex constants are not supported')
+
     def visit_BinOp(self, node):
         self.generic_visit(node)
-        if any(isinstance(x, (ast.List, ast.Tuple))
-               for x in (node.left, node.right)):
-            # Python repeats and joins lists and tuples, where Fortran
-            # works elementwise on arrays and complex numbers
-            raise ValueError('array and complex arithmetic is not supported')
-        if type(node.op) not in _fortran_ops:
-            return node
-        return ast.Call(ast.Name(_fortran_ops[type(node.op)], ast.Load()),
-                        [node.left, node.right], [])
+        return _operation('_binary', type(node.op).__name__, node.left,
+                          node.right)
+
+    def visit_UnaryOp(self, node):
+        self.generic_visit(node)
+        return _operation('_unary', type(node.op).__name__, node.operand)
+
+    def visit_BoolOp(self, node):
+        self.generic_visit(node)
+        return _operation('_logical', type(node.op).__name__, *node.values)
+
+    def visit_Compare(self, node):
+        self.generic_visit(node)
+        if len(node.ops) > 1:
+            raise TypeError('Fortran relations do not chain')
+        return _operation('_relational', type(node.ops[0]).__name__,
+                          node.left, node.comparators[0])
 
 
-def _fortran_div(a, b):
-    if isinstance(a, int) and isinstance(b, int):
-        q = abs(a) // abs(b)
-        return q if (a < 0) == (b < 0) else -q
-    return a / b
+# The parts of Fortran that Python reads differently or not at all:
+# character literals, which double their delimiter, with an optional kind
+# before them; //; logical literals; the dotted and /= operators; and
+# numbers, with an optional exponent and kind, a d exponent making them
+# double precision and the q exponent of gfortran real(16).
+_dotted_names = 'eq|ne|lt|le|gt|ge|not|and|or|eqv|neqv|true|false'
+_fortran_token_re = re.compile(
+    r"(?:\b(?P<char_kind>\w+)_)?(?P<char>'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\")"
+    r'|(?P<concat>//)'
+    r'|\.(?P<logical>true|false)\.(?:_(?P<logical_kind>\w+))?'
+    r'|(?P<operator>\.(?:eq|ne|lt|le|gt|ge|not|and|or)\.|/=)'
+    rf'|(?<!\w)(?P<number>\d+(?:\.(?!(?:{_dotted_names})\.)\d*)?|\.\d+)'
+    r'(?:(?P<letter>[deq])(?P<exponent>[-+]?\d+))?(?:_(?P<kind>\w+))?',
+    re.I)
+_python_operators = {'.eq.': '==', '.ne.': '!=', '.lt.': '<', '.le.': '<=',
+                     '.gt.': '>', '.ge.': '>=', '.not.': 'not',
+                     '.and.': 'and', '.or.': 'or', '/=': '!='}
 
 
-def _fortran_pow(a, b):
-    if isinstance(a, int) and isinstance(b, int) and b < 0:
-        return _fortran_div(1, a ** -b)
-    return a ** b
+def _literal_kind(kind, typespec, names):
+    """Return the kind a literal names, or the default kind."""
+    if kind is None:
+        return _default_kinds[typespec]
+    if kind.isdigit():
+        return int(kind)
+    try:
+        value = names[kind]
+    except KeyError:
+        raise NameError(f'name {kind!r} is not defined') from None
+    if _type_kind(value)[0] != 'integer':
+        raise TypeError(f'kind {kind} is not an integer')
+    return int(value)
+
+
+def _number(m, names, c_literals):
+    """Return the value of a number literal."""
+    digits, letter, kind = m['number'], m['letter'], m['kind']
+    if letter is None and '.' not in digits:
+        value = int(digits)
+        if kind is not None:
+            return _integer(value, _literal_kind(kind, 'integer', names))
+        try:
+            return _integer(value, _default_kinds['integer'])
+        except OverflowError:
+            # gfortran refuses such a literal, and flang reads it as
+            # integer(8), so its kind is not known
+            return _Integer(value)
+    letter = (letter or 'e').lower()
+    if letter == 'e':
+        # C reads a floating constant without a suffix as a double
+        real_kind = (_literal_kind(kind, 'real', names) if kind is not None
+                     else 8 if c_literals else _default_kinds['real'])
+    elif kind is None:
+        # q is gfortran's real(16); d is real(8)
+        real_kind = 8 if letter == 'd' else 16
+    else:
+        raise TypeError(f'a {letter} exponent takes no kind')
+    mantissa, scale = Fraction(digits), int(m['exponent'] or 0)
+    if mantissa:
+        # a power of ten far outside the kind's exponents overflows or rounds
+        # to zero, and need not be computed
+        low, high = _exponent_bounds(real_kind)
+        log2 = (scale + math.log10(mantissa)) * math.log2(10)
+        if log2 > high:
+            raise OverflowError(f'{m[0]} overflows real({real_kind})')
+        if log2 < low:
+            mantissa = 0
+    return _Real(mantissa * Fraction(10) ** scale, real_kind)
+
+
+def _translate(expr, names, c_literals=False):
+    """Translate a Fortran expression to Python, each literal in it becoming
+    a name for its value, which the returned dict gives."""
+    literals = {}
+
+    def literal(value):
+        name = f'_literal{len(literals)}'
+        literals[name] = value
+        return name
+
+    def token(m):
+        if m['char'] is not None:
+            s = m['char']
+            return literal(_Character(
+                s[1:-1].replace(2 * s[0], s[0]),
+                _literal_kind(m['char_kind'], 'character', names)))
+        if m['concat']:
+            return ' @ '
+        if m['logical']:
+            return literal(_Logical(
+                m['logical'].lower() == 'true',
+                _literal_kind(m['logical_kind'], 'logical', names)))
+        if m['operator']:
+            return f" {_python_operators[m['operator'].lower()]} "
+        return literal(_number(m, names, c_literals))
+
+    source = _fortran_token_re.sub(token, expr)
+    # (/ and /) delimit array constructors as [ and ] do
+    return source.replace('(/', '[').replace('/)', ']').strip(), literals
 
 
 class _ParameterArray(dict):
@@ -2686,20 +3160,38 @@ class _ParameterArray(dict):
         return self[index if len(index) > 1 else index[0]]
 
 
-def _fortran_eval(expr, g_params, params):
-    """Evaluate a Fortran expression that Python can parse."""
-    tree = _FortranArithmetic().visit(ast.parse(expr.strip(), mode='eval'))
+class _Names(collections.abc.Mapping):
+    """The values of the names in an expression, in their Fortran types."""
+
+    def __init__(self, *maps):
+        self.maps = maps
+
+    def __getitem__(self, name):
+        for m in self.maps:
+            if name in m:
+                return _typed(m[name])
+        raise KeyError(name)
+
+    def __iter__(self):
+        return iter({name for m in self.maps for name in m})
+
+    def __len__(self):
+        return len({name for m in self.maps for name in m})
+
+
+def _fortran_eval(expr, g_params, params, c_literals=False):
+    """Evaluate a Fortran expression, each value of it of a type and kind.
+
+    With c_literals a real literal without a kind is a double, as in the C
+    that f2py writes the initial values of arguments in.
+    """
+    names = _Names(params, g_params)
+    source, literals = _translate(expr, names, c_literals)
+    tree = _FortranOperations().visit(ast.parse(source, mode='eval'))
     code = compile(ast.fix_missing_locations(tree), '<fortran>', 'eval')
-    arrays = {k: _ParameterArray(v) for k, v in params.items()
-              if isinstance(v, dict)}
-    funcs = {'_fortran_div': _fortran_div, '_fortran_pow': _fortran_pow}
-    return eval(code, {**_intrinsics, **g_params, **funcs},
-                {**params, **arrays})
-
-
-def _nint(a):
-    # halves round away from zero, where Python's round goes to even
-    return int(decimal.Decimal(a).to_integral_value(decimal.ROUND_HALF_UP))
+    # no builtins, as those of Python are not Fortran's
+    return eval(code, {'__builtins__': {}, **_operations, **_intrinsics,
+                       **literals}, names)
 
 
 def _elements(array):
@@ -2707,36 +3199,159 @@ def _elements(array):
     return list(array.values()) if isinstance(array, dict) else list(array)
 
 
-# Fortran intrinsics that Python lacks or defines differently, with the
-# Fortran argument names so that keyword calls work too
+def _kind_arg(kind, typespec):
+    # the kind a kind= argument gives, or the default kind
+    if kind is None:
+        return _default_kinds[typespec]
+    if _type_kind(kind)[0] != 'integer':
+        raise TypeError('a kind is an integer')
+    return int(kind)
+
+
+def _real_arg(a):
+    if isinstance(a, (list, dict)) or _type_kind(a)[0] != 'real':
+        raise TypeError(f'{a!r} is not a real')
+    return a.value
+
+
+def _character_arg(c):
+    if isinstance(c, (list, dict)) or _type_kind(c)[0] != 'character':
+        raise TypeError(f'{c!r} is not a character')
+    return c
+
+
+def _common_type(args):
+    """Return the type and kind that integer or real arguments promote
+    to, as gfortran and flang promote the arguments of max and mod."""
+    if any(isinstance(a, (list, dict)) for a in args):
+        raise TypeError('array arguments are not supported')
+    types = [_type_kind(a) for a in args]
+    if {t for t, _ in types} not in ({'integer'}, {'real'}):
+        raise TypeError('the arguments are integers or reals')
+    return functools.reduce(lambda x, y: _promote(*x, *y), types)
+
+
+def _extremum(pick, args):
+    typespec, kind = _common_type(args)
+    values = [_exact(_convert(a, typespec, kind)) for a in args]
+    return _convert(_Real(pick(values)), typespec, kind)
+
+
+def _nint(a, kind=None):
+    v = _real_arg(a)
+    # halves round away from zero
+    n = math.floor(abs(v) + Fraction(1, 2))
+    return _integer(n if v >= 0 else -n, _kind_arg(kind, 'integer'))
+
+
+def _remainder(a, p, quotient):
+    typespec, kind = _common_type([a, p])
+    x = _exact(_convert(a, typespec, kind))
+    y = _exact(_convert(p, typespec, kind))
+    if not y:
+        raise ZeroDivisionError('division by zero')
+    return _convert(_Real(x - quotient(x / y) * y), typespec, kind)
+
+
+def _sign(a, b):
+    _common_type([a, b])
+    x = abs(_exact(a))
+    # the result is of the type and kind of a
+    return _convert(_Real(x if _exact(b) >= 0 else -x), *_type_kind(a))
+
+
+def _reduce(op, array):
+    elements = _elements(array)
+    if not elements:
+        raise TypeError('an empty array is not supported')
+    return functools.reduce(functools.partial(_binary, op), elements)
+
+
+def _integer_arg(i):
+    if isinstance(i, (list, dict)) or _type_kind(i)[0] != 'integer':
+        raise TypeError(f'{i!r} is not an integer')
+    return int(i)
+
+
+def _char(i, kind=None):
+    kind = _kind_arg(kind, 'character')
+    # a character of kind k holds a code of 8 * k bits
+    if not 0 <= _integer_arg(i) < 2 ** (8 * kind):
+        raise TypeError(f'{i} is not a code of a character of kind {kind}')
+    return _Character(chr(i), kind)
+
+
+def _ichar(c, kind=None):
+    if len(_character_arg(c)) != 1:
+        raise TypeError(f'{c!r} is not of length 1')
+    return _integer(ord(c), _kind_arg(kind, 'integer'))
+
+
+def _repeat(string, ncopies):
+    if _integer_arg(ncopies) < 0:
+        raise TypeError('repeat takes no negative ncopies')
+    return _Character(_character_arg(string) * int(ncopies), string.kind)
+
+
+def _len(string, kind=None):
+    # of a character array, the length of each element
+    if isinstance(string, (list, dict)):
+        string = _elements(string)[0]
+    return _integer(len(_character_arg(string)), _kind_arg(kind, 'integer'))
+
+
+def _size(array, dim=None, kind=None):
+    if not isinstance(array, (list, dict)):
+        raise TypeError(f'{array!r} is not an array')
+    n = len(array) if dim is None else _extent(array, _integer_arg(dim))
+    return _integer(n, _kind_arg(kind, 'integer'))
+
+
+def _kind_func(x):
+    kind = _type_kind(x)[1]
+    if kind is None:
+        raise TypeError(f'f2py does not know the kind of {x!r}')
+    return _Integer(kind, _default_kinds['integer'])
+
+
+# Fortran intrinsics by the Fortran names of their arguments, so that keyword
+# calls work too, each with the type and kind of result Fortran gives
 _intrinsics = {
-    'int': lambda a, kind=None: int(a.real),
-    'nint': lambda a, kind=None: _nint(a),
-    'ceiling': lambda a, kind=None: math.ceil(a),
-    'floor': lambda a, kind=None: math.floor(a),
-    'real': lambda a, kind=None: float(a.real),
-    'dble': lambda a: float(a.real),
-    'mod': lambda a, p: a - int(_fortran_div(a, p)) * p,
-    'modulo': lambda a, p: a % p,
-    'sign': lambda a, b: abs(a) if b >= 0 else -abs(a),
-    'merge': lambda tsource, fsource, mask: tsource if mask else fsource,
-    'achar': lambda i, kind=None: chr(i),
-    'char': lambda i, kind=None: chr(i),
-    'iachar': lambda c, kind=None: ord(c),
-    'ichar': lambda c, kind=None: ord(c),
-    'repeat': lambda string, ncopies: string * ncopies,
-    'trim': lambda string: string.rstrip(' '),
-    'len_trim': lambda string, kind=None: len(string.rstrip(' ')),
-    'len': lambda string, kind=None:
-        len(string if isinstance(string, str) else _elements(string)[0]),
-    'size': lambda array, dim=None, kind=None:
-        len(array) if dim is None else _extent(array, dim),
-    'sum': lambda array: sum(_elements(array)),
-    'product': lambda array: math.prod(_elements(array)),
-    'maxval': lambda array: max(_elements(array)),
-    'minval': lambda array: min(_elements(array)),
-    'any': lambda mask: any(_elements(mask)),
-    'all': lambda mask: all(_elements(mask)),
+    'int': lambda a, kind=None: _convert(a, 'integer',
+                                         _kind_arg(kind, 'integer')),
+    'nint': _nint,
+    'ceiling': lambda a, kind=None: _integer(math.ceil(_real_arg(a)),
+                                             _kind_arg(kind, 'integer')),
+    'floor': lambda a, kind=None: _integer(math.floor(_real_arg(a)),
+                                           _kind_arg(kind, 'integer')),
+    'real': lambda a, kind=None: _convert(a, 'real', _kind_arg(kind, 'real')),
+    'float': lambda a: _convert(a, 'real', _default_kinds['real']),
+    'dble': lambda a: _convert(a, 'real', _default_kinds['double precision']),
+    'abs': lambda a: _convert(_Real(abs(_exact(a))), *_type_kind(a)),
+    'max': lambda *a: _extremum(max, a),
+    'min': lambda *a: _extremum(min, a),
+    'mod': lambda a, p: _remainder(a, p, math.trunc),
+    'modulo': lambda a, p: _remainder(a, p, math.floor),
+    'sign': _sign,
+    'merge': lambda tsource, fsource, mask:
+        tsource if _logical('And', mask) else fsource,
+    'achar': _char,
+    'char': _char,
+    'iachar': _ichar,
+    'ichar': _ichar,
+    'repeat': _repeat,
+    'trim': lambda string: _Character(_character_arg(string).rstrip(' '),
+                                      string.kind),
+    'len_trim': lambda string, kind=None: _integer(
+        len(_character_arg(string).rstrip(' ')), _kind_arg(kind, 'integer')),
+    'len': _len,
+    'size': _size,
+    'sum': lambda array: _reduce('Add', array),
+    'product': lambda array: _reduce('Mult', array),
+    'maxval': lambda array: _extremum(max, _elements(array)),
+    'minval': lambda array: _extremum(min, _elements(array)),
+    'any': lambda mask: _logical('Or', *_elements(mask)),
+    'all': lambda mask: _logical('And', *_elements(mask)),
 }
 
 
@@ -2753,7 +3368,9 @@ def _fit_length(value, var, g_params, params):
         return value
 
     def fit(s):
-        return s.ljust(length)[:length] if isinstance(s, str) else s
+        if isinstance(s, _Character):
+            return _Character(s.ljust(length)[:length], s.kind)
+        return s
     if isinstance(value, dict):
         return {k: fit(s) for k, s in value.items()}
     return fit(value)
@@ -2772,9 +3389,6 @@ def get_parameters(vars, global_params={}):
     for n in get_sorted_names(vars):
         if 'attrspec' in vars[n] and 'parameter' in vars[n]['attrspec']:
             param_names.append(n)
-    kind_re = re.compile(r'\bkind\s*\(\s*(?P<value>.*)\s*\)', re.I)
-    selected_int_kind_re = re.compile(
-        r'\bselected_int_kind\s*\(\s*(?P<value>.*)\s*\)', re.I)
     kind_call_re = re.compile(r'\b(selected_(int|real)_)?kind\s*\(', re.I)
     for n in param_names:
         if '=' in vars[n]:
@@ -2782,26 +3396,6 @@ def get_parameters(vars, global_params={}):
             dimspec = ([s.removeprefix('dimension').strip()
                         for s in vars[n]['attrspec']
                        if s.startswith('dimension')] or [None])[0]
-            if islogical(vars[n]):
-                v = v.lower()
-                for repl in [
-                    ('.false.', 'False'),
-                    ('.true.', 'True'),
-                    # TODO: test .eq., .neq., etc replacements.
-                ]:
-                    v = v.replace(*repl)
-                v = re.sub(r'\b(True|False)_\w+', r'\1', v)
-
-            v = kind_re.sub(r'kind("\1")', v)
-            v = selected_int_kind_re.sub(r'selected_int_kind(\1)', v)
-
-            if dimspec:
-                # e.g. [1.5d0, 2_8, 3.0_dp] reads as [1.5e0, 2, 3.0]
-                v = _fortran_number_re.sub(_python_number, v)
-            else:
-                # e.g. 3_ik + n_max reads as 3 + n_max
-                v = _fortran_number_re.sub(lambda m: m[0].partition('_')[0], v)
-
             # Currently this will not work for complex numbers.
             # There is missing code for extracting a complex number,
             # which may be defined in either of these:
@@ -2809,20 +3403,9 @@ def get_parameters(vars, global_params={}):
             #  b) cmplx(Re, Im)
             #  c) dcmplx(Re, Im)
             #  d) cmplx(Re, Im, <prec>)
-
-            if isdouble(vars[n]):
-                tt = list(v)
-                for m in real16pattern.finditer(v):
-                    tt[m.start():m.end()] = list(
-                        v[m.start():m.end()].lower().replace('d', 'e'))
-                v = ''.join(tt)
-
-            elif iscomplex(vars[n]):
+            if iscomplex(vars[n]):
                 outmess(f'get_parameters[TODO]: '
                         f'implement evaluation of complex expression {v}\n')
-
-            if isstring_or_stringarray(vars[n]):
-                v = _char_literal_re.sub(_python_string, vars[n]['='])
             try:
                 params[n] = param_eval(v, g_params, params, dimspec=dimspec)
             except Exception as msg:
@@ -2843,7 +3426,8 @@ def get_parameters(vars, global_params={}):
                 del params[n]
                 continue
             if isstring(vars[n]) and isinstance(params[n], int):
-                params[n] = chr(params[n])
+                params[n] = _Character(chr(params[n]),
+                                       _default_kinds['character'])
             if isstring_or_stringarray(vars[n]):
                 params[n] = _fit_length(params[n], vars[n], g_params, params)
             nl = n.lower()
@@ -2874,22 +3458,30 @@ def _eval_length(length, params):
     return _eval_scalar(length, params)
 
 
-_is_kind_number = re.compile(r'\d+_').match
+_real_literal = r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[dDeEqQ][-+]?\d+)?(?:_\w+)?'
+_real_literal_re = re.compile(rf'\s*{_real_literal}\s*')
 
 
-def _eval_scalar(value, params):
-    if _is_kind_number(value):
-        value = value.split('_')[0]
+def _eval_scalar(value, params, c_literals=False):
     try:
         # TODO: use symbolic from PR #19805
-        value = _fortran_eval(value, {}, params)
-        value = (repr if isinstance(value, str) else str)(value)
+        result = _fortran_eval(value, {}, params, c_literals)
     except (NameError, SyntaxError, TypeError):
         return value
     except Exception as msg:
         errmess(f'"{msg}" in evaluating {value!r} '
                 f'(available names: {list(params)})\n')
-    return value
+        return value
+    if isinstance(result, (list, dict)):
+        return value
+    if isinstance(result, _Real):
+        if _real_literal_re.fullmatch(value):
+            # a literal already is its value, and keeps its kind as written
+            return value.strip()
+        if not c_literals and result.kind not in (None, _default_kinds['real']):
+            # without its kind, Fortran would read the value as a default real
+            return f'{result}_{result.kind}'
+    return (repr if isinstance(result, str) else str)(result)
 
 
 def analyzevars(block):
@@ -3229,7 +3821,8 @@ def analyzevars(block):
                 if not vars[n]['depend']:
                     del vars[n]['depend']
             if isscalar(vars[n]):
-                vars[n]['='] = _eval_scalar(vars[n]['='], params)
+                # the initial value of an argument is C
+                vars[n]['='] = _eval_scalar(vars[n]['='], params, n in args)
 
     for n in list(vars.keys()):
         if n == block['name']:  # n is block name
@@ -3336,7 +3929,8 @@ def _eval_items(item, g_params, params):
                 end += 1 if step > 0 else -1
                 return [x for i in range(start, end, step)
                         for part in parts[:j]
-                        for x in _eval_items(part, g_params, {**params, m[1]: i})]
+                        for x in _eval_items(part, g_params, {
+                            **params, m[1]: _default_integer(i)})]
     value = _fortran_eval(item, g_params, params)
     if isinstance(value, dict):
         return list(value.values())
