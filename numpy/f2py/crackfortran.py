@@ -2807,7 +2807,9 @@ def analyzevars(block):
                     if len(dl) == 1 and dl[0] != dim_char:
                         dl = ['1', dl[0]]
                     if len(dl) == 2:
-                        d1, d2 = map(symbolic.Expr.parse, dl)
+                        d1, d2 = (symbolic.Expr.parse(
+                            bound, language=symbolic.Language.Fortran)
+                            for bound in dl)
                         dsize = d2 - d1 + 1
                         d = dsize.tostring(language=symbolic.Language.C)
                         # find variables v that define d as a linear

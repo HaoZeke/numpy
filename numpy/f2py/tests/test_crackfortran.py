@@ -208,9 +208,9 @@ class TestDimSpec(util.F2PyTest):
 
     linear_dimspecs = [
         "n", "2*n", "2:n", "n/2", "5 - n/2", "3*n:20", "n*(n+1):n*(n+5)",
-        "2*n, n"
+        "2*n, n", "2*n, 0:2**n"
     ]
-    nonlinear_dimspecs = ["2*n:3*n*n+2*n"]
+    nonlinear_dimspecs = ["2*n:3*n*n+2*n", "n**2", "2**n"]
     all_dimspecs = linear_dimspecs + nonlinear_dimspecs
 
     code = ""
