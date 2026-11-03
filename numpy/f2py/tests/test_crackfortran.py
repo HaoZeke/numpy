@@ -1236,6 +1236,26 @@ class TestTypeParameters:
                 in crackfortran.crack2fortran(mod))
 
 
+class TestTypeNames:
+    # a derived type keeps a name that crackfortran renames for variables,
+    # as its attributes and the types that extend it use that name
+    def test_kept(self, tmp_path):
+        fpath = tmp_path / "names.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module names
+              type, abstract :: shape
+              end type shape
+              type, extends(shape) :: square
+                real :: side
+              end type square
+            end module names
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        assert [b["name"] for b in mod["body"]] == ["shape", "square"]
+        assert mod["vars"]["shape"]["attrspec"] == ["abstract"]
+        assert mod["vars"]["square"]["attrspec"] == ["extends(shape)"]
+
+
 class TestComponentHostParameters:
     # the components of a type see the parameters of its module, except
     # where a name of the type hides them
