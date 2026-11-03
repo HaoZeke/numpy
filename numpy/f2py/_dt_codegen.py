@@ -87,7 +87,7 @@ f2py_dt_array_from_any(PyObject *value, int typenum, int requirements)
 
 def _gen_bindc_struct(typename, members):
     """Generate C typedef struct for a bind(c) type."""
-    lines = [f'typedef struct {{']
+    lines = ['typedef struct {']
     for mname, mvar in members.items():
         if _is_type_array_member(mvar):
             inner = mvar.get('typename', '').lower()
@@ -472,7 +472,6 @@ static int
                 f'"{mname} member", NULL}},'
             )
             continue
-
 
         if _is_complex_member(mvar):
             ctype = _get_member_ctype(mvar)
@@ -863,7 +862,7 @@ def _gen_operator_fortran_wrappers(typename, ops, type_map):
     Returns list of Fortran source lines.
     """
     lines = []
-    for op_sym, proc_list in ops.items():
+    for proc_list in ops.values():
         for pname, proc, result_kind in proc_list:
             args = _routine_args(proc)
             wrapper_name = f'f2py_op_{typename}_{pname}'
@@ -879,7 +878,7 @@ def _gen_operator_fortran_wrappers(typename, ops, type_map):
                     f'  function {wrapper_name}('
                     + ', '.join(f'{a}_ptr' for a in args)
                     + ') result(cptr) bind(c)')
-                lines.append(f'    type(c_ptr) :: cptr')
+                lines.append('    type(c_ptr) :: cptr')
                 for argname in args:
                     var = proc['vars'].get(argname, {})
                     if var.get('typespec') == 'type':
@@ -908,9 +907,9 @@ def _gen_operator_fortran_wrappers(typename, ops, type_map):
                             f'{argname})')
                 # Call original function
                 call_args = ', '.join(args)
-                lines.append(f'    allocate(res)')
+                lines.append('    allocate(res)')
                 lines.append(f'    res = {pname}({call_args})')
-                lines.append(f'    cptr = c_loc(res)')
+                lines.append('    cptr = c_loc(res)')
                 lines.append(f'  end function {wrapper_name}')
                 lines.append('')
 
@@ -920,7 +919,7 @@ def _gen_operator_fortran_wrappers(typename, ops, type_map):
                     f'  function {wrapper_name}('
                     + ', '.join(f'{a}_ptr' for a in args)
                     + ') result(res) bind(c)')
-                lines.append(f'    integer(c_int) :: res')
+                lines.append('    integer(c_int) :: res')
                 for argname in args:
                     var = proc['vars'].get(argname, {})
                     if var.get('typespec') == 'type':
@@ -946,10 +945,10 @@ def _gen_operator_fortran_wrappers(typename, ops, type_map):
                 call_args = ', '.join(args)
                 lines.append(
                     f'    if ({pname}({call_args})) then')
-                lines.append(f'      res = 1')
-                lines.append(f'    else')
-                lines.append(f'      res = 0')
-                lines.append(f'    end if')
+                lines.append('      res = 1')
+                lines.append('    else')
+                lines.append('      res = 0')
+                lines.append('    end if')
                 lines.append(f'  end function {wrapper_name}')
                 lines.append('')
 
@@ -968,8 +967,8 @@ def _gen_operator_c_code(typename, ops, type_map):
     # Forward declare the PyTypeObject so operator functions can
     # reference it (the actual definition comes later)
     code_parts = [
-        f'static PyTypeObject Py{typename}_Type;  '
-        f'/* forward decl for operators */'
+        (f'static PyTypeObject Py{typename}_Type;  '
+         '/* forward decl for operators */'),
     ]
     nb_slots = {}
     cmp_ops = {}
@@ -1159,10 +1158,10 @@ def _gen_init_code(typename, modulename):
         '\t{',
         f'\t\tPyObject *fmod = PyDict_GetItemString(d, "{modulename}");',
         f'\t\tif (PyType_Ready(&Py{typename}_Type) < 0) return -1;',
-        f'\t\tif (PyModule_AddObjectRef(m, "{pyname}", '
-        f'(PyObject *)&Py{typename}_Type) < 0) return -1;',
-        f'\t\tif (fmod != NULL && PyObject_SetAttrString(fmod, "{pyname}", '
-        f'(PyObject *)&Py{typename}_Type) < 0) return -1;',
+        (f'\t\tif (PyModule_AddObjectRef(m, "{pyname}", '
+         f'(PyObject *)&Py{typename}_Type) < 0) return -1;'),
+        (f'\t\tif (fmod != NULL && PyObject_SetAttrString(fmod, "{pyname}", '
+         f'(PyObject *)&Py{typename}_Type) < 0) return -1;'),
         '\t}',
     ]
 
@@ -1188,7 +1187,7 @@ def _gen_opaque_extern_decls(typename, members, specializations=None,
 
     sym = _fortran_sym(typename)
     lines = []
-    lines.append(f'/* Extern declarations for Fortran wrappers */')
+    lines.append('/* Extern declarations for Fortran wrappers */')
 
     # LEN parameter extra args for extern declarations.
     # For LEN types, every function after the constructor needs
@@ -1581,7 +1580,7 @@ def _gen_opaque_tp_init(typename, members, specializations=None,
     }}"""
         for i, li in enumerate(len_info):
             ctx_lines += f'\n    len_ctx[{i}] = {li["name"]};'
-        ctx_lines += f"""
+        ctx_lines += """
     PyCapsule_SetContext(self->capsule, len_ctx);"""
         post_capsule = ctx_lines
     else:
@@ -2708,7 +2707,7 @@ static PyObject *
             rmvar = resolved_members.get(mname, mvar)
             rctype = _get_member_ctype(rmvar) or ctype
             if rctype == 'float':
-                parse = f'(float)PyFloat_AsDouble(value)'
+                parse = '(float)PyFloat_AsDouble(value)'
             elif rctype == 'double':
                 parse = 'PyFloat_AsDouble(value)'
             elif rctype == 'int':

@@ -752,7 +752,7 @@ def is_simple_derived_type(typeblock):
         return False
     # Count real (non-type-parameter) members
     has_data_members = False
-    for name, var in members.items():
+    for var in members.values():
         # Skip type parameters (KIND/LEN from parameterized types)
         # F2018 7.5.3 -- these are not data members
         attrspec = var.get('attrspec', [])

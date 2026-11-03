@@ -268,7 +268,7 @@ def _resolve_parameterized_type(typeblock):
     if not kind_params:
         return kind_params
 
-    for mname, mvar in get_type_members(typeblock).items():
+    for mvar in get_type_members(typeblock).values():
         if _is_type_parameter(mvar):
             continue
         # Resolve kindselector references
@@ -293,7 +293,7 @@ def _enumerate_kind_values(typespec):
     given typespec. Returns sorted list of ints.
     """
     values = set()
-    for (ts, k), _ in _FORTRAN_TO_C.items():
+    for (ts, k) in _FORTRAN_TO_C.keys():
         if ts == typespec and k is not None:
             try:
                 values.add(int(k))
@@ -371,7 +371,7 @@ def _enumerate_specializations(typeblock):
 
     # Find which typespecs are parameterized by each KIND param
     param_typespecs = {}
-    for mname, mvar in get_type_members(typeblock).items():
+    for mvar in get_type_members(typeblock).values():
         if _is_type_parameter(mvar):
             continue
         if 'kindselector' not in mvar:
@@ -448,7 +448,7 @@ def _resolve_type_for_kind(typeblock, kind_dict):
     """
     import copy
     tb = copy.deepcopy(typeblock)
-    for mname, mvar in get_type_members(tb).items():
+    for mvar in get_type_members(tb).values():
         if _is_type_parameter(mvar):
             continue
         if 'kindselector' not in mvar:
@@ -669,7 +669,7 @@ def _topo_visit(tb, all_blocks, type_map, generated, gen_order):
                             generated, gen_order)
                 break
     # Visit nested type member dependencies
-    for mname, mvar in get_type_members(tb).items():
+    for mvar in get_type_members(tb).values():
         if _is_type_member(mvar):
             inner = mvar.get('typename', '').lower()
             for dep_tb in all_blocks:
@@ -1040,7 +1040,7 @@ def _can_wrap_bindc(typeblock, type_map=None):
     _resolve_parameterized_type(typeblock)
     if not is_simple_derived_type(typeblock):
         return False
-    for name, var in get_type_members(typeblock).items():
+    for var in get_type_members(typeblock).values():
         if _is_type_parameter(var):
             continue
         # the struct has no C type for characters, which opaque types handle

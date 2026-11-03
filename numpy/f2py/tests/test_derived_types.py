@@ -2,9 +2,9 @@
 
 import textwrap
 
-import numpy as np
 import pytest
 
+import numpy as np
 from numpy.f2py import crackfortran, derived_type_rules
 from numpy.f2py.f2py2e import run_main
 
@@ -512,6 +512,7 @@ class TestTypeAsArgCodeGen:
             assert f'f2py_rout_m_type_arg_mod_{name}' in cmod
             assert f'{{"{name}",-1,' in cmod
         assert 'f2py_dt_from_pyobj(&p, &p_tag' in cmod
+
     def test_function_returning_type_generated(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_as_arg.f90")
@@ -523,6 +524,7 @@ class TestTypeAsArgCodeGen:
         assert ('create_particlef2pywrap = '
                 'c_loc(f2py_create_particlef2pywrap)') in wrappers
         assert 'f2py_dt_to_pyobj(create_particlef2pywrap' in cmod
+
     def test_fortran_wrappers_for_routines(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_as_arg.f90")
@@ -1093,12 +1095,14 @@ class TestTypeArrayArgCodeGen:
         # Should generate wrappers for routines with array-of-type args
         assert 'f2py_rout_m_type_array_arg_mod_sum_positions' in cmod
         assert 'f2py_rout_m_type_array_arg_mod_count_element' in cmod
+
     def test_list_extraction_code(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_array_arg.f90")
         cmod, _ = _generated(tmp_path, fpath)
         # The sequence of instances becomes an array of handles
         assert 'f2py_dt_handles_from_pyobj(atoms_capi' in cmod
+
     def test_fortran_wrapper_generated(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_array_arg.f90")
@@ -1178,6 +1182,7 @@ class TestAssumedShapeCodeGen:
         assert 'f2py_rout_m_type_assumed_shape_mod_sum_vectors' in cmod
         # Should NOT have `: =` (invalid C from assumed-shape dim)
         assert ': =' not in cmod
+
     def test_fortran_wrapper_for_assumed_shape(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_assumed_shape_arg.f90")
@@ -2360,6 +2365,7 @@ class TestIntentOutTypeArrayCodeGen:
                              "intent_out_type_array.f90")
         cmod, _ = _generated(tmp_path, fpath)
         assert 'f2py_rout_m_intent_out_type_array_mod_make_sequence' in cmod
+
     def test_output_array_wrapper_code(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "intent_out_type_array.f90")
@@ -2367,6 +2373,7 @@ class TestIntentOutTypeArrayCodeGen:
         # Fortran gives a buffer of handles and the extent
         assert 'f2py_dt_from_vector(results, 1, (npy_intp[]){f2py_results_n1}' in cmod
         assert 'f2py_intent_out_type_array_mod_make_sequence_free_results' in cmod
+
     def test_fortran_wrapper_has_heap_alloc(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "intent_out_type_array.f90")
@@ -2378,6 +2385,7 @@ class TestIntentOutTypeArrayCodeGen:
         assert 'f2py_results_h(f2py_results_k) = c_loc(f2py_results_e)' in wrappers
         assert ('subroutine f2py_intent_out_type_array_mod_make_sequence_'
                 'free_results(h, n) bind(c)') in wrappers
+
     def test_out_args_not_in_kwlist(self, tmp_path):
         fpath = util.getpath("tests", "src", "derived_types",
                              "intent_out_type_array.f90")
@@ -2706,21 +2714,21 @@ class TestComplexMemberBindC(util.F2PyTest):
         assert hasattr(self.module, 'impedance')
 
     def test_impedance_create(self):
-        z = self.module.impedance(resistance=50.0, reactance=10+20j)
+        z = self.module.impedance(resistance=50.0, reactance=10 + 20j)
         assert z.resistance == 50.0
-        assert z.reactance == (10+20j)
+        assert z.reactance == (10 + 20j)
 
     def test_impedance_set_complex(self):
         z = self.module.impedance()
-        z.reactance = 3+4j
-        assert z.reactance == (3+4j)
+        z.reactance = 3 + 4j
+        assert z.reactance == (3 + 4j)
 
     def test_impedance_real_only(self):
         z = self.module.impedance(reactance=5.0)
-        assert z.reactance == (5+0j)
+        assert z.reactance == (5 + 0j)
 
     def test_impedance_repr(self):
-        z = self.module.impedance(resistance=100.0, reactance=1+2j)
+        z = self.module.impedance(resistance=100.0, reactance=1 + 2j)
         r = repr(z)
         assert 'impedance' in r
         assert '100' in r
@@ -2729,8 +2737,8 @@ class TestComplexMemberBindC(util.F2PyTest):
         assert hasattr(self.module, 'signal_sample')
 
     def test_signal_sample_float_complex(self):
-        s = self.module.signal_sample(value=1.5+2.5j, timestamp=0.1)
-        assert abs(s.value - (1.5+2.5j)) < 1e-6
+        s = self.module.signal_sample(value=1.5 + 2.5j, timestamp=0.1)
+        assert abs(s.value - (1.5 + 2.5j)) < 1e-6
         assert abs(s.timestamp - 0.1) < 1e-6
 
 
@@ -2743,20 +2751,20 @@ class TestComplexMemberOpaque(util.F2PyTest):
         assert hasattr(self.module, 'wavefunction')
 
     def test_wavefunction_create(self):
-        wf = self.module.wavefunction(amplitude=1+0j, phase=0.0)
-        assert wf.amplitude == (1+0j)
+        wf = self.module.wavefunction(amplitude=1 + 0j, phase=0.0)
+        assert wf.amplitude == (1 + 0j)
         assert wf.phase == 0.0
 
     def test_wavefunction_set_complex(self):
         wf = self.module.wavefunction()
-        wf.amplitude = 0.5+0.5j
-        assert wf.amplitude == (0.5+0.5j)
+        wf.amplitude = 0.5 + 0.5j
+        assert wf.amplitude == (0.5 + 0.5j)
 
     def test_wavefunction_roundtrip(self):
-        wf = self.module.wavefunction(amplitude=3-4j, phase=1.57)
-        assert wf.amplitude == (3-4j)
-        wf.amplitude = -1+2j
-        assert wf.amplitude == (-1+2j)
+        wf = self.module.wavefunction(amplitude=3 - 4j, phase=1.57)
+        assert wf.amplitude == (3 - 4j)
+        wf.amplitude = -1 + 2j
+        assert wf.amplitude == (-1 + 2j)
         assert wf.phase == 1.57
 
 
@@ -2997,7 +3005,8 @@ class TestParameterizedKindCodeGen:
     def test_kind_resolved_in_members(self):
         """Test that kind parameters are resolved in member types."""
         from numpy.f2py._dt_helpers import (
-            _get_member_ctype, _resolve_parameterized_type
+            _get_member_ctype,
+            _resolve_parameterized_type,
         )
         fpath = util.getpath("tests", "src", "derived_types",
                              "parameterized_kind.f90")
@@ -3083,7 +3092,7 @@ class TestParameterizedKindNoDefaultCodeGen:
 
     def test_no_default_wrappable(self):
         """Type with KIND without default should be wrappable."""
-        from numpy.f2py._dt_helpers import _can_wrap_opaque, _enumerate_specializations
+        from numpy.f2py._dt_helpers import _can_wrap_opaque
         fpath = util.getpath("tests", "src", "derived_types",
                              "parameterized_kind_no_default.f90")
         mod = crackfortran.crackfortran([str(fpath)])
@@ -3315,9 +3324,7 @@ class TestParameterizedLenCodeGen:
 
     def test_len_sized_array_detected(self):
         """Test _is_len_sized_array identifies LEN-dimensioned members."""
-        from numpy.f2py._dt_helpers import (
-            _is_len_sized_array, _get_len_param_info,
-        )
+        from numpy.f2py._dt_helpers import _get_len_param_info, _is_len_sized_array
         from numpy.f2py.auxfuncs import get_type_members
         fpath = util.getpath("tests", "src", "derived_types",
                              "parameterized_len.f90")
