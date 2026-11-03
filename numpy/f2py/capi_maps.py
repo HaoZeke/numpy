@@ -292,14 +292,17 @@ def _named_kind(typespec, name):
 
 
 def _mapped_ctype(typespec, key):
-    """The C type for a kind or a star length, without the other map.
+    """The C type for a kind or a star length.
 
-    A ``complex`` kind that is not in ``complexkind`` is not a byte count.
-    ``complex(kind=16)`` must not become ``complex*16``.
+    A numeric ``complex`` kind that is not in ``complexkind`` is not a byte
+    count, so ``complex(kind=16)`` must not become ``complex*16``.
+    A name such as ``c_double_complex`` is stored on the type map.
     """
     kind_map = typespec + 'kind'
-    if kind_map in f2cmap_all:
-        return f2cmap_all[kind_map].get(key)
+    if kind_map in f2cmap_all and key in f2cmap_all[kind_map]:
+        return f2cmap_all[kind_map][key]
+    if key.lstrip('-').isdigit() and kind_map in f2cmap_all:
+        return None
     return f2cmap_all.get(typespec, {}).get(key)
 
 
