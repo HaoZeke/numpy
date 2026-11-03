@@ -1,0 +1,12 @@
+! gh-20771: C operators in dimension specifications
+python module gh20771
+interface
+  subroutine isuppz_len(compute_v, range, n, il, iu, isuppz, m)
+    integer intent(in) :: compute_v
+    character intent(in) :: range
+    integer intent(in) :: n, il, iu
+    integer intent(out), dimension((compute_v?(2*(*range=='A'||(*range=='I' && iu-il+1==n)?n:0)):0)), depend(n,iu,il,compute_v,range) :: isuppz
+    integer intent(hide), depend(isuppz) :: m = len(isuppz)
+  end subroutine isuppz_len
+end interface
+end python module gh20771

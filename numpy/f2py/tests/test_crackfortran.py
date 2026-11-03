@@ -3,6 +3,7 @@ import importlib
 import io
 import textwrap
 import time
+import warnings
 
 import pytest
 
@@ -10,6 +11,7 @@ import numpy as np
 from numpy.f2py import capi_maps, crackfortran
 from numpy.f2py.auxfuncs import getargs2
 from numpy.f2py.crackfortran import markinnerspaces, nameargspattern
+from numpy.f2py.symbolic import ExprWarning
 
 from . import util
 
@@ -353,6 +355,44 @@ class TestStringLiteralDepend:
         assert any(b.get("name") == "nonchar_literal_cycle" for b in mod)
         err = capsys.readouterr().err
         assert "cyclic dependencies" in err
+
+
+class TestCOperatorsDimSpec:
+    # gh-20771: C logical operators in a dimension specification must keep
+    # their precedence in the generated C (scipy/scipy#16527)
+    def test_isuppz(self, monkeypatch):
+        # f2py does not lower the case of signature files
+        monkeypatch.setattr(crackfortran, "dolowercase", 0)
+        fpath = util.getpath("tests", "src", "crackfortran", "gh20771.pyf")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ExprWarning)
+            mod = crackfortran.crackfortran([str(fpath)])
+        iface = next(b for b in mod if b.get("name") == "gh20771")["body"][0]
+        routine = next(b for b in iface["body"]
+                       if b.get("name") == "isuppz_len")
+        assert routine["vars"]["isuppz"]["dimension"] == [(
+            "(compute_v?2 * (range == 'A' || range == 'I'"
+            " && 1 - il + iu == n?n:0):0)")]
+
+
+@pytest.mark.slow
+class TestCOperatorsDimSpecRuntime(util.F2PyTest):
+    module_name = "gh20771"
+    sources = [
+        util.getpath("tests", "src", "crackfortran", "gh20771.pyf"),
+        util.getpath("tests", "src", "crackfortran", "gh20771.f90"),
+    ]
+
+    @pytest.mark.parametrize("compute_v, range_, il, iu, size", [
+        (1, "A", 1, 4, 8),
+        (1, "I", 1, 4, 8),
+        (1, "I", 2, 3, 0),
+        (1, "V", 1, 4, 0),
+        (0, "A", 1, 4, 0),
+    ])
+    def test_isuppz_len(self, compute_v, range_, il, iu, size):
+        isuppz = self.module.isuppz_len(compute_v, range_, 4, il, iu)
+        assert isuppz.tolist() == list(range(1, size + 1))
 
 
 @pytest.mark.slow

@@ -21,7 +21,7 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 # contain C expressions that support here is implemented as well.
 #
 # TODO: support logical constants (Op.BOOLEAN)
-# TODO: support logical operators (.AND., ...)
+# TODO: support Fortran logical operators (.AND., ...)
 # TODO: support defined operators (.MYOP., ...)
 #
 __all__ = ['Expr']
@@ -57,6 +57,7 @@ class Op(Enum):
     INDEXING = 210
     CONCAT = 220
     RELATIONAL = 300
+    LOGICAL = 310
     TERMS = 1000
     FACTORS = 2000
     REF = 3000
@@ -91,6 +92,25 @@ class RelOp(Enum):
         return {RelOp.EQ: '==', RelOp.NE: '!=',
                 RelOp.LT: '<', RelOp.LE: '<=',
                 RelOp.GT: '>', RelOp.GE: '>='}[self]
+
+
+class LogicalOp(Enum):
+    """
+    Used in Op.LOGICAL expression to specify the function part.
+    """
+    NOT = 1
+    AND = 2
+    OR = 3
+
+    def tostring(self, language=Language.C):
+        if language is Language.Fortran:
+            return {LogicalOp.NOT: '.not.', LogicalOp.AND: '.and.',
+                    LogicalOp.OR: '.or.'}[self]
+        if language is Language.Python:
+            return {LogicalOp.NOT: 'not', LogicalOp.AND: 'and',
+                    LogicalOp.OR: 'or'}[self]
+        return {LogicalOp.NOT: '!', LogicalOp.AND: '&&',
+                LogicalOp.OR: '||'}[self]
 
 
 class ArithOp(Enum):
@@ -225,6 +245,11 @@ class Expr:
         elif op is Op.RELATIONAL:
             # data is (<relop>, <left>, <right>)
             assert isinstance(data, tuple) and len(data) == 3
+        elif op is Op.LOGICAL:
+            # data is (<logicalop>, <operand>) for NOT, otherwise
+            # (<logicalop>, <left>, <right>)
+            assert isinstance(data, tuple)
+            assert len(data) == (2 if data[0] is LogicalOp.NOT else 3)
         else:
             raise NotImplementedError(
                 f'unknown op or missing sanity check: {op}')
@@ -258,6 +283,10 @@ class Expr:
                     return self.data[:2] < other.data[:2]
                 return tuple(sorted(self.data[2].items())) < tuple(
                     sorted(other.data[2].items()))
+            if self.op in (Op.RELATIONAL, Op.LOGICAL):
+                # operator enums are not orderable
+                return ((self.data[0].value,) + self.data[1:]
+                        < (other.data[0].value,) + other.data[1:])
             return self.data < other.data
         return NotImplemented
 
@@ -407,9 +436,31 @@ class Expr:
             precedence = (Precedence.EQ if rop in (RelOp.EQ, RelOp.NE)
                           else Precedence.LT)
             left = left.tostring(precedence, language=language)
-            right = right.tostring(precedence, language=language)
+            # relational operators are left-associative, a right
+            # operand of the same precedence needs parentheses
+            right = right.tostring(
+                Precedence.LT if precedence is Precedence.EQ
+                else Precedence.SUM, language=language)
             rop = rop.tostring(language=language)
             r = f'{left} {rop} {right}'
+        elif self.op is Op.LOGICAL:
+            lop, *operands = self.data
+            if lop is LogicalOp.NOT and language is Language.C:
+                precedence = Precedence.UNARY
+                r = '!' + operands[0].tostring(precedence, language=language)
+            elif lop is LogicalOp.NOT:
+                # Fortran .not. and Python not bind less tightly than
+                # relational operators
+                precedence = Precedence.LAND
+                operand = operands[0].tostring(Precedence.EQ,
+                                               language=language)
+                r = f'{lop.tostring(language=language)} {operand}'
+            else:
+                precedence = (Precedence.LAND if lop is LogicalOp.AND
+                              else Precedence.LOR)
+                left, right = [operand.tostring(precedence, language=language)
+                               for operand in operands]
+                r = f'{left} {lop.tostring(language=language)} {right}'
         else:
             raise NotImplementedError(f'tostring for op {self.op}')
         if parent_precedence.value < precedence.value:
@@ -654,6 +705,10 @@ class Expr:
             left = left.substitute(symbols_map)
             right = right.substitute(symbols_map)
             return normalize(Expr(self.op, (rop, left, right)))
+        if self.op is Op.LOGICAL:
+            lop, *operands = self.data
+            operands = tuple(a.substitute(symbols_map) for a in operands)
+            return normalize(Expr(self.op, (lop, *operands)))
         raise NotImplementedError(f'substitute method for {self.op}: {self!r}')
 
     def traverse(self, visit, *args, **kwargs):
@@ -710,6 +765,11 @@ class Expr:
             left = left.traverse(visit, *args, **kwargs)
             right = right.traverse(visit, *args, **kwargs)
             return normalize(Expr(self.op, (rop, left, right)))
+        elif self.op is Op.LOGICAL:
+            lop, *operands = self.data
+            operands = tuple(operand.traverse(visit, *args, **kwargs)
+                             for operand in operands)
+            return normalize(Expr(self.op, (lop, *operands)))
         raise NotImplementedError(f'traverse method for {self.op}')
 
     def contains(self, other):
@@ -1055,6 +1115,18 @@ def as_ge(left, right):
     return Expr(Op.RELATIONAL, (RelOp.GE, left, right))
 
 
+def as_not(operand):
+    return Expr(Op.LOGICAL, (LogicalOp.NOT, operand))
+
+
+def as_and(left, right):
+    return Expr(Op.LOGICAL, (LogicalOp.AND, left, right))
+
+
+def as_or(left, right):
+    return Expr(Op.LOGICAL, (LogicalOp.OR, left, right))
+
+
 def as_terms(obj):
     """Return expression as TERMS expression.
     """
@@ -1118,7 +1190,7 @@ def as_numer_denom(obj):
     if isinstance(obj, Expr):
         obj = normalize(obj)
         if obj.op in (Op.INTEGER, Op.REAL, Op.COMPLEX, Op.SYMBOL,
-                      Op.INDEXING, Op.TERNARY):
+                      Op.INDEXING, Op.TERNARY, Op.RELATIONAL, Op.LOGICAL):
             return obj, as_number(1)
         elif obj.op is Op.APPLY:
             if obj.data[0] is ArithOp.DIV and not obj.data[2]:
@@ -1269,6 +1341,30 @@ def unreplace_parenthesis(s, d):
     return s
 
 
+def split_ternary(s):
+    """Split ternary operation ``cond ? expr1 : expr2`` of input string.
+
+    Subexpressions in parentheses must be replaced, see
+    replace_parenthesis. Return a 3-tuple of strings or None.
+    """
+    i = s.find('?')
+    if i == -1:
+        return None
+    # skip the colons of ternary operations nested in expr1
+    depth = 0
+    for j in range(i, len(s)):
+        if s[j] == '?':
+            depth += 1
+        elif s[j] == ':':
+            depth -= 1
+            if depth == 0:
+                parts = s[:i], s[i + 1:j], s[j + 1:]
+                if all(p.strip() for p in parts):
+                    return parts
+                return None
+    return None
+
+
 def fromstring(s, language=Language.C):
     """Create an expression from a string.
 
@@ -1353,22 +1449,30 @@ class _FromStringWorker:
                 f'parsing comma-separated list (context={context}): {r}')
 
         # ternary operation
-        m = re.match(r'\A([^?]+)[?]([^:]+)[:](.+)\Z', r)
-        if m:
-            assert context == 'expr', context
-            oper, expr1, expr2 = restore(m.groups())
-            oper = self.process(oper)
-            expr1 = self.process(expr1)
-            expr2 = self.process(expr2)
+        parts = split_ternary(r)
+        if parts is not None:
+            oper, expr1, expr2 = self.process(restore(parts))
             return as_ternary(oper, expr1, expr2)
+
+        # logical OR and AND operations
+        if self.language is Language.C:
+            for lop, token in ((LogicalOp.OR, '||'), (LogicalOp.AND, '&&')):
+                operands = r.split(token)
+                if len(operands) > 1:
+                    result, *operands = self.process(restore(operands))
+                    for operand in operands:
+                        result = Expr(Op.LOGICAL, (lop, result, operand))
+                    return result
 
         # relational expression
         if self.language is Language.Fortran:
             m = re.match(
                 r'\A(.+)\s*[.](eq|ne|lt|le|gt|ge)[.]\s*(.+)\Z', r, re.I)
         else:
-            m = re.match(
-                r'\A(.+)\s*([=][=]|[!][=]|[<][=]|[<]|[>][=]|[>])\s*(.+)\Z', r)
+            # equality operators bind less tightly than the other
+            # relational operators, all are left-associative
+            m = (re.match(r'\A(.+)([=!]=)(.+)\Z', r)
+                 or re.match(r'\A(.+)([<>]=?)(.+)\Z', r))
         if m:
             left, rop, right = m.groups()
             if self.language is Language.Fortran:
@@ -1430,6 +1534,10 @@ class _FromStringWorker:
             op = {'*': Op.DEREF, '&': Op.REF}[r[0]]
             operand = self.process(restore(r[1:]))
             return Expr(op, operand)
+
+        # logical NOT operation
+        if self.language is Language.C and r.startswith('!'):
+            return as_not(self.process(restore(r[1:])))
 
         # exponentiation operations
         if self.language is not Language.C and '**' in r:

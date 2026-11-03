@@ -16,6 +16,9 @@ _RightT_co = TypeVar("_RightT_co", default=Any, covariant=True)
 
 type _RelCOrPy = L["==", "!=", "<", "<=", ">", ">="]
 type _RelFortran = L[".eq.", ".ne.", ".lt.", ".le.", ".gt.", ".ge."]
+type _LogicalC = L["!", "&&", "||"]
+type _LogicalFortran = L[".not.", ".and.", ".or."]
+type _LogicalPy = L["not", "and", "or"]
 
 type _ToExpr = Expr | complex | str
 type _ToExprN = _ToExpr | tuple[_ToExprN, ...]
@@ -43,6 +46,7 @@ class Op(Enum):
     INDEXING = 210
     CONCAT = 220
     RELATIONAL = 300
+    LOGICAL = 310
     TERMS = 1_000
     FACTORS = 2_000
     REF = 3_000
@@ -68,6 +72,18 @@ class RelOp(Enum):
     def tostring(self, /, language: L[Language.C, Language.Python] = ...) -> _RelCOrPy: ...
     @overload
     def tostring(self, /, language: L[Language.Fortran]) -> _RelFortran: ...
+
+class LogicalOp(Enum):
+    NOT = 1
+    AND = 2
+    OR = 3
+
+    @overload
+    def tostring(self, /, language: L[Language.C] = ...) -> _LogicalC: ...
+    @overload
+    def tostring(self, /, language: L[Language.Fortran]) -> _LogicalFortran: ...
+    @overload
+    def tostring(self, /, language: L[Language.Python]) -> _LogicalPy: ...
 
 class ArithOp(Enum):
     POS = 1

@@ -1,10 +1,14 @@
+import warnings
+
 import pytest
 
 from numpy.f2py.symbolic import (
     ArithOp,
     Expr,
+    ExprWarning,
     Language,
     Op,
+    as_and,
     as_apply,
     as_array,
     as_complex,
@@ -17,8 +21,10 @@ from numpy.f2py.symbolic import (
     as_le,
     as_lt,
     as_ne,
+    as_not,
     as_number,
     as_numer_denom,
+    as_or,
     as_ref,
     as_string,
     as_symbol,
@@ -129,6 +135,16 @@ class TestSymbolic(util.F2PyTest):
         assert e == e
         assert e != f
         assert hash(e) is not None
+        assert sorted([as_ne(x, y), e]) == [e, as_ne(x, y)]
+
+        g = as_and(x, y)
+        h = as_or(x, y)
+        assert g.op == Op.LOGICAL
+        assert as_not(x).op == Op.LOGICAL
+        assert g == g
+        assert g != h
+        assert hash(g) is not None
+        assert sorted([h, as_not(x), g]) == [as_not(x), g, h]
 
     def test_tostring_fortran(self):
         x = as_symbol("x")
@@ -179,6 +195,12 @@ class TestSymbolic(util.F2PyTest):
         assert str(as_gt(x, y)) == "x .gt. y"
         assert str(as_ge(x, y)) == "x .ge. y"
 
+        assert str(as_not(x)) == ".not. x"
+        assert str(as_and(x, y)) == "x .and. y"
+        assert str(as_or(x, y)) == "x .or. y"
+        assert str(as_not(as_eq(x, y))) == ".not. x .eq. y"
+        assert str(as_and(as_not(x), as_or(y, z))) == ".not. x .and. (y .or. z)"
+
     def test_tostring_c(self):
         language = Language.C
         x = as_symbol("x")
@@ -210,6 +232,33 @@ class TestSymbolic(util.F2PyTest):
         assert as_le(x, y).tostring(language=language) == "x <= y"
         assert as_gt(x, y).tostring(language=language) == "x > y"
         assert as_ge(x, y).tostring(language=language) == "x >= y"
+        assert as_eq(as_eq(x, y), z).tostring(language=language) == "x == y == z"
+        assert as_eq(x, as_eq(y, z)).tostring(
+            language=language) == "x == (y == z)"
+        assert as_lt(x, as_lt(y, z)).tostring(
+            language=language) == "x < (y < z)"
+        assert as_eq(as_lt(x, y), as_lt(y, z)).tostring(
+            language=language) == "x < y == y < z"
+        assert as_lt(as_eq(x, y), z).tostring(
+            language=language) == "(x == y) < z"
+
+        assert as_not(x).tostring(language=language) == "!x"
+        assert as_and(x, y).tostring(language=language) == "x && y"
+        assert as_or(x, y).tostring(language=language) == "x || y"
+        assert as_not(as_eq(x, y)).tostring(language=language) == "!(x == y)"
+        assert as_eq(as_not(x), y).tostring(language=language) == "!x == y"
+        assert as_or(as_and(x, y), z).tostring(
+            language=language) == "x && y || z"
+        assert as_and(as_or(x, y), z).tostring(
+            language=language) == "(x || y) && z"
+        assert as_and(x, y + 1).tostring(language=language) == "x && 1 + y"
+        assert (2 * as_and(x, y)).tostring(
+            language=language) == "2 * (x && y)"
+        assert as_ternary(as_or(x, y), y, z).tostring(
+            language=language) == "(x || y?y:z)"
+
+        assert as_and(as_not(as_eq(x, y)), z).tostring(
+            language=Language.Python) == "not x == y and z"
 
     def test_operations(self):
         x = as_symbol("x")
@@ -292,6 +341,8 @@ class TestSymbolic(util.F2PyTest):
         assert as_ternary(x, y,
                           z).substitute({x: y + z}) == as_ternary(y + z, y, z)
         assert as_eq(x, y).substitute({x: y + z}) == as_eq(y + z, y)
+        assert as_and(x, y).substitute({x: y + z}) == as_and(y + z, y)
+        assert as_not(x).substitute({x: z}) == as_not(z)
 
     def test_fromstring(self):
 
@@ -379,6 +430,33 @@ class TestSymbolic(util.F2PyTest):
         assert fromstring("x > y") == as_gt(x, y)
         assert fromstring("x <= y") == as_le(x, y)
         assert fromstring("x >= y") == as_ge(x, y)
+        assert fromstring("x < y == y < z") == as_eq(as_lt(x, y), as_lt(y, z))
+        assert fromstring("x == y < z") == as_eq(x, as_lt(y, z))
+        assert fromstring("x == y != z") == as_ne(as_eq(x, y), z)
+        assert fromstring("x <= y >= z") == as_ge(as_le(x, y), z)
+
+        assert fromstring("!x") == as_not(x)
+        assert fromstring("x && y") == as_and(x, y)
+        assert fromstring("x || y") == as_or(x, y)
+        assert fromstring("x && y && z") == as_and(as_and(x, y), z)
+        assert fromstring("x || y && z") == as_or(x, as_and(y, z))
+        assert fromstring("x && y || z") == as_or(as_and(x, y), z)
+        assert fromstring("(x || y) && z") == as_and(as_or(x, y), z)
+        assert fromstring("x == y && y < z") == as_and(as_eq(x, y),
+                                                       as_lt(y, z))
+        assert fromstring("x && y + 1") == as_and(x, y + 1)
+        assert fromstring("x - 1 || y") == as_or(x - 1, y)
+        assert fromstring("!x == y") == as_eq(as_not(x), y)
+        assert fromstring("!(x == y)") == as_not(as_eq(x, y))
+        assert fromstring("!x * y") == as_not(x) * y
+        assert fromstring("x != !y") == as_ne(x, as_not(y))
+        assert fromstring("x || y ? y : z") == as_ternary(as_or(x, y), y, z)
+
+        assert fromstring("x ? y ? z : x : y") == as_ternary(
+            x, as_ternary(y, z, x), y)
+        assert fromstring("x ? y : z ? x : y") == as_ternary(
+            x, y, as_ternary(z, x, y))
+        assert fromstring("f(x ? y : z)") == f(as_ternary(x, y, z))
 
         assert fromstring("x .eq. y", language=Language.Fortran) == as_eq(x, y)
         assert fromstring("x .ne. y", language=Language.Fortran) == as_ne(x, y)
@@ -410,6 +488,8 @@ class TestSymbolic(util.F2PyTest):
                 f(y, x - z)).traverse(replace_visit) == (z +
                                                          f(y, as_number(0)))
         assert as_eq(x, y).traverse(replace_visit) == as_eq(z, y)
+        assert as_or(x, as_not(x)).traverse(replace_visit) == as_or(
+            z, as_not(z))
 
         # Use traverse to collect symbols, method 1
         function_symbols = set()
@@ -466,8 +546,12 @@ class TestSymbolic(util.F2PyTest):
         assert (z * x + y).linear_solve(x) == (z, y)
         assert ((z + y) * x + y).linear_solve(x) == (z + y, y)
         assert (z * y * x + y).linear_solve(x) == (z * y, y)
+        assert (as_eq(y, z) * x).linear_solve(x) == (as_eq(y, z),
+                                                     as_number(0))
+        assert (as_and(y, z) * x + y).linear_solve(x) == (as_and(y, z), y)
 
         pytest.raises(RuntimeError, lambda: (x * x).linear_solve(x))
+        pytest.raises(RuntimeError, lambda: as_and(x, y).linear_solve(x))
 
     def test_as_numer_denom(self):
         x = as_symbol("x")
@@ -499,3 +583,31 @@ class TestSymbolic(util.F2PyTest):
         #gh - 30268
         with pytest.raises(ValueError, match=r"Mismatch of \(\) parenthesis"):
             Expr.parse("DATA (A, I=1, N", language=Language.Fortran)
+
+    def test_c_logical_operators_gh20771(self):
+        # Dimension specifications of SciPy LAPACK wrappers, see also
+        # scipy/scipy#16527
+        compute_v, rng, n, il, iu = map(
+            as_symbol, ["compute_v", "range", "n", "il", "iu"])
+        jobt, jobu, m = map(as_symbol, ["jobt", "jobu", "m"])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ExprWarning)
+            isuppz = fromstring(
+                "(compute_v?(2*(*range=='A'||(*range=='I' && iu-il+1==n)"
+                "?n:0)):0)")
+            u = fromstring("((jobt == 0)&&(jobu == 3)?0:(jobu == 1?m:n))")
+
+        assert isuppz == as_ternary(
+            compute_v,
+            2 * as_ternary(
+                as_or(as_eq(as_deref(rng), as_string("'A'")),
+                      as_and(as_eq(as_deref(rng), as_string("'I'")),
+                             as_eq(iu - il + 1, n))),
+                n, as_number(0)),
+            as_number(0))
+        assert isuppz.tostring(language=Language.C) == (
+            "(compute_v?2 * (*range == 'A' || *range == 'I'"
+            " && 1 - il + iu == n?n:0):0)")
+        assert u == as_ternary(
+            as_and(as_eq(jobt, as_number(0)), as_eq(jobu, as_number(3))),
+            as_number(0), as_ternary(as_eq(jobu, as_number(1)), m, n))
