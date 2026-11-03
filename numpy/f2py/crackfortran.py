@@ -2240,6 +2240,9 @@ def _resolve_forwarded_callbacks(blocks, source_blocks):
 
     def remove_markers(body):
         for block in body:
+            if block.get('_f2py_uncalled_external'):
+                outmess(f"postcrack: no resolved interface for external {block['name']!r}, "
+                        "assuming it takes no arguments.\n")
             block.pop('_f2py_owner', None)
             block.pop('_f2py_uncalled_external', None)
             block.pop('_f2py_callback_calls', None)
@@ -2360,8 +2363,6 @@ def _uncalled_external(block, name, tab):
     else:
         rout = {'block': 'subroutine', 'vars': {}}
     rout.update(name=name, args=[], body=[], _f2py_uncalled_external=True)
-    outmess(f"postcrack: no call or interface found for external {name!r} "
-            f"of {block['name']!r}, assuming it takes no arguments.\n")
     return postcrack(rout, tab=tab + '\t')
 
 
