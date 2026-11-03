@@ -37,6 +37,19 @@ class TestModuleWithoutPublicEntities(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestSetupFunctionNames(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "modules", "setup_names.f90")]
+
+    def test_variables(self):
+        # these used to shadow what the setup functions refer to
+        mod = self.module.setup_names
+        assert mod.i_f2py == 1
+        assert mod.f2py_setup_names_def == 2
+        self.module.set_common()
+        assert self.module.names.i_f2py == 3
+
+
+@pytest.mark.slow
 class TestModuleDocString(util.F2PyTest):
     sources = [util.getpath("tests", "src", "modules", "module_data_docstring.f90")]
 

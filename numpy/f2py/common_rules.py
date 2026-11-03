@@ -14,7 +14,6 @@ f2py_version = __version__.version
 
 from . import capi_maps, func2subr
 from .auxfuncs import getuseblocks, hasbody, hascommon, hasnote, isintent_hide, outmess
-from .crackfortran import rmbadname
 
 
 def findcommonblocks(block, top=1):
@@ -101,18 +100,21 @@ def buildhooks(m):
             rank = dm['rank']
             cadd(f'\t{{\"{n}\",{rank},{{{{{dms}}}}},{at}, {elsize}}},')
         cadd('\t{NULL}\n};')
-        inames1 = rmbadname(inames)
-        inames1_tps = ','.join(['char *' + s for s in inames1])
-        cadd(f'static void f2py_setup_{name}({inames1_tps}) {{')
+        # the arguments are numbered, as a name from the common block could
+        # shadow the names the function refers to, and no Fortran name
+        # begins with an underscore
+        args = [f'_f2py_{i}' for i in range(len(inames))]
+        args_tps = ','.join(['char *' + s for s in args])
+        cadd(f'static void f2py_setup_{name}({args_tps}) {{')
         cadd('\tint i_f2py=0;')
-        for n in inames1:
-            cadd(f'\tf2py_{name}_def[i_f2py++].data = {n};')
+        for arg in args:
+            cadd(f'\tf2py_{name}_def[i_f2py++].data = {arg};')
         cadd('}')
         if '_' in lower_name:
             F_FUNC = 'F_FUNC_US'
         else:
             F_FUNC = 'F_FUNC'
-        arg_types_str = ','.join(['char*'] * len(inames1))
+        arg_types_str = ','.join(['char*'] * len(inames))
         cadd(f"extern void {F_FUNC}(f2pyinit{lower_name},F2PYINIT{name.upper()})"
              f"(void(*)({arg_types_str}));")
         cadd(f'static void f2py_init_{name}(void) {{')

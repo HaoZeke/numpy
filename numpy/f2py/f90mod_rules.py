@@ -100,6 +100,15 @@ def buildhooks(pymod):
         sargs, fargs, efargs, modobjs, notvars, onlyvars = [], [], [], [], [
             m['name']], []
         sargsp = []
+
+        def setup_arg(decl, s=sargs):
+            # the arguments of f2py_setup_<module> are numbered, as a name
+            # from the module could shadow the names the function refers
+            # to, and no Fortran name begins with an underscore
+            arg = f'_f2py_{len(s)}'
+            s.append(decl.format(arg))
+            return arg
+
         ifargs = []
         mfargs = []
         if hasbody(m):
@@ -170,10 +179,10 @@ def buildhooks(pymod):
             if isallocatable(var):
                 fargs.append(f"f2py_{m['name']}_getdims_{n}")
                 efargs.append(fargs[-1])
-                sargs.append(
-                    f'void (*{n})(int*,npy_intp*,void(*)(char*,npy_intp*),int*)')
+                arg = setup_arg(
+                    'void (*{})(int*,npy_intp*,void(*)(char*,npy_intp*),int*)')
                 sargsp.append('void (*)(int*,npy_intp*,void(*)(char*,npy_intp*),int*)')
-                iadd(f"\tf2py_{m['name']}_def[i_f2py++].func = {n};")
+                iadd(f"\tf2py_{m['name']}_def[i_f2py++].func = {arg};")
                 fadd(f'subroutine {fargs[-1]}(r,s,f2pysetdata,flag)')
                 fadd(f"use {m['name']}, only: d => {undo_rmbadname1(n)}\n")
                 fadd('integer flag\n')
@@ -185,9 +194,9 @@ def buildhooks(pymod):
                 fadd(f'end subroutine {fargs[-1]}')
             else:
                 fargs.append(n)
-                sargs.append(f'char *{n}')
+                arg = setup_arg('char *{}')
                 sargsp.append('char*')
-                iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
+                iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {arg};")
         if onlyvars:
             dadd('\\end{description}')
         if hasbody(m):
@@ -221,9 +230,9 @@ def buildhooks(pymod):
                 cadd(f'\t{{"{b_name}",-1,{{{{-1}}}},0,0,NULL,(void *)'
                       f'f2py_rout_#modulename#_{m_name}_{b_name},'
                       f'doc_f2py_rout_#modulename#_{m_name}_{b_name}}},')
-                sargs.append(f"char *{b_name}")
+                arg = setup_arg('char *{}')
                 sargsp.append('char *')
-                iadd(f"\tf2py_{m_name}_def[i_f2py++].data = {b_name};")
+                iadd(f"\tf2py_{m_name}_def[i_f2py++].data = {arg};")
         cadd('\t{NULL}\n};\n')
         iadd('}')
         m_name = m['name']
