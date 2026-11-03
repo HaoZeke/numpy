@@ -3171,6 +3171,40 @@ def test_wrappers_declare_class_only_when_type_does_not_suffice(tmp_path):
         assert emitted is needs_class, src.name
 
 
+def test_nonpolymorphic_class_declaration_is_an_error(capsys):
+    """A dummy that is not polymorphic must not be declared ``class``.
+
+    ``wrapper_handles`` reports that with ``errmess`` and ``F2PYError``,
+    and both name the routine and the argument.
+    """
+    from numpy.f2py._dt_routines import wrapper_handles
+    from numpy.f2py.auxfuncs import F2PYError
+
+    rout = {
+        'name': 'retag',
+        'vars': {
+            'item': {
+                # allocatable so the wrapper would declare class(); the
+                # argument is still not polymorphic, which is the error.
+                'attrspec': ['allocatable'],
+                'f2py_dt': {
+                    'spec': 'box',
+                    'cases': [
+                        (1, 'box', 'store', 'box'),
+                        (2, 'carton', 'store', 'carton'),
+                    ],
+                },
+            },
+        },
+    }
+    with pytest.raises(F2PYError, match="retag") as caught:
+        wrapper_handles(rout, ['item'])
+    assert 'item' in str(caught.value)
+    err = capsys.readouterr().err
+    assert 'retag' in err
+    assert 'item' in err
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not util.has_f90_compiler(),
                     reason="No Fortran 90 compiler available")
