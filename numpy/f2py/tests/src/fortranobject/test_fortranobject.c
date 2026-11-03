@@ -512,6 +512,33 @@ test_module_allocatable(void **state)
 }
 
 static void
+test_module_delattr(void **state)
+{
+    (void)state;
+    PyObject *module = PyFortranObject_New(module_defs(), NULL);
+    assert_non_null(module);
+    PyObject *value = Py_BuildValue("[d]", 1.0);
+    assert_int_equal(PyObject_SetAttrString(module, "alloc", value), 0);
+    Py_DECREF(value);
+
+    /* Fortran objects cannot be deleted, assigning None deallocates. */
+    const char *names[] = {"ival", "darr", "alloc"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        assert_int_equal(PyObject_DelAttrString(module, names[i]), -1);
+        check_pyerr(PyExc_AttributeError, "cannot delete fortran data");
+        PyObject *obj = PyObject_GetAttrString(module, names[i]);
+        assert_non_null(obj);
+        assert_true(PyArray_Check(obj));
+        Py_DECREF(obj);
+    }
+    assert_int_equal(PyObject_DelAttrString(module, "twice"), -1);
+    check_pyerr(PyExc_AttributeError, "over-writing fortran routine");
+
+    Py_DECREF(module);
+    free_alloc_data();
+}
+
+static void
 test_ndarray_intent_in_reuses_array(void **state)
 {
     (void)state;
@@ -957,6 +984,7 @@ run(PyObject *Py_UNUSED(self), PyObject *Py_UNUSED(args))
         cmocka_unit_test(test_module_object),
         cmocka_unit_test(test_module_setattr),
         cmocka_unit_test(test_module_allocatable),
+        cmocka_unit_test(test_module_delattr),
         cmocka_unit_test(test_ndarray_intent_in_reuses_array),
         cmocka_unit_test(test_ndarray_intent_in_copies),
         cmocka_unit_test(test_ndarray_intent_in_sequence),
