@@ -55,6 +55,20 @@ def get_include():
       * ``mymod-f2pywrappers.f`` (if it was generated in Step 1)
       * ``fortranobject.c``
 
+    Since NumPy 2.6, the ``numpy-config`` CLI tool and the ``numpy.pc``
+    pkg-config file also report this directory::
+
+        $ numpy-config --f2py-includedir
+        /path/to/site-packages/numpy/f2py/src
+
+        # Or rely on pkg-config:
+        $ export PKG_CONFIG_PATH=$(numpy-config --pkgconfigdir)
+        $ pkg-config --variable=f2py_includedir numpy
+
+    In Meson, ``dependency('numpy')`` returns it for either lookup method
+    through ``get_variable(pkgconfig: 'f2py_includedir',
+    configtool: 'f2py-includedir')``.
+
     See Also
     --------
     numpy.get_include : function that returns the numpy include directory

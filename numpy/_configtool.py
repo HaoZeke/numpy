@@ -25,6 +25,13 @@ def main() -> None:
         help=("Print the pkgconfig directory in which `numpy.pc` is stored "
               "(useful for setting $PKG_CONFIG_PATH)."),
     )
+    parser.add_argument(
+        "--f2py-includedir",
+        action="store_true",
+        help=("Print the directory containing `fortranobject.c` and "
+              "`fortranobject.h`, which extension modules built from "
+              "f2py-generated sources need."),
+    )
     args = parser.parse_args()
     if not sys.argv[1:]:
         parser.print_help()
@@ -33,6 +40,9 @@ def main() -> None:
     if args.pkgconfigdir:
         _path = Path(get_include()) / '..' / 'lib' / 'pkgconfig'
         print(_path.resolve())
+    if args.f2py_includedir:
+        from .f2py import get_include as get_f2py_include
+        print(get_f2py_include())
 
 
 if __name__ == "__main__":

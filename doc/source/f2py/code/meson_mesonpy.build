@@ -8,16 +8,17 @@ add_languages('fortran', native: false)
 
 py = import('python').find_installation(pure: false)
 
-# NumPy >=2.0 provides include dirs via dependency()
-np_dep = dependency('numpy')
+# NumPy >=2.0 provides include dirs via dependency(), and >=2.6 also reports
+# the directory holding fortranobject.{c,h}. The version constraint skips an
+# older numpy.pc on the default pkg-config path, e.g. from a system package.
+np_dep = dependency('numpy', version : '>=2.6')
 
-incdir_f2py = run_command(py,
-  ['-c', 'import numpy.f2py; print(numpy.f2py.get_include())'],
-  check : true
-).stdout().strip()
-
-# f2py include dir (for fortranobject.h) is not in dependency('numpy'),
+# The f2py include dir is not in the compile flags of dependency('numpy'),
 # so add it separately
+incdir_f2py = np_dep.get_variable(
+  pkgconfig : 'f2py_includedir',
+  configtool : 'f2py-includedir',
+)
 f2py_dep = declare_dependency(
   include_directories : incdir_f2py,
 )

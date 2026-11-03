@@ -40,6 +40,8 @@ Building an extension module which includes Python and Fortran consists of:
 
   + Distributed with ``numpy``
   + Can be queried via ``python -c "import numpy.f2py; print(numpy.f2py.get_include())"``
+  + Since NumPy 2.6, also via ``numpy-config --f2py-includedir`` or the
+    ``f2py_includedir`` variable of the ``numpy.pc`` pkg-config file
 
 - NumPy headers
 

@@ -1,5 +1,6 @@
 prefix=${pcfiledir}/../..
 includedir=${prefix}/include
+f2py_includedir=${prefix}/../f2py/src
 
 Name: numpy
 Description: NumPy is the fundamental package for scientific computing with Python.

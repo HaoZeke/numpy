@@ -62,9 +62,9 @@ Save the following as ``fib.f90``:
 Two entries matter here:
 
 * ``build-backend = "mesonpy"`` tells build frontends to use ``meson-python``.
-* ``requires`` lists build-time dependencies. ``numpy >= 2.0`` is required so
-  that ``f2py``, the NumPy headers, and ``dependency('numpy')`` support in Meson
-  are available during compilation.
+* ``requires`` lists build-time dependencies. ``numpy >= 2.6`` is required so
+  that ``f2py``, the NumPy headers, and ``dependency('numpy')`` support in Meson,
+  including the F2PY include directory, are available during compilation.
 
 ``meson.build``
 ---------------
@@ -79,14 +79,29 @@ Two entries matter here:
 
 The ``meson.build`` file does four things:
 
-1. Uses ``dependency('numpy')`` to locate NumPy headers, and a
-   ``declare_dependency`` to add the F2PY include directory (for
-   ``fortranobject.h``).
+1. Uses ``dependency('numpy')`` to locate the NumPy headers and the F2PY
+   include directory (for ``fortranobject.{c,h}``), and a
+   ``declare_dependency`` to add the latter to the include path. The version
+   constraint makes Meson skip an older ``numpy.pc``, such as one installed by
+   a Linux distribution's NumPy package, and fall back to ``numpy-config``.
 2. Runs ``f2py`` via ``custom_target`` to generate the C wrapper sources.
 3. Compiles the generated C code together with the Fortran source into a Python
    extension module using ``py.extension_module``.
 4. Installs ``__init__.py`` into the package directory so the result is a proper
    Python package.
+
+.. note::
+
+   NumPy versions before 2.6 do not provide the ``f2py_includedir`` variable.
+   To build against them, relax the version constraint and query the F2PY
+   include directory with Python instead:
+
+   .. code-block:: none
+
+      incdir_f2py = run_command(py,
+        ['-c', 'import numpy.f2py; print(numpy.f2py.get_include())'],
+        check : true
+      ).stdout().strip()
 
 The ``subdir: 'fib_wrapper'`` argument on the extension module is required so
 that the compiled ``fib`` shared library is installed inside the ``fib_wrapper/``

@@ -1,6 +1,7 @@
 [build-system]
-# numpy>=2.0 is required for dependency('numpy') support in meson.build
-requires = ["meson-python>=0.15.0", "numpy>=2.0"]
+# numpy>=2.6 is required for the f2py_includedir variable of
+# dependency('numpy') in meson.build
+requires = ["meson-python>=0.15.0", "numpy>=2.6"]
 build-backend = "mesonpy"
 
 [project]
