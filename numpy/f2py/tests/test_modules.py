@@ -53,6 +53,25 @@ class TestModuleDocString(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestModuleAttributes(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "modules", "module_data_docstring.f90")]
+
+    def test_attribute_dict(self):
+        mod = self.module.mod
+        # __doc__ is built on first access and cached in the object's dict
+        assert mod.__doc__ is mod.__doc__
+        mod.custom = 42
+        assert mod.custom == 42
+        del mod.custom
+        with pytest.raises(AttributeError):
+            mod.custom
+        with pytest.raises(AttributeError):
+            del mod.custom
+        with pytest.raises(AttributeError):
+            mod.no_such_attribute
+
+
+@pytest.mark.slow
 class TestModuleAndSubroutine(util.F2PyTest):
     module_name = "example"
     sources = [
