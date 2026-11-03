@@ -1255,6 +1255,14 @@ def _member_value(var, ref):
     return ref
 
 
+def _member_actual(var, name):
+    """Return the actual argument for a dummy declared like var, from the
+    wrapper argument ``name``."""
+    if _is_int_logical(var):
+        return f'{name} /= 0'
+    return name
+
+
 def _member_assign(var, ref, value):
     """Return the statement that stores a wrapper argument in a member."""
     if _is_int_logical(var):

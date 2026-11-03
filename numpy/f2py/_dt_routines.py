@@ -12,6 +12,8 @@ import os
 
 from ._dt_codegen import _gen_operator_fortran_wrappers, _scan_operator_interfaces
 from ._dt_helpers import (
+    _C_TO_PYFORMAT,
+    _C_TO_PYOBJ,
     _can_wrap_opaque,
     _coarray_as_local,
     _enumerate_specializations,
@@ -24,6 +26,7 @@ from ._dt_helpers import (
     _get_extends_parent,
     _get_fortran_type_spec,
     _get_len_param_info,
+    _get_member_ctype,
     _get_member_isoc_type,
     _get_pointer_ndim,
     _is_allocatable_member,
@@ -38,6 +41,7 @@ from ._dt_helpers import (
     _is_type_array_member,
     _is_type_member,
     _is_type_parameter,
+    _member_actual,
     _member_assign,
     _member_value,
     _resolve_type_for_kind,
@@ -188,6 +192,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
 
     lines.append('contains')
     lines.append('')
+    source_file = _source_file(module_block) if module_block else ''
 
     # Expand opaque types into specialization list:
     # [(func_name_base, type_spec, members, tb, len_info), ...]
@@ -287,6 +292,11 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
         init_lines, loop_depth = _initial_state(
             'obj', _all_components(orig_tb, type_map), type_map,
             skip=set(args))
+        # nor do procedure pointer components (F2018 7.5.4.6)
+        init_lines += [
+            f"nullify(obj%{pp['name']})"
+            for pp in _type_proc_pointers(source_file, orig_tb, type_map)
+            if not pp['init_null']]
         lines.append(
             f'  function f2py_create_{typename}({args_str}) '
             f'result(cptr) bind(c)')
@@ -1023,7 +1033,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
         source_file = _source_file(module_block)
         for tb in opaque_types:
             typename = tb['name']
-            proc_ptrs = _scan_proc_pointer_components(source_file, typename)
+            proc_ptrs = _type_proc_pointers(source_file, tb, type_map)
             if proc_ptrs:
                 pp_fortran = _gen_proc_pointer_fortran_wrappers(
                     typename, proc_ptrs, module_block.get('body', []))
@@ -1718,13 +1728,15 @@ def _scan_proc_pointer_components(source_file, typename):
         'name': component name (lowercased)
         'interface': interface name from PROCEDURE(interface)
         'nopass': True if NOPASS attribute present
+        'pass': the passed-object dummy named by PASS(arg), or None for
+            the first dummy
         'init_null': True if initialized with => null()
 
     Scans the component-part (before CONTAINS) for lines like:
         procedure(real_func), pointer, nopass :: func => null()
         procedure(sub_iface), pointer :: action
 
-    F2018 7.5.4.4 (R741): proc-component-def-stmt
+    F2018 7.5.4.1 (R741): proc-component-def-stmt
     """
     import re
     result = []
@@ -1736,6 +1748,7 @@ def _scan_proc_pointer_components(source_file, typename):
         r'(?:\s*=>\s*null\s*\(\s*\))?'            # optional => null()
         r'\s*$',
         re.I)
+    pass_pat = re.compile(r'^pass\s*\(\s*(\w+)\s*\)$', re.I)
 
     for part, stripped in _type_definition(source_file, typename):
         if part != 'components':
@@ -1748,264 +1761,166 @@ def _scan_proc_pointer_components(source_file, typename):
             attrs = [a.strip() for a in attrs_str.split(',')]
             if 'pointer' not in attrs:
                 continue  # must have POINTER attribute
-            nopass = 'nopass' in attrs
-            init_null = '=>' in stripped.lower() and 'null' in stripped.lower()
+            passed = None
+            for a in attrs:
+                pm = pass_pat.match(a)
+                if pm:
+                    passed = pm.group(1).lower()
             result.append({
                 'name': comp_name,
                 'interface': interface,
-                'nopass': nopass,
-                'init_null': init_null,
+                'nopass': 'nopass' in attrs,
+                'pass': passed,
+                'init_null': re.search(r'=>\s*null\s*\(', stripped,
+                                       re.I) is not None,
             })
 
     return result
 
 
-def _find_interface_block(module_body, interface_name):
-    """Find an abstract interface or interface block by name in the module.
+def _type_proc_pointers(source_file, tb, type_map):
+    """Return the procedure pointer components of a type, inherited ones
+    first, as _scan_proc_pointer_components describes them."""
+    parent = (_get_extends_parent(tb) or '').lower()
+    inherited = (_type_proc_pointers(source_file, type_map[parent], type_map)
+                 if parent in type_map else [])
+    own = _scan_proc_pointer_components(source_file, tb['name'])
+    names = {pp['name'] for pp in own}
+    return [pp for pp in inherited if pp['name'] not in names] + own
 
-    Searches for a function or subroutine named ``interface_name`` inside
-    interface or abstract interface blocks.  Returns the block dict
-    (with 'args', 'vars', 'block' keys) or None if not found.
+
+def _find_interface_block(module_body, interface_name):
+    """Find the interface a PROCEDURE(name) declaration refers to.
+
+    Searches the bodies of interface and abstract interface blocks, and
+    then the procedures of the module.  Returns the block dict (with
+    'args', 'vars', 'block' keys) or None if not found.
     """
+    name = interface_name.lower()
     for block in module_body:
         if block.get('block') in ('interface', 'abstract interface'):
             for sub in block.get('body', []):
-                if sub.get('name', '').lower() == interface_name.lower():
+                if sub.get('name', '').lower() == name:
                     return sub
+    for block in module_body:
+        if (block.get('block') in ('function', 'subroutine')
+                and block.get('name', '').lower() == name):
+            return block
     return None
+
+
+def _proc_pointer_call(pp, module_body):
+    """Describe how Python calls procedure pointer component pp.
+
+    Returns (args, result, problem): the dummies Python passes, each as
+    (name, var), the variable of the function result or None, and why
+    f2py cannot call the component, or None.  Python passes scalars
+    that are intent(in) or have no intent, of types with a C type; the
+    passed-object dummy (F2018 7.5.4.5) is the instance itself.
+    """
+    iface = _find_interface_block(module_body, pp['interface'])
+    if iface is None:
+        return [], None, f'its interface {pp["interface"]} is not found'
+    names = list(iface.get('args', []))
+    if not pp['nopass'] and names:
+        names.remove(pp['pass'] if pp['pass'] in names else names[0])
+    variables = iface.get('vars', {})
+    args = [(name, variables.get(name, {})) for name in names]
+    result = None
+    if iface.get('block') == 'function':
+        result = variables.get(iface.get('result', iface['name']), {})
+    for name, var in args + [('the result', result)] * (result is not None):
+        intent = var.get('intent', [])
+        if (isarray(var) or _get_member_isoc_type(var) is None
+                or _get_member_ctype(var) not in _C_TO_PYOBJ
+                or (name != 'the result' and set(intent) - {'in'})):
+            return [], None, f'f2py cannot pass {name}'
+    return args, result, None
 
 
 def _gen_proc_pointer_fortran_wrappers(typename, proc_ptrs, module_body):
     """Generate Fortran bind(c) wrappers for procedure pointer components.
 
     For each procedure pointer component, generates a wrapper like:
-        subroutine f2py_call_TYPE_COMP(self_ptr, arg1, ...) bind(c)
+        subroutine f2py_call_TYPE_COMP(self_ptr, f2py_ok, arg1, ...) bind(c)
             type(c_ptr), value :: self_ptr
+            integer(c_int), intent(out) :: f2py_ok
             type(TYPE), pointer :: self
             call c_f_pointer(self_ptr, self)
-            call self%comp(arg1, ...)     ! or result = self%comp(arg1, ...)
+            f2py_ok = merge(1, 0, associated(self%comp))
+            if (f2py_ok == 1) call self%comp(arg1, ...)
         end subroutine
+    where f2py_ok tells whether the component is associated, as calling a
+    disassociated procedure pointer is not allowed (F2018 15.5.1).
     """
     lines = []
-
     for pp in proc_ptrs:
-        iface = _find_interface_block(module_body, pp['interface'])
-        if iface is None:
-            outmess(f'  Skipping proc pointer {pp["name"]}: '
-                    f'interface {pp["interface"]} not found\n')
+        args, result, problem = _proc_pointer_call(pp, module_body)
+        if problem:
+            outmess(f'\t\tf2py does not wrap procedure pointer component '
+                    f'{pp["name"]} of {typename}, as {problem}\n')
             continue
-
-        is_func = iface.get('block') == 'function'
-        iface_args = iface.get('args', [])
-        iface_vars = iface.get('vars', {})
-        comp_name = pp['name']
-        wrapper_name = f'f2py_call_{typename}_{comp_name}'
-
-        # Build argument declarations
-        arg_decls = []
-        arg_names = []
-        call_args = []
-        for argname in iface_args:
-            var = iface_vars.get(argname, {})
-            typespec = var.get('typespec', 'real')
-            kind = var.get('kindselector', {}).get('kind', '')
-            intent = var.get('intent', ['in'])
-
-            # Map to iso_c_binding type
-            if typespec == 'integer':
-                ctype = 'integer(c_int)'
-                if kind in ('8', 'c_long_long', 'int64'):
-                    ctype = 'integer(c_long_long)'
-            elif typespec == 'real':
-                ctype = 'real(c_float)'
-                if kind in ('8', 'c_double', 'real64'):
-                    ctype = 'real(c_double)'
-            elif typespec == 'double precision':
-                ctype = 'real(c_double)'
-            else:
-                ctype = f'{typespec}'
-
-            intent_str = f'intent({",".join(intent)})' if intent else 'intent(in)'
-            arg_decls.append(
-                f'    {ctype}, {intent_str}, value :: {argname}')
-            arg_names.append(argname)
-            call_args.append(argname)
-
-        # Build the wrapper
-        all_args = ['self_ptr'] + arg_names
-        args_str = ', '.join(all_args)
-
-        if is_func:
-            # Function: need return value
-            result_var = iface.get('result', iface.get('name', comp_name))
-            result_type_var = iface_vars.get(result_var, {})
-            result_typespec = result_type_var.get('typespec', 'real')
-            result_kind = result_type_var.get(
-                'kindselector', {}).get('kind', '')
-            if result_typespec == 'real':
-                result_ctype = 'real(c_float)'
-                if result_kind in ('8', 'c_double', 'real64'):
-                    result_ctype = 'real(c_double)'
-            elif result_typespec == 'integer':
-                result_ctype = 'integer(c_int)'
-                if result_kind in ('8', 'c_long_long', 'int64'):
-                    result_ctype = 'integer(c_long_long)'
-            elif result_typespec == 'double precision':
-                result_ctype = 'real(c_double)'
-            else:
-                result_ctype = result_typespec
-
-            all_args_with_result = all_args + ['f2py_result']
-            args_str_with_result = ', '.join(all_args_with_result)
-            call_str = ', '.join(call_args) if call_args else ''
-
-            lines.append(
-                f'  subroutine {wrapper_name}'
-                f'({args_str_with_result}) bind(c)')
-            lines.append('    use iso_c_binding')
-            lines.append(f'    type(c_ptr), value :: self_ptr')
-            for decl in arg_decls:
-                lines.append(decl)
-            lines.append(
-                f'    {result_ctype}, intent(out) :: f2py_result')
-            lines.append(f'    type({typename}), pointer :: self')
-            lines.append(f'    call c_f_pointer(self_ptr, self)')
-            if pp['nopass']:
-                lines.append(
-                    f'    f2py_result = self%{comp_name}({call_str})')
-            else:
-                # PASS: first arg is self, already handled by the
-                # Fortran call (self%comp passes self implicitly)
-                lines.append(
-                    f'    f2py_result = self%{comp_name}({call_str})')
-            lines.append(f'  end subroutine {wrapper_name}')
-            lines.append('')
+        comp = pp['name']
+        dummies = ['self_ptr', 'f2py_ok'] + [name for name, _ in args]
+        decls = ['    type(c_ptr), value :: self_ptr',
+                 '    integer(c_int), intent(out) :: f2py_ok']
+        decls += [f'    {_get_member_isoc_type(var)}, value :: {name}'
+                  for name, var in args]
+        actual = ', '.join(_member_actual(var, name) for name, var in args)
+        if result is not None:
+            dummies.append('f2py_result')
+            decls.append(f'    {_get_member_isoc_type(result)}, '
+                         'intent(out) :: f2py_result')
+            call = (f'f2py_result = '
+                    f'{_member_value(result, f"self%{comp}({actual})")}')
         else:
-            # Subroutine
-            call_str = ', '.join(call_args) if call_args else ''
-            lines.append(
-                f'  subroutine {wrapper_name}({args_str}) bind(c)')
-            lines.append('    use iso_c_binding')
-            lines.append(f'    type(c_ptr), value :: self_ptr')
-            for decl in arg_decls:
-                lines.append(decl)
-            lines.append(f'    type({typename}), pointer :: self')
-            lines.append(f'    call c_f_pointer(self_ptr, self)')
-            if pp['nopass']:
-                lines.append(f'    call self%{comp_name}({call_str})')
-            else:
-                lines.append(f'    call self%{comp_name}({call_str})')
-            lines.append(f'  end subroutine {wrapper_name}')
-            lines.append('')
-
-    return '\n'.join(lines) if lines else ''
+            call = f'call self%{comp}({actual})'
+        lines += [f'  subroutine f2py_call_{typename}_{comp}'
+                  f'({", ".join(dummies)}) bind(c)',
+                  '    use iso_c_binding',
+                  *decls,
+                  f'    type({typename}), pointer :: self',
+                  '    call c_f_pointer(self_ptr, self)',
+                  '    f2py_ok = 0',
+                  f'    if (.not. associated(self%{comp})) return',
+                  '    f2py_ok = 1',
+                  f'    {call}',
+                  f'  end subroutine f2py_call_{typename}_{comp}',
+                  '']
+    return '\n'.join(lines)
 
 
 def _gen_proc_pointer_c_methods(typename, proc_ptrs, module_body):
     """Generate C method wrappers and PyMethodDef entries for proc ptrs."""
-    from ._dt_helpers import _get_member_ctype
-
     funcs = []
     method_entries = []
     capsule_name = f'f2py.{typename}'
-
     for pp in proc_ptrs:
-        iface = _find_interface_block(module_body, pp['interface'])
-        if iface is None:
+        args, result, problem = _proc_pointer_call(pp, module_body)
+        if problem:
             continue
-
-        is_func = iface.get('block') == 'function'
-        iface_args = iface.get('args', [])
-        iface_vars = iface.get('vars', {})
-        comp_name = pp['name']
-        wrapper_name = f'f2py_call_{typename}_{comp_name}'
-        method_name = f'Py{typename}_method_{comp_name}'
-
-        # Build extern declaration
-        extern_args = ['void *']  # self_ptr
-        for argname in iface_args:
-            var = iface_vars.get(argname, {})
-            ctype = _get_member_ctype(var)
-            if ctype is None:
-                ctype = 'double'  # fallback
-            extern_args.append(ctype)
-        if is_func:
-            result_var = iface.get('result', iface.get('name', comp_name))
-            result_type_var = iface_vars.get(result_var, {})
-            result_ctype = _get_member_ctype(result_type_var)
-            if result_ctype is None:
-                result_ctype = 'double'
-            extern_args.append(f'{result_ctype} *')
-
-        extern_str = ', '.join(extern_args)
-
-        # Build kwlist
-        kwlist_items = [f'"{a}"' for a in iface_args]
-        kwlist_str = ', '.join(kwlist_items + ['NULL'])
-
-        # Build format string and parse args
-        format_parts = []
-        parse_decls = []
-        call_args = ['ptr']
-        for argname in iface_args:
-            var = iface_vars.get(argname, {})
-            ctype = _get_member_ctype(var)
-            if ctype in ('float',):
-                format_parts.append('f')
-                parse_decls.append(f'    float {argname} = 0;')
-            elif ctype in ('double',):
-                format_parts.append('d')
-                parse_decls.append(f'    double {argname} = 0;')
-            elif ctype in ('int',):
-                format_parts.append('i')
-                parse_decls.append(f'    int {argname} = 0;')
-            elif ctype in ('long long',):
-                format_parts.append('L')
-                parse_decls.append(f'    long long {argname} = 0;')
-            else:
-                format_parts.append('d')
-                parse_decls.append(f'    double {argname} = 0;')
-            call_args.append(argname)
-
-        format_str = ''.join(format_parts)
-
-        if is_func:
-            result_var = iface.get('result', iface.get('name', comp_name))
-            result_type_var = iface_vars.get(result_var, {})
-            result_ctype = _get_member_ctype(result_type_var)
-            if result_ctype is None:
-                result_ctype = 'double'
-
-            funcs.append(f"""\
-extern void {wrapper_name}({extern_str});
-
-static PyObject *
-{method_name}(PyObject *selfobj, PyObject *args, PyObject *kwds)
-{{
-    Py{typename}Object *self = (Py{typename}Object *)selfobj;
-    if (self->capsule == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError,
-                        "{typename} object not initialized");
-        return NULL;
-    }}
-    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
-    if (ptr == NULL) return NULL;
-
-{chr(10).join(parse_decls)}
-
-    static char *kwlist[] = {{{kwlist_str}}};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "{format_str}", kwlist,
-                                     {', '.join('&' + a for a in iface_args)}))
-        return NULL;
-
-    {result_ctype} result;
-    {wrapper_name}({', '.join(call_args)}, &result);
-    return {'PyFloat_FromDouble((double)result)' if result_ctype in ('float', 'double') else 'PyLong_FromLongLong((long long)result)'};
-}}
-""")
+        comp = pp['name']
+        wrapper_name = f'f2py_call_{_fortran_sym(typename)}_{comp}'
+        ctypes = [_get_member_ctype(var) for _, var in args]
+        extern = ['void *', 'int *'] + ctypes
+        decls = [f'    {ctype} {name} = 0;'
+                 for (name, _), ctype in zip(args, ctypes)]
+        call = ['ptr', '&ok'] + [name for name, _ in args]
+        if result is not None:
+            rctype = _get_member_ctype(result)
+            extern.append(f'{rctype} *')
+            decls.append(f'    {rctype} result = 0;')
+            call.append('&result')
+            ret = 'return ' + _C_TO_PYOBJ[rctype].format(val='result') + ';'
         else:
-            funcs.append(f"""\
-extern void {wrapper_name}({extern_str});
+            ret = 'Py_RETURN_NONE;'
+        kwlist = ', '.join([f'"{name}"' for name, _ in args] + ['NULL'])
+        fmt = ''.join(_C_TO_PYFORMAT[ctype] for ctype in ctypes)
+        parsed = ''.join(f', &{name}' for name, _ in args)
+        method_name = f'Py{typename}_method_{comp}'
+        decl_str = '\n'.join(decls)
+        funcs.append(f"""\
+extern void {wrapper_name}({', '.join(extern)});
 
 static PyObject *
 {method_name}(PyObject *selfobj, PyObject *args, PyObject *kwds)
@@ -2018,24 +1933,25 @@ static PyObject *
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
-
-{chr(10).join(parse_decls)}
-
-    static char *kwlist[] = {{{kwlist_str}}};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "{format_str}", kwlist,
-                                     {', '.join('&' + a for a in iface_args)}))
+    int ok = 0;
+{decl_str}
+    static char *kwlist[] = {{{kwlist}}};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "{fmt}", kwlist{parsed}))
         return NULL;
-
-    {wrapper_name}({', '.join(call_args)});
-    Py_RETURN_NONE;
+    {wrapper_name}({', '.join(call)});
+    if (!ok) {{
+        PyErr_SetString(PyExc_TypeError,
+                        "procedure pointer component {comp} of "
+                        "{typename} is not associated");
+        return NULL;
+    }}
+    {ret}
 }}
 """)
-
         method_entries.append(
-            f'    {{"{comp_name}", (PyCFunction){method_name}, '
+            f'    {{"{comp}", (PyCFunction){method_name}, '
             f'METH_VARARGS | METH_KEYWORDS, '
-            f'"Procedure pointer component {comp_name}"}}')
-
+            f'"Procedure pointer component {comp}"}}')
     return funcs, method_entries
 
 

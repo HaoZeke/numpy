@@ -2337,6 +2337,38 @@ class TestPrivateModule(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestProcPointerComponents(util.F2PyTest):
+    """Procedure pointer components are methods (F2018 7.5.4.1)."""
+    sources = [util.getpath("tests", "src", "derived_types", name)
+               for name in ("proc_pointer_comp.f90", "proc_pointer_pass.f90")]
+
+    def test_nopass(self):
+        o = self.module.with_proc_ptr(id=1)
+        assert self.module.apply_func(o, 3.0) == 0
+        with pytest.raises(TypeError, match="not associated"):
+            o.func(3.0)
+        self.module.set_func_square(o)
+        assert o.func(3.0) == 9
+        self.module.set_func_double(o)
+        assert o.func(x=3.0) == 6
+
+    def test_pass(self):
+        c = self.module.counter()
+        with pytest.raises(TypeError, match="not associated"):
+            c.step(1)
+        self.module.arm(c)
+        c.step(2)
+        assert c.n == 2
+        assert (c.check(True, 1.0), c.check(False, 1.0)) == (1, 0)
+
+    def test_inherited(self):
+        d = self.module.named_counter(id=7)
+        self.module.arm(d)
+        d.step(3)
+        assert (d.id, d.n) == (7, 3)
+
+
+@pytest.mark.slow
 class TestDefinedIO(util.F2PyTest):
     """write(formatted) is __str__ and read(formatted) is from_string
     (F2018 12.6.4.8)."""
