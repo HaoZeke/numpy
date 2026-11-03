@@ -151,6 +151,13 @@ dump_attrs(const PyArrayObject *arr);
 
 extern PyObject *f2py_describe_obj(PyObject *obj);
 
+/* Runs pending Python signal handlers on behalf of long-running compiled
+   code, which can call it from Fortran through a bind(c) interface.
+   Returns nonzero while a Python exception is pending; the routine should
+   then return, and its wrapper raises the exception. */
+extern int
+f2py_check_signals(void);
+
   /* Utility CPP macros and functions that can be used in signature file
      expressions. See signature-file.rst for documentation.
   */
