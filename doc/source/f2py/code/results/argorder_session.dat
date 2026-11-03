@@ -1,0 +1,53 @@
+>>> import numpy as np
+>>> import argorder
+>>> print(argorder.tally.__doc__)
+m,total = tally(a,limit,[n])
+
+Wrapper for ``tally``.
+
+Parameters
+----------
+a : input rank-1 array('d') with bounds (n)
+limit : input float
+
+Other Parameters
+----------------
+n : input int, optional
+    Default: shape(a, 0)
+
+Returns
+-------
+m : int
+total : float
+
+>>> a = np.array([4.0, 1.0, 5.0, 2.0])
+>>> argorder.tally(a, 3.0)
+(2, 9.0)
+>>> m, total = argorder.tally(a, 3.0, 4)
+>>> print(m, total)
+2 9.0
+>>> argorder.tally(n=4, limit=3.0, a=a)
+(2, 9.0)
+>>> argorder.tally(4, a, 3.0)
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+argorder.error: (shape(a, 0) == n) failed for 1st keyword n: tally:n=3
+>>> print(argorder.tally2.__doc__)
+m,total = tally2(n,a,limit)
+
+Wrapper for ``tally2``.
+
+Parameters
+----------
+n : input int, optional
+    Default: shape(a, 0)
+a : input rank-1 array('d') with bounds (n)
+limit : input float
+
+Returns
+-------
+m : int
+total : float
+
+>>> argorder.tally2(4, a, 3.0)
+(2, 9.0)

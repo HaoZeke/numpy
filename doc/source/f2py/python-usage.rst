@@ -37,6 +37,71 @@ individual objects of the wrapped Fortran code.
   :language: python
 
 
+.. _f2py-argument-order:
+
+Argument order and return values
+================================
+
+F2PY derives the Python signature of a wrapper function from the Fortran
+argument list, but the two are often not the same:
+
+* Arguments with ``intent(hide)`` are left out. This includes ``intent(out)``
+  arguments that do not also have ``intent(in)`` or ``intent(inout)``.
+* Required arguments come first, followed by optional arguments. Within each
+  group, the arguments keep their order from the Fortran argument list.
+* Arguments that F2PY adds come last: ``overwrite_<name>`` for
+  ``intent(copy)`` and ``intent(overwrite)`` arguments, and
+  ``<name>_extra_args`` for call-back arguments.
+* The result of a Fortran function is returned first, followed by all
+  ``intent(out)`` arguments in their Fortran order. A single value is
+  returned as is, several values are returned as a :class:`tuple`, and
+  ``None`` is returned when there is nothing to return.
+
+An argument is optional when it has the ``optional`` attribute or an
+initialization expression (see :ref:`f2py-attributes`). F2PY also makes an
+argument optional by itself when it is a dimension of an input array, such as
+``n`` in ``real*8 a(n)``. The default value of such a size argument is computed
+from the shape of the array, and F2PY checks that an explicitly passed value
+matches the array. As a result, size arguments move behind all required
+arguments, even when they come before the array in Fortran. A size argument of
+an ``intent(out)`` array stays required, because F2PY needs its value to
+allocate the array.
+
+The ``__doc__`` attribute of a wrapper shows its Python signature, with
+optional arguments in square brackets. Any argument can also be passed by
+keyword, using the name shown there.
+
+Consider the following Fortran 77 code:
+
+.. literalinclude:: ./code/argorder.f
+  :language: fortran
+
+and wrap it using ``f2py -c -m argorder argorder.f``.
+
+In Python:
+
+.. literalinclude:: ./code/results/argorder_session.dat
+  :language: python
+
+In ``tally``, the size argument ``n`` comes first in Fortran, but in Python it
+is optional and follows the required arguments ``a`` and ``limit``. The two
+``intent(out)`` arguments ``m`` and ``total`` are returned as a tuple.
+
+Calling ``tally(4, a, 3.0)`` with the arguments in their Fortran order passes
+``4`` as the array ``a``, the array as ``limit`` (a scalar argument takes the
+first element of a sequence), and ``3.0`` as ``n``. The check that F2PY
+generated for ``n`` catches this mistake here, but it cannot catch every such
+mistake: when the values happen to satisfy the check, the Fortran routine is
+called with the wrong arguments. Use the order shown by ``__doc__``, or pass
+the arguments by keyword.
+
+To keep a size argument in its Fortran position, give it the ``required``
+attribute, as the ``Cf2py required n`` directive does in ``tally2``. F2PY still
+checks the value against the shape of the array, and still uses the default
+value when ``None`` is passed, which is why ``__doc__`` lists it. To remove a
+size argument from the Python signature instead, use ``intent(hide)``.
+
+
 Scalar arguments
 =================
 

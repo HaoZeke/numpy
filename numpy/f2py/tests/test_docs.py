@@ -64,3 +64,27 @@ class TestDocAdvanced(util.F2PyTest):
         ftype.data.a = 0
 
     # TODO: implement test methods for other example Fortran codes
+
+
+@pytest.mark.slow
+class TestDocArgOrder(util.F2PyTest):
+    sources = [_path('argorder.f')]
+
+    def test_size_argument_follows_required(self):
+        tally = self.module.tally
+        assert tally.__doc__.startswith('m,total = tally(a,limit,[n])\n')
+        a = np.array([4.0, 1.0, 5.0, 2.0])
+        assert tally(a, 3.0) == (2, 9.0)
+        assert tally(a, 3.0, 4) == (2, 9.0)
+        assert tally(n=4, limit=3.0, a=a) == (2, 9.0)
+        with pytest.raises(Exception, match=r'\(shape\(a, 0\) == n\) failed'):
+            tally(4, a, 3.0)
+
+    def test_required_size_argument(self):
+        tally2 = self.module.tally2
+        assert tally2.__doc__.startswith('m,total = tally2(n,a,limit)\n')
+        a = np.array([4.0, 1.0, 5.0, 2.0])
+        assert tally2(4, a, 3.0) == (2, 9.0)
+        assert tally2(None, a, 3.0) == (2, 9.0)
+        with pytest.raises(Exception, match=r'\(shape\(a, 0\) == n\) failed'):
+            tally2(3, a, 3.0)

@@ -94,6 +94,9 @@ function that has the following signature::
        ...
        return <return variables>
 
+See :ref:`f2py-argument-order` for how the Fortran arguments are distributed
+over these lists.
+
 The signature of a Fortran block data has the following structure::
 
   block data [ <block data name> ]
@@ -338,9 +341,10 @@ Attributes
 The following attributes can be used by F2PY.
 
 ``optional``
-  The corresponding argument is moved to the end of ``<optional arguments>``
-  list. A default value for an optional argument can be specified via
-  ``<init_expr>`` (see the ``entitydecl`` :ref:`definition <type-declarations>`)
+  The corresponding argument is moved to the ``<optional arguments>`` list
+  (see :ref:`f2py-argument-order`). A default value for an optional argument
+  can be specified via ``<init_expr>`` (see the ``entitydecl``
+  :ref:`definition <type-declarations>`)
 
   .. note::
 
@@ -352,7 +356,9 @@ The following attributes can be used by F2PY.
 ``required``
   The corresponding argument with this attribute is considered mandatory. This
   is the default. ``required`` should only be specified if there is a need to
-  disable the automatic ``optional`` setting when ``<init_expr>`` is used.
+  disable the automatic ``optional`` setting when ``<init_expr>`` is used, or
+  when the argument is a dimension of an input array (see
+  :ref:`f2py-argument-order`).
 
   If a Python ``None`` object is used as a required argument, the argument is
   treated as optional. That is, in the case of array arguments, the memory is
