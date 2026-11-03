@@ -697,7 +697,7 @@ rout_rules = [
                         '    {\"#name#\",-1,{{-1}},0,0,(char *)#fortranname#,(f2py_init_func)#apiname#,doc_#apiname#},'
                         },
         'decl': ['    #ctype# #name#_return_value = NULL;',
-                 '    int #name#_return_value_len = 0;'],
+                 '    npy_intp #name#_return_value_len = 0;'],
         'callfortran': '#name#_return_value,#name#_return_value_len,',
         'callfortranroutine': ['    #name#_return_value_len = #rlength#;',
                                '    if ((#name#_return_value = (string)malloc(#name#_return_value_len+1) == NULL) {',
@@ -789,7 +789,7 @@ aux_rules = [
     # String
     {  # Common
         'decl': ['    #ctype# #varname# = NULL;',
-                 '    int slen(#varname#);',
+                 '    npy_intp slen(#varname#);',
                  ],
         'need': ['len..'],
         '_check': isstring
@@ -1080,7 +1080,7 @@ if (#varname#_cb.capi==Py_None) {
     # String
     {  # Common
         'decl': ['    #ctype# #varname# = NULL;',
-                 '    int slen(#varname#);',
+                 '    npy_intp slen(#varname#);',
                  '    PyObject *#varname#_capi = Py_None;'],
         'callfortran': '#varname#,',
         'callfortranappend': 'slen(#varname#),',
@@ -1145,7 +1145,7 @@ if (#varname#_cb.capi==Py_None) {
                  '    const int #varname#_Rank = #rank#;',
                  '    PyArrayObject *capi_#varname#_as_array = NULL;',
                  '    int capi_#varname#_intent = 0;',
-                 {isstringarray: '    int slen(#varname#) = 0;'},
+                 {isstringarray: '    npy_intp slen(#varname#) = 0;'},
                  ],
         'callfortran': '#varname#,',
         'callfortranappend': {isstringarray: 'slen(#varname#),'},
