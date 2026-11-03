@@ -89,6 +89,20 @@ class TestAllocatableCharacterArray(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestCPointerWithoutData(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "gh19573", "alloc_only.f90")
+    ]
+
+    def test_gh19573(self):
+        # an unallocated array has no C pointer to wrap in a capsule
+        mod = self.module.alloc_only
+        assert not hasattr(mod, "_cpointer")
+        mod.a = [1.0, 2.0, 3.0]
+        assert type(mod._cpointer).__name__ == "PyCapsule"
+
+
+@pytest.mark.slow
 class TestUsedModule(util.F2PyTest):
     module_name = "fmath"
     sources = [

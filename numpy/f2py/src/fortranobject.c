@@ -383,9 +383,12 @@ fortran_getattr(PyFortranObject *fp, char *name)
         }
         return s;
     }
-    if ((strcmp(name, "_cpointer") == 0) && (fp->len == 1)) {
-        PyObject *cobj =
-                F2PyCapsule_FromVoidPtr((void *)(fp->defs[0].data), NULL);
+    if ((strcmp(name, "_cpointer") == 0) && (fp->len == 1) &&
+        (fp->defs[0].data != NULL)) {
+        PyObject *cobj = PyCapsule_New((void *)(fp->defs[0].data), NULL, NULL);
+        if (cobj == NULL) {
+            return NULL;
+        }
         if (PyDict_SetItemString(fp->dict, name, cobj)) {
             Py_DECREF(cobj);
             return NULL;
