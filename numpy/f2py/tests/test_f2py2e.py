@@ -715,6 +715,65 @@ def test_cli_obj(capfd, hello_world_f90, monkeypatch):
             assert f"'''{obj}'''" in mbld
 
 
+def test_meson_machine_files(hello_world_f90, monkeypatch, tmp_path):
+    """Check that cross and native files are passed on to meson setup
+    gh-28352
+
+    CLI :: --cross-file --native-file
+    """
+    ipath = Path(hello_world_f90)
+    commands = []
+    monkeypatch.setattr(MesonBackend, "_run_subprocess_command",
+                        lambda self, command, cwd: commands.append(command))
+    monkeypatch.setattr(
+        sys, "argv",
+        f"f2py -m blah {ipath} -c --build-dir bld --cross-file cross.ini "
+        "--cross-file=not-a-path.ini --native-file native.ini".split(),
+    )
+
+    with util.switchdir(tmp_path):
+        Path("cross.ini").touch()
+        Path("native.ini").touch()
+        f2pycli()
+
+    setup_command = commands[0]
+    assert setup_command[:2] == ["meson", "setup"]
+    assert setup_command[2:-1] == [
+        "--cross-file", str(tmp_path / "cross.ini"),
+        "--cross-file", "not-a-path.ini",
+        "--native-file", str(tmp_path / "native.ini"),
+    ]
+
+
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
+def test_meson_cross_file_build(capfd, retreal_f77, monkeypatch, tmp_path):
+    """Check that a module builds when meson is given a cross file
+    gh-28352
+
+    CLI :: --cross-file
+    """
+    ipath = Path(retreal_f77)
+    monkeypatch.setattr(
+        sys, "argv",
+        f"f2py -m blah {ipath} -c --build-dir bld --cross-file cross.ini".split(),
+    )
+
+    with util.switchdir(tmp_path):
+        # Without a [host_machine] section meson takes the host to be the
+        # build machine, so the cross-built module can be imported here.
+        Path("cross.ini").write_text("[properties]\n")
+        compiler_check_f2pycli()
+        out, _ = capfd.readouterr()
+        assert "Build type: cross build" in out
+        rout = subprocess.run(
+            [sys.executable, "-c", "import blah; print(blah.td(2.5))"],
+            capture_output=True, encoding='UTF-8',
+        )
+    assert rout.stdout == '2.5\n'
+    assert rout.returncode == 0
+
+
 def test_inclpath(monkeypatch):
     """Add to the include directories
 
