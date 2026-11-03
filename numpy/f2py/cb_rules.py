@@ -436,7 +436,7 @@ cb_arg_rules = [
             goto capi_fail;"""},
                       {isintent_inout: """\
     if (cb->nofargs>capi_i) {
-        int #varname_i#_cb_dims[] = {#varname_i#_cb_len};
+        npy_intp #varname_i#_cb_dims[] = {#varname_i#_cb_len};
         if (CAPI_ARGLIST_SETITEM(capi_i++,pyarr_from_p_#ctype#1(#varname_i#,#varname_i#_cb_dims)))
             goto capi_fail;
     }"""}],

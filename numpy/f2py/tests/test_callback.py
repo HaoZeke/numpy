@@ -249,6 +249,25 @@ class TestGH25211(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestGH18767(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh18767.f90"),
+               util.getpath("tests", "src", "callback", "gh18767.pyf")]
+    module_name = "gh18767_callback"
+
+    def test_inout_string_callback(self):
+        seen = []
+
+        def cb(t):
+            seen.append((t.dtype, t.shape))
+            t[:] = np.frombuffer(b"HELLO", dtype="S1")
+
+        s = np.array(b"hello", dtype="S5")
+        self.module.call_cb(cb, s)
+        assert seen == [(np.dtype("S1"), (5,))]
+        assert s.item() == b"HELLO"
+
+
+@pytest.mark.slow
 @pytest.mark.xfail(condition=(platform.system().lower() == 'darwin'),
                    run=False,
                    reason="Callback aborts cause CI failures on macOS")
