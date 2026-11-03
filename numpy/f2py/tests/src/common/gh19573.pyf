@@ -1,0 +1,14 @@
+python module _gh19573_common
+    interface
+        subroutine setn(m)
+            integer intent(in) :: m
+            integer intent(hide) :: n
+            common /blk/ n
+        end subroutine setn
+        subroutine getn(m)
+            integer intent(out) :: m
+            integer intent(hide) :: n
+            common /blk/ n
+        end subroutine getn
+    end interface
+end python module _gh19573_common
