@@ -161,15 +161,10 @@ def buildhooks(pymod):
             continue
         # skip modules with unwrappable derived types
         if m['name'] in usenames and containsderivedtypes(m):
-            type_blocks = [b for b in m.get('body', [])
-                           if b.get('block') == 'type']
-            for tb in type_blocks:
-                tb['parent_block'] = m
+            type_map = derived_type_rules._module_types(m)[0]
             has_unwrappable = any(
-                not (derived_type_rules._can_wrap_bindc(tb)
-                     or derived_type_rules._can_wrap_opaque(tb))
-                for tb in type_blocks
-            )
+                tb['name'].lower() not in type_map
+                for tb in derived_type_rules._find_derived_types(m))
             if has_unwrappable:
                 outmess(f"\t\t\tSkipping {m['name']} since it is in 'use'"
                         f" and contains an unwrappable derived type...\n")
@@ -256,8 +251,9 @@ def buildhooks(pymod):
             for b in m['body']:
                 b_name = b['name']
                 if not isroutine(b):
-                    outmess("f90mod_rules.buildhooks:"
-                            f" skipping {b['block']} {b_name}\n")
+                    if b['block'] != 'type' or b_name.lower() not in dt_types:
+                        outmess("f90mod_rules.buildhooks:"
+                                f" skipping {b['block']} {b_name}\n")
                     continue
                 if b_name.lower() in finals:
                     outmess("f90mod_rules.buildhooks:"

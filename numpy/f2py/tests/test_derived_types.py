@@ -2385,6 +2385,56 @@ class TestInitialState(util.F2PyTest):
         assert linked == 0
 
 
+def test_member_ctypes():
+    from numpy.f2py._dt_helpers import _eval_kind_expr, _get_member_ctype
+    # a kind without a C type is not the default kind
+    assert _get_member_ctype(
+        {'typespec': 'real', 'kindselector': {'kind': '16'}}) is None
+    assert _get_member_ctype(
+        {'typespec': 'integer', 'kindselector': {'kind': 'dp'}}) is None
+    # complex*16 has parts of kind 8
+    assert _get_member_ctype(
+        {'typespec': 'complex', 'kindselector': {'*': '16'}}) == 'npy_cdouble'
+    assert _get_member_ctype(
+        {'typespec': 'integer', 'kindselector': {'kind': '2'}}) == 'short'
+    # these depend on the C processor (F2018 18.2.2)
+    assert _eval_kind_expr('c_long') is None
+    assert _eval_kind_expr('c_long_double') is None
+
+
+@pytest.mark.slow
+class TestHiddenComponents(util.F2PyTest):
+    """A component f2py cannot expose is hidden, and the routines that
+    take its type are still wrapped."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "hidden_components.f90")]
+
+    def test_linked_list(self):
+        head = self.module.node(value=0)
+        assert not hasattr(head, "next")
+        assert self.module.length(head) == 0
+        self.module.push(head, 5)
+        self.module.push(head, 7)
+        assert self.module.length(head) == 2
+
+    def test_hidden(self):
+        h = self.module.holder()
+        for name in ("tiny", "codes", "nodes", "grid"):
+            assert not hasattr(h, name)
+        self.module.fill(h, 3)
+        assert self.module.census(h) == 3 + 3 + 4 * 3 + 100
+
+    def test_exposed(self):
+        h = self.module.holder(flag=True, small=-2, z=1 + 2j)
+        assert (h.flag, h.small, h.z) == (1, -2, 1 + 2j)
+        h.flag = False
+        h.flags = [1, 0, 1]
+        assert h.flag == 0
+        assert h.flags.tolist() == [1, 0, 1]
+        self.module.fill(h, 1)
+        assert self.module.census(h) == 1 + 1 + 4 + 100
+
+
 class TestDefaultInitCodeGen:
     """Test that component defaults are applied in constructors (F2018 R739)."""
 

@@ -17,8 +17,9 @@ from .auxfuncs import (
     isallocatable,
     isarray,
     isbindctype,
+    outmess,
 )
-from .crackfortran import _fortran_eval
+from .crackfortran import _ISO_FORTRAN_ENV_VARS, _fortran_eval
 
 # Map Fortran typespec (+ optional kind) to C types for struct members
 _FORTRAN_TO_C = {
@@ -29,12 +30,15 @@ _FORTRAN_TO_C = {
     ('real', 'c_double'): 'double',
     ('double precision', None): 'double',
     ('integer', None): 'int',
+    ('integer', '2'): 'short',
     ('integer', '4'): 'int',
     ('integer', '8'): 'long long',
+    ('integer', 'c_short'): 'short',
     ('integer', 'c_int'): 'int',
     ('integer', 'c_long'): 'long',
     ('integer', 'c_long_long'): 'long long',
     ('logical', None): 'int',
+    ('logical', '4'): 'int',
     ('logical', 'c_bool'): 'unsigned char',
     ('complex', None): 'npy_cfloat',
     ('complex', '4'): 'npy_cfloat',
@@ -48,6 +52,7 @@ _FORTRAN_TO_C = {
 _C_TO_PYFORMAT = {
     'float': 'f',
     'double': 'd',
+    'short': 'h',
     'int': 'i',
     'long': 'l',
     'long long': 'L',
@@ -60,6 +65,7 @@ _C_TO_PYFORMAT = {
 _C_TO_PYOBJ = {
     'float': 'PyFloat_FromDouble((double){val})',
     'double': 'PyFloat_FromDouble({val})',
+    'short': 'PyLong_FromLong((long){val})',
     'int': 'PyLong_FromLong((long){val})',
     'long': 'PyLong_FromLong({val})',
     'long long': 'PyLong_FromLongLong({val})',
@@ -70,6 +76,7 @@ _C_TO_PYOBJ = {
 _PYOBJ_TO_C = {
     'float': '(float)PyFloat_AsDouble({obj})',
     'double': 'PyFloat_AsDouble({obj})',
+    'short': '(short)PyLong_AsLong({obj})',
     'int': '(int)PyLong_AsLong({obj})',
     'long': 'PyLong_AsLong({obj})',
     'long long': 'PyLong_AsLongLong({obj})',
@@ -81,6 +88,7 @@ _PYOBJ_TO_C = {
 _C_TO_NPY_ENUM = {
     'float': 'NPY_FLOAT',
     'double': 'NPY_DOUBLE',
+    'short': 'NPY_SHORT',
     'int': 'NPY_INT',
     'long': 'NPY_LONG',
     'long long': 'NPY_LONGLONG',
@@ -147,18 +155,14 @@ def _eval_kind_expr(expr):
     except (ValueError, TypeError):
         pass
 
-    # iso_fortran_env named constants
-    _iso_fortran_kinds = {
-        'real32': 4, 'real64': 8, 'real128': 16,
-        'int8': 1, 'int16': 2, 'int32': 4, 'int64': 8,
-    }
-    if expr in _iso_fortran_kinds:
-        return _iso_fortran_kinds[expr]
+    if expr in _ISO_FORTRAN_ENV_VARS:
+        return int(_ISO_FORTRAN_ENV_VARS[expr]['='])
 
-    # iso_c_binding named constants
+    # iso_c_binding kinds whose C types are IEEE 754 binary32 and binary64
+    # or have the same width on every target of gfortran and LLVM flang;
+    # others, such as c_long and c_long_double, depend on the target
     _iso_c_kinds = {
-        'c_float': 4, 'c_double': 8, 'c_long_double': 16,
-        'c_int': 4, 'c_long': 8, 'c_long_long': 8,
+        'c_float': 4, 'c_double': 8, 'c_int': 4, 'c_long_long': 8,
         'c_float_complex': 4, 'c_double_complex': 8,
     }
     if expr in _iso_c_kinds:
@@ -524,26 +528,37 @@ def _get_fortran_type_spec(typeblock, kind_override=None):
     return typename
 
 
+def _member_kind(var):
+    """Return the kind of a member as a lower case string, or None."""
+    ks = var.get('kindselector', {})
+    if ks.get('kind'):
+        return str(ks['kind']).strip().lower()
+    star = str(ks.get('*', '')).strip()
+    if not star:
+        return None
+    # TYPE*N gives the storage size, which for COMPLEX is twice the kind
+    # (gfortran and LLVM flang kinds are byte sizes)
+    if var.get('typespec', '').lower() == 'complex' and star.isdigit():
+        return str(int(star) // 2)
+    return star.lower()
+
+
 def _get_member_ctype(var):
-    """Get C type string for a type member variable."""
+    """Get the C type of a type member variable, or None if it has none.
+
+    A kind that does not map to a C type gives None rather than the type of
+    the default kind, which would change the values of the member.
+    """
     typespec = var.get('typespec', '').lower()
-    kind = None
-    if 'kindselector' in var:
-        ks = var['kindselector']
-        kind = ks.get('kind') or ks.get('*')
-        if kind:
-            kind = str(kind).lower()
+    kind = _member_kind(var)
     result = _FORTRAN_TO_C.get((typespec, kind))
-    if result is not None:
+    if result is not None or kind is None:
         return result
     # Try resolving kind expressions (e.g. kind(0.0d0) -> '8')
-    if kind is not None:
-        resolved = _eval_kind_expr(kind)
-        if resolved is not None:
-            result = _FORTRAN_TO_C.get((typespec, str(resolved)))
-            if result is not None:
-                return result
-    return _FORTRAN_TO_C.get((typespec, None))
+    resolved = _eval_kind_expr(kind)
+    if resolved is None:
+        return None
+    return _FORTRAN_TO_C.get((typespec, str(resolved)))
 
 
 def _get_array_dims(var):
@@ -684,18 +699,7 @@ def _module_types(module):
     extensions.
     """
     type_blocks = _find_derived_types(module)
-    type_map = {}
-    remaining = list(type_blocks)
-    progress = True
-    while remaining and progress:
-        progress = False
-        for tb in list(remaining):
-            if (_can_wrap_bindc(tb, type_map)
-                    or _can_wrap_opaque(tb, type_map)
-                    or _can_wrap_abstract(tb, type_map)):
-                type_map[tb['name'].lower()] = tb
-                remaining.remove(tb)
-                progress = True
+    type_map = _wrap_types(type_blocks)
     generated = set()
     gen_order = []
     for tb in type_blocks:
@@ -981,13 +985,113 @@ def _is_type_array_member(var):
             and is_fixed_array(var))
 
 
+def _member_problem(var, len_param_names=()):
+    """Return why f2py cannot expose a component to Python, or None.
+
+    Whether f2py wraps the type of a component of derived type is up to
+    the caller.
+    """
+    if _is_coarray_member(var):
+        var = _coarray_as_local(var)  # F2018 7.5.4.3: local data
+    typespec = var.get('typespec', '').lower()
+    attrs = var.get('attrspec', [])
+    dims = var.get('dimension', [])
+    if typespec == 'type':
+        if 'pointer' in attrs or 'allocatable' in attrs:
+            return 'it is a pointer or allocatable of derived type'
+        if dims and not is_fixed_array(var):
+            return 'it is an array of derived type without a constant shape'
+        if len(dims) > 1:
+            return f'it is an array of derived type of rank {len(dims)}'
+        return None
+    if typespec == 'character':
+        if _is_deferred_char_member(var) or (_is_char_member(var)
+                                             and not dims):
+            return None
+        return 'it is a character array or has no constant length'
+    if typespec not in _SIMPLE_SCALAR_TYPESPECS:
+        return f'f2py has no Python type for {typespec} components'
+    if _get_member_ctype(var) is None:
+        return f'f2py has no C type for {typespec}({_member_kind(var)})'
+    if _is_allocatable_member(var) or _is_pointer_member(var):
+        return None
+    if 'pointer' in attrs or 'allocatable' in attrs:
+        return 'it is a pointer or allocatable scalar'
+    if dims and not (is_fixed_array(var)
+                     or _is_len_sized_array(var, len_param_names)):
+        return 'its shape is not constant'
+    return None
+
+
+def _settle_members(typeblock, checked, type_map, settle):
+    """Hide the components of ``typeblock`` that f2py cannot expose.
+
+    ``checked`` is the type block with its KIND parameters resolved.  A
+    component of a derived type that is not wrapped yet makes this return
+    False, unless ``settle`` is true, which hides such components too.
+    Hidden components get no accessors and are left out of
+    get_type_members; as for PRIVATE components, the type stays wrapped
+    and routines still take its objects.
+    """
+    hidden = typeblock.setdefault('f2py_hidden', {})
+    len_param_names = {li['name'] for li in _get_len_param_info(checked)}
+    waiting = False
+    for name, var in checked.get('vars', {}).items():
+        if (name in hidden or _is_type_parameter(var)
+                or _is_private_member(var)):
+            continue
+        problem = _member_problem(var, len_param_names)
+        if problem is None and var.get('typespec') == 'type':
+            inner = var.get('typename', '').lower()
+            if inner not in (type_map or {}):
+                if not settle:
+                    waiting = True
+                    continue
+                problem = f'f2py does not wrap its type {inner}'
+        if problem:
+            hidden[name] = problem
+            outmess(f'\t\tf2py does not expose component {name} of type '
+                    f'{typeblock["name"]}, as {problem}\n')
+    return not waiting
+
+
+def _wrap_types(type_blocks):
+    """Return the type blocks f2py wraps, by lower case name.
+
+    A type waits until the types of its components are wrapped.  When all
+    remaining types wait, the first one that can be wrapped with those
+    components hidden is wrapped so, and the rest wait again.  As the
+    type of a component that is neither a pointer nor allocatable must be
+    defined before it (F2018 7.5.4.1), and other components of derived
+    type are hidden anyway, this hides only components whose types f2py
+    cannot wrap.
+    """
+    type_map = {}
+    remaining = list(type_blocks)
+    while remaining:
+        for settle in (False, True):
+            tb = next((tb for tb in remaining
+                       if _can_wrap_bindc(tb, type_map)
+                       or _can_wrap_opaque(tb, type_map, settle)
+                       or _can_wrap_abstract(tb, type_map, settle)), None)
+            if tb is not None:
+                break
+        else:
+            break
+        type_map[tb['name'].lower()] = tb
+        remaining.remove(tb)
+    return type_map
+
+
 def _can_wrap_bindc(typeblock, type_map=None):
     """Check if a bind(c) type can be wrapped as a direct C struct.
 
     type_map is a dict of already-known wrappable types, used to
-    validate nested type members.
+    validate nested type members.  A C struct needs every component, so
+    a type with a component f2py cannot expose is wrapped as an opaque
+    pointer instead.
     """
-    if not isbindctype(typeblock):
+    if not isbindctype(typeblock) or typeblock.get('f2py_hidden'):
         return False
     if _has_len_params(typeblock):
         return False
@@ -1000,32 +1104,21 @@ def _can_wrap_bindc(typeblock, type_map=None):
     for name, var in get_type_members(typeblock).items():
         if _is_type_parameter(var):
             continue
-        if _is_type_member(var) or _is_type_array_member(var):
+        if _member_problem(var) is not None:
+            return False
+        if var.get('typespec') == 'type':
             inner = var.get('typename', '').lower()
             if type_map is None or inner not in type_map:
                 return False
-        elif _is_char_member(var):
-            continue
-        elif _is_deferred_char_member(var):
-            continue
-        elif _is_allocatable_member(var):
-            continue
-        elif _is_pointer_member(var):
-            continue
-        elif _is_coarray_member(var):
-            continue
-        elif _get_member_ctype(var) is None:
-            return False
     return True
 
 
-def _can_wrap_abstract(typeblock, type_map=None):
+def _can_wrap_abstract(typeblock, type_map=None, settle=False):
     """Check if an abstract type can be wrapped as a skeleton base type.
 
     Abstract types (F2003 4.5.7) cannot be instantiated, but their
     concrete extensions need the abstract parent's PyTypeObject for
-    tp_base (isinstance() support). Returns True if the abstract type
-    has wrappable data members.
+    tp_base (isinstance() support).  See _settle_members for ``settle``.
     """
     if not _is_abstract_type(typeblock):
         return False
@@ -1036,28 +1129,7 @@ def _can_wrap_abstract(typeblock, type_map=None):
     if _has_unresolved_kind_params(typeblock):
         return False
     _resolve_parameterized_type(typeblock)
-    if not is_simple_derived_type(typeblock):
-        return False
-    for name, var in get_type_members(typeblock).items():
-        if _is_type_parameter(var):
-            continue
-        if _is_type_member(var) or _is_type_array_member(var):
-            inner = var.get('typename', '').lower()
-            if type_map is None or inner not in type_map:
-                return False
-        elif _is_char_member(var):
-            continue
-        elif _is_deferred_char_member(var):
-            continue
-        elif _is_allocatable_member(var):
-            continue
-        elif _is_pointer_member(var):
-            continue
-        elif _is_coarray_member(var):
-            continue
-        elif _get_member_ctype(var) is None:
-            return False
-    return True
+    return _settle_members(typeblock, typeblock, type_map, settle)
 
 
 def _is_len_sized_array(var, len_param_names):
@@ -1074,12 +1146,14 @@ def _is_len_sized_array(var, len_param_names):
     return any(str(d).strip().lower() in len_param_names for d in dims)
 
 
-def _can_wrap_opaque(typeblock, type_map=None):
-    """Check if a non-bind(c) type can be wrapped via opaque pointers.
+def _can_wrap_opaque(typeblock, type_map=None, settle=False):
+    """Check if a type can be wrapped via opaque pointers.
 
     type_map is a dict of already-known wrappable types, used to
     validate nested type members and extends(parent) dependencies.
-    Abstract types are excluded (handled by _can_wrap_abstract).
+    Abstract types are excluded (handled by _can_wrap_abstract), and so
+    are bind(c) types that _can_wrap_bindc wraps as C structs.  See
+    _settle_members for ``settle``.
 
     Parameterized types with KIND parameters are supported (with or
     without defaults). LEN parameters are also supported when all
@@ -1087,7 +1161,7 @@ def _can_wrap_opaque(typeblock, type_map=None):
     """
     if _is_abstract_type(typeblock):
         return False
-    if isbindctype(typeblock):
+    if isbindctype(typeblock) and _can_wrap_bindc(typeblock, type_map):
         return False
     if _has_unresolved_kind_params(typeblock):
         return False
@@ -1095,9 +1169,10 @@ def _can_wrap_opaque(typeblock, type_map=None):
     # Use default specialization if available
     kind_info = _get_kind_param_info(typeblock)
     specs = _enumerate_specializations(typeblock)
+    checked = typeblock
     if specs:
         # Use first specialization (default or smallest kind) for check
-        _resolve_type_for_kind(typeblock, specs[0][0])
+        checked = _resolve_type_for_kind(typeblock, specs[0][0])
     elif kind_info:
         # Has KIND params but no enumerable specializations
         return False
@@ -1108,85 +1183,48 @@ def _can_wrap_opaque(typeblock, type_map=None):
     if parent_name:
         if type_map is None or parent_name not in type_map:
             return False
-    # Child types that inherit all members from a wrappable parent
-    # may have no own members -- this is valid (F2018 7.5.7).
-    if not is_simple_derived_type(typeblock):
-        if not (parent_name and parent_name in (type_map or {})):
-            return False
-    # Collect LEN param names for array dimension checking
-    len_param_names = {li['name'] for li in _get_len_param_info(typeblock)}
-
-    for name, var in get_type_members(typeblock).items():
-        if _is_type_parameter(var):
-            continue
-        if _is_type_member(var) or _is_type_array_member(var):
-            inner = var.get('typename', '').lower()
-            if type_map is None or inner not in type_map:
-                return False
-        elif _is_char_member(var):
-            continue
-        elif _is_deferred_char_member(var):
-            continue
-        elif _is_allocatable_member(var):
-            continue
-        elif _is_pointer_member(var):
-            continue
-        elif _is_coarray_member(var):
-            continue
-        elif len_param_names and _is_len_sized_array(var, len_param_names):
-            # Array sized by LEN param -- handled via dynamic accessors
-            typespec = var.get('typespec', '').lower()
-            if typespec not in _SIMPLE_SCALAR_TYPESPECS:
-                return False
-            continue
-        elif _get_member_ctype(var) is None:
-            return False
-    return True
+    return _settle_members(typeblock, checked, type_map, settle)
 
 
-# Fortran typespec to iso_c_binding type map for wrapper generation
-_FORTRAN_TO_ISOC = {
-    ('real', None): 'real(c_float)',
-    ('real', '4'): 'real(c_float)',
-    ('real', '8'): 'real(c_double)',
-    ('real', 'c_float'): 'real(c_float)',
-    ('real', 'c_double'): 'real(c_double)',
-    ('double precision', None): 'real(c_double)',
-    ('integer', None): 'integer(c_int)',
-    ('integer', '4'): 'integer(c_int)',
-    ('integer', '8'): 'integer(c_long_long)',
-    ('integer', 'c_int'): 'integer(c_int)',
-    ('integer', 'c_long_long'): 'integer(c_long_long)',
-    ('logical', None): 'integer(c_int)',
-    ('complex', None): 'complex(c_float_complex)',
-    ('complex', '4'): 'complex(c_float_complex)',
-    ('complex', '8'): 'complex(c_double_complex)',
-    ('complex', 'c_float_complex'): 'complex(c_float_complex)',
-    ('complex', 'c_double_complex'): 'complex(c_double_complex)',
-    ('double complex', None): 'complex(c_double_complex)',
+# The iso_c_binding type of the wrapper arguments that carry each C type;
+# default logical travels as int, see _member_value and _member_assign
+_C_TO_ISOC = {
+    'float': 'real(c_float)',
+    'double': 'real(c_double)',
+    'short': 'integer(c_short)',
+    'int': 'integer(c_int)',
+    'long': 'integer(c_long)',
+    'long long': 'integer(c_long_long)',
+    'unsigned char': 'logical(c_bool)',
+    'npy_cfloat': 'complex(c_float_complex)',
+    'npy_cdouble': 'complex(c_double_complex)',
 }
 
 
 def _get_member_isoc_type(var):
     """Get iso_c_binding type for a member variable."""
-    typespec = var.get('typespec', '').lower()
-    kind = None
-    if 'kindselector' in var:
-        ks = var['kindselector']
-        kind = ks.get('kind') or ks.get('*')
-        if kind:
-            kind = str(kind).lower()
-    result = _FORTRAN_TO_ISOC.get((typespec, kind))
-    if result is not None:
-        return result
-    # Try resolving kind expressions (e.g. kind(0.0d0) -> '8')
-    if kind is not None:
-        resolved = _eval_kind_expr(kind)
-        if resolved is not None:
-            result = _FORTRAN_TO_ISOC.get((typespec, str(resolved)))
-            if result is not None:
-                return result
-    return _FORTRAN_TO_ISOC.get((typespec, None))
+    return _C_TO_ISOC.get(_get_member_ctype(var))
+
+
+def _is_int_logical(var):
+    """Check if a logical member reaches C as an int, which needs a
+    conversion in both directions."""
+    return (var.get('typespec', '').lower() == 'logical'
+            and _get_member_ctype(var) == 'int')
+
+
+def _member_value(var, ref):
+    """Return the value of the member ``ref`` in its wrapper argument type."""
+    if _is_int_logical(var):
+        return f'merge(1_c_int, 0_c_int, {ref})'
+    return ref
+
+
+def _member_assign(var, ref, value):
+    """Return the statement that stores a wrapper argument in a member."""
+    if _is_int_logical(var):
+        return f'{ref} = {value} /= 0'
+    return f'{ref} = {value}'
 
 
 def _get_c_return_type(ctype):

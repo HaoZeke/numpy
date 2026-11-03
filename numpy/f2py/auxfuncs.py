@@ -713,8 +713,11 @@ _SIMPLE_SCALAR_TYPESPECS = {'integer', 'real', 'double precision',
 
 
 def get_type_members(typeblock):
-    """Return {name: var_dict} for members of a type block."""
-    return dict(typeblock.get('vars', {}))
+    """Return {name: var_dict} for the members of a type block that f2py
+    exposes, which leaves out those _dt_helpers._settle_members hides."""
+    hidden = typeblock.get('f2py_hidden', {})
+    return {name: var for name, var in typeblock.get('vars', {}).items()
+            if name not in hidden}
 
 
 def is_fixed_array(var):
