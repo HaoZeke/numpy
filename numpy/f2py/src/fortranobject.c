@@ -384,8 +384,23 @@ fortran_getattr(PyFortranObject *fp, char *name)
         return s;
     }
     if ((strcmp(name, "_cpointer") == 0) && (fp->len == 1)) {
+        /* An unallocated allocatable leaves data NULL. The array name
+         * is the one f2py stored on the def. PyDict_SetItemString
+         * crashes on a NULL value. */
+        if (fp->defs[0].data == NULL) {
+            PyErr_Format(PyExc_ValueError, "array '%s' is not allocated",
+                         fp->defs[0].name);
+            return NULL;
+        }
         PyObject *cobj =
                 F2PyCapsule_FromVoidPtr((void *)(fp->defs[0].data), NULL);
+        if (cobj == NULL) {
+            /* The NULL data path was handled above. Capsule creation
+             * failed for another reason. Report MemoryError, including
+             * when the helper already set one. */
+            PyErr_NoMemory();
+            return NULL;
+        }
         if (PyDict_SetItemString(fp->dict, name, cobj)) {
             Py_DECREF(cobj);
             return NULL;
