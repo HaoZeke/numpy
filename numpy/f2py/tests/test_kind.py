@@ -159,6 +159,15 @@ class TestQuadInquiryParameters(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestInitialValues(util.F2PyTest):
+    # C read 1.0d-6 as 1.0 - 6
+    sources = [util.getpath("tests", "src", "kind", "initial_values.f90")]
+
+    def test_defaults(self):
+        assert self.module.scale(2.0) == 2.0 * 1e-6 * 3
+
+
+@pytest.mark.slow
 class TestKindSelectors(util.F2PyTest):
     # an argument whose kind an intrinsic gives gets the C type of the kind
     sources = [util.getpath("tests", "src", "kind", "kind_selectors.f90")]
