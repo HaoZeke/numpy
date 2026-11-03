@@ -1,7 +1,7 @@
 module type_names
   implicit none
 
-  ! shape and index are names that crackfortran renames for variables
+  ! shape is a name that crackfortran renames for variables
   type, abstract :: shape
   contains
     procedure(area_iface), deferred :: area
@@ -21,10 +21,6 @@ module type_names
     procedure :: area => square_area
   end type square
 
-  type :: index
-    integer :: at = 0
-  end type index
-
 contains
 
   function square_area(self) result(a)
@@ -38,10 +34,5 @@ contains
     double precision :: a
     a = s%area()
   end function total_area
-
-  subroutine advance(i)
-    type(index), intent(inout) :: i
-    i%at = i%at + 1
-  end subroutine advance
 
 end module type_names

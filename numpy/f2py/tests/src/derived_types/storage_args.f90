@@ -6,10 +6,6 @@ module storage_args
     integer :: n = 0
   end type item
 
-  type, extends(item) :: tagged
-    integer :: tag = 0
-  end type tagged
-
   type, bind(c) :: pair
     integer(c_int) :: a = 0, b = 0
   end type pair
@@ -85,27 +81,5 @@ contains
     integer :: s
     s = sum(v%n)
   end function total
-
-  function kind_of(x) result(k)
-    class(item), allocatable, intent(in) :: x
-    integer :: k
-    k = 0
-    if (allocated(x)) then
-      select type (x)
-      type is (item)
-        k = 1
-      type is (tagged)
-        k = 2
-      end select
-    end if
-  end function kind_of
-
-  subroutine retag(x)
-    class(item), pointer, intent(in) :: x
-    select type (x)
-    type is (tagged)
-      x%tag = x%tag + 1
-    end select
-  end subroutine retag
 
 end module storage_args

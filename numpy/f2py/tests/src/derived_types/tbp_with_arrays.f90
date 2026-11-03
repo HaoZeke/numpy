@@ -15,7 +15,8 @@ contains
     self%n = self%n + k
   end subroutine add
 
-  ! an array argument makes the module define rank as a macro
+  ! an array argument makes the module define rank as a macro.
+  ! array_total.f90 is this routine in a file that has no class.
   function total(x) result(s)
     integer, intent(in) :: x(:)
     integer :: s
