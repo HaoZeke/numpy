@@ -168,6 +168,12 @@ class MesonBackend(Backend):
         self.meson_build_dir = "bbdir"
         self.build_type = "debug" if "--debug" in self.fc_flags else "release"
         self.fc_flags = _get_flags(self.fc_flags)
+        # Command line paths are relative to the working directory, while
+        # meson resolves paths from build_dir, where meson.build is written
+        self.include_dirs = [
+            _meson_include_dir(d, self.build_dir) for d in self.include_dirs or []
+        ]
+        self.library_dirs = [Path(d).absolute() for d in self.library_dirs]
 
     def _move_exec_to_root(self, build_dir: Path):
         walk_dir = Path(build_dir) / self.meson_build_dir
@@ -220,7 +226,9 @@ class MesonBackend(Backend):
 
     def compile(self) -> None:
         self.sources = _prepare_sources(self.modulename, self.sources, self.build_dir)
-        _prepare_objects(self.modulename, self.extra_objects, self.build_dir)
+        self.extra_objects = _prepare_objects(
+            self.modulename, self.extra_objects, self.build_dir
+        )
         self.write_meson_build(self.build_dir)
         self.run_meson(self.build_dir)
         self._move_exec_to_root(self.build_dir)
@@ -257,6 +265,16 @@ def _prepare_objects(mname, objects, bdir):
     for obj in objects:
         if Path(obj).exists() and Path(obj).is_file():
             shutil.copy(obj, bdir)
+    return [Path(obj).name for obj in objects]
+
+
+def _meson_include_dir(include_dir, build_dir):
+    # meson rejects absolute paths into its source tree, which is build_dir
+    path = Path(include_dir).absolute()
+    try:
+        return path.relative_to(Path(build_dir).absolute())
+    except ValueError:
+        return path
 
 def _get_macro_args(define_macros, undef_macros):
     args = [
