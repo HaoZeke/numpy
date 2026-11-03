@@ -475,6 +475,64 @@ class TestFunctionPrefixKind(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestFunctionResultKind(util.F2PyTest):
+    # gh-19767: the type in a FUNCTION statement, with its kind or length,
+    # declares the RESULT variable.
+    sources = [util.getpath("tests", "src", "crackfortran", "gh19767.f90")]
+    # Exact in IEEE 754 binary64, rounds to 1.0 in binary32
+    one_plus_eps = np.nextafter(1.0, 2.0)
+
+    def test_function_without_module(self):
+        x = self.one_plus_eps
+        assert self.module.mysqrt(3.5) == 12.25
+        assert self.module.mysqrt(x) == x * x
+
+    def test_module_function(self):
+        x = self.one_plus_eps
+        assert self.module.gh19767_mod.mysqrt(x) == x * x
+
+    @pytest.mark.parametrize("name", ["real_star8", "real_pure"])
+    def test_real8(self, name):
+        x = self.one_plus_eps
+        assert getattr(self.module, name)(x) == x
+
+    def test_integer8(self):
+        x = np.iinfo(np.int64).max
+        assert self.module.int_kind8(x) == x
+
+    def test_complex8(self):
+        z = complex(self.one_plus_eps, -self.one_plus_eps)
+        assert self.module.cplx_kind8(z) == z
+
+    def test_character_len(self):
+        assert self.module.char_len5(b"abcde") == b"abcde"
+
+    def test_implicit_rule_not_applied(self):
+        assert self.module.int_implicit(-1) == -1
+
+
+class TestFunctionResultDecl:
+    def test_derived_type(self, tmp_path):
+        # gh-19767
+        fpath = tmp_path / "gh19767_type.f90"
+        fpath.write_text(
+            "module gh19767_type\n"
+            "  type :: point\n"
+            "    real :: x\n"
+            "  end type\n"
+            "contains\n"
+            "  type(point) function origin() result(p)\n"
+            "    p%x = 0\n"
+            "  end function\n"
+            "end module\n"
+        )
+        mod = crackfortran.crackfortran([str(fpath)])
+        func = next(b for b in mod[0]["body"] if b["name"] == "origin")
+        assert func["vars"]["p"]["typespec"] == "type"
+        assert func["vars"]["p"]["typename"] == "point"
+
+
+@pytest.mark.slow
 class TestFortranGroupCounters(util.F2PyTest):
     def test_end_if_comment(self):
         # gh-23533
