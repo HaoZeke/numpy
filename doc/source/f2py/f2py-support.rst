@@ -98,7 +98,7 @@ Fortran 77
      - Yes
      -
      - ``test_regression.py``
-   * - Statement functions, ``EQUIVALENCE`` and ``SAVE``
+   * - Statement functions, ``SAVE``, and ``EQUIVALENCE`` of local variables
      - Yes
      - They do not change the interface; F2PY ignores them and the compiler
        handles them.
@@ -128,12 +128,13 @@ Fortran 90 and 95
      - Yes
      - Available as ``<extension module>.<module>.<name>``. Module variables
        can be read and assigned from Python.
-     - ``test_modules.py``, ``test_regression.py``
+     - ``test_modules.py``, ``test_regression.py``,
+       ``test_language_support.py``
    * - ``ALLOCATABLE`` module arrays
      - Yes
      - Assigning from Python allocates or reallocates the array, and assigning
        ``None`` deallocates it, see :doc:`python-usage`.
-     - ``test_modules.py``
+     - ``test_modules.py``, ``test_language_support.py``
    * - Module ``PARAMETER`` constants
      - Partial
      - Exposed as module attributes. With LLVM ``flang`` the values are wrong,
