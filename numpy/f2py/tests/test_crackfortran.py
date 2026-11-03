@@ -373,6 +373,58 @@ class TestLdaBeforeNRuntime(util.F2PyTest):
         assert gotlda == 4
 
 
+class TestUseRenamedKinds:
+    # gh-30352: a kind renamed on use, such as ``dp => real64``, resolves to
+    # the intrinsic module constant that capi_maps maps to a C type.
+    def test_intrinsic_kind_renames(self):
+        fpath = util.getpath("tests", "src", "crackfortran", "gh30352.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        body = next(b for b in mod if b["name"] == "gh30352")["body"]
+        kinds = {
+            (r["name"], a): (r["vars"][a]["kindselector"]["kind"],
+                             capi_maps.getctype(r["vars"][a]))
+            for r in body for a in r["args"] if "kindselector" in r["vars"][a]
+        }
+        assert kinds[("test_function", "arr")] == ("real64", "complex_double")
+        assert kinds[("set_cdp", "arr")] == ("c_double", "complex_double")
+        assert kinds[("add_dp", "a")] == ("real64", "double")
+        assert kinds[("add_ik", "a")] == ("int64", "long_long")
+
+    def test_rename_without_lowercasing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crackfortran, "dolowercase", 0)
+        fpath = tmp_path / "upper.f90"
+        fpath.write_text(
+            "MODULE M\n"
+            "  USE ISO_FORTRAN_ENV, ONLY: DP => REAL64\n"
+            "CONTAINS\n"
+            "  SUBROUTINE S(X)\n"
+            "    COMPLEX(KIND=DP), INTENT(INOUT) :: X\n"
+            "  END SUBROUTINE S\n"
+            "END MODULE M\n"
+        )
+        mod = crackfortran.crackfortran([str(fpath)])
+        x = mod[0]["body"][0]["vars"]["X"]
+        assert x["kindselector"] == {"kind": "real64"}
+        assert capi_maps.getctype(x) == "complex_double"
+
+
+@pytest.mark.slow
+class TestUseRenamedKindsRuntime(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "crackfortran", "gh30352.f90")]
+
+    @pytest.mark.parametrize("name", ["test_function", "set_cdp", "set_wp"])
+    def test_complex_inout(self, name):
+        arr = np.zeros(10, dtype=np.complex128)
+        getattr(self.module.gh30352, name)(arr)
+        np.testing.assert_array_equal(arr, np.full(10, 1 - 1j))
+
+    def test_real_function(self):
+        assert self.module.gh30352.add_dp(1.0, 2.0**-40) == 1 + 2.0**-40
+
+    def test_integer_function(self):
+        assert self.module.gh30352.add_ik(2**32, 2**32) == 2**33
+
+
 @pytest.mark.slow
 class TestEval(util.F2PyTest):
     def test_eval_scalar(self):
