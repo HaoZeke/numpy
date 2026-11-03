@@ -14,13 +14,15 @@ py = import('python').find_installation(pure: false)
 np_dep = dependency('numpy', version : '>=2.6')
 
 # The f2py include dir is not in the compile flags of dependency('numpy'),
-# so add it separately
+# so add it separately. Pass it as a flag like dependency('numpy') does:
+# include_directories() rejects absolute paths into the source tree, which
+# is where it points when the virtual environment lives in the project.
 incdir_f2py = np_dep.get_variable(
   pkgconfig : 'f2py_includedir',
   configtool : 'f2py-includedir',
 )
 f2py_dep = declare_dependency(
-  include_directories : incdir_f2py,
+  compile_args : '-I' + incdir_f2py,
 )
 
 # Generate the f2py wrappers
