@@ -6,6 +6,60 @@ from numpy.f2py.crackfortran import crackfortran
 from . import util
 
 
+class TestModuleIndexedData:
+    """Element-indexed DATA belongs to the declared array."""
+
+    @pytest.mark.parametrize("implicit", ["", "implicit none"])
+    @pytest.mark.parametrize("name, mapped_name", [("d", "d"), ("size", "size_bn")])
+    @pytest.mark.parametrize("statements", [
+        "data d(1) / 1 /\n  data d(2) / 2 /",
+        "data d(1), d(2) / 1, 2 /",
+    ])
+    def test_element_indexed_data(self, tmp_path, implicit, statements, name, mapped_name):
+        path = tmp_path / "indexed_data.f90"
+        path.write_text(
+            "module minimal\n" + implicit + "\n"
+            f"integer, dimension(2) :: {name}\n"
+            + statements.replace("d(", f"{name}(")
+            + "\nend module minimal\n")
+        blocks = crackfortran([str(path)])
+        assert len(blocks) == 1
+        variables = blocks[0]["vars"]
+        assert set(variables) == {mapped_name}
+        assert variables[mapped_name]["typespec"] == "integer"
+        assert variables[mapped_name]["dimension"] == ["2"]
+        assert variables[mapped_name]["="] == "(/1, 2/)"
+
+    def test_repeated_element_value(self, tmp_path):
+        path = tmp_path / "repeated_data.f90"
+        path.write_text(
+            "module minimal\ninteger, dimension(2) :: d\n"
+            "data d(1), d(2) / 2*3 /\nend module minimal\n")
+        variables = crackfortran([str(path)])[0]["vars"]
+        assert set(variables) == {"d"}
+        assert variables["d"]["="] == "(/3, 3/)"
+
+    def test_whole_array_data(self, tmp_path):
+        path = tmp_path / "whole_array_data.f90"
+        path.write_text(
+            "module minimal\ninteger, dimension(2) :: d\n"
+            "data d / 1, 2 /\nend module minimal\n")
+        variables = crackfortran([str(path)])[0]["vars"]
+        assert set(variables) == {"d"}
+        assert variables["d"]["="] == "(/1,  2/)"
+
+
+@pytest.mark.slow
+class TestModuleIndexedDataRuntime(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "crackfortran", "gh7189_indexed.f90")]
+
+    def test_module_values(self):
+        np.testing.assert_array_equal(self.module.minimal.d, [1, 2])
+        np.testing.assert_array_equal(self.module.minimal_none.d, [1, 2])
+        np.testing.assert_array_equal(self.module.repeated.d, [3, 3])
+        np.testing.assert_array_equal(self.module.reserved_name.size, [1, 2])
+
+
 @pytest.mark.slow
 class TestData(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "data_stmts.f90")]

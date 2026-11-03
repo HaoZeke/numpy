@@ -1004,6 +1004,50 @@ def _resolvenameargspattern(line):
     return None, [], None, None
 
 
+def _data_element_value(initializers, index):
+    """Select a DATA value, including a repeated scalar or complex value."""
+    offset = 0
+    for value in markoutercomma(initializers).split('@,@'):
+        repeated = re.fullmatch(r'\s*(\d+)\s*\*\s*(.*)', value, re.S)
+        count = int(repeated[1]) if repeated else 1
+        if offset <= index < offset + count:
+            return (repeated[2] if repeated else value).strip()
+        offset += count
+    raise IndexError('DATA value list is shorter than its object list')
+
+
+def _data_place_element(var, index_expr, value):
+    """Combine complete constant-index initializers for a 1-D array."""
+    if re.fullmatch(r'\d+', index_expr) is None:
+        return None
+    dimensions = getdimension(var)
+    if not dimensions or len(dimensions) != 1:
+        return None
+    try:
+        extent = int(dimensions[0])
+    except (TypeError, ValueError):
+        return None
+    index = int(index_expr)
+    if not 1 <= index <= extent:
+        return None
+    parts = var.get('__data_init_parts')
+    if parts is None:
+        parts = {}
+        current = var.get('=')
+        if (isinstance(current, str) and current.startswith('(/')
+                and current.rstrip().endswith('/)')):
+            values = [part.strip() for part in
+                      markoutercomma(current.strip()[2:-2]).split('@,@')]
+            if len(values) == extent:
+                parts.update(enumerate(values, start=1))
+    parts[index] = value
+    if len(parts) == extent:
+        var.pop('__data_init_parts', None)
+        return "(/" + ", ".join(parts[item] for item in range(1, extent + 1)) + "/)"
+    var['__data_init_parts'] = parts
+    return None
+
+
 def analyzeline(m, case, line):
     """
     Reads each line in the input file in sequence and updates global vars.
@@ -1461,7 +1505,17 @@ def analyzeline(m, case, line):
                     # Since in any case it is initialized in the Fortran code
                     outmess(f'Comment line in declaration "{l[1]}" is not supported. Skipping.\n')
                     continue
+                element = re.fullmatch(r'([a-z][\w$]*)\s*\((.+)\)\s*', v, re.I)
+                if element:
+                    v = rmbadname1(element[1])
                 vars.setdefault(v, {})
+                if element:
+                    value = _data_element_value(l[1], idx)
+                    initialized = _data_place_element(vars[v], element[2].strip(), value)
+                    if initialized is not None:
+                        vars[v]['='] = initialized
+                    last_name = v
+                    continue
                 vtype = vars[v].get('typespec')
                 vdim = getdimension(vars[v])
                 matches = re.findall(r"\(.*?\)", l[1]) if vtype == 'complex' else l[1].split(',')
@@ -2668,6 +2722,9 @@ def analyzevars(block):
                 for k in ['public', 'private']:
                     if k in gen:
                         vars[n] = setattrspec(vars.get(n, {}), k)
+    for variable in vars.values():
+        if isinstance(variable, dict):
+            variable.pop('__data_init_parts', None)
     svars = []
     args = block['args']
     for a in args:
