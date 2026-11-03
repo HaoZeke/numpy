@@ -244,7 +244,10 @@ Other statements
 
       ::
 
-        implicit real (a-h,o-z,$_), integer (i-m)
+        implicit real (a-h,o-z,$_), integer (i-n)
+
+      An ``implicit`` statement applies to the block that contains it
+      and to the blocks nested in that block.
 
   + ``entry`` statements
       ::
@@ -252,7 +255,9 @@ Other statements
         entry <entry name> [([<arguments>])]
 
       F2PY generates wrappers for all entry names using the signature
-      of the routine block.
+      of the routine block. In a function block, the result of an entry
+      is the variable named after the entry, so its type comes from the
+      declaration of that name or from the implicit rules.
 
       .. note::
 
