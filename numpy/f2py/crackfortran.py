@@ -213,6 +213,9 @@ _ISO_FORTRAN_ENV_VARS = {
     'real64': _make_param('integer', 8),
 }
 
+# The kinds of iso_c_binding are those of the companion C processor
+# (F2018 18.2.2), such as c_long_double, which is 10 for gfortran on
+# x86-64, so they stay names and capi_maps maps them to C types.
 _INTRINSIC_MODULE_VARS = {
     'iso_fortran_env': _ISO_FORTRAN_ENV_VARS,
 }
