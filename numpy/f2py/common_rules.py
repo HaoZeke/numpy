@@ -66,6 +66,10 @@ def buildhooks(m):
                 inames.append(n)
         hnames_str = ','.join(hnames)
         inames_str = ','.join(inames)
+        if not inames:
+            outmess(f'\t\tSkipping COMMON block "{name}" since all its '
+                    f'variables are hidden: {hnames_str}\n')
+            continue
         if hnames:
             outmess(f'\t\tConstructing COMMON block support for "{name}"...\n\t\t  '
                     f'{inames_str}\n\t\t  Hidden: {hnames_str}\n')

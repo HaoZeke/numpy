@@ -37,6 +37,21 @@ class TestModuleWithoutPublicEntities(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestModuleWithoutWrappableEntities(util.F2PyTest):
+    sources = [
+        util.getpath(
+            "tests", "src", "modules", "gh20053", "no_wrappable_entities.f90"
+        )
+    ]
+
+    def test_gh20053(self):
+        # Importing used to crash on the empty tables of these modules
+        assert self.module.twice(2.0) == 4.0
+        assert not hasattr(self.module, "type_only")
+        assert not hasattr(self.module, "interface_only")
+
+
+@pytest.mark.slow
 class TestModuleDocString(util.F2PyTest):
     sources = [util.getpath("tests", "src", "modules", "module_data_docstring.f90")]
 
