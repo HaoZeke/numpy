@@ -164,6 +164,27 @@ def test_gh22819_many_pyf(capfd, gh22819_cli, monkeypatch):
             f2pycli()
 
 
+@pytest.mark.slow
+class TestSizeArgumentDiagnostic(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "cli", "gh25728.f")]
+
+    def test_valid_argument_order(self):
+        values = [45, 845, 1845]
+        assert self.module.get_fact(55, values) == 9
+        assert self.module.get_fact(55, values, 3) == 9
+        assert self.module.get_fact(55, values, j_size=3) == 9
+
+    def test_fortran_argument_order_hint(self):
+        error_type = getattr(self.module, f"_{self.module.__name__}_error")
+        with pytest.raises(error_type, match="optional size arguments follow their arrays"):
+            self.module.get_fact(55, 3, [45, 845, 1845])
+
+    def test_explicit_size_mismatch_hint(self):
+        error_type = getattr(self.module, f"_{self.module.__name__}_error")
+        with pytest.raises(error_type, match="Check the generated Python signature"):
+            self.module.get_fact(55, [45, 845, 1845], j_size=2)
+
+
 def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
     foutl = get_io_paths(gh23598_warn, mname="test")
     ipath = foutl.f90inp
