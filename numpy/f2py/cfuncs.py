@@ -65,25 +65,14 @@ includes['stdarg.h'] = '#include <stdarg.h>'
 
 ############# Type definitions ###############
 
-typedefs['unsigned_char'] = 'typedef unsigned char unsigned_char;'
-typedefs['unsigned_short'] = 'typedef unsigned short unsigned_short;'
-typedefs['unsigned_long'] = 'typedef unsigned long unsigned_long;'
-typedefs['signed_char'] = 'typedef signed char signed_char;'
-typedefs['long_long'] = """
-#if defined(NPY_OS_WIN32)
-typedef __int64 long_long;
-#else
-typedef long long long_long;
-typedef unsigned long long unsigned_long_long;
-#endif
-"""
-typedefs['unsigned_long_long'] = """
-#if defined(NPY_OS_WIN32)
-typedef __uint64 long_long;
-#else
-typedef unsigned long long unsigned_long_long;
-#endif
-"""
+typedefs['unsigned_char'] = 'typedef npy_ubyte unsigned_char;'
+typedefs['unsigned_short'] = 'typedef npy_ushort unsigned_short;'
+typedefs['unsigned_long'] = 'typedef npy_ulong unsigned_long;'
+typedefs['signed_char'] = 'typedef npy_byte signed_char;'
+typedefs['long_long'] = 'typedef npy_longlong long_long;'
+typedefs['unsigned_long_long'] = 'typedef npy_ulonglong unsigned_long_long;'
+# Not npy_longdouble: NumPy makes that double when its own build had a
+# double-sized long double, whatever the compiler building the wrapper.
 typedefs['long_double'] = """
 #ifndef _LONG_DOUBLE
 typedef long double long_double;
