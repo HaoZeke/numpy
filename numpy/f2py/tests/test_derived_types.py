@@ -2405,6 +2405,24 @@ class TestInitialState(util.F2PyTest):
         assert linked == 0
 
 
+@pytest.mark.slow
+class TestTypeNames(util.F2PyTest):
+    """Types keep names that crackfortran renames for variables."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "type_names.f90")]
+
+    def test_abstract_shape(self):
+        s = self.module.square(side=3.0)
+        assert isinstance(s, self.module.shape)
+        assert s.area() == 9
+        assert self.module.total_area(s) == 9
+
+    def test_index(self):
+        i = self.module.index()
+        self.module.advance(i)
+        assert i.at == 1
+
+
 def test_member_ctypes():
     from numpy.f2py._dt_helpers import _eval_kind_expr, _get_member_ctype
     # a kind without a C type is not the default kind

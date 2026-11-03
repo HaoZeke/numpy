@@ -1188,7 +1188,11 @@ def analyzeline(m, case, line):
         if not name:
             name = 'unknown_' + block.replace(' ', '_')
         groupcache[groupcounter]['prefix'] = m.group('before')
-        groupcache[groupcounter]['name'] = rmbadname1(name)
+        # a derived type keeps its name, which declarations, extends()
+        # and the attributes stored above refer to, and which only ever
+        # appears in C inside longer identifiers
+        groupcache[groupcounter]['name'] = (
+            name if block == 'type' else rmbadname1(name))
         groupcache[groupcounter]['result'] = result
         if groupcounter == 1:
             groupcache[groupcounter]['from'] = currentfilename
