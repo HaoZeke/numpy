@@ -1,4 +1,4 @@
-python module _char_handling_test
+python module _char_handling_test_bc
     interface
     subroutine charint(trans, info)
         callstatement (*f2py_func)(&trans, &info)
@@ -9,4 +9,4 @@ python module _char_handling_test
 
     end subroutine charint
     end interface
-end python module _char_handling_test
+end python module _char_handling_test_bc
