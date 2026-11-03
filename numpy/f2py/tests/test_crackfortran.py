@@ -545,6 +545,20 @@ class TestParamEval:
         assert ret[4, 12, 5] == 250
 
 
+class TestRelationsInDeclarations:
+    # the blanks around a relation do not split a declaration
+    def test_names(self, tmp_path):
+        fpath = tmp_path / "relations.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module relations
+              logical, parameter :: more = 3 > 2, less = 3 .lt. 2
+              logical, parameter :: neither = .not. more .and. less
+            end module relations
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert list(vs) == ["more", "less", "neither"]
+
+
 class TestSelectedKinds:
     # a kind is selected by its precision, range and radix, as Fortran
     # 2018 16.9.168 to 16.9.170 say, from the model of each kind
