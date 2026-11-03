@@ -611,6 +611,37 @@ class TestTypeBoundProcCodeGen:
         assert 'reset' in procs
         assert procs['reset'] == 'counter_reset'
 
+    def test_scan_binding_statements(self, tmp_path):
+        # type names match as words, statements may be continued, and
+        # bindings may have attributes and come in lists
+        fpath = tmp_path / "bindings.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module bindings
+              type :: point2
+                real :: y
+              contains
+                procedure :: norm => point2_norm
+              endtype point2
+              type :: point
+                real :: x
+              contains
+                procedure, pass(self) :: norm
+                procedure :: shift => point_shift, &
+                             scale => point_scale
+                procedure, nopass :: origin
+                procedure, private :: hidden
+              end type point
+            end module bindings
+            """))
+        attrs = {}
+        procs = derived_type_rules._scan_type_bound_procedures(
+            str(fpath), 'point', attrs)
+        assert procs == {'norm': 'norm', 'shift': 'point_shift',
+                         'scale': 'point_scale', 'origin': 'origin'}
+        assert attrs['norm'] == {'pass': 'self', 'nopass': False}
+        assert attrs['shift'] == {'pass': None, 'nopass': False}
+        assert attrs['origin'] == {'pass': None, 'nopass': True}
+
     def test_hooks_include_methods(self):
         fpath = util.getpath("tests", "src", "derived_types",
                              "type_bound_proc.f90")

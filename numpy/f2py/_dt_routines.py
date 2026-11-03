@@ -2016,96 +2016,138 @@ def _gen_routine_c_wrapper(modulename, routine, type_map):
     return c_code, method_def
 
 
-def _scan_type_bound_procedures(source_file, typename):
+def _statements(source_file):
+    """Yield the statements of a free form source file, without comments
+    and with continuation lines joined."""
+    with open(source_file) as f:
+        pending = ''
+        for line in f:
+            line = line.split('!')[0].rstrip()
+            if line.lstrip().startswith('&'):
+                line = line.lstrip()[1:]
+            if line.endswith('&'):
+                pending += line[:-1]
+                continue
+            for statement in (pending + line).split(';'):
+                if statement.strip():
+                    yield statement.strip()
+            pending = ''
+
+
+def _type_definition(source_file, typename):
+    """Yield (part, statement) for the statements of a type definition.
+
+    part is 'components' before its CONTAINS statement and 'bindings'
+    after it.  crackfortran does not keep these statements, so they are
+    read from the source.
+    """
+    import re
+    if not source_file or not os.path.isfile(source_file):
+        return
+    type_pat = re.compile(
+        r'^type\b(?:\s*,\s*[\w()]+)*\s*::\s*' + re.escape(typename) + r'\b',
+        re.I)
+    end_type_pat = re.compile(r'^end\s*type\b', re.I)
+    contains_pat = re.compile(r'^contains\b', re.I)
+    part = None
+    for statement in _statements(source_file):
+        if part is None:
+            if type_pat.match(statement):
+                part = 'components'
+        elif end_type_pat.match(statement):
+            return
+        elif contains_pat.match(statement):
+            part = 'bindings'
+        else:
+            yield part, statement
+
+
+def _scan_type_bound_procedures(source_file, typename, attrs=None):
     """Scan Fortran source for type-bound procedure declarations.
 
     Returns a dict mapping method_name -> impl_name from lines like:
         procedure :: method => impl
-        procedure :: method  (impl == method when no =>)
-    within the 'contains' section of the named type block.
+        procedure, pass(this) :: method  (impl == method when no =>)
+    within the 'contains' section of the named type block, and maps
+    a generic binding to the list of its specific bindings.  attrs, when
+    given, gets the passed-object dummy of each specific binding, as
+    {'pass': name or None for the first dummy, 'nopass': bool}.
+    Deferred and private bindings are left out.
     """
     import re
     result = {}
-    if not source_file or not os.path.isfile(source_file):
-        return result
-
-    in_type = False
-    in_contains = False
-    type_pat = re.compile(
-        r'^\s*type\b(?:\s*,\s*[\w()]+)*\s*::\s*' + re.escape(typename),
-        re.I)
-    end_type_pat = re.compile(
-        r'^\s*end\s+type\b', re.I)
-    contains_pat = re.compile(r'^\s*contains\b', re.I)
+    # F2018 R749: PROCEDURE [(interface)] [[, binding-attr-list] ::]
+    # type-bound-proc-decl-list, where each declaration is
+    # binding-name [=> procedure-name]
     proc_pat = re.compile(
-        r'^\s*procedure\s*::\s*(\w+)\s*(?:=>\s*(\w+))?\s*$', re.I)
-    # F2018 R752: procedure(interface), deferred :: name
-    # Deferred TBPs have no implementation; skip them.
-    deferred_pat = re.compile(
-        r'^\s*procedure\s*\([^)]*\)\s*,\s*deferred\b', re.I)
+        r'^procedure\s*(?:\(\s*\w+\s*\))?\s*(?:,(?P<attrs>[^:]*))?'
+        r'(?:::)?\s*(?P<decls>\w+\s*(?:=>\s*\w+)?'
+        r'(?:\s*,\s*\w+\s*(?:=>\s*\w+)?)*)\s*$', re.I)
+    pass_pat = re.compile(r'^pass\s*(?:\(\s*(\w+)\s*\))?$', re.I)
     # F2018 7.5.5 paragraph 3, R751:
     # GENERIC [ , access-spec ] :: generic-spec => binding-name-list
     # Maps a generic name to multiple specific procedures.
-    # We use the first specific binding as the implementation.
     generic_pat = re.compile(
-        r'^\s*generic\s*(?:,\s*\w+)?\s*::\s*(\w+)\s*=>\s*(.+)\s*$',
+        r'^generic\s*(?:,\s*(\w+))?\s*::\s*(\w+)\s*=>\s*(.+)\s*$',
         re.I)
     # F2018 12.6.4.8: Defined I/O generics
     # GENERIC :: WRITE(FORMATTED) => impl_name
     # GENERIC :: READ(FORMATTED) => impl_name
     dio_pat = re.compile(
-        r'^\s*generic\s*(?:,\s*\w+)?\s*::\s*'
+        r'^generic\s*(?:,\s*\w+)?\s*::\s*'
         r'(write|read)\s*\(\s*(formatted|unformatted)\s*\)\s*=>\s*(.+)\s*$',
         re.I)
 
-    with open(source_file) as f:
-        for line in f:
-            stripped = line.split('!')[0].strip()  # remove comments
-            if not stripped:
+    for part, stripped in _type_definition(source_file, typename):
+        if part != 'bindings':
+            continue
+        m = proc_pat.match(stripped)
+        if m:
+            binding_attrs = [a.strip().lower()
+                             for a in (m.group('attrs') or '').split(',')
+                             if a.strip()]
+            # Deferred TBPs (F2018 R752) have no implementation
+            if 'deferred' in binding_attrs or 'private' in binding_attrs:
                 continue
-            if not in_type:
-                if type_pat.match(stripped):
-                    in_type = True
+            passed = {'pass': None, 'nopass': 'nopass' in binding_attrs}
+            for a in binding_attrs:
+                pm = pass_pat.match(a)
+                if pm and pm.group(1):
+                    passed['pass'] = pm.group(1).lower()
+            for decl in m.group('decls').split(','):
+                method_name, _, impl_name = decl.partition('=>')
+                method_name = method_name.strip().lower()
+                result[method_name] = (impl_name.strip().lower()
+                                       or method_name)
+                if attrs is not None:
+                    attrs[method_name] = passed
+            continue
+        # Defined I/O generics (F2018 12.6.4.8)
+        dio_match = dio_pat.match(stripped)
+        if dio_match:
+            direction = dio_match.group(1).lower()
+            formatting = dio_match.group(2).lower()
+            impl = dio_match.group(3).strip().lower()
+            key = f'__{direction}_{formatting}__'
+            result[key] = impl
+            continue
+        # Generic bindings (F2018 R751): store all specific
+        # bindings for runtime dispatch.  The result dict maps
+        # generic_name -> impl_name (single binding) or
+        # generic_name -> [impl1, impl2, ...] (multiple).
+        generic_match = generic_pat.match(stripped)
+        if generic_match:
+            if (generic_match.group(1) or '').lower() == 'private':
                 continue
-            if end_type_pat.match(stripped):
-                break
-            if contains_pat.match(stripped):
-                in_contains = True
-                continue
-            if in_contains:
-                # Skip deferred TBPs (no implementation to wrap)
-                if deferred_pat.match(stripped):
-                    continue
-                m = proc_pat.match(stripped)
-                if m:
-                    method_name = m.group(1).lower()
-                    impl_name = (m.group(2) or m.group(1)).lower()
-                    result[method_name] = impl_name
-                    continue
-                # Generic bindings (F2018 R751): store all specific
-                # bindings for runtime dispatch.  The result dict maps
-                # generic_name -> impl_name (single binding) or
-                # generic_name -> [impl1, impl2, ...] (multiple).
-                generic_match = generic_pat.match(stripped)
-                if generic_match:
-                    generic_name = generic_match.group(1).lower()
-                    bindings = [
-                        binding.strip().lower()
-                        for binding in generic_match.group(2).split(',')
-                    ]
-                    if len(bindings) == 1:
-                        result[generic_name] = bindings[0]
-                    elif len(bindings) > 1:
-                        result[generic_name] = bindings
-                    continue
-                # Defined I/O generics (F2018 12.6.4.8)
-                dio_match = dio_pat.match(stripped)
-                if dio_match:
-                    direction = dio_match.group(1).lower()
-                    formatting = dio_match.group(2).lower()
-                    impl = dio_match.group(3).strip().lower()
-                    key = f'__{direction}_{formatting}__'
-                    result[key] = impl
+            generic_name = generic_match.group(2).lower()
+            bindings = [
+                binding.strip().lower()
+                for binding in generic_match.group(3).split(',')
+            ]
+            if len(bindings) == 1:
+                result[generic_name] = bindings[0]
+            elif len(bindings) > 1:
+                result[generic_name] = bindings
 
     return result
 
@@ -2121,42 +2163,18 @@ def _scan_final_subroutines(source_file, typename):
     """
     import re
     result = set()
-    if not source_file or not os.path.isfile(source_file):
-        return result
-
-    in_type = False
-    in_contains = False
-    type_pat = re.compile(
-        r'^\s*type\b(?:\s*,\s*[\w()]+)*\s*::\s*' + re.escape(typename),
-        re.I)
-    end_type_pat = re.compile(
-        r'^\s*end\s+type\b', re.I)
-    contains_pat = re.compile(r'^\s*contains\b', re.I)
     final_pat = re.compile(
-        r'^\s*final\s*(?:::)?\s*(.+)\s*$', re.I)
-
-    with open(source_file) as f:
-        for line in f:
-            stripped = line.split('!')[0].strip()
-            if not stripped:
-                continue
-            if not in_type:
-                if type_pat.match(stripped):
-                    in_type = True
-                continue
-            if end_type_pat.match(stripped):
-                break
-            if contains_pat.match(stripped):
-                in_contains = True
-                continue
-            if in_contains:
-                final_match = final_pat.match(stripped)
-                if final_match:
-                    names = final_match.group(1)
-                    for name in names.split(','):
-                        name = name.strip().lower()
-                        if name:
-                            result.add(name)
+        r'^final\s*(?:::)?\s*(.+)\s*$', re.I)
+    for part, stripped in _type_definition(source_file, typename):
+        if part != 'bindings':
+            continue
+        final_match = final_pat.match(stripped)
+        if final_match:
+            names = final_match.group(1)
+            for name in names.split(','):
+                name = name.strip().lower()
+                if name:
+                    result.add(name)
 
     return result
 
@@ -2178,54 +2196,34 @@ def _scan_proc_pointer_components(source_file, typename):
     """
     import re
     result = []
-    if not source_file or not os.path.isfile(source_file):
-        return result
-
-    in_type = False
-    type_pat = re.compile(
-        r'^\s*type\b(?:\s*,\s*[\w()]+)*\s*::\s*' + re.escape(typename),
-        re.I)
-    end_type_pat = re.compile(
-        r'^\s*end\s+type\b', re.I)
-    contains_pat = re.compile(r'^\s*contains\b', re.I)
     # Match: procedure(interface), pointer [, nopass] [, pass(arg)] :: name [=> null()]
     proc_ptr_pat = re.compile(
-        r'^\s*procedure\s*\(\s*(\w+)\s*\)\s*,'  # procedure(interface),
+        r'^procedure\s*\(\s*(\w+)\s*\)\s*,'      # procedure(interface),
         r'\s*(.*?)'                               # attributes
         r'\s*::\s*(\w+)'                          # :: name
         r'(?:\s*=>\s*null\s*\(\s*\))?'            # optional => null()
         r'\s*$',
         re.I)
 
-    with open(source_file) as f:
-        for line in f:
-            stripped = line.split('!')[0].strip()
-            if not stripped:
-                continue
-            if not in_type:
-                if type_pat.match(stripped):
-                    in_type = True
-                continue
-            if end_type_pat.match(stripped):
-                break
-            if contains_pat.match(stripped):
-                break  # stop at CONTAINS -- proc ptrs are before it
-            m = proc_ptr_pat.match(stripped)
-            if m:
-                interface = m.group(1).lower()
-                attrs_str = m.group(2).lower()
-                comp_name = m.group(3).lower()
-                attrs = [a.strip() for a in attrs_str.split(',')]
-                if 'pointer' not in attrs:
-                    continue  # must have POINTER attribute
-                nopass = 'nopass' in attrs
-                init_null = '=>' in stripped.lower() and 'null' in stripped.lower()
-                result.append({
-                    'name': comp_name,
-                    'interface': interface,
-                    'nopass': nopass,
-                    'init_null': init_null,
-                })
+    for part, stripped in _type_definition(source_file, typename):
+        if part != 'components':
+            continue
+        m = proc_ptr_pat.match(stripped)
+        if m:
+            interface = m.group(1).lower()
+            attrs_str = m.group(2).lower()
+            comp_name = m.group(3).lower()
+            attrs = [a.strip() for a in attrs_str.split(',')]
+            if 'pointer' not in attrs:
+                continue  # must have POINTER attribute
+            nopass = 'nopass' in attrs
+            init_null = '=>' in stripped.lower() and 'null' in stripped.lower()
+            result.append({
+                'name': comp_name,
+                'interface': interface,
+                'nopass': nopass,
+                'init_null': init_null,
+            })
 
     return result
 
