@@ -30,6 +30,43 @@ class TestModuleIndexedData:
         assert variables[mapped_name]["dimension"] == ["2"]
         assert variables[mapped_name]["="] == "(/1, 2/)"
 
+    @pytest.mark.parametrize("implicit", ["", "implicit none"])
+    @pytest.mark.parametrize("statements", [
+        "data size(1) / 1 /\n  data size(2) / 2 /",
+        "data size(1), size(2) / 1, 2 /",
+    ])
+    def test_reserved_name_data(self, tmp_path, implicit, statements):
+        path = tmp_path / "reserved_name_data.f90"
+        path.write_text(
+            "module minimal\n" + implicit + "\n"
+            "integer, dimension(2) :: size\n" + statements
+            + "\nend module minimal\n")
+        variables = crackfortran([str(path)])[0]["vars"]
+        assert set(variables) == {"size_bn"}
+        assert variables["size_bn"]["typespec"] == "integer"
+        assert variables["size_bn"]["dimension"] == ["2"]
+        assert variables["size_bn"]["="] == "(/1, 2/)"
+
+    def test_mixed_whole_array_data(self, tmp_path):
+        path = tmp_path / "mixed_data.f90"
+        path.write_text(
+            "module minimal\nimplicit none\ninteger :: a(2), d(1)\n"
+            "data a, d(1) / 1, 2, 3 /\nend module minimal\n")
+        variables = crackfortran([str(path)])[0]["vars"]
+        assert set(variables) == {"a", "d"}
+        assert variables["a"]["="] == "(/1, 2/)"
+        assert variables["d"]["="] == "(/3/)"
+
+    def test_unknown_array_extent_data(self, tmp_path):
+        path = tmp_path / "unknown_extent_data.f90"
+        path.write_text(
+            "module minimal\nimplicit none\ninteger, parameter :: n = 2\n"
+            "integer :: a(n), d(1)\n"
+            "data a, d(1) / 1, 2, 3 /\nend module minimal\n")
+        variables = crackfortran([str(path)])[0]["vars"]
+        assert set(variables) == {"n", "a", "d"}
+        assert "=" not in variables["d"]
+
     def test_repeated_element_value(self, tmp_path):
         path = tmp_path / "repeated_data.f90"
         path.write_text(
@@ -58,6 +95,10 @@ class TestModuleIndexedDataRuntime(util.F2PyTest):
         np.testing.assert_array_equal(self.module.minimal_none.d, [1, 2])
         np.testing.assert_array_equal(self.module.repeated.d, [3, 3])
         np.testing.assert_array_equal(self.module.reserved_name.size, [1, 2])
+        np.testing.assert_array_equal(self.module.mixed.a, [1, 2])
+        np.testing.assert_array_equal(self.module.mixed.d, [3])
+        np.testing.assert_array_equal(self.module.unknown_extent.a, [1, 2])
+        np.testing.assert_array_equal(self.module.unknown_extent.d, [3])
 
 
 @pytest.mark.slow

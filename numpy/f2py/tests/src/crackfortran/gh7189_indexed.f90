@@ -23,3 +23,16 @@ module reserved_name
   data size(1) / 1 /
   data size(2) / 2 /
 end module reserved_name
+
+module mixed
+  implicit none
+  integer :: a(2), d(1)
+  data a, d(1) / 1, 2, 3 /
+end module mixed
+
+module unknown_extent
+  implicit none
+  integer, parameter :: n = 2
+  integer :: a(n), d(1)
+  data a, d(1) / 1, 2, 3 /
+end module unknown_extent

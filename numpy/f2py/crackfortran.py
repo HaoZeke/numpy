@@ -1016,6 +1016,19 @@ def _data_element_value(initializers, index):
     raise IndexError('DATA value list is shorter than its object list')
 
 
+def _data_object_count(var):
+    """Count scalar DATA slots for a declared scalar or constant-size vector."""
+    dimensions = getdimension(var)
+    if not dimensions:
+        return 1
+    if len(dimensions) != 1:
+        return None
+    try:
+        return max(0, int(dimensions[0]))
+    except (TypeError, ValueError):
+        return None
+
+
 def _data_place_element(var, index_expr, value):
     """Combine complete constant-index initializers for a 1-D array."""
     if re.fullmatch(r'\d+', index_expr) is None:
@@ -1490,8 +1503,13 @@ def analyzeline(m, case, line):
             if l[0].startswith('('):
                 outmess(f'analyzeline: implied-DO list "{l[0]}" is not supported. Skipping.\n')
                 continue
-            for idx, v in enumerate(rmbadname([x.strip() for x in markoutercomma(l[0]).split('@,@')])):
+            objects = rmbadname([x.strip() for x in markoutercomma(l[0]).split('@,@')])
+            has_elements = any(re.fullmatch(r'([a-z][\w$]*)\s*\((.+)\)\s*', obj, re.I)
+                               for obj in objects)
+            data_offset = 0
+            for idx, v in enumerate(objects):
                 if v.startswith('('):
+                    data_offset = None
                     outmess(f'analyzeline: implied-DO list "{v}" is not supported. Skipping.\n')
                     # XXX: subsequent init expressions may get wrong values.
                     # Ignoring since data statements are irrelevant for
@@ -1510,10 +1528,26 @@ def analyzeline(m, case, line):
                     v = rmbadname1(element[1])
                 vars.setdefault(v, {})
                 if element:
-                    value = _data_element_value(l[1], idx)
-                    initialized = _data_place_element(vars[v], element[2].strip(), value)
-                    if initialized is not None:
-                        vars[v]['='] = initialized
+                    if data_offset is not None:
+                        value = _data_element_value(l[1], data_offset)
+                        initialized = _data_place_element(vars[v], element[2].strip(), value)
+                        if initialized is not None:
+                            vars[v]['='] = initialized
+                        data_offset += 1
+                    last_name = v
+                    continue
+                if has_elements:
+                    count = _data_object_count(vars[v])
+                    if data_offset is None or count is None:
+                        data_offset = None
+                    else:
+                        values = [_data_element_value(l[1], data_offset + offset)
+                                  for offset in range(count)]
+                        if getdimension(vars[v]) and values:
+                            vars[v]['='] = "(/" + ", ".join(values) + "/)"
+                        elif values:
+                            vars[v]['='] = values[0]
+                        data_offset += count
                     last_name = v
                     continue
                 vtype = vars[v].get('typespec')
