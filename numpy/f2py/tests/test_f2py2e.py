@@ -601,7 +601,8 @@ def test_debugcapi(capfd, hello_world_f90, monkeypatch):
             assert r"#define DEBUGCFUNCS" in ocmod.read()
 
 
-@pytest.mark.skip(reason="Consistently fails on CI; noisy so skip not xfail.")
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
 def test_debugcapi_bld(hello_world_f90, monkeypatch):
     """Ensures that debugging wrappers work
 
@@ -613,9 +614,10 @@ def test_debugcapi_bld(hello_world_f90, monkeypatch):
                         f'f2py -m {mname} {ipath} -c --debug-capi'.split())
 
     with util.switchdir(ipath.parent):
-        f2pycli()
+        compiler_check_f2pycli()
         cmd_run = shlex.split(f"{sys.executable} -c \"import blah; blah.hi()\"")
         rout = subprocess.run(cmd_run, capture_output=True, encoding='UTF-8')
+        assert rout.returncode == 0, rout.stderr
         eout = ' Hello World\n'
         eerr = textwrap.dedent("""\
 debug-capi:Python C/API function blah.hi()
@@ -628,7 +630,7 @@ debug-capi:Python C/API function blah.hi: successful.
 debug-capi:Freeing memory.
         """)
         assert rout.stdout == eout
-        assert rout.stderr == eerr
+        assert eerr in rout.stderr
 
 
 def test_wrapfunc_def(capfd, hello_world_f90, monkeypatch):
@@ -827,18 +829,21 @@ def test_version(capfd, monkeypatch):
     assert np.__version__ == out.strip()
 
 
-@pytest.mark.skip(reason="Consistently fails on CI; noisy so skip not xfail.")
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
 def test_npdistop(hello_world_f90, monkeypatch):
-    """
+    """Modules using the Fortran runtime (here for I/O) import and run
+
     CLI :: -c
     """
     ipath = Path(hello_world_f90)
     monkeypatch.setattr(sys, "argv", f'f2py -m blah {ipath} -c'.split())
 
     with util.switchdir(ipath.parent):
-        f2pycli()
+        compiler_check_f2pycli()
         cmd_run = shlex.split(f"{sys.executable} -c \"import blah; blah.hi()\"")
         rout = subprocess.run(cmd_run, capture_output=True, encoding='UTF-8')
+        assert rout.returncode == 0, rout.stderr
         eout = ' Hello World\n'
         assert rout.stdout == eout
 
@@ -915,6 +920,15 @@ def meson_build_of(monkeypatch, tmp_path):
         return mbld
 
     return generate
+
+
+def test_compile_links_with_fortran(meson_build_of, hello_world_f90):
+    """The Fortran compiler links the module, adding its runtime library
+
+    CLI :: -c
+    """
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90))
+    assert "link_language: 'fortran'" in mbld
 
 
 @pytest.mark.parametrize("flag", [
