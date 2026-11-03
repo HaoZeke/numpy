@@ -232,6 +232,26 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.j_max == 72)
 
 
+@pytest.mark.slow
+class TestContainedProcedures(util.F2PyTest):
+    # Check that CONTAINS procedures stay out of the F90 wrappers
+    sources = [util.getpath("tests", "src", "regression", "gh20103.f90")]
+
+    def test_gh20103_subroutine(self):
+        array = np.zeros((3, 3), order="F")
+        self.module.example(array)
+        expected = 100 * np.arange(1, 4)[:, None] + 10 * np.arange(1, 4)
+        npt.assert_array_equal(array, expected)
+
+    def test_gh20103_function(self):
+        assert self.module.total([1.0, 2.0, 3.0]) == 12.0
+
+    def test_gh20103_module_procedure(self):
+        x = np.ones(3)
+        self.module.gh20103_mod.scale(x)
+        npt.assert_array_equal(x, 2.0)
+
+
 def _wrap_f90(funcwrappers2):
     """Reproduce the F90 line-wrapping logic from rules.py buildmodule."""
     lines = []
