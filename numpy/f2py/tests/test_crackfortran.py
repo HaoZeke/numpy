@@ -713,6 +713,24 @@ class TestRealParameters:
             'big': float(np.finfo(np.float32).max), 'z': 1 + 2j, 'n': 3}
 
 
+class TestUnknownKinds:
+    # a kind that f2py cannot tell stays as written, and is not guessed from
+    # the literals in it, while gh-6624's evaluates
+    def test_not_guessed(self, tmp_path):
+        fpath = tmp_path / "unknown.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module unknown
+              use, intrinsic :: iso_fortran_env, only: real64
+              integer, parameter :: wp = kind(0.0_real64)
+              integer, parameter :: dp = selected_real_kind(precision(1.0d0))
+              real :: a(wp), b(dp)
+            end module unknown
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert vs["a"]["dimension"] == ["kind(0.0_real64)"]
+        assert vs["b"]["dimension"] == ["8"]
+
+
 class TestLiteralKinds:
     # a kind follows a literal, and is no part of a name
     def test_extents(self, tmp_path):
