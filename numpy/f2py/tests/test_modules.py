@@ -127,6 +127,15 @@ class TestDerivedTypeVariables(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestModuleWithoutEntries(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "modules", "type_only.f90")]
+
+    def test_import(self):
+        # f2py skips every entity, so the module object has no entries
+        assert not hasattr(self.module.type_only, "current")
+
+
+@pytest.mark.slow
 class TestUsedModule(util.F2PyTest):
     module_name = "fmath"
     sources = [
