@@ -573,7 +573,6 @@ def sign2map(a, var):
         if isexternal(var):
             ret['vardebugshowvalue'] = f'debug-capi:{a}=%p'
     if ret['ctype'] in cformat_map:
-        ret['varshowvalue'] = f"#name#:{a}={cformat_map[ret['ctype']]}"
         ret['showvalueformat'] = f"{cformat_map[ret['ctype']]}"
     if isstring(var):
         ret['varshowvalue'] = f'#name#:slen({a})=%d {a}=\\"%s\\"'
