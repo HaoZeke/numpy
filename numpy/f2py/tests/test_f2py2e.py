@@ -103,6 +103,15 @@ def gh22819_cli(tmpdir_factory):
 
 
 @pytest.fixture(scope="session")
+def gh28648_cli(tmpdir_factory):
+    """Preprocessed F90 file for testing -D with -c in gh-28648"""
+    fdat = util.getpath("tests", "src", "cli", "gh_28648.F90").read_text()
+    fn = tmpdir_factory.getbasetemp() / "gh_28648.F90"
+    fn.write_text(fdat, encoding="ascii")
+    return fn
+
+
+@pytest.fixture(scope="session")
 def hello_world_f77(tmpdir_factory):
     """Generates a single f77 file for testing"""
     fdat = util.getpath("tests", "src", "cli", "hi77.f").read_text()
@@ -1044,20 +1053,39 @@ def test_compile_libraries(meson_build_of, hello_world_f90, tmp_path):
     assert "link_args : ['-lfoo']" in mbld
 
 
-def test_npd_define():
+def test_compile_macros(meson_build_of, hello_world_f90):
+    """Macros reach both the C and the Fortran compiler
+
+    CLI :: -c -D<define> -U<name>
     """
-    CLI :: -D<define>
-    """
-    # TODO: populate
-    pass
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          "-DFOO", "-DBAR=1", "-UBAZ")
+    assert "c_args: ['-DFOO', '-DBAR=1', '-UBAZ']" in mbld
+    assert "fortran_args: ['-DFOO', '-DBAR=1', '-UBAZ']" in mbld
 
 
-def test_npd_undefine():
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
+def test_compile_macros_gh28648(gh28648_cli, monkeypatch):
+    """Macros select preprocessed Fortran code and configure the C wrapper
+    gh-28648
+
+    CLI :: -c -D<define>
     """
-    CLI :: -U<name>
-    """
-    # TODO: populate
-    pass
+    ipath = Path(gh28648_cli)
+    monkeypatch.setattr(sys, "argv", [
+        "f2py", "-c", "-m", "gh28648", str(ipath),
+        "-DNEW_MODEL_PARM", "-DF2PY_REPORT_ON_ARRAY_COPY=0",
+    ])
+    code = ("import gh28648; m = gh28648.model; "
+            "print(m.run_active_model(2.0)); m.run_passive_model([1.0, 2.0])")
+    with util.switchdir(ipath.parent):
+        compiler_check_f2pycli()
+        rout = subprocess.run([sys.executable, "-c", code],
+                              capture_output=True, encoding="UTF-8")
+    assert rout.returncode == 0, rout.stderr
+    assert rout.stdout.strip() == "20.0"
+    assert "created an array from object" in rout.stderr
 
 
 def test_compile_include_dirs(meson_build_of, hello_world_f90, tmp_path):
