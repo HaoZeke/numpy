@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from numpy.f2py.f2py2e import get_newer_options, main as f2pycli
+from numpy.f2py.f2py2e import get_newer_options, main as f2pycli, preparse_sysargv
 from numpy.testing._private.utils import NOGIL_BUILD
 
 from . import util
@@ -233,6 +233,18 @@ def test_untitled_cli(capfd, hello_world_f90, monkeypatch):
         compiler_check_f2pycli()
         out, _ = capfd.readouterr()
         assert "untitledmodule.c" in out
+
+
+def test_meson_backend_default(capfd, monkeypatch):
+    """Check that meson is the default backend and needs no warning
+
+    CLI :: -c without --backend
+    """
+    monkeypatch.setattr(sys, "argv", "f2py -c -m blah blah.f90".split())
+    assert preparse_sysargv()["backend"] == "meson"
+    out, err = capfd.readouterr()
+    assert "distutils" not in out + err
+
 
 @pytest.mark.slow
 def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
