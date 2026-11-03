@@ -52,6 +52,9 @@ ${inc_list}
                      objects: [
 ${obj_list}
                      ],
+                     link_args: [
+${link_list}
+                     ],
                      dependencies : [
                      py_dep,
                      quadmath_dep,

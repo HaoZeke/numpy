@@ -711,7 +711,7 @@ def test_cli_obj(capfd, hello_world_f90, monkeypatch):
         with Path(f"{odir}/meson.build").open() as mesonbuild:
             mbld = mesonbuild.read()
             assert "objects:" in mbld
-            assert f"'''{obj}'''" in mbld
+            assert f"'''{Path(obj).absolute()}'''" in mbld
 
 
 def test_inclpath(monkeypatch):

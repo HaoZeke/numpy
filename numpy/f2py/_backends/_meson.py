@@ -10,6 +10,9 @@ from string import Template
 
 from ._backend import Backend
 
+# Positional inputs that f2py passes on to the linker as libraries
+_LIBRARY_SUFFIXES = (".a", ".so", ".dylib")
+
 
 def _meson_identifier(prefix: str, value: str, index: int) -> str:
     safe_value = re.sub(r"[^a-zA-Z0-9_]", "_", value)
@@ -88,8 +91,18 @@ class MesonTemplate:
         )
 
     def objects_substitution(self) -> None:
+        # Meson places ``objects`` before the target's own objects on the link
+        # line, where a library cannot resolve the symbols those objects
+        # need, so libraries are passed as ``link_args``, which follow them.
+        libraries = [obj for obj in self.objects
+                     if Path(obj).suffix in _LIBRARY_SUFFIXES]
+        objects = [obj for obj in self.objects
+                   if Path(obj).suffix not in _LIBRARY_SUFFIXES]
         self.substitutions["obj_list"] = ",\n".join(
-            [f"{self.indent}'''{obj}'''," for obj in self.objects]
+            [f"{self.indent}'''{obj}'''," for obj in objects]
+        )
+        self.substitutions["link_list"] = ",\n".join(
+            [f"{self.indent}'''{lib}'''," for lib in libraries]
         )
 
     def deps_substitution(self) -> None:
@@ -204,7 +217,9 @@ class MesonBackend(Backend):
 
     def compile(self) -> None:
         self.sources = _prepare_sources(self.modulename, self.sources, self.build_dir)
-        _prepare_objects(self.modulename, self.extra_objects, self.build_dir)
+        # Reference linker inputs in place, a shared library linked from the
+        # temporary build directory is not found when the module is imported
+        self.extra_objects = [Path(obj).absolute() for obj in self.extra_objects]
         self.write_meson_build(self.build_dir)
         self.run_meson(self.build_dir)
         self._move_exec_to_root(self.build_dir)
@@ -234,13 +249,6 @@ def _prepare_sources(mname, sources, bdir):
         if not Path(source).suffix == ".pyf"
     ]
     return extended_sources
-
-def _prepare_objects(mname, objects, bdir):
-    Path(bdir).mkdir(parents=True, exist_ok=True)
-    # Copy objects
-    for obj in objects:
-        if Path(obj).exists() and Path(obj).is_file():
-            shutil.copy(obj, bdir)
 
 def _get_flags(fc_flags):
     flag_values = []
