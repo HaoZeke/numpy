@@ -4909,7 +4909,9 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         if 'externals' in block and a in block['externals']:
             if isintent_callback(vars[a]):
                 ret = f'{ret}{tab}intent(callback) {a}'
-            ret = f'{ret}{tab}external {a}'
+            # An explicit interface gives the dummy its EXTERNAL attribute.
+            if not as_interface or a not in block.get('interfaced', []):
+                ret = f'{ret}{tab}external {a}'
             if isoptional(vars[a]):
                 ret = f'{ret}{tab}optional {a}'
             if a in vars and 'typespec' not in vars[a]:
