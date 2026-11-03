@@ -7,7 +7,7 @@ import pytest
 
 import numpy as np
 import numpy.testing as npt
-from numpy.f2py._backends._meson import MesonTemplate
+from numpy.f2py._backends._meson import MesonBackend, MesonTemplate
 
 from . import util
 
@@ -184,6 +184,35 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\nscalapack-openmpi =" not in meson_build
     assert "\nfoo-bar =" not in meson_build
     assert "\n1foo =" not in meson_build
+
+
+def test_meson_macros(tmp_path):
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    backend = MesonBackend(
+        modulename="Blah",
+        sources=["f90continuation.f90"],
+        extra_objects=[],
+        build_dir=tmp_path,
+        include_dirs=[],
+        library_dirs=[],
+        libraries=[],
+        define_macros=[("F2PY_USE_PYTHON_TLS", None), ("NVAL", "3")],
+        undef_macros=["NDEBUG"],
+        f2py_flags=[],
+        sysinfo_flags=[],
+        fc_flags=["--f90flags=-g"],
+        flib_flags=[],
+        setup_flags=[],
+        remove_build_dir=False,
+        extra_dat={},
+    )
+    backend.write_meson_build(tmp_path)
+    meson_build = (tmp_path / "meson.build").read_text()
+
+    mparser.Parser(meson_build, "meson.build").parse()
+    macros = "'-DF2PY_USE_PYTHON_TLS', '-DNVAL=3', '-UNDEBUG'"
+    assert f"c_args: [{macros}]" in meson_build
+    assert f"fortran_args: ['-g', {macros}]" in meson_build
 
 
 @pytest.mark.slow

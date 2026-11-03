@@ -147,9 +147,9 @@ Common build flags:
 ``-l<libname>``
   Use the library ``<libname>`` when linking.
 ``-D<macro>[=<defn=1>]``
-  Define macro ``<macro>`` as ``<defn>``.
+  Define macro ``<macro>`` as ``<defn>`` for the C and Fortran compilers.
 ``-U<macro>``
-  Define macro ``<macro>``
+  Undefine macro ``<macro>`` for the C and Fortran compilers.
 ``-I<dir>``
   Append directory ``<dir>`` to the list of directories searched for include
   files.
