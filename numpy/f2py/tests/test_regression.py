@@ -232,6 +232,46 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.j_max == 72)
 
 
+@pytest.mark.slow
+class TestLogicalBoolArrays(util.F2PyTest):
+    # gh-10117: bool arrays reach one-byte LOGICAL dummies without a copy.
+    # Each routine returns the address of the array it was given.
+    sources = [util.getpath("tests", "src", "regression", "logical_bool.f90")]
+
+    @pytest.mark.parametrize("name", ["count_l1", "count_lstar1"])
+    def test_one_byte_intent_in(self, name):
+        func = getattr(self.module.logical_bool, name)
+        a = np.array([True, False, True, True])
+        assert func(a) == (3, a.ctypes.data)
+        b = a.astype(np.int8)
+        assert func(b) == (3, b.ctypes.data)
+
+        strided = a[::2]
+        cnt, addr = func(strided)
+        assert cnt == 2
+        assert addr != strided.ctypes.data
+
+    def test_default_kind_intent_in(self):
+        a = np.array([True, False, True, True])
+        cnt, addr = self.module.logical_bool.count_l4(a)
+        assert cnt == 3
+        assert addr != a.ctypes.data
+
+    def test_written_arrays_are_not_shared(self):
+        # How .TRUE. is stored is up to the Fortran processor, so bool
+        # arrays must not be handed out for writing.
+        a = np.array([True, False, True])
+        with pytest.raises(ValueError, match="not compatible"):
+            self.module.logical_bool.negate_l1(a)
+        out = self.module.logical_bool.negate_l1_inout(a)
+        npt.assert_array_equal(out, [False, True, False])
+        npt.assert_array_equal(a, [True, False, True])
+
+        b = a.astype(np.int8)
+        self.module.logical_bool.negate_l1(b)
+        npt.assert_array_equal(b, [0, 1, 0])
+
+
 def _wrap_f90(funcwrappers2):
     """Reproduce the F90 line-wrapping logic from rules.py buildmodule."""
     lines = []

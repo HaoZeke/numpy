@@ -779,6 +779,19 @@ dump_attrs(const PyArrayObject *obj)
      (PyArray_ISBOOL(arr) && PyTypeNum_ISBOOL(type_num)) ||           \
      (PyArray_ISSTRING(arr) && PyTypeNum_ISSTRING(type_num)))
 
+/*
+ * Casting a bool array to an integer type of the same item size leaves
+ * its bytes unchanged, so an argument that is only read, such as an
+ * intent(in) LOGICAL(KIND=1) array, can use the bool data directly.
+ * Arguments that may be written to are excluded: the Fortran standard
+ * leaves the representation of .TRUE. to the processor (Intel Fortran
+ * stores -1 by default), while NumPy bools must be 0 or 1.
+ */
+#define ARRAY_ISBOOL_FOR_INPUT(arr,type_num,intent)                     \
+    (PyArray_ISBOOL(arr) && PyTypeNum_ISINTEGER(type_num) &&          \
+     !((intent) & (F2PY_INTENT_INOUT | F2PY_INTENT_INPLACE |          \
+                   F2PY_INTENT_OUT)))
+
 static int
 get_elsize(PyObject *obj) {
   /*
@@ -991,7 +1004,8 @@ ndarray_from_pyobj(const int type_num,
         */
         if ((! (intent & F2PY_INTENT_COPY)) &&
             PyArray_ITEMSIZE(arr) == elsize &&
-            ARRAY_ISCOMPATIBLE(arr,type_num) &&
+            (ARRAY_ISCOMPATIBLE(arr,type_num) ||
+             ARRAY_ISBOOL_FOR_INPUT(arr,type_num,intent)) &&
             F2PY_CHECK_ALIGNMENT(arr, intent)) {
             if ((intent & F2PY_INTENT_INOUT || intent & F2PY_INTENT_INPLACE)
               ? ((intent & F2PY_INTENT_C) ? PyArray_ISCARRAY(arr) : PyArray_ISFARRAY(arr))
