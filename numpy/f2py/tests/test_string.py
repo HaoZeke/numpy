@@ -1,8 +1,12 @@
 import pytest
 
 import numpy as np
+from numpy.testing import IS_64BIT
+from numpy.testing._private.utils import requires_memory
 
 from . import util
+
+LEN_BEYOND_INT = np.iinfo(np.intc).max + 1
 
 
 @pytest.mark.slow
@@ -100,3 +104,14 @@ class TestFixedString(util.F2PyTest):
 
             # check that the rest of input string is preserved
             assert rest == self._sint(s, start=4)
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not IS_64BIT, reason="needs objects larger than a C int")
+class TestLargeString(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "string", "gh18767.f90")]
+
+    @requires_memory(free_bytes=2 * LEN_BEYOND_INT)
+    def test_string_len(self):
+        s = b"z".rjust(LEN_BEYOND_INT, b"a")
+        assert self.module.string_len(s) == (LEN_BEYOND_INT, ord("z"))
