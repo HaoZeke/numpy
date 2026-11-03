@@ -155,6 +155,8 @@ except ImportError:
     charset_normalizer = None
 
 from . import __version__, symbolic
+from ._isocbind import isoc_kindmap
+from ._isofenv import isof_kindmap
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -1990,6 +1992,14 @@ def get_usedict(block):
     return usedict
 
 
+# Kind constants of the intrinsic modules. Their values are processor
+# dependent, so capi_maps maps them to C types by name.
+_intrinsic_kind_names = {
+    'iso_c_binding': isoc_kindmap,
+    'iso_fortran_env': isof_kindmap,
+}
+
+
 def get_useparameters(block, param_map=None):
     global f90modulevars
 
@@ -2000,6 +2010,14 @@ def get_useparameters(block, param_map=None):
         return param_map
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
+        renames = {local: name.lower()
+                   for local, name in mapping.get('map', {}).items()
+                   if local.lower() != name.lower()}
+        if usename in _intrinsic_kind_names:
+            for local, name in renames.items():
+                if name in _intrinsic_kind_names[usename]:
+                    param_map[local] = param_map[local.lower()] = name
+            continue
         if usename not in f90modulevars:
             outmess(f'get_useparameters: no module {usename} info used by '
                     f'{block.get("name")}\n')
@@ -2008,9 +2026,12 @@ def get_useparameters(block, param_map=None):
         params = get_parameters(mvars)
         if not params:
             continue
-        # XXX: apply mapping
-        if mapping:
-            errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
+        # Only-lists are not enforced: a scope keeps one use record per
+        # module, so they could hide names that another use statement of
+        # the same module imports.
+        for local, name in renames.items():
+            if name in params:
+                params[local] = params[local.lower()] = params[name]
         for k, v in list(params.items()):
             if k in param_map:
                 outmess(f'get_useparameters: overriding parameter {k!r} with'
