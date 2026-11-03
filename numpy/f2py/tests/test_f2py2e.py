@@ -671,6 +671,28 @@ def test_nowrapfunc(capfd, hello_world_f90, monkeypatch):
         assert r"Fortran 77 wrappers are saved to" not in out
 
 
+@pytest.mark.parametrize(("flag", "nstrict"),
+                         [("", 0), ("--no-strict-setattr", 0),
+                          ("--strict-setattr", 2)])
+def test_strict_setattr(tmp_path, monkeypatch, flag, nstrict):
+    """Ensures that module and COMMON block objects can reject unknown names
+
+    CLI :: --[no-]strict-setattr
+    """
+    ipath = tmp_path / "gh3751.f90"
+    ipath.write_text(
+        util.getpath("tests", "src", "modules", "gh3751.f90").read_text(),
+        encoding="ascii")
+    mname = "blah"
+    monkeypatch.setattr(sys, "argv",
+                        f'f2py -m {mname} {ipath} {flag}'.split())
+
+    with util.switchdir(tmp_path):
+        f2pycli()
+        with Path(f"./{mname}module.c").open() as ocmod:
+            assert ocmod.read().count("PyFortranObject_NewStrict(") == nstrict
+
+
 def test_inclheader(capfd, hello_world_f90, monkeypatch):
     """Add to the include directories
 
