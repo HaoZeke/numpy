@@ -7,3 +7,5 @@ module, or a routine declared with an empty ``fortranname``, now raises
 Fortran 90 modules that only define derived types or interfaces are now
 skipped, like modules without public entities, instead of crashing on
 import.
+``COMMON`` blocks whose members are all ``intent(hide)`` are now skipped
+instead of making the import fail with ``SystemError``.
