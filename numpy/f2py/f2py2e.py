@@ -126,8 +126,8 @@ Options:
 
 
 build backend options (only effective with -c)
-[NO_MESON] is used to indicate an option not meant to be used
-with the meson backend or above Python 3.12:
+[NO_MESON] marks options of the removed numpy.distutils backend,
+which are accepted and ignored:
 
   --fcompiler=         Specify Fortran compiler type by vendor [NO_MESON]
   --compiler=          Specify distutils C compiler type [NO_MESON]
@@ -162,10 +162,8 @@ with the meson backend or above Python 3.12:
 Extra options (only effective with -c):
 
   --link-<resource>    Link extension module with <resource> as defined
-                       by numpy.distutils/system_info.py. E.g. to link
-                       with optimized LAPACK libraries (vecLib on MacOSX,
-                       ATLAS elsewhere), use --link-lapack_opt.
-                       See also --help-link switch. [NO_MESON]
+                       by numpy.distutils/system_info.py. Use
+                       --dep <dependency> instead. [NO_MESON]
 
   -L/path/to/lib/ -l<libname>
   -D<define> -U<name>
