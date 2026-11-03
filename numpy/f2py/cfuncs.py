@@ -1333,8 +1333,8 @@ needs['create_cb_arglist'] = ['CFUNCSMESS', 'PRINTPYOBJERR', 'MINMAX']
 # create the list of arguments to be used when calling back to python
 cfuncs['create_cb_arglist'] = """
 static int
-create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
-                  const int nofoptargs, int *nofargs, PyTupleObject **args,
+create_cb_arglist(PyObject* fun, PyObject* xa , const int maxnofargs,
+                  const int nofoptargs, int *nofargs, PyObject **args,
                   const char *errmess)
 {
     PyObject *tmp = NULL;
@@ -1457,16 +1457,18 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
     }
 
     /* Initialize argument list */
-    *args = (PyTupleObject *)PyTuple_New(siz);
+    *args = PyTuple_New(siz);
+    if (*args == NULL)
+        goto capi_fail;
     for (i=0;i<*nofargs;i++) {
         Py_INCREF(Py_None);
-        PyTuple_SET_ITEM((PyObject *)(*args),i,Py_None);
+        PyTuple_SetItem(*args,i,Py_None);
     }
     if (xa != NULL)
         for (i=(*nofargs);i<siz;i++) {
             tmp = PyTuple_GetItem((PyObject *)xa,i-(*nofargs));
             Py_INCREF(tmp);
-            PyTuple_SET_ITEM(*args,i,tmp);
+            PyTuple_SetItem(*args,i,tmp);
         }
     CFUNCSMESS(\"create_cb_arglist-end\\n\");
     Py_DECREF(tmp_fun);

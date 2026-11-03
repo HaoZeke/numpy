@@ -160,6 +160,18 @@ class TestF77Callback(util.F2PyTest):
         if errors:
             raise AssertionError(errors)
 
+    def test_hidden_callback_extra_args(self):
+        self.module.global_f = lambda x, y=0: x + y
+        self.module.global_f_extra_args = [10]
+        try:
+            assert self.module.hidden_callback(2) == 12
+            # Only the extra arguments reach a callback that is not an
+            # argument of the wrapper (gh18341)
+            assert self.module.hidden_callback2(2) == 10
+        finally:
+            del self.module.global_f
+            del self.module.global_f_extra_args
+
     def test_hidden_callback(self):
         try:
             self.module.hidden_callback(2)
