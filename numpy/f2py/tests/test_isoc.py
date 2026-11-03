@@ -25,6 +25,20 @@ class TestISOC(util.F2PyTest):
         assert_allclose(out, exp)
         assert out.dtype == exp.dtype
 
+    # gh-30352: c_float, c_double and c_long_double are complex kinds too
+    @pytest.mark.parametrize("dtype", [np.complex64, np.complex128, np.clongdouble])
+    def test_complex_real_kind(self, dtype):
+        a = np.array([1 + 1j, 2 - 2j, 3j], dtype=dtype)
+        b = np.array([4j, 5, -6j], dtype=dtype)
+        out = {
+            np.complex64: self.module.coddity.add_cfloat_rkind_arr,
+            np.complex128: self.module.coddity.add_cdouble_rkind_arr,
+            np.clongdouble: self.module.coddity.add_clong_double_rkind_arr
+        }[dtype](a, b)
+        exp = a + b
+        assert_allclose(out, exp)
+        assert out.dtype == exp.dtype
+
     # gh-24553
     def test_c_double(self):
         out = self.module.coddity.c_add(1, 2)

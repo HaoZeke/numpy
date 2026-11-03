@@ -22,6 +22,19 @@ class TestIOSF(util.F2PyTest):
         exp_out = 3
         assert out == exp_out
 
+    # gh-30352: real32 and real64 are complex kinds too
+    @pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+    def test_f_add_complex_arr(self, dtype):
+        a = np.array([1 + 1j, 2 - 2j, 3j], dtype=dtype)
+        b = np.array([4j, 5, -6j], dtype=dtype)
+        out = {
+            np.complex64: self.module.foddity.add_complex_real32_arr,
+            np.complex128: self.module.foddity.add_complex_real64_arr,
+        }[dtype](a, b)
+        exp_out = a + b
+        assert_allclose(out, exp_out)
+        assert out.dtype == exp_out.dtype
+
     def test_wat(self):
         out = self.module.foddity.wat(1, 2)
         exp_out = 8

@@ -16,6 +16,21 @@
         real(real32), intent(out) :: c
         c = a + b
       end subroutine f_addf
+      ! gh-30352
+      subroutine add_complex_real32_arr(a, b, c)
+        use iso_fortran_env, only: real32
+        implicit none
+        complex(real32), dimension(3), intent(in) :: a, b
+        complex(real32), dimension(3), intent(out) :: c
+        c = a + b
+      end subroutine add_complex_real32_arr
+      subroutine add_complex_real64_arr(a, b, c)
+        use iso_fortran_env, only: real64
+        implicit none
+        complex(real64), dimension(3), intent(in) :: a, b
+        complex(real64), dimension(3), intent(out) :: c
+        c = a + b
+      end subroutine add_complex_real64_arr
       ! gh-9693
       function wat(x, y) result(z)
           use iso_fortran_env, only: int32
