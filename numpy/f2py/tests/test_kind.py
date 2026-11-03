@@ -429,18 +429,19 @@ class TestSizeKind(util.F2PyTest):
 class TestFastKind(util.F2PyTest):
     sources = [util.getpath("tests", "src", "kind", "fastint.f90")]
 
-    def _round_trip(self, func):
-        sample = int(func(1))
-        width = np.array(sample).dtype.itemsize
+    def _round_trip(self, func, name):
+        from numpy.f2py.capi_maps import f2cmap_all
+        widths = {'signed_char': 1, 'short': 2, 'int': 4, 'long_long': 8}
+        width = widths[f2cmap_all['integer'][name]]
         value = (_FAST_KIND_PAST_32_BITS if width >= 8
                  else _FAST_KIND_FITS_ALL)
         assert int(func(value)) == value + 1
 
     def test_fast16(self):
-        self._round_trip(self.module.fastmod.add16)
+        self._round_trip(self.module.fastmod.add16, 'c_int_fast16_t')
 
     def test_fast32(self):
-        self._round_trip(self.module.fastmod.add32)
+        self._round_trip(self.module.fastmod.add32, 'c_int_fast32_t')
 
 
 @pytest.mark.slow
