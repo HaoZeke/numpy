@@ -124,19 +124,27 @@ f2py_cb_start_clock();
     goto capi_return_pt;
     }
     if (capi_arglist==NULL) {
+        PyTupleObject *capi_xa = NULL;
         capi_longjmp_ok = 0;
         capi_tmp = PyObject_GetAttrString(#modulename#_module,\"#argname#_extra_args\");
         if (capi_tmp) {
-            cb->args_capi = (PyTupleObject *)PySequence_Tuple(capi_tmp);
+            capi_xa = (PyTupleObject *)PySequence_Tuple(capi_tmp);
             Py_DECREF(capi_tmp);
-            if (cb->args_capi==NULL) {
+            if (capi_xa==NULL) {
                 PyErr_SetString(#modulename#_error,\"Failed to convert #modulename#.#argname#_extra_args to tuple.\\n\");
                 goto capi_fail;
             }
         } else {
             PyErr_Clear();
-            cb->args_capi = (PyTupleObject *)Py_BuildValue(\"()\");
         }
+        /* The calling routine does not declare the call-back. For backward
+           compatibility, functions callable with the extra arguments alone
+           get only those. */
+        if (!create_cb_arglist(cb->capi,capi_xa,#maxnofargs#,#nofoptargs#,1,&cb->nofargs,&cb->args_capi,\"failed in processing argument list for call-back #argname#.\")) {
+            Py_XDECREF(capi_xa);
+            goto capi_fail;
+        }
+        Py_XDECREF(capi_xa);
         capi_arglist = cb->args_capi;
     }
     if (capi_arglist == NULL) {
@@ -191,7 +199,8 @@ capi_return_pt:
 }
 #endtitle#
 """,
-    'need': ['setjmp.h', 'CFUNCSMESS', 'F2PY_THREAD_LOCAL_DECL'],
+    'need': ['setjmp.h', 'CFUNCSMESS', 'F2PY_THREAD_LOCAL_DECL',
+             'create_cb_arglist'],
     'maxnofargs': '#maxnofargs#',
     'nofoptargs': '#nofoptargs#',
     'docstr': """\

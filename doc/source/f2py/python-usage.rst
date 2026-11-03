@@ -244,12 +244,23 @@ In Python:
 .. literalinclude:: ./code/results/extcallback_session.dat
   :language: python
 
+In ``pfromf.f1()`` the Fortran code of ``f2`` runs without the Python wrapper
+of ``f2``, as it would for any Fortran routine that calls ``fpy`` without
+declaring it ``intent(callback)``. Such calls pass their Fortran arguments to
+the Python function following the same :ref:`rules <f2py-callback-arguments>`
+as calls made through the wrapper, with ``fpy_extra_args`` taken from the
+module attribute of that name. For backward compatibility, a Python function
+that can be called with these extra arguments alone, for instance because all
+of its parameters have default values, receives only the extra arguments.
+
 .. note::
 
    When using modified Fortran code via ``callstatement`` or other directives,
    the wrapped Python function must be called as a callback, otherwise only the
    bare Fortran routine will be used. For more details, see
    https://github.com/numpy/numpy/issues/26681#issuecomment-2466460943
+
+.. _f2py-callback-arguments:
 
 Resolving arguments to call-back functions
 ------------------------------------------
