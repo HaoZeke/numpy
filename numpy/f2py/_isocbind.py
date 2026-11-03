@@ -56,6 +56,14 @@ iso_c_binding_map = {
 isoc_c2pycode_map = {}
 iso_c2py_map = {}
 
+# Kind numbers of names that have no C type of their own. ``getctype``
+# maps the name as this number, so ``real(c_float128)`` follows ``real(16)``.
+iso_c_kind_numbers: dict[str, dict[str, int]] = {
+    'real': {'c_float16': 2, 'c_float128': 16},
+    'complex': {'c_float16_complex': 2, 'c_float128_complex': 16},
+    'integer': {'c_int128_t': 16},
+}
+
 isoc_kindmap = {}
 for fortran_type, c_type_dict in iso_c_binding_map.items():
     for c_type in c_type_dict.keys():
