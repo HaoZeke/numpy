@@ -256,6 +256,28 @@ class TestDimSpec(util.F2PyTest):
             assert sz == sz1, (n, n1, sz, sz1)
 
 
+class TestAssumedShapeLowerBound:
+    # gh-25421: a lower bound alone, as in a(0:), declares an assumed shape
+    @pytest.mark.parametrize("dimspec, expected", [
+        ("0:", [":"]),
+        ("1:", [":"]),
+        ("-1:, 2:", [":", ":"]),
+        ("0:, :", [":", ":"]),
+        ("0:*", ["*"]),
+        ("0:n", ["1 + n"]),
+    ])
+    def test_dimension(self, tmp_path, dimspec, expected):
+        fpath = tmp_path / "gh25421.f90"
+        fpath.write_text(textwrap.dedent(f"""
+            subroutine sub(a, n)
+              integer, intent(in) :: n
+              real, intent(in) :: a({dimspec})
+            end subroutine sub
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert mod[0]["vars"]["a"]["dimension"] == expected
+
+
 class TestModuleDeclaration:
     def test_dependencies(self, tmp_path):
         fpath = util.getpath("tests", "src", "crackfortran", "foo_deps.f90")
