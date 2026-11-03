@@ -577,7 +577,7 @@ def get_newer_options(iline):
 def make_f2py_compile_parser():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--dep", action="append", dest="dependencies")
-    parser.add_argument("--backend", choices=['meson', 'distutils'], default='distutils')
+    parser.add_argument("--backend", choices=['meson', 'distutils'], default='meson')
     parser.add_argument("-m", dest="module_name")
     parser.add_argument("--cross-file", action="append", dest="cross_files")
     parser.add_argument("--native-file", action="append", dest="native_files")
@@ -593,8 +593,8 @@ def preparse_sysargv():
 
     backend_key = args.backend
     if backend_key == 'distutils':
-        outmess("Cannot use distutils backend with Python>=3.12,"
-                " using meson backend instead.\n")
+        outmess("The distutils backend has been removed,"
+                " using the meson backend instead.\n")
         backend_key = "meson"
 
     return {

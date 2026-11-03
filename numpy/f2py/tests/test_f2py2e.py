@@ -248,8 +248,8 @@ def test_untitled_cli(capfd, hello_world_f90, monkeypatch):
 
 @pytest.mark.slow
 def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
-    """Check that distutils backend and related options fail
-    CLI :: --fcompiler --help-link --backend distutils
+    """Check that distutils-only options fail
+    CLI :: --fcompiler --help-link
     """
     MNAME = "hi"
     foutl = get_io_paths(hello_world_f90, mname=MNAME)
@@ -270,15 +270,6 @@ def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
     assert excinfo.value.code == 2
     _, err = capfd.readouterr()
     assert "Unknown option '--help-link'" in err
-
-    monkeypatch.setattr(
-        sys, "argv", ["f2py", "--backend", "distutils"]
-    )
-    with pytest.raises(SystemExit):
-        compiler_check_f2pycli()
-        f2pycli()
-        out, _ = capfd.readouterr()
-        assert "'distutils' backend was removed" in out
 
 def test_f2py_skip(capfd, retreal_f77, monkeypatch):
     """Tests that functions can be skipped
@@ -1021,6 +1012,21 @@ def meson_build_of(monkeypatch, tmp_path):
         return mbld
 
     return generate
+
+
+def test_compile_backend(meson_build_of, hello_world_f90, capfd):
+    """meson is the default and only backend, distutils falls back to it
+
+    CLI :: -c --backend
+    """
+    meson_build_of("-m", "blah", str(hello_world_f90))
+    out, _ = capfd.readouterr()
+    assert "distutils" not in out
+
+    meson_build_of("-m", "blah", str(hello_world_f90), "--backend", "distutils")
+    out, _ = capfd.readouterr()
+    assert ("The distutils backend has been removed, "
+            "using the meson backend instead.") in out
 
 
 def test_compile_links_with_fortran(meson_build_of, hello_world_f90):
