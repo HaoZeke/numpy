@@ -592,6 +592,18 @@ cppmacros['CHECKSCALAR'] = """
         PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, var);\\
         /*goto capi_fail;*/\\
     } else """
+# PyErr_Format has no %g, so a _Float16 is printed through snprintf.
+cppmacros['CHECKHALF'] = """
+/* A binary16 printed with %g needs a sign, digits, an exponent and a NUL.
+   64 bytes covers that longest form. */
+#define F2PY_HALF_BUF 64
+#define CHECKHALF(check,tcheck,name,var)\\
+    if (!(check)) {\\
+        char _f2py_half_buf[F2PY_HALF_BUF];\\
+        snprintf(_f2py_half_buf, sizeof(_f2py_half_buf), \"%g\", (double)(var));\\
+        PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": %s\", _f2py_half_buf);\\
+        /*goto capi_fail;*/\\
+    } else """
 # cppmacros['CHECKDIMS']="""
 # define CHECKDIMS(dims,rank) \\
 #     for (int i=0;i<(rank);i++)\\
