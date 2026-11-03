@@ -168,9 +168,7 @@ class MesonBackend(Backend):
         self.cross_files = self.extra_dat.get("cross_files", [])
         self.native_files = self.extra_dat.get("native_files", [])
         self.meson_build_dir = "bbdir"
-        self.build_type = (
-            "debug" if any("debug" in flag for flag in self.fc_flags) else "release"
-        )
+        self.build_type = "debug" if "--debug" in self.fc_flags else "release"
         self.fc_flags = _get_flags(self.fc_flags)
 
     def _move_exec_to_root(self, build_dir: Path):

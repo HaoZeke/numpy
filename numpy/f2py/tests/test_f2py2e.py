@@ -1034,12 +1034,18 @@ def test_compile_fortran_flags(meson_build_of, hello_world_f90):
             "'-O1']") in mbld
 
 
-def test_npd_debug():
-    """
+def test_compile_debug(meson_build_of, hello_world_f90):
+    """Only --debug selects a debug build
+
     CLI :: -c --debug
     """
-    # TODO: populate
-    pass
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90), "--debug")
+    assert "'buildtype=debug'" in mbld
+    assert "--debug" not in mbld
+
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          "--f90flags=-fdebug-prefix-map=/src=.")
+    assert "'buildtype=release'" in mbld
 
 
 def test_compile_libraries(meson_build_of, hello_world_f90, tmp_path):
