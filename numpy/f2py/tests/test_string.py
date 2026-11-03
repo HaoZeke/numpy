@@ -1,6 +1,7 @@
 import pytest
 
 import numpy as np
+from numpy.testing import assert_array_equal
 
 from . import util
 
@@ -100,3 +101,14 @@ class TestFixedString(util.F2PyTest):
 
             # check that the rest of input string is preserved
             assert rest == self._sint(s, start=4)
+
+    @pytest.mark.parametrize("byteorder", ["<", ">"])
+    def test_str_array(self, byteorder):
+        # a str_ array must behave as the bytes array it casts to
+        for s in self._get_input(intent="inout"):
+            u = s.astype(f"{byteorder}U{s.itemsize}")
+            r = self.module.test_in_bytes4(s)
+            assert self.module.test_in_bytes4(u) == r
+            r = self.module.test_inout_bytes4(s)
+            assert self.module.test_inout_bytes4(u) == r
+            assert_array_equal(u, s.astype(u.dtype))
