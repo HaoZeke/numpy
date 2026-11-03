@@ -15,6 +15,10 @@ from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
     getfortranname,
+    hasoptionalargs,
+    isabsentcapable,
+    isattr_value,
+    isfortranoptional,
     isexternal,
     isfunction,
     isfunction_wrap,
@@ -71,7 +75,15 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
     elif 'kind' in selector:
         vardef = f"{vardef}(kind={selector['kind']})"
 
-    vardef = f'{vardef} {fa}'
+    attributes = []
+    if isabsentcapable(vars[a]):
+        attributes.append('optional')
+    if isattr_value(vars[a]):
+        attributes.append('value')
+    if attributes:
+        vardef = f"{vardef}, {', '.join(attributes)} :: {fa}"
+    else:
+        vardef = f'{vardef} {fa}'
     if 'dimension' in vars[a]:
         vardef = f"{vardef}({','.join(vars[a]['dimension'])})"
     return vardef
@@ -92,10 +104,22 @@ def useiso_fortran_env(rout):
             return True
     return useisof
 
+def _prepare_optional_args(rout):
+    # The wrapper accepts references; Fortran supplies the callee's VALUE ABI.
+    # saved_interface retains the actual procedure's VALUE attribute.
+    hasoptionalargs(rout)
+    for name in rout['args']:
+        var = rout['vars'][name]
+        if isfortranoptional(var) and isattr_value(var):
+            var['attrspec'] = [attr for attr in var['attrspec']
+                               if attr != 'value']
+
+
 def createfuncwrapper(rout, signature=0):
     assert isfunction(rout)
 
     extra_args = []
+    _prepare_optional_args(rout)
     vars = rout['vars']
     for a in rout['args']:
         v = rout['vars'][a]
@@ -108,7 +132,8 @@ def createfuncwrapper(rout, signature=0):
                 vars[dn] = dv
                 v['dimension'][i] = dn
     rout['args'].extend(extra_args)
-    need_interface = bool(extra_args)
+    need_interface = (bool(extra_args)
+                      or hasoptionalargs(rout))
 
     ret = ['']
 
@@ -224,6 +249,7 @@ def createsubrwrapper(rout, signature=0):
     assert issubroutine(rout)
 
     extra_args = []
+    _prepare_optional_args(rout)
     vars = rout['vars']
     for a in rout['args']:
         v = rout['vars'][a]
@@ -236,7 +262,8 @@ def createsubrwrapper(rout, signature=0):
                 vars[dn] = dv
                 v['dimension'][i] = dn
     rout['args'].extend(extra_args)
-    need_interface = bool(extra_args)
+    need_interface = (bool(extra_args)
+                      or hasoptionalargs(rout))
 
     ret = ['']
 

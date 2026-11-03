@@ -3546,7 +3546,8 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         if 'depend' in vars[a]:
             vardef = f"{vardef}{c}depend({','.join(vars[a]['depend'])})"
             c = ','
-        if '=' in vars[a]:
+        if ('=' in vars[a]
+                and not (as_interface and a in block.get('args', []))):
             v = vars[a]['=']
             if vars[a]['typespec'] in ['complex', 'double complex']:
                 try:

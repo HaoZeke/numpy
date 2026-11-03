@@ -312,7 +312,8 @@ def issubroutine(rout):
 def issubroutine_wrap(rout):
     if isintent_c(rout):
         return 0
-    return issubroutine(rout) and hasassumedshape(rout)
+    return issubroutine(rout) and (hasassumedshape(rout)
+                                    or hasoptionalargs(rout))
 
 def isattr_value(var):
     return 'value' in var.get('attrspec', [])
@@ -330,7 +331,8 @@ def hasassumedshape(rout):
 
 
 def requiresf90wrapper(rout):
-    return ismoduleroutine(rout) or hasassumedshape(rout)
+    return (ismoduleroutine(rout) or hasassumedshape(rout)
+            or hasoptionalargs(rout))
 
 
 def isroutine(rout):
@@ -427,6 +429,27 @@ def hasvariables(rout):
 def isoptional(var):
     return ('attrspec' in var and 'optional' in var['attrspec'] and
             'required' not in var['attrspec']) and isintent_nothide(var)
+
+
+def isfortranoptional(var):
+    return isoptional(var) and not isintent_c(var) and not isexternal(var)
+
+
+def isabsentcapable(var):
+    # An explicit default substitutes a value instead of forwarding absence.
+    return isfortranoptional(var) and '=' not in var
+
+
+def hasoptionalargs(rout):
+    if rout.get('hasoptionalargs'):
+        return True
+    for name in rout['args']:
+        var = rout['vars'][name]
+        if (isabsentcapable(var)
+                or (isfortranoptional(var) and isattr_value(var))):
+            rout['hasoptionalargs'] = True
+            return True
+    return False
 
 
 def isexternal(var):

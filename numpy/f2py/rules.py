@@ -76,6 +76,7 @@ from .auxfuncs import (
     hasresultnote,
     isarray,
     isarrayofstrings,
+    isabsentcapable,
     isattr_value,
     ischaracter,
     ischaracter_or_characterarray,
@@ -970,7 +971,13 @@ if (#varname#_cb.capi==Py_None) {
     {  # Common
         'decl': '    #ctype# #varname# = 0;',
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#);'},
-        'callfortran': {l_or(isintent_c, isattr_value): '#varname#,', l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
+        'callfortran': {
+            l_or(isintent_c, isattr_value): '#varname#,',
+            l_and(l_not(l_or(isintent_c, isattr_value)),
+                  isabsentcapable):
+                '(#varname#_capi == Py_None ? NULL : &#varname#),',
+            l_and(l_not(l_or(isintent_c, isattr_value)),
+                  l_not(isabsentcapable)): '&#varname#,'},
         'return': {isintent_out: ',#varname#'},
         '_check': l_and(isscalar, l_not(iscomplex))
     }, {
@@ -1035,7 +1042,12 @@ if (#varname#_cb.capi==Py_None) {
     # Complex scalars
     {  # Common
         'decl': '    #ctype# #varname#;',
-        'callfortran': {isintent_c: '#varname#,', l_not(isintent_c): '&#varname#,'},
+        'callfortran': {
+            isintent_c: '#varname#,',
+            l_and(l_not(isintent_c), isabsentcapable):
+                '(#varname#_capi == Py_None ? NULL : &#varname#),',
+            l_and(l_not(isintent_c), l_not(isabsentcapable)):
+                '&#varname#,'},
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#.r,#varname#.i);'},
         'return': {isintent_out: ',#varname#_capi'},
         '_check': iscomplex
@@ -1082,7 +1094,10 @@ if (#varname#_cb.capi==Py_None) {
         'decl': ['    #ctype# #varname# = NULL;',
                  '    int slen(#varname#);',
                  '    PyObject *#varname#_capi = Py_None;'],
-        'callfortran': '#varname#,',
+        'callfortran': {
+            isabsentcapable:
+                '(#varname#_capi == Py_None ? NULL : #varname#),',
+            l_not(isabsentcapable): '#varname#,'},
         'callfortranappend': 'slen(#varname#),',
         'pyobjfrom': [
             {debugcapi:
@@ -1147,7 +1162,10 @@ if (#varname#_cb.capi==Py_None) {
                  '    int capi_#varname#_intent = 0;',
                  {isstringarray: '    int slen(#varname#) = 0;'},
                  ],
-        'callfortran': '#varname#,',
+        'callfortran': {
+            isabsentcapable:
+                '(#varname#_capi == Py_None ? NULL : #varname#),',
+            l_not(isabsentcapable): '#varname#,'},
         'callfortranappend': {isstringarray: 'slen(#varname#),'},
         'return': {isintent_out: ',capi_#varname#_as_array'},
         'need': 'len..',
@@ -1193,6 +1211,13 @@ if (#varname#_cb.capi==Py_None) {
     }, {
         'frompyobj': [
             '    #setdims#;',
+            {isabsentcapable: '''\
+    if (#varname#_capi == Py_None) {
+        for (int f2py_i = 0; f2py_i < #rank#; ++f2py_i) {
+            if (#varname#_Dims[f2py_i] < 0)
+                #varname#_Dims[f2py_i] = 0;
+        }
+    }'''},
             '    capi_#varname#_intent |= #intent#;',
             ('    const char capi_errmess[] = "#modulename#.#pyname#:'
              ' failed to create array from the #nth# `#varname#`";'),
