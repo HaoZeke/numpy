@@ -747,7 +747,8 @@ def getcallprotoargument(rout, cb_map={}):
                 ctype = ctype + '*'
             if (isstring(var)
                  or isarrayofstrings(var)  # obsolete?
-                 or isstringarray(var)):
+                 or isstringarray(var)
+                 or ischaracter_or_characterarray(var)):
                 arg_types2.append('size_t')
         arg_types.append(ctype)
 

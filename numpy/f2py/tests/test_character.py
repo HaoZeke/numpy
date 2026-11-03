@@ -642,3 +642,20 @@ class TestBCCharHandling(util.F2PyTest):
     def test_gh25286(self):
         info = self.module.charint('T')
         assert info == 2
+
+
+@pytest.mark.slow
+class TestCharacterHiddenLength(util.F2PyTest):
+    # gh-13809: a CHARACTER without a length selector still has a hidden
+    # length argument, and the lengths of later CHARACTER dummies follow it
+    sources = [util.getpath("tests", "src", "string", "gh13809.f")]
+
+    def test_character(self):
+        assert self.module.charlens(b"A", b"hello") == 5
+        assert self.module.charlens(b"B", b"hello") == -5
+
+    def test_character_array(self):
+        assert self.module.chararrlens([b"A", b"B"], b"hello") == 5
+
+    def test_character_function(self):
+        assert ord(self.module.charlenfunc(b"A", b"hello")) == 5

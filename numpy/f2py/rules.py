@@ -1295,13 +1295,16 @@ if (#varname#_cb.capi==Py_None) {
      '_check': iscomplexarray,
      '_depend': ''
      },
-    # Character
+    # Character: without a length selector the length is 1, and Fortran
+    # still expects the hidden length argument for it
     {
+        'callfortranappend': '1,',
         'need': 'string',
         '_check': ischaracter,
     },
     # Character array
     {
+        'callfortranappend': '1,',
         'need': 'string',
         '_check': ischaracterarray,
     },
