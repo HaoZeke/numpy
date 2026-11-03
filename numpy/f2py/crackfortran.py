@@ -2285,10 +2285,9 @@ def analyzebody(block, args, tab=''):
                 continue
             else:
                 as_ = b['args']
-            # Add private members to skipfuncs for gh-23879
-            if b['name'] in maybe_private.keys():
-                skipfuncs.append(b['name'])
-            if b['name'] in skipfuncs:
+            # a private module procedure cannot be named outside its module
+            # (gh-23879); a procedure of that name elsewhere can
+            if b['name'] in skipfuncs or b['name'] in maybe_private.keys():
                 continue
             if onlyfuncs and b['name'] not in onlyfuncs:
                 continue

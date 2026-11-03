@@ -69,6 +69,36 @@ class TestPublicPrivate:
         pyf = crackfortran.crack2fortran(mod)
         assert 'bar1337baz' not in pyf
 
+    def test_private_procedure_of_another_module(self, tmp_path):
+        # a private procedure keeps no other module's procedure of its
+        # name from being wrapped
+        fpath = tmp_path / "twomods.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module first
+              private
+              public :: run
+            contains
+              subroutine run(x)
+                integer, intent(inout) :: x
+                call helper(x)
+              end subroutine run
+              subroutine helper(x)
+                integer, intent(inout) :: x
+                x = x + 1
+              end subroutine helper
+            end module first
+            module second
+            contains
+              subroutine helper(x)
+                integer, intent(inout) :: x
+                x = 2 * x
+              end subroutine helper
+            end module second
+            """))
+        mods = crackfortran.crackfortran([str(fpath)])
+        body = {m['name']: [b['name'] for b in m['body']] for m in mods}
+        assert body == {'first': ['run'], 'second': ['helper']}
+
 class TestModuleProcedure:
     def test_moduleOperators(self, tmp_path):
         fpath = util.getpath("tests", "src", "crackfortran", "operators.f90")
