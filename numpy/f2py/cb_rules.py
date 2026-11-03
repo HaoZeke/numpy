@@ -22,6 +22,7 @@ from .auxfuncs import (
     iscomplexfunction,
     isfunction,
     isintent_c,
+    isintent_callback,
     isintent_hide,
     isintent_in,
     isintent_inout,
@@ -645,5 +646,10 @@ def buildcallback(rout, um):
                                       'latexdocstr': ar['latexdocstr'],
                                       'argname': rd['argname']
                                       }
+    if isintent_callback(rout):
+        capi_maps.lcb2_map[rd['name']]['callbackname'] = rd['callbackname']
+        capi_maps.lcb2_map[rd['name']]['signature'] = (
+            ar['cbtypedefs'].replace(rd['name'], ''),
+            ar['maxnofargs'], ar['nofoptargs'])
     outmess(f"      {ar['docstrshort']}\n")
 ################## Build call-back function #############

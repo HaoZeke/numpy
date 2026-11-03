@@ -22,6 +22,7 @@ from ._isofenv import iso_fortran_env_map
 # As the needed functions cannot be determined by static inspection of the
 # code, it is safest to use import * pending a major refactoring of f2py.
 from .auxfuncs import *
+from .auxfuncs import F2PYError
 from .crackfortran import markoutercomma
 
 __all__ = [
@@ -34,6 +35,9 @@ __all__ = [
 depargs = []
 lcb_map = {}
 lcb2_map = {}
+# Fortran name -> (callback, routine) of the intent(callback) externals of
+# the Python module being built
+intent_callback_map = {}
 # forced casting: mainly caused by the fact that Python or Numeric
 #                 C/APIs do not support the corresponding C types.
 c2py_map = {'double': 'float',
@@ -583,6 +587,26 @@ def sign2map(a, var):
     return ret
 
 
+def _shared_callback(cbname, routname):
+    """Return the callback wrapper that routine ``routname`` uses for ``cbname``.
+
+    An intent(callback) wrapper is defined under the Fortran name of the
+    external, so the routines of a Python module that declare the same
+    external must all use the wrapper of the first one.
+    """
+    cb = lcb2_map[cbname]
+    if 'callbackname' not in cb:
+        return cbname
+    first, firstrout = intent_callback_map.setdefault(
+        cb['callbackname'], (cbname, routname))
+    if lcb2_map[first]['signature'] != cb['signature']:
+        raise F2PYError(
+            f"intent(callback) {cb['argname']} of {routname} does not match "
+            f"its declaration in {firstrout}: one Fortran external cannot "
+            "have two signatures")
+    return first
+
+
 def routsign2map(rout):
     """
     name,NAME,begintitle,endtitle
@@ -623,7 +647,7 @@ def routsign2map(rout):
                             if rout['use'][u]['map'][k] == un[0]:
                                 ln = k
                                 break
-                    lcb_map[ln] = un[1]
+                    lcb_map[ln] = _shared_callback(un[1], name)
     elif rout.get('externals'):
         externals = rout['externals']
         errmess(f"routsign2map: Confused: function {ret['name']} has externals "
@@ -676,6 +700,7 @@ def modsign2map(m):
         ret = {'modulename': m['name'],
                'MODULENAME': m['name'].upper(),
                'texmodulename': m['name'].replace('_', '\\_')}
+        intent_callback_map.clear()
     ret['restdoc'] = getrestdoc(m) or []
     if hasnote(m):
         ret['note'] = m['note']

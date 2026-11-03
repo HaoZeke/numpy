@@ -1,5 +1,6 @@
 import math
 import platform
+import subprocess
 import sys
 import textwrap
 import threading
@@ -246,6 +247,74 @@ class TestGH25211(util.F2PyTest):
 
         res = self.module.foo(bar)
         assert res == 110
+
+
+@pytest.mark.slow
+class TestSharedIntentCallback(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh8288.f90")]
+
+    def test_shared_callback(self):
+        calls = []
+        self.module.pyfunc = lambda i: calls.append(i)
+        self.module.routine()
+        self.module.routine2()
+        assert calls == [1, 2]
+
+    def test_shared_callback_reentrant(self):
+        calls = []
+
+        def pyfunc(i):
+            calls.append(i)
+            if i == 1:
+                self.module.routine2()
+
+        self.module.pyfunc = pyfunc
+        self.module.routine()
+        assert calls == [1, 2]
+
+    def test_shared_callback_raises(self):
+        def pyfunc(i):
+            raise ValueError(f"called from routine {i}")
+
+        self.module.pyfunc = pyfunc
+        with pytest.raises(ValueError, match="called from routine 1"):
+            self.module.routine()
+        with pytest.raises(ValueError, match="called from routine 2"):
+            self.module.routine2()
+
+
+@pytest.mark.slow
+class TestSharedIntentCallbackPyf(TestSharedIntentCallback):
+    sources = [util.getpath("tests", "src", "callback", "gh8288.pyf"),
+               util.getpath("tests", "src", "callback", "gh8288.f90")]
+    module_name = "gh8288"
+
+
+def test_shared_intent_callback_mismatch(tmp_path):
+    pyf = tmp_path / "mismatch.pyf"
+    pyf.write_text(textwrap.dedent("""\
+        python module mismatch
+            interface
+                subroutine routine()
+                    intent(callback,hide) pyfunc
+                    external pyfunc
+                    integer i
+                    call pyfunc(i)
+                end subroutine routine
+                subroutine routine2()
+                    intent(callback,hide) pyfunc
+                    external pyfunc
+                    real x
+                    call pyfunc(x)
+                end subroutine routine2
+            end interface
+        end python module mismatch
+        """))
+    proc = subprocess.run([sys.executable, "-m", "numpy.f2py", pyf.name],
+                          cwd=tmp_path, capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert ("intent(callback) pyfunc of routine2 does not match its "
+            "declaration in routine") in proc.stderr
 
 
 @pytest.mark.slow
