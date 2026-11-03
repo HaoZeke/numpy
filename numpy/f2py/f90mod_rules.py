@@ -242,10 +242,20 @@ def buildhooks(pymod):
              f'F2PYINIT{m_name.upper()})(f2py_setup_{m_name});')
         iadd('}\n')
         ret['f90modhooks'] = ret['f90modhooks'] + chooks + ihooks
+        # a named constant cannot be assigned to
+        constants = [
+            '\t\t{\n\t\t\tPyObject *v = PyDict_GetItemString('
+            f'((PyFortranObject *)tmp)->dict, "{undo_rmbadname1(n)}");\n'
+            '\t\t\tif (v != NULL)\n\t\t\t\tPyArray_CLEARFLAGS('
+            '(PyArrayObject *)v, NPY_ARRAY_WRITEABLE);\n\t\t}'
+            for n in onlyvars
+            if 'parameter' in m['vars'][n].get('attrspec', [])]
         ret['initf90modhooks'] = [
             '\t{',
             ('\t\tPyObject *tmp = '
             f'PyFortranObject_New(f2py_{m_name}_def,f2py_init_{m_name});'),
+            '\t\tif (tmp == NULL) return -1;',
+            *constants,
             f'\t\tPyDict_SetItemString(d, "{m_name}", tmp);',
             '\t\tPy_XDECREF(tmp);',
             '\t}',

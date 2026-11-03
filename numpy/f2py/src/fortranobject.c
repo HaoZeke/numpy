@@ -439,6 +439,30 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                    fp->defs[i].rank * sizeof(npy_intp));
         }
         else { /* not allocatable array */
+            PyObject *current = NULL;
+            int readonly;
+            if (fp->dict != NULL) {
+                // python 3.13 added PyDict_GetItemRef
+#if PY_VERSION_HEX < 0x030D0000
+                current = _PyDict_GetItemStringWithError(fp->dict, name); // noqa: borrowed-ref OK
+                if (current == NULL && PyErr_Occurred()) {
+                    return -1;
+                }
+                Py_XINCREF(current);
+#else
+                if (PyDict_GetItemStringRef(fp->dict, name, &current) == -1) {
+                    return -1;
+                }
+#endif
+            }
+            readonly = current != NULL && PyArray_Check(current) &&
+                       !PyArray_ISWRITEABLE((PyArrayObject *)current);
+            Py_XDECREF(current);
+            if (readonly) {
+                PyErr_Format(PyExc_AttributeError,
+                             "cannot assign to the named constant %s", name);
+                return -1;
+            }
             if ((arr = array_from_pyobj(fp->defs[i].type, fp->defs[i].dims.d,
                                         fp->defs[i].rank, F2PY_INTENT_IN,
                                         v)) == NULL)

@@ -1,3 +1,4 @@
+import os
 import textwrap
 
 import pytest
@@ -34,6 +35,40 @@ class TestModuleWithoutPublicEntities(util.F2PyTest):
     def test_gh26920(self):
         # if it compiles and can be loaded, things are fine
         pass
+
+
+@pytest.mark.slow
+class TestConstantParameter(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "constant_parameter.f90")
+    ]
+
+    def test_parameters_are_constant(self):
+        mod = self.module.constants
+        before = int(mod.constant)
+        with pytest.raises(AttributeError, match="named constant constant"):
+            mod.constant = before + 1
+        assert int(mod.constant) == before
+        mod.non_parameter = 6
+        assert mod.non_parameter == 6
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    "flang" in os.environ.get("FC", ""),
+    reason="an array parameter needs LLVM flang's runtime library",
+)
+class TestConstantParameterArray(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "constant_parameter_array.f90")
+    ]
+
+    def test_array_parameter_is_constant(self):
+        mod = self.module.constants
+        vector = mod.vector.tolist()
+        with pytest.raises(ValueError, match="read-only"):
+            mod.vector[0] = 9
+        assert mod.vector.tolist() == vector
 
 
 @pytest.mark.slow
