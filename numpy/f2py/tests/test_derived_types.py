@@ -1823,6 +1823,28 @@ class TestBoundWithArrays(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestBindCCharacter(util.F2PyTest):
+    """A bind(c) type with a character component, which the C struct
+    cannot hold, is wrapped as an opaque type."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "bindc_char.f90")]
+
+    def test_character(self):
+        t = self.module.tagged()
+        assert (t.n, t.mark) == (0, "a")
+        self.module.bump(t)
+        assert (t.n, t.mark) == (1, "b")
+        t.mark = "c"
+        assert t.mark == "c"
+
+    def test_default_length(self):
+        letters = self.module.letters()
+        assert (letters.first, letters.second) == ("x", "y")
+        self.module.swap(letters)
+        assert (letters.first, letters.second) == ("y", "x")
+
+
+@pytest.mark.slow
 class TestStorageArguments(util.F2PyTest):
     """Allocatable and pointer dummies and results of derived type."""
     sources = [util.getpath("tests", "src", "derived_types",
