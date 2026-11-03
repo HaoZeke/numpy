@@ -96,6 +96,25 @@ and the corresponding <C type>. The <C type> can be one of the following::
     complex_long_double
     string
 
+``long`` is 32 bits wide on Windows and 64 bits wide on most other
+64-bit platforms, so use it only for kinds that are interoperable with
+C ``long``, such as ``c_long`` from ``iso_c_binding``. Use
+``signed_char``, ``short``, ``int`` and ``long_long`` for integers of
+1, 2, 4 and 8 bytes.
+
+An empty ``<selector_expr>`` maps declarations without a kind.
+Compiler options such as ``-fdefault-integer-8`` change the size of
+default ``integer`` and ``logical`` variables without F2PY knowing.
+When building with those options, use a map such as::
+
+    {'integer': {'': 'long_long'}, 'logical': {'': 'long_long'}}
+
+F2PY maps ``c_int_fast16_t`` and ``c_int_fast32_t`` from
+``iso_c_binding`` to ``short`` and ``int``.
+Those types differ in size between compilers on the same platform.
+When the compiler makes them wider, as GFortran does on 64-bit glibc
+systems, map them to ``long_long``.
+
 For example, for a Fortran file ``func1.f`` containing:
 
 .. literalinclude:: ./../code/f2cmap_demo.f
@@ -106,7 +125,7 @@ a ``.f2py_f2cmap`` file with the following content can be created in the current
 
 .. code-block:: python
 
-  dict(real=dict(real64='double'), integer=dict(int64='long long'))
+  dict(real=dict(real64='double'), integer=dict(int64='long_long'))
 
 and create the module as usual. F2PY checks if a ``.f2py_f2cmap`` file is present
 in the current directory and will use it to map ``KIND`` specifiers to ``C`` data types.
