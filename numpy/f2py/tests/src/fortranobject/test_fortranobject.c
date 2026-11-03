@@ -200,12 +200,12 @@ test_dict_setitemstring(void **state)
     assert_ptr_equal(stored, value);
     Py_DECREF(stored);
 
-    /* A NULL object is reported and not stored. */
+    /* A NULL object is not stored. No pending exception becomes SystemError. */
     assert_int_equal(F2PyDict_SetItemString(dict, "missing", NULL), -1);
-    assert_no_pyerr();
+    check_pyerr(PyExc_SystemError, "NULL value");
     PyErr_SetString(PyExc_RuntimeError, "failed to create the object");
     assert_int_equal(F2PyDict_SetItemString(dict, "missing", NULL), -1);
-    assert_no_pyerr();
+    check_pyerr(PyExc_RuntimeError, "failed to create the object");
     assert_int_equal(PyDict_Size(dict), 1);
 
     Py_DECREF(value);
@@ -223,12 +223,12 @@ test_capsule(void **state)
     assert_ptr_equal(F2PyCapsule_AsVoidPtr(capsule), &target);
     Py_DECREF(capsule);
 
-    /* Failures return NULL without leaving an exception set. */
+    /* AsVoidPtr clears a bad capsule. FromVoidPtr keeps PyCapsule_New's error. */
     assert_false(F2PyCapsule_Check(Py_None));
     assert_null(F2PyCapsule_AsVoidPtr(Py_None));
     assert_no_pyerr();
     assert_null(F2PyCapsule_FromVoidPtr(NULL, NULL));
-    assert_no_pyerr();
+    check_pyerr(PyExc_ValueError, "null pointer");
 }
 
 static int destructor_calls;
