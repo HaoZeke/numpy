@@ -1185,17 +1185,13 @@ float_from_pyobj(float* v, PyObject *obj, const char *errmess)
 """
 
 
-needs['float16_from_pyobj'] = ['double_from_pyobj', 'float16', 'string.h']
+needs['float16_from_pyobj'] = ['double_from_pyobj', 'float16']
 cfuncs['float16_from_pyobj'] = """
 static int
 float16_from_pyobj(float16* v, PyObject *obj, const char *errmess)
 {
     double d = 0.0;
-    if (PyArray_IsScalar(obj, Half)) {
-        npy_half h = PyArrayScalar_VAL(obj, Half);
-        memcpy(v, &h, sizeof(*v));
-        return 1;
-    }
+    /* every float16 value is a double, so the conversion is exact */
     if (double_from_pyobj(&d, obj, errmess)) {
         *v = (float16)d;
         return 1;
