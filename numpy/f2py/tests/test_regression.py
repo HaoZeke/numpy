@@ -186,6 +186,32 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\n1foo =" not in meson_build
 
 
+def test_gh26352_intel_windows_symbol_names():
+    # F_FUNC expects lowercase Fortran symbols with a trailing underscore
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = MesonTemplate(
+        modulename="fib1",
+        sources=[Path("fib1.f90")],
+        deps=[],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=[],
+        build_type="release",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+
+    mparser.Parser(meson_build, "meson.build").parse()
+    intel_windows = "if fc.get_id() in ['intel-cl', 'intel-llvm-cl']"
+    assert intel_windows in meson_build
+    start = meson_build.index(intel_windows)
+    block = meson_build[start:meson_build.index("endif", start)]
+    assert "'/names:lowercase', '/assume:underscore'" in block
+    assert "language : 'fortran'" in block
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():
