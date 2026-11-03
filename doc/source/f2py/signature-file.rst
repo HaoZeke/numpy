@@ -178,7 +178,12 @@ Use statements
 
      <rename_list> := <local_name> => <use_name> [ , <rename_list> ]
 
-* Currently F2PY uses ``use`` statements only for linking call-back modules and
+* A ``use`` statement in a Fortran 90 module makes the variables and
+  parameters it accesses from another module in the same ``python module``
+  block attributes of the using module too, following ``ONLY`` lists, renames
+  and ``PRIVATE`` statements.
+
+* F2PY also uses ``use`` statements for linking call-back modules and
   ``external`` arguments (call-back functions). See :ref:`Call-back arguments`.
 
 Common block statements
