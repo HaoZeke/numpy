@@ -187,7 +187,7 @@ def test_meson_library_names_use_valid_identifiers():
 
 
 @pytest.mark.parametrize(
-    "kwarg", ["link_language: 'fortran'", "gnu_symbol_visibility: 'default'"]
+    "kwarg", ["link_language: 'fortran'", "gnu_symbol_visibility: 'default'", "link_with: fortranobject_lib", "gnu_symbol_visibility: 'hidden'"]
 )
 def test_meson_extension_module_kwargs(kwarg):
     # gh-30804
