@@ -2260,6 +2260,83 @@ class TestCoarrayComponents(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestPolymorphicDispatch(util.F2PyTest):
+    """class(T) dummies take the extensions of T (F2018 7.3.2.3)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "polymorphic_dispatch.f90")]
+
+    def test_dispatch(self):
+        c = self.module.circle(radius=2.0)
+        r = self.module.rectangle(width=2.0, height=3.0)
+        assert isinstance(c, self.module.shape)
+        self.module.compute_area(c)
+        self.module.compute_area(r)
+        assert c.area == pytest.approx(np.float32(3.14159265) * 4)
+        assert self.module.get_area(r) == 6
+        s = self.module.shape(area=1.5)
+        self.module.compute_area(s)
+        assert self.module.get_area(s) == 1.5
+
+    def test_wrong_type(self):
+        with pytest.raises(TypeError):
+            self.module.get_area(1.0)
+
+
+@pytest.mark.slow
+class TestUnlimitedPolymorphic(util.F2PyTest):
+    """class(*) dummies take Python scalars and derived type instances
+    (F2018 7.3.2.3)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "unlimited_poly.f90")]
+
+    def test_intrinsic(self):
+        c = self.module.container()
+        self.module.store_value(c, 5)
+        assert (self.module.get_tag(c), c.stored_int) == (1, 5)
+        # default real is real(c_float), a Python float is real(c_double)
+        self.module.store_value(c, np.float32(2.5))
+        assert (self.module.get_tag(c), c.stored_real) == (2, 2.5)
+        self.module.store_value(c, 2.5)
+        assert self.module.get_tag(c) == -1
+
+    def test_derived(self):
+        c = self.module.container()
+        self.module.store_value(c, self.module.container())
+        assert self.module.get_tag(c) == -1
+        with pytest.raises(TypeError):
+            self.module.store_value(c, "text")
+
+
+@pytest.mark.slow
+class TestIsoFortranEnvComponents(util.F2PyTest):
+    """Components with kinds from iso_fortran_env."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "iso_env_type.f90")]
+
+    def test_kinds(self):
+        a = self.module.precise_point()
+        b = self.module.precise_point()
+        self.module.set_point(a, 1, 0.1, 0.2, 0.3)
+        self.module.set_point(b, 2, 0.1, 0.2, 1.3)
+        assert (a.id, a.x, a.y, a.z) == (1, 0.1, 0.2, 0.3)
+        assert self.module.point_distance(a, b) == pytest.approx(1.0)
+        c = self.module.big_counter(count=2**40)
+        assert c.count == 2**40
+
+
+@pytest.mark.slow
+class TestPrivateModule(util.F2PyTest):
+    """Public types and routines of a module that is private by default."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "opaque_point.f90")]
+
+    def test_distance(self):
+        p = self.module.point(x=0, y=0)
+        q = self.module.point(x=3, y=4)
+        assert self.module.distance(p, q) == 5
+
+
+@pytest.mark.slow
 class TestDefinedIO(util.F2PyTest):
     """write(formatted) is __str__ and read(formatted) is from_string
     (F2018 12.6.4.8)."""
