@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from numpy.f2py._backends._meson import MesonBackend
 from numpy.f2py.f2py2e import get_newer_options, main as f2pycli
 from numpy.testing._private.utils import NOGIL_BUILD
 
@@ -216,8 +217,9 @@ def test_gen_pyf_no_overwrite(capfd, hello_world_f90, monkeypatch):
         Path("faker.pyf").write_text("Fake news", encoding="ascii")
         with pytest.raises(SystemExit):
             f2pycli()  # Refuse to overwrite
-            _, err = capfd.readouterr()
-            assert "Use --overwrite-signature to overwrite" in err
+        _, err = capfd.readouterr()
+        assert "Use --overwrite-signature to overwrite" in err
+        assert Path("faker.pyf").read_text(encoding="ascii") == "Fake news"
 
 
 @pytest.mark.skipif(sys.version_info <= (3, 12), reason="Python 3.12 required")
@@ -255,8 +257,8 @@ def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
     )
     with pytest.raises(SystemExit):
         f2pycli()
-        out, _ = capfd.readouterr()
-        assert "Unknown option --help-link" in out
+    _, err = capfd.readouterr()
+    assert "Unknown option '--help-link'" in err
 
     monkeypatch.setattr(
         sys, "argv", ["f2py", "--backend", "distutils"]
@@ -267,7 +269,6 @@ def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
         out, _ = capfd.readouterr()
         assert "'distutils' backend was removed" in out
 
-@pytest.mark.xfail
 def test_f2py_skip(capfd, retreal_f77, monkeypatch):
     """Tests that functions can be skipped
     CLI :: skip:
@@ -285,7 +286,7 @@ def test_f2py_skip(capfd, retreal_f77, monkeypatch):
         out, err = capfd.readouterr()
         for skey in toskip.split():
             assert (
-                f'buildmodule: Could not found the body of interfaced routine "{skey}". Skipping.'
+                f'buildmodule: Could not find the body of interfaced routine "{skey}". Skipping.'
                 in err)
         for rkey in remaining.split():
             assert f'Constructing wrapper function "{rkey}"' in out
@@ -754,13 +755,16 @@ def test_inclpath(monkeypatch):
     assert remain == []
 
 
-def test_hlink():
-    """Add to the include directories
+def test_hlink(capfd, monkeypatch):
+    """The numpy.distutils system_info listing is gone
 
     CLI :: --help-link
     """
-    # TODO: populate
-    pass
+    monkeypatch.setattr(sys, "argv", ["f2py", "--help-link", "lapack_opt"])
+    with pytest.raises(SystemExit):
+        f2pycli()
+    _, err = capfd.readouterr()
+    assert "Unknown option '--help-link'" in err
 
 
 def test_f2cmap(capfd, f2cmap_f90, monkeypatch):
@@ -818,9 +822,9 @@ def test_version(capfd, monkeypatch):
     # TODO: f2py2e should not call sys.exit() after printing the version
     with pytest.raises(SystemExit):
         f2pycli()
-        out, _ = capfd.readouterr()
-        import numpy as np
-        assert np.__version__ == out.strip()
+    out, _ = capfd.readouterr()
+    import numpy as np
+    assert np.__version__ == out.strip()
 
 
 @pytest.mark.skip(reason="Consistently fails on CI; noisy so skip not xfail.")
@@ -890,95 +894,62 @@ def test_freethreading_compatible(hello_world_f90, monkeypatch):
         assert rout.returncode == 0
 
 
-# Numpy distutils flags
-# TODO: These should be tested separately
+# Build (-c) options
+#
+# ``meson_build_of`` stops ``f2py -c`` just before meson runs, so the generated
+# meson.build shows how each option reaches the build without a compiler.
 
-def test_npd_fcompiler():
-    """
-    CLI :: -c --fcompiler
-    """
-    # TODO: populate
-    pass
+@pytest.fixture
+def meson_build_of(monkeypatch, tmp_path):
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
+    build_dir = tmp_path / "bld"
 
+    def generate(*args):
+        monkeypatch.setattr(
+            sys, "argv", ["f2py", "-c", "--build-dir", str(build_dir), *args])
+        with util.switchdir(tmp_path):
+            f2pycli()
+        mbld = (build_dir / "meson.build").read_text()
+        mparser.Parser(mbld, "meson.build").parse()
+        return mbld
 
-def test_npd_compiler():
-    """
-    CLI :: -c --compiler
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_help_fcompiler():
-    """
-    CLI :: -c --help-fcompiler
-    """
-    # TODO: populate
-    pass
+    return generate
 
 
-def test_npd_f77exec():
+@pytest.mark.parametrize("flag", [
+    "--fcompiler=gnu95",
+    "--compiler=unix",
+    "--help-fcompiler",
+    "--f77exec=/usr/bin/f77",
+    "--f90exec=/usr/bin/f90",
+    "--opt=-O1",
+    "--arch=-march=x86-64",
+    "--noopt",
+    "--noarch",
+    "--link-lapack_opt",
+])
+def test_compile_distutils_option(meson_build_of, hello_world_f90, flag):
+    """numpy.distutils-only options are accepted but not passed to meson
+
+    CLI :: -c --fcompiler= --compiler= --help-fcompiler --f77exec= --f90exec=
+           --opt= --arch= --noopt --noarch --link-<resource>
     """
-    CLI :: -c --f77exec
-    """
-    # TODO: populate
-    pass
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90), flag)
+    assert "'''hello.f90'''" in mbld
+    assert flag.split("=", 1)[-1] not in mbld
 
 
-def test_npd_f90exec():
-    """
-    CLI :: -c --f90exec
-    """
-    # TODO: populate
-    pass
+def test_compile_fortran_flags(meson_build_of, hello_world_f90):
+    """Fortran compiler flags become meson fortran_args
 
-
-def test_npd_f77flags():
+    CLI :: -c --f77flags= --f90flags=
     """
-    CLI :: -c --f77flags
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_f90flags():
-    """
-    CLI :: -c --f90flags
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_opt():
-    """
-    CLI :: -c --opt
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_arch():
-    """
-    CLI :: -c --arch
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_noopt():
-    """
-    CLI :: -c --noopt
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_noarch():
-    """
-    CLI :: -c --noarch
-    """
-    # TODO: populate
-    pass
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          "--f77flags=-ffixed-line-length-none",
+                          "--f90flags=-fno-range-check -O1")
+    assert ("fortran_args: ['-ffixed-line-length-none', '-fno-range-check', "
+            "'-O1']") in mbld
 
 
 def test_npd_debug():
@@ -989,20 +960,15 @@ def test_npd_debug():
     pass
 
 
-def test_npd_link_auto():
-    """
-    CLI :: -c --link-<resource>
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_lib():
+def test_compile_libraries(meson_build_of, hello_world_f90, tmp_path):
     """
     CLI :: -c -L/path/to/lib/ -l<libname>
     """
-    # TODO: populate
-    pass
+    libdir = tmp_path / "lib"
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          f"-L{libdir}", "-lfoo")
+    assert f"link_args : ['''-L{libdir}''']" in mbld
+    assert "link_args : ['-lfoo']" in mbld
 
 
 def test_npd_define():
@@ -1021,17 +987,23 @@ def test_npd_undefine():
     pass
 
 
-def test_npd_incl():
+def test_compile_include_dirs(meson_build_of, hello_world_f90, tmp_path):
     """
-    CLI :: -I/path/to/include/
+    CLI :: -c -I/path/to/include/
     """
-    # TODO: populate
-    pass
+    incdir = tmp_path / "inc"
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90), f"-I{incdir}")
+    assert f"'''{incdir}'''" in mbld
 
 
-def test_npd_linker():
+def test_compile_extra_objects(meson_build_of, hello_world_f90, tmp_path):
     """
-    CLI :: <filename>.o <filename>.so <filename>.a
+    CLI :: -c <filename>.o <filename>.so <filename>.a
     """
-    # TODO: populate
-    pass
+    objs = ["extra.o", "libextra.a", "libextra.so", "libextra.dylib"]
+    for obj in objs:
+        (tmp_path / obj).touch()
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90), *objs)
+    objects = re.search(r"objects: \[(.*?)\]", mbld, re.DOTALL).group(1)
+    for obj in objs:
+        assert f"'''{obj}'''" in objects
