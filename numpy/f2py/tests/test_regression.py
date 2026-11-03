@@ -232,6 +232,19 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.j_max == 72)
 
 
+@pytest.mark.slow
+class TestModuleFunctionArgumentNames(util.F2PyTest):
+    # The wrapper of a module function must keep arguments whose names end
+    # with the function name
+    sources = [util.getpath("tests", "src", "regression", "modfunc_argnames.f90")]
+
+    def test_argument_name_ends_with_function_name(self):
+        assert self.module.argnames.addf(2, 5) == 7
+
+    def test_no_arguments(self):
+        assert self.module.argnames.three() == 3
+
+
 def _wrap_f90(funcwrappers2):
     """Reproduce the F90 line-wrapping logic from rules.py buildmodule."""
     lines = []

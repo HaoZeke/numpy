@@ -140,14 +140,14 @@ def createfuncwrapper(rout, signature=0):
 
     useisoc = useiso_c_binding(rout)
     useisof = useiso_fortran_env(rout)
-    sargs = ', '.join(args)
     if f90mode:
         # gh-23598 fix warning
         # Essentially, this gets called again with modules where the name of the
         # function is added to the arguments, which is not required, and removed
-        sargs = sargs.replace(f"{name}, ", '')
         args = [arg for arg in args if arg != name]
         rout['args'] = args
+    sargs = ', '.join(args)
+    if f90mode:
         add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
         if not signature:
             add(f"use {rout['modulename']}, only : {fortranname}")
