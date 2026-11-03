@@ -1178,7 +1178,7 @@ def as_factors(obj):
                 (term, coeff), = obj.data.items()
                 if coeff == 1:
                     return Expr(Op.FACTORS, {term: 1})
-                return Expr(Op.FACTORS, {term: 1, Expr.number(coeff): 1})
+                return Expr(Op.FACTORS, {term: 1, as_number(coeff): 1})
         if (obj.op is Op.APPLY
              and obj.data[0] is ArithOp.DIV
              and not obj.data[2]):
