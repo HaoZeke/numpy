@@ -280,6 +280,9 @@ cppmacros['pyobj_from_long_long1'] = """
 #define pyobj_from_long_long1(v) (PyLong_FromLong(v))
 #endif
 """
+cppmacros['pyobj_from_npy_intp1'] = r"""
+#define pyobj_from_npy_intp1(v) (PyLong_FromSsize_t(v))
+"""
 needs['pyobj_from_long_double1'] = ['long_double']
 cppmacros['pyobj_from_long_double1'] = """
 #define pyobj_from_long_double1(v) (PyFloat_FromDouble(v))"""
@@ -1049,6 +1052,55 @@ long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
 """
 
 
+cfuncs['npy_intp_from_pyobj'] = """
+static int
+npy_intp_from_pyobj(npy_intp* v, PyObject *obj, const char *errmess)
+{
+    PyObject* tmp = NULL;
+
+    if (PyLong_Check(obj)) {
+        *v = PyLong_AsSsize_t(obj);
+        return !(*v == -1 && PyErr_Occurred());
+    }
+
+    tmp = PyNumber_Long(obj);
+    if (tmp) {
+        *v = PyLong_AsSsize_t(tmp);
+        Py_DECREF(tmp);
+        return !(*v == -1 && PyErr_Occurred());
+    }
+
+    if (PyComplex_Check(obj)) {
+        PyErr_Clear();
+        tmp = PyObject_GetAttrString(obj,\"real\");
+    }
+    else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
+        /*pass*/;
+    }
+    else if (PySequence_Check(obj)) {
+        PyErr_Clear();
+        tmp = PySequence_GetItem(obj, 0);
+    }
+
+    if (tmp) {
+        if (npy_intp_from_pyobj(v, tmp, errmess)) {
+            Py_DECREF(tmp);
+            return 1;
+        }
+        Py_DECREF(tmp);
+    }
+    {
+        PyObject* err = PyErr_Occurred();
+        if (err == NULL) {
+            err = #modulename#_error;
+        }
+        PyErr_SetString(err,errmess);
+    }
+    return 0;
+}
+"""
+
+
 needs['long_double_from_pyobj'] = ['double_from_pyobj', 'long_double']
 cfuncs['long_double_from_pyobj'] = """
 static int
@@ -1313,6 +1365,9 @@ needs['try_pyarr_from_long_long'] = [
     'pyobj_from_long_long1', 'TRYPYARRAYTEMPLATE', 'long_long']
 cfuncs[
     'try_pyarr_from_long_long'] = 'static int try_pyarr_from_long_long(PyObject* obj,long_long* v) {\n    TRYPYARRAYTEMPLATE(long_long,\'L\');\n}\n'
+needs['try_pyarr_from_npy_intp'] = ['pyobj_from_npy_intp1', 'TRYPYARRAYTEMPLATE']
+cfuncs[
+    'try_pyarr_from_npy_intp'] = 'static int try_pyarr_from_npy_intp(PyObject* obj,npy_intp* v) {\n    TRYPYARRAYTEMPLATE(npy_intp,\'n\');\n}\n'
 needs['try_pyarr_from_float'] = ['pyobj_from_float1', 'TRYPYARRAYTEMPLATE']
 cfuncs[
     'try_pyarr_from_float'] = 'static int try_pyarr_from_float(PyObject* obj,float* v) {\n    TRYPYARRAYTEMPLATE(float,\'f\');\n}\n'

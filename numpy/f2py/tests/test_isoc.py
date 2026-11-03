@@ -58,6 +58,41 @@ class TestISOC(util.F2PyTest):
         assert out.dtype == exp_out.dtype
 
 
+# gh-21409
+@pytest.mark.slow
+class TestISOCPointerWidth(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "isocintrin", "gh21409.f90")]
+    big = np.iinfo(np.intp).max // 2
+
+    @pytest.mark.parametrize(
+        "name", ["add_size_t_arr", "add_intptr_arr", "add_ptrdiff_arr"])
+    def test_arrays(self, name):
+        a = np.array([1, 2, self.big], dtype=np.intp)
+        b = np.array([4, 5, 6], dtype=np.intp)
+        out = getattr(self.module.ptrwidth, name)(a, b)
+        assert out.dtype == np.intp
+        assert out.tolist() == (a + b).tolist()
+
+    def test_scalar(self):
+        assert self.module.ptrwidth.add_size_t(self.big, 1) == self.big + 1
+
+    def test_inout(self):
+        a = np.array([1, 2, self.big], dtype=np.intp)
+        self.module.ptrwidth.bump_ptrdiff(a)
+        assert a.tolist() == [2, 3, self.big + 1]
+
+    def test_function(self):
+        assert self.module.ptrwidth.intptr_sum(self.big, 1) == self.big + 1
+
+
+def test_only_c_long_maps_to_long():
+    from numpy.f2py._isocbind import iso_c_binding_map
+
+    # gh-21409: C long is 32 bits on Windows, so no other kind may use it
+    mapped = {k for k, v in iso_c_binding_map["integer"].items() if v == "long"}
+    assert mapped == {"c_long"}
+
+
 def test_process_f2cmap_dict():
     from numpy.f2py.auxfuncs import process_f2cmap_dict
 
