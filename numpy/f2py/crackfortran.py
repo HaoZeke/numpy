@@ -2138,6 +2138,8 @@ def postcrack(block, args=None, tab=''):
                 interface['body'].append(edef)
             elif e in mvars and not isexternal(mvars[e]):
                 interface['vars'][e] = mvars[e]
+            elif not userisdefined:
+                interface['body'].append(_uncalled_external(block, e, tab))
         if interface['vars'] or interface['body']:
             block['interfaced'] = interfaced
             mblock = {'block': 'python module', 'body': [
@@ -2147,6 +2149,25 @@ def postcrack(block, args=None, tab=''):
     if useblock:
         block['use'] = useblock
     return block
+
+
+def _uncalled_external(block, name, tab):
+    """Signature for an EXTERNAL dummy that ``block`` never calls.
+
+    No call site shows its arguments, so it is given none. Only a
+    function has a type: a typed dummy becomes a function of that type
+    and an untyped one a subroutine.
+    """
+    var = copy.deepcopy(block['vars'][name])
+    var['attrspec'].remove('external')
+    if 'typespec' in var:
+        rout = {'block': 'function', 'vars': {name: var}}
+    else:
+        rout = {'block': 'subroutine', 'vars': {}}
+    rout.update(name=name, args=[], body=[])
+    outmess(f"postcrack: no call or interface found for external {name!r} "
+            f"of {block['name']!r}, assuming it takes no arguments.\n")
+    return postcrack(rout, tab=tab + '\t')
 
 
 def _sort_cyclic_dependents(dep, vars):
