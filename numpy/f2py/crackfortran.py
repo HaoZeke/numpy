@@ -952,7 +952,7 @@ typedefpattern = re.compile(
 nameargspattern = re.compile(
     r'\s*(?P<name>\b[\w$]+\b)\s*(@\(@\s*(?P<args>[\w\s,]*)\s*@\)@|)\s*((result(\s*@\(@\s*(?P<result>\b[\w$]+\b)\s*@\)@|))|(bind\s*@\(@\s*(?P<bind>(?:(?!@\)@).)*)\s*@\)@))*\s*\Z', re.I)
 operatorpattern = re.compile(
-    r'\s*(?P<scheme>(operator|assignment))'
+    r'\s*(?P<scheme>(operator|assignment))\s*'
     r'@\(@\s*(?P<name>[^)]+)\s*@\)@\s*\Z', re.I)
 callnameargspattern = re.compile(
     r'\s*(?P<name>\b[\w$]+\b)\s*@\(@\s*(?P<args>.*)\s*@\)@\s*\Z', re.I)
@@ -999,7 +999,9 @@ def _resolvenameargspattern(line):
         return m1.group('name'), m1.group('args'), m1.group('result'), bind_cname
     m1 = operatorpattern.match(line)
     if m1:
-        name = m1.group('scheme') + '(' + m1.group('name') + ')'
+        # Blanks may separate but not split tokens (F2018 6.3.2.2)
+        op = ''.join(m1.group('name').split())
+        name = f"{m1.group('scheme')}({op})"
         return name, [], None, None
     m1 = callnameargspattern.match(line)
     if m1:
@@ -1266,7 +1268,7 @@ def analyzeline(m, case, line):
             else:
                 k = rmbadname1(m1.group('name'))
             if case in ['public', 'private'] and k in {'operator', 'assignment'}:
-                k += m1.group('after')
+                k += ''.join(m1.group('after').split())
             if k not in edecl:
                 edecl[k] = {}
             if case == 'dimension':

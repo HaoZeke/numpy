@@ -103,6 +103,15 @@ class TestModuleProcedure:
                     if b["block"] in ("function", "subroutine")}
         assert set().union(*procs.values()) <= routines
 
+    def test_generic_spec_blanks(self):
+        # gh-19896: blanks around the operator do not change the name
+        fpath = util.getpath("tests", "src", "crackfortran", "gh19896.f90")
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        names = [b["name"] for b in mod["body"] if b["block"] == "interface"]
+        assert names == ["operator(.dot.)", "operator(+)", "assignment(=)"]
+        for name in names:
+            assert mod["vars"][name]["attrspec"] == ["public"]
+
     def test_notPublicPrivate(self, tmp_path):
         fpath = util.getpath("tests", "src", "crackfortran", "pubprivmod.f90")
         mod = crackfortran.crackfortran([str(fpath)])

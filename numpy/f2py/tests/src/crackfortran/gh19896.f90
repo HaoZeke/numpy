@@ -1,18 +1,19 @@
 module gh19896
   implicit none
+  public :: operator(.dot.), operator (+), assignment ( = )
 
   interface operator(.dot.)
      module procedure dot_real
      module procedure :: dot_int
   end interface operator(.dot.)
 
-  interface operator(+)
+  interface operator (+)
      module procedure union
   end interface
 
-  interface assignment(=)
+  interface assignment ( = )
      module procedure int_from_char, real_from_char
-  end interface assignment(=)
+  end interface assignment ( = )
 
 contains
 
