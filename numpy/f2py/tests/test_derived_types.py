@@ -2315,6 +2315,47 @@ class TestPrivateComponents(util.F2PyTest):
         m = self.module.mixed_access()
         assert not hasattr(m, "priv_b")
         assert self.module.sum_mixed(m) == 6
+def _constructor(source, typename):
+    mod = crackfortran.crackfortran([str(source)])
+    blocks = derived_type_rules._find_derived_types(mod[0])
+    src = derived_type_rules.generate_fortran_wrappers(
+        mod[0]['name'], blocks, module_block=mod[0])
+    start = src.index(f'function f2py_create_{typename}(')
+    return src[start:src.index('end function', start)]
+
+
+class TestInitialStateCodeGen:
+    """Components without default initialization are undefined after
+    ALLOCATE (F2018 7.5.4.6); the constructor defines them."""
+
+    source = util.getpath("tests", "src", "derived_types",
+                          "initial_state.f90")
+
+    def test_pointers_nullified(self):
+        code = _constructor(self.source, 'holder')
+        assert 'nullify(obj%view)' in code
+        assert 'nullify(obj%one%link)' in code
+        assert 'nullify(obj%many(f2py_i1)%link)' in code
+
+    def test_inner_defaults_kept(self):
+        code = _constructor(self.source, 'holder')
+        assert 'obj%one%count' not in code
+        assert 'obj%one%weight = 0' in code
+        assert 'obj%samples = 0' in code
+
+
+@pytest.mark.slow
+class TestInitialState(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "initial_state.f90")]
+
+    def test_new_object_is_defined(self):
+        h = self.module.holder(id=3)
+        assert h.view is None
+        counts, total, linked = self.module.inspect(h)
+        assert counts.tolist() == [7, 7, 7]
+        assert total == 0
+        assert linked == 0
 
 
 class TestDefaultInitCodeGen:
