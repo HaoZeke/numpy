@@ -387,6 +387,16 @@ class TestSymbolic(util.F2PyTest):
         assert fromstring("x .le. y", language=Language.Fortran) == as_le(x, y)
         assert fromstring("x .ge. y", language=Language.Fortran) == as_ge(x, y)
 
+        assert fromstring("x == y", language=Language.Fortran) == as_eq(x, y)
+        assert fromstring("x /= y", language=Language.Fortran) == as_ne(x, y)
+        assert fromstring("x < y", language=Language.Fortran) == as_lt(x, y)
+        assert fromstring("x > y", language=Language.Fortran) == as_gt(x, y)
+        assert fromstring("x <= y", language=Language.Fortran) == as_le(x, y)
+        assert fromstring("x >= y", language=Language.Fortran) == as_ge(x, y)
+        assert fromstring("x+1==y", language=Language.Fortran) == as_eq(x + 1, y)
+        assert fromstring("(x==y?1:2)", language=Language.Fortran) == as_ternary(
+            as_eq(x, y), as_number(1), as_number(2))
+
     def test_traverse(self):
         x = as_symbol("x")
         y = as_symbol("y")

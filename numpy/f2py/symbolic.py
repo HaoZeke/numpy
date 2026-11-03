@@ -79,7 +79,10 @@ class RelOp(Enum):
         if language is Language.Fortran:
             return {'.eq.': RelOp.EQ, '.ne.': RelOp.NE,
                     '.lt.': RelOp.LT, '.le.': RelOp.LE,
-                    '.gt.': RelOp.GT, '.ge.': RelOp.GE}[s.lower()]
+                    '.gt.': RelOp.GT, '.ge.': RelOp.GE,
+                    '==': RelOp.EQ, '/=': RelOp.NE,
+                    '<': RelOp.LT, '<=': RelOp.LE,
+                    '>': RelOp.GT, '>=': RelOp.GE}[s.lower()]
         return {'==': RelOp.EQ, '!=': RelOp.NE, '<': RelOp.LT,
                 '<=': RelOp.LE, '>': RelOp.GT, '>=': RelOp.GE}[s]
 
@@ -1365,14 +1368,13 @@ class _FromStringWorker:
         # relational expression
         if self.language is Language.Fortran:
             m = re.match(
-                r'\A(.+)\s*[.](eq|ne|lt|le|gt|ge)[.]\s*(.+)\Z', r, re.I)
+                r'\A(.+)\s*([.](?:eq|ne|lt|le|gt|ge)[.]'
+                r'|[=][=]|[/][=]|[<][=]|[<]|[>][=]|[>])\s*(.+)\Z', r, re.I)
         else:
             m = re.match(
                 r'\A(.+)\s*([=][=]|[!][=]|[<][=]|[<]|[>][=]|[>])\s*(.+)\Z', r)
         if m:
             left, rop, right = m.groups()
-            if self.language is Language.Fortran:
-                rop = '.' + rop + '.'
             left, right = self.process(restore((left, right)))
             rop = RelOp.fromstring(rop, language=self.language)
             return Expr(Op.RELATIONAL, (rop, left, right))
