@@ -57,7 +57,9 @@ def check_language(lang, code_snippet=None):
             pytest.skip("meson not present, skipping compiler dependent test", allow_module_level=True)
         return runmeson.returncode == 0
     finally:
-        shutil.rmtree(tmpdir)
+        # On Windows another process can still hold a probe file open, and a
+        # scratch directory that cannot be removed must not fail the check.
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 fortran77_code = '''
