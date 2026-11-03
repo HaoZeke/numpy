@@ -2240,6 +2240,26 @@ class TestHostParameters(util.F2PyTest):
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(
+    not util.fortran_builds("program p\ninteger :: x[*]\nend program p\n",
+                            ["-fcoarray=single"]),
+    reason="Fortran compiler has no -fcoarray=single")
+class TestCoarrayComponents(util.F2PyTest):
+    """An object with a coarray component cannot be a pointer (F2018
+    C825), so such a type has no handles and is not wrapped."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "coarray_component.f90")]
+    options = ["--f90flags=-fcoarray=single"]
+
+    def test_unwrapped(self):
+        assert not hasattr(self.module, "field")
+        assert not hasattr(self.module.coarray_component, "fill")
+        p = self.module.plain()
+        self.module.bump(p)
+        assert p.n == 1
+
+
+@pytest.mark.slow
 class TestDefinedIO(util.F2PyTest):
     """write(formatted) is __str__ and read(formatted) is from_string
     (F2018 12.6.4.8)."""

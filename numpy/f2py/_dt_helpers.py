@@ -1055,6 +1055,34 @@ def _settle_members(typeblock, checked, type_map, settle):
     return not waiting
 
 
+def _has_coarray_ultimate(typeblock, type_map, seen=()):
+    """Check if a type has a coarray ultimate component, directly or in a
+    nonpointer nonallocatable component of derived type."""
+    for var in typeblock.get('vars', {}).values():
+        if _is_coarray_member(var):
+            return True
+        inner = type_map.get(var.get('typename', '').lower())
+        attrs = var.get('attrspec', [])
+        if (var.get('typespec') == 'type' and inner is not None
+                and inner['name'] not in seen and 'pointer' not in attrs
+                and 'allocatable' not in attrs
+                and _has_coarray_ultimate(inner, type_map,
+                                          (*seen, typeblock['name']))):
+            return True
+    return False
+
+
+def _unwrapped_reason(typeblock, type_map):
+    """Return why _wrap_types leaves a type unwrapped."""
+    parent = _get_extends_parent(typeblock)
+    if _has_coarray_ultimate(typeblock, type_map):
+        return ('an object with a coarray component cannot be a pointer '
+                '(F2018 C825)')
+    if parent and parent.lower() not in type_map:
+        return f'it extends {parent}, which f2py does not wrap'
+    return 'f2py cannot enumerate the values of its KIND parameters'
+
+
 def _wrap_types(type_blocks):
     """Return the type blocks f2py wraps, by lower case name.
 
@@ -1080,6 +1108,11 @@ def _wrap_types(type_blocks):
             break
         type_map[tb['name'].lower()] = tb
         remaining.remove(tb)
+    for tb in remaining:
+        if not tb.get('f2py_unwrapped'):
+            tb['f2py_unwrapped'] = _unwrapped_reason(tb, type_map)
+            outmess(f'\t\tf2py does not wrap derived type {tb["name"]}, '
+                    f'as {tb["f2py_unwrapped"]}\n')
     return type_map
 
 
@@ -1126,7 +1159,8 @@ def _can_wrap_abstract(typeblock, type_map=None, settle=False):
         return False
     if _has_len_params(typeblock):
         return False
-    if _has_unresolved_kind_params(typeblock):
+    if (_has_unresolved_kind_params(typeblock)
+            or _has_coarray_ultimate(typeblock, type_map or {})):
         return False
     _resolve_parameterized_type(typeblock)
     return _settle_members(typeblock, typeblock, type_map, settle)
@@ -1163,7 +1197,8 @@ def _can_wrap_opaque(typeblock, type_map=None, settle=False):
         return False
     if isbindctype(typeblock) and _can_wrap_bindc(typeblock, type_map):
         return False
-    if _has_unresolved_kind_params(typeblock):
+    if (_has_unresolved_kind_params(typeblock)
+            or _has_coarray_ultimate(typeblock, type_map or {})):
         return False
     # Resolve KIND parameters before wrappability check
     # Use default specialization if available
