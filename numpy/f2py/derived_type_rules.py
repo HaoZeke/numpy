@@ -22,8 +22,6 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 
-import os
-
 from ._dt_codegen import (  # noqa: F401
     _gen_array_from_any_helper,
     _gen_bindc_struct,
@@ -111,28 +109,12 @@ from ._dt_routines import (  # noqa: F401
     _scan_final_subroutines,
     _scan_proc_pointer_components,
     _scan_type_bound_procedures,
+    _source_file,
     generate_fortran_wrappers,
     prepare_routine,
     write_fortran_wrappers,
 )
 from .auxfuncs import get_type_members, isroutine, outmess
-
-
-def _source_file(module):
-    """Return the source file of a module, for scanning what crackfortran
-    does not record: type-bound procedures, finalizers and procedure
-    pointer components.
-
-    The 'from' field is the file for crackfortran, and is prefixed with
-    ':modulename:' in the full f2py pipeline.
-    """
-    source_file = module.get('from', '')
-    if ':' in source_file:
-        for part in reversed(source_file.split(':')):
-            if part and os.path.isfile(part):
-                return part
-        return ''
-    return source_file
 
 
 def describe_types(pymod):
@@ -584,11 +566,28 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
             typename, proc_ptrs, module_block.get('body', []))
         all_method_funcs.extend(pp_funcs)
         all_method_entries.extend(pp_entries)
+
+    # Defined I/O: __str__ via write(formatted) and from_string via
+    # read(formatted) (F2018 12.6.4.8)
+    has_tp_str = False
+    if bound_procs:
+        if '__write_formatted__' in bound_procs:
+            code_parts.append(_gen_defined_io_tp_str(typename))
+            has_tp_str = True
+        if '__read_formatted__' in bound_procs:
+            all_method_funcs.append(_gen_defined_io_from_string(typename))
+            all_method_entries.append(
+                f'    {{"from_string", (PyCFunction)'
+                f'Py{typename}_from_string, '
+                f'METH_VARARGS | METH_CLASS, '
+                f'"Create {typename} from formatted string"}}')
+
     if all_method_funcs:
         code_parts.extend(all_method_funcs)
         methods_table = (
             f'static PyMethodDef Py{typename}_methods[] = {{\n'
-            + '\n'.join(all_method_entries) + '\n'
+            + ''.join(f"{entry.rstrip(',')},\n"
+                      for entry in all_method_entries)
             + '    {NULL}  /* sentinel */\n'
             + '};\n')
         code_parts.append(methods_table)
@@ -609,22 +608,6 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
         parent_tb = type_map.get(parent_name)
         if parent_tb:
             parent_typename = parent_tb['name']
-
-    # Defined I/O: __str__ via write(formatted) (F2018 12.6.4.8)
-    has_tp_str = False
-    if bound_procs:
-        if '__write_formatted__' in bound_procs:
-            code_parts.append(_gen_defined_io_tp_str(typename))
-            has_tp_str = True
-        if '__read_formatted__' in bound_procs:
-            code_parts.append(_gen_defined_io_from_string(typename))
-            # Add from_string as a class method
-            if all_method_entries is not None:
-                all_method_entries.append(
-                    f'    {{"from_string", (PyCFunction)'
-                    f'Py{typename}_from_string, '
-                    f'METH_VARARGS | METH_CLASS, '
-                    f'"Create {typename} from formatted string"}}')
 
     code_parts.append(_gen_typeobject(
         typename, has_methods=has_methods,

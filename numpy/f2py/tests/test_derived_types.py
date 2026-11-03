@@ -2240,6 +2240,33 @@ class TestHostParameters(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestDefinedIO(util.F2PyTest):
+    """write(formatted) is __str__ and read(formatted) is from_string
+    (F2018 12.6.4.8)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "defined_io.f90")]
+
+    def test_str(self):
+        p = self.module.formatted_point(x=1.5, y=2.5, z=3.5)
+        assert str(p) == "point(  1.50,   2.50,   3.50)"
+
+    def test_long_record(self):
+        assert str(self.module.long_record(n=0)) == ""
+        assert str(self.module.long_record(n=10000)) == "x" * 10000
+
+    def test_from_string(self):
+        p = self.module.formatted_point.from_string("4 5 6")
+        assert (p.x, p.y, p.z) == (4, 5, 6)
+        assert str(p) == "point(  4.00,   5.00,   6.00)"
+        self.module.set_point(p, 1, 2, 3)
+        assert (p.x, p.y, p.z) == (1, 2, 3)
+
+    def test_from_string_fails(self):
+        with pytest.raises(ValueError, match="iostat"):
+            self.module.formatted_point.from_string("not numbers")
+
+
+@pytest.mark.slow
 class TestBoundWithArrays(util.F2PyTest):
     """Type-bound procedures in a module with array arguments."""
     sources = [util.getpath("tests", "src", "derived_types",
