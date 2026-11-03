@@ -4150,11 +4150,8 @@ def analyzevars(block):
     svars = []
     args = block['args']
     for a in args:
-        try:
-            vars[a]
+        if a in vars:
             svars.append(a)
-        except KeyError:
-            pass
     for n in list(vars.keys()):
         if n not in args:
             svars.append(n)
@@ -4636,6 +4633,17 @@ def _eval_reshape(args, g_params, params):
     return values, shape
 
 
+def _extend_parameter_items(values, item, g_params, params, implied):
+    """Append constructor values, preserving explicit-shape diagnostics."""
+    try:
+        values.extend(_eval_items(item, g_params, params))
+    except Exception as msg:
+        if implied:
+            raise
+        outmess(f'param_eval: got "{msg}" on {item!r}\n')
+        values.append(None)
+
+
 def param_eval(v, g_params, params, dimspec=None):
     """
     Creates a dictionary of indices and values for each parameter in a
@@ -4690,13 +4698,7 @@ def param_eval(v, g_params, params, dimspec=None):
             v = v[1:-1]
         v_eval = []
         for item in markoutercomma(v).split('@,@'):
-            try:
-                v_eval.extend(_eval_items(item, g_params, params))
-            except Exception as msg:
-                if implied:
-                    raise
-                outmess(f'param_eval: got "{msg}" on {item!r}\n')
-                v_eval.append(None)
+            _extend_parameter_items(v_eval, item, g_params, params, implied)
         shape = [len(v_eval)]
 
     extents = [shape[i] if ubound == '*' else int(ubound) - lbound + 1
@@ -5037,14 +5039,11 @@ def use2fortran(use, tab=''):
 def true_intent_list(var):
     lst = var['intent']
     ret = []
+    namespace = globals()
     for intent in lst:
-        try:
-            f = globals()[f'isintent_{intent}']
-        except KeyError:
-            pass
-        else:
-            if f(var):
-                ret.append(intent)
+        name = f'isintent_{intent}'
+        if name in namespace and namespace[name](var):
+            ret.append(intent)
     return ret
 
 
