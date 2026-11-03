@@ -3,6 +3,7 @@ import importlib
 import io
 import textwrap
 import time
+from fractions import Fraction
 
 import pytest
 
@@ -664,11 +665,10 @@ class TestParameterSizes:
         fpath = tmp_path / "sizes.f90"
         fpath.write_text(textwrap.dedent("""\
             module sizes
-              integer :: i
               integer, parameter :: n_max = 2
               integer, parameter :: ints(*) = [n_max, 2 * n_max, 8]
               real(8), parameter :: reals(0:*) = (/1.5d0, 2.5d0/)
-              integer, parameter :: unknown(*) = (/huge(i)/)
+              integer, parameter :: unknown(*) = (/ishft(1, 3)/)
               character(len=*), parameter :: phrase = 'don''t' // '!'
               character(len=*), parameter :: names(*) = ['ab', 'cd']
             end module sizes
@@ -710,7 +710,8 @@ class TestRealParameters:
                 'z': {**par, 'typespec': 'complex', '=': 'cmplx(1.0, 2.0)'},
                 'n': {**par, 'typespec': 'integer', '=': 'int(big / 1e38)'}}
         assert crackfortran.get_parameters(vars) == {
-            'big': 'huge(1.0)', 'z': 'cmplx(1.0, 2.0)', 'n': 'int(big / 1e38)'}
+            'big': float(np.finfo(np.float32).max), 'z': 'cmplx(1.0, 2.0)',
+            'n': 3}
 
 
 class TestLiteralKinds:
@@ -808,6 +809,84 @@ class TestDeclaredTypes:
             """))
         vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
         assert [vs[n]["dimension"] for n in ("a", "b")] == [["5"], ["8"]]
+
+
+def _evaluate(**values):
+    # parameters of no declared type, so of the type of their values
+    par = {'attrspec': ['parameter']}
+    params = crackfortran.get_parameters(
+        {n: {**par, '=': v} for n, v in values.items()})
+    return {n: getattr(v, 'value', v) for n, v in params.items()}
+
+
+class TestInquiries:
+    # the inquiries of Fortran 2018 16.9 give the model numbers of 16.4 of
+    # the kind of their argument, as its IEEE 754 format has them
+    @pytest.mark.parametrize("kind", [1, 2, 4, 8, 16])
+    def test_integer(self, kind):
+        i = f'1_{kind}'
+        bits = 8 * kind
+        huge = 2 ** (bits - 1) - 1
+        assert _evaluate(h=f'huge({i})', d=f'digits({i})', r=f'range({i})',
+                         b=f'bit_size({i})', x=f'radix({i})',
+                         k=f'kind(huge({i}) - bit_size({i}))') == {
+            'h': huge, 'd': bits - 1, 'r': len(str(huge)) - 1, 'b': bits,
+            'x': 2, 'k': kind}
+
+    @pytest.mark.parametrize("kind, info", [
+        (4, np.finfo(np.float32)), (8, np.finfo(np.float64)),
+        *([(10, np.finfo(np.longdouble))] if 10 in crackfortran._real_formats
+          else []),
+    ])
+    def test_real(self, kind, info):
+        x = f'1.0_{kind}'
+        exact = [Fraction(*v.as_integer_ratio())
+                 for v in (info.max, info.smallest_normal, info.eps)]
+        decimal = int(np.floor(min(np.log10(info.max),
+                                   -np.log10(info.smallest_normal))))
+        assert _evaluate(
+            h=f'huge({x})', t=f'tiny({x})', e=f'epsilon({x})',
+            d=f'digits({x})', p=f'precision({x})', r=f'range({x})',
+            x=f'radix({x})', hi=f'maxexponent({x})', lo=f'minexponent({x})',
+            k=f'kind(tiny({x}))') == {
+            'h': exact[0], 't': exact[1], 'e': exact[2], 'd': info.nmant + 1,
+            'p': info.precision, 'r': decimal, 'x': 2, 'hi': info.maxexp,
+            'lo': info.minexp + 1, 'k': kind}
+
+    def test_quad(self):
+        # kind 16 is IEEE binary128, omitted for an IBM double-double
+        if 16 not in crackfortran._real_formats:
+            pytest.skip('kind 16 is not the IEEE binary128 model')
+        x = '1.0_16'
+        assert _evaluate(
+            h=f'huge({x})', t=f'tiny({x})', e=f'epsilon({x})',
+            d=f'digits({x})', p=f'precision({x})', r=f'range({x})',
+            hi=f'maxexponent({x})', lo=f'minexponent({x})') == {
+            'h': (2 - Fraction(2) ** -112) * Fraction(2) ** 16383,
+            't': Fraction(2) ** -16382, 'e': Fraction(2) ** -112, 'd': 113,
+            'p': 33, 'r': 4931, 'hi': 16384, 'lo': -16381}
+
+    def test_names(self, tmp_path):
+        # a variable, or a parameter of an unknown value, has its kind
+        fpath = tmp_path / "names.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module names
+              integer :: i
+              real(8) :: x
+              complex(8) :: z
+              real(8), parameter :: unknown = log(2.0_8)
+              integer, parameter :: hi = huge(i), px = precision(x)
+              integer, parameter :: rz = range(z), du = digits(unknown)
+              real :: a(px), b(rz), c(du), d(hi / 2**30), e(precision(x))
+              real(kind(x)) :: f
+              character(len=digits(i)) :: s
+            end module names
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        dims = [vs[n]["dimension"] for n in ("a", "b", "c", "d", "e")]
+        assert dims == [["15"], ["307"], ["53"], ["1"], ["15"]]
+        assert vs["f"]["kindselector"]["kind"] == "8"
+        assert vs["s"]["charselector"]["len"] == "31"
 
 
 class TestIntegerDivision:
