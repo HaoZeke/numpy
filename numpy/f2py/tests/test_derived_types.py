@@ -3205,6 +3205,16 @@ def test_nonpolymorphic_class_declaration_is_an_error(capsys):
     assert 'item' in err
 
 
+def test_fortran_source_text_keeps_bang_inside_a_string():
+    """A ``!`` inside a character literal is not a comment."""
+    text = util.fortran_source_text(
+        "print *, 'a!b'\n"
+        'print *, "c!d" ! trailing comment\n')
+    assert "print *, 'a!b'" in text
+    assert 'print *, "c!d"' in text
+    assert 'trailing' not in text
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not util.has_f90_compiler(),
                     reason="No Fortran 90 compiler available")

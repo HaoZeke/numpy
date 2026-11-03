@@ -24,6 +24,7 @@ import pytest
 import numpy
 from numpy._utils import asunicode
 from numpy.f2py._backends._meson import MesonBackend
+from numpy.f2py.crackfortran import split_by_unquoted
 from numpy.testing import IS_IOS, IS_WASM, temppath
 
 #
@@ -234,11 +235,17 @@ _POLYMORPHIC_PROBE = (
 
 
 def fortran_source_text(text):
-    """Return free-form Fortran with comments removed and lines joined."""
+    """Return free-form Fortran with comments removed and lines joined.
+
+    A ``!`` inside a ``'...'`` or ``"..."`` literal is not a comment.
+    The cut is ``split_by_unquoted``, the same one crackfortran uses
+    when it reads free-form source.
+    """
     pending = ''
     code = []
     for line in text.splitlines():
-        line = line.split('!')[0].rstrip()
+        line, _comment = split_by_unquoted(line, '!')
+        line = line.rstrip()
         if line.lstrip().startswith('&'):
             line = line.lstrip()[1:]
         if line.endswith('&'):
