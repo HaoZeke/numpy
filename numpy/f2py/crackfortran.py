@@ -2442,6 +2442,13 @@ def _get_depend_dict(name, vars, deps):
         for word in word_pattern.findall(rhs):
             if word not in words and word in vars and word != name:
                 words.append(word)
+    if isparameter(vars[name]):
+        # the value of a parameter takes the kind and length it declares
+        for selector in ('kindselector', 'charselector'):
+            for text in (vars[name].get(selector) or {}).values():
+                for word in word_pattern.findall(str(text)):
+                    if word not in words and word in vars and word != name:
+                        words.append(word)
     for word in list(words):
         for w in _get_depend_dict(word, vars, deps):
             if w not in words and w != name:
@@ -3380,7 +3387,54 @@ def _fit_length(value, var, g_params, params):
     return fit(value)
 
 
-def get_parameters(vars, global_params={}):
+def _declared_type(name, var, params, implicitrules=None):
+    """Return the type and kind that the declaration of a name gives it, or
+    its implicit type, with a kind of None where f2py cannot tell it."""
+    typespec = var.get('typespec')
+    kindselector = var.get('kindselector') or {}
+    charselector = var.get('charselector') or {}
+    if not typespec and implicitrules and name[:1].lower() in implicitrules:
+        rule = implicitrules[name[0].lower()]
+        typespec = rule.get('typespec')
+        kindselector = rule.get('kindselector') or {}
+        charselector = rule.get('charselector') or {}
+    if typespec in ('double precision', 'double complex'):
+        return ('real' if typespec == 'double precision' else 'complex',
+                _default_kinds['double precision'])
+    if typespec == 'byte':
+        return 'integer', 1
+    if typespec not in _default_kinds:
+        return None, None
+    selector = charselector if typespec == 'character' else kindselector
+    if 'kind' in selector:
+        try:
+            kind = _fortran_eval(selector['kind'], {}, params)
+            return typespec, _kind_arg(kind, typespec)
+        except Exception:
+            return typespec, None
+    if '*' in selector and typespec != 'character':
+        # real*8 counts bytes, of which a complex takes two per kind
+        try:
+            return typespec, int(selector['*']) // (
+                2 if typespec == 'complex' else 1)
+        except ValueError:
+            return typespec, None
+    return typespec, _default_kinds[typespec]
+
+
+def _assign(value, typespec, kind):
+    """Convert a value to a type and kind, element by element for an array,
+    as assigning it does, or keep it if it does not convert."""
+    try:
+        if isinstance(value, dict):
+            return {k: _convert(_typed(v), typespec, kind)
+                    for k, v in value.items()}
+        return _convert(_typed(value), typespec, kind)
+    except (TypeError, OverflowError):
+        return value
+
+
+def get_parameters(vars, global_params={}, implicitrules=None):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
     param_names = []
@@ -3423,6 +3477,9 @@ def get_parameters(vars, global_params={}):
                 # its expression
                 del params[n]
                 continue
+            typespec, kind = _declared_type(n, vars[n], params, implicitrules)
+            if typespec:
+                params[n] = _assign(params[n], typespec, kind)
             if isstring(vars[n]) and isinstance(params[n], int):
                 params[n] = _Character(chr(params[n]),
                                        _default_kinds['character'])
@@ -3515,7 +3572,7 @@ def analyzevars(block):
             svars.append(n)
 
     use_params = get_useparameters(block)
-    params = get_parameters(vars, use_params)
+    params = get_parameters(vars, use_params, implicitrules)
     if block['block'] == 'module':
         # kept for get_useparameters, as the analysis below reduces the
         # dimensions of arrays to their sizes

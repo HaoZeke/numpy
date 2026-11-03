@@ -13,4 +13,11 @@ module parameter_values
   real(dp), parameter :: tenth = 0.1_dp, twice = 2 * tenth, wide = 0.1
   character(len=*), parameter :: word = 'it''s' // ' ok'
   logical, parameter :: yes = 3 > 2 .and. .not. 1 /= 1
+  ! assignment converts a value to the type and kind declared
+  integer, parameter :: p = 15, wp = selected_real_kind(p)
+  real(wp), parameter :: one = 1
+  integer, parameter :: n_declared = int(one / 2 * 10), k_declared = kind(one)
+  integer, parameter :: n_truncated = 2.7
+  real, parameter :: rounded = 2**24 + 1
+  integer, parameter :: n_back = int(rounded) - 2**24
 end module parameter_values

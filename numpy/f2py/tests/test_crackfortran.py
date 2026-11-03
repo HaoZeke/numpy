@@ -777,6 +777,39 @@ class TestValueKinds:
         assert mod["body"][0]["vars"]["x"]["="] == "0.3333333333333333"
 
 
+class TestDeclaredTypes:
+    # a parameter takes the type and kind of its declaration, or its
+    # implicit type, which assignment converts its value to
+    def test_declared(self, tmp_path):
+        fpath = tmp_path / "declared.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module declared
+              integer, parameter :: p = 15
+              integer, parameter :: wp = selected_real_kind(p)
+              real(wp), parameter :: one = 1
+              integer, parameter :: n = int(one / 2 * 10), k = kind(one)
+              integer, parameter :: m = 2.7
+              real, parameter :: big = 2**24 + 1
+              real :: buf(n), kinds(k), two(m), none(int(big) - 2**24)
+            end module declared
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        dims = [vs[n]["dimension"] for n in ("buf", "kinds", "two", "none")]
+        assert dims == [["5"], ["8"], ["2"], ["0"]]
+
+    def test_implicit(self, tmp_path):
+        fpath = tmp_path / "implicit.f90"
+        fpath.write_text(textwrap.dedent("""\
+            subroutine implicit(a, b)
+              implicit double precision (d)
+              parameter (x = 1, d = 1)
+              real a(int(x / 2 * 10)), b(kind(d))
+            end
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert [vs[n]["dimension"] for n in ("a", "b")] == [["5"], ["8"]]
+
+
 class TestIntegerDivision:
     # the quotient of two integers is truncated, as in Fortran
     def test_extents(self, tmp_path):
