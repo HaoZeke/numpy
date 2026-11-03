@@ -710,8 +710,7 @@ class TestRealParameters:
                 'z': {**par, 'typespec': 'complex', '=': 'cmplx(1.0, 2.0)'},
                 'n': {**par, 'typespec': 'integer', '=': 'int(big / 1e38)'}}
         assert crackfortran.get_parameters(vars) == {
-            'big': float(np.finfo(np.float32).max), 'z': 'cmplx(1.0, 2.0)',
-            'n': 3}
+            'big': float(np.finfo(np.float32).max), 'z': 1 + 2j, 'n': 3}
 
 
 class TestLiteralKinds:
@@ -903,6 +902,41 @@ class TestParameterStatements:
         vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
         dims = [vs[n]["dimension"] for n in ("a", "b", "c")]
         assert dims == [["3"], ["5"], ["4"]]
+
+
+class TestComplex:
+    # a complex literal has the kind of its part of greater precision, and
+    # cmplx gives the default kind unless its kind= says otherwise
+    @pytest.mark.parametrize("value, expected", [
+        ("kind((1.0d0, 0.1))", 8), ("kind((1, 2))", 4),
+        ("kind(cmplx(1.0d0, 2.0d0))", 4), ("kind(cmplx(1, 2, 8))", 8),
+        ("kind(dcmplx(1, 2))", 8), ("kind(real((1.0d0, 2.0d0)))", 8),
+        ("kind(aimag((1.0_8, 2.0_8)))", 8), ("precision((1.0_8, 0.0_8))", 15),
+        ("range((1, 2))", 37), ("int((2.7, 1.0))", 2),
+        ("merge(1, 2, (1.0, 2.0) * 2 == (2, 4))", 1),
+        ("merge(1, 2, (1.0, 2.0) ** 3 == (-11, -2))", 1),
+        ("merge(1, 2, conjg((1, 2)) / (1, 1) == (-0.5, -1.5))", 1),
+    ])
+    def test_values(self, value, expected):
+        var = {'typespec': 'integer', 'attrspec': ['parameter'], '=': value}
+        assert crackfortran.get_parameters({'k': var}) == {'k': expected}
+
+    def test_text(self, tmp_path):
+        # each part keeps the kind of the complex
+        fpath = tmp_path / "complex.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module complex
+              complex, parameter :: z = (1.0, 2.0) * 2
+              complex(8), parameter :: w = (1.0d0, 0.1d0) * 3, x = (1.5d0, 0.5)
+            end module complex
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])
+        vs = mod[0]["vars"]
+        assert [vs[n]["="] for n in ("z", "w", "x")] == [
+            "(2.0, 4.0)", "(3.0_8, 0.30000000000000004_8)", "(1.5d0, 0.5)"]
+        # which f2py -h writes as they are, not as Python reads them
+        assert "w=(3.0_8, 0.30000000000000004_8)" in crackfortran.crack2fortran(
+            mod)
 
 
 class TestIntegerDivision:
@@ -1101,7 +1135,8 @@ class TestReshape:
 
 
 class TestArrayArithmetic:
-    # Python would repeat the list, where Fortran doubles each element
+    # Python would repeat the list, where Fortran doubles each element, and
+    # a complex is not a list
     def test_unevaluated(self, tmp_path):
         fpath = tmp_path / "arithmetic.f90"
         fpath.write_text(textwrap.dedent("""\
@@ -1113,7 +1148,7 @@ class TestArrayArithmetic:
             """))
         vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
         assert vs["twice"]["dimension"] == ["*"]
-        assert vs["z"]["="] == "(1.0, 2.0)*2"
+        assert vs["z"]["="] == "(2.0, 4.0)"
         assert vs["buf"]["dimension"] == ["size(2 * [1, 2, 3])"]
 
 
