@@ -3728,11 +3728,11 @@ def _eval_scalar(value, params, c_literals=False):
         return value
     if isinstance(result, (list, dict)):
         return value
-    if isinstance(result, (_Real, _Complex)):
+    if isinstance(result, (_Real, _Complex)) and not c_literals:
         if _real_literal_re.fullmatch(value):
             # a literal already is its value, and keeps its kind as written
             return value.strip()
-        if not c_literals and result.kind not in (None, _default_kinds['real']):
+        if result.kind not in (None, _default_kinds['real']):
             # without its kind, Fortran would read the value as a default real
             if isinstance(result, _Real):
                 return f'{result}_{result.kind}'

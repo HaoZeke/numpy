@@ -731,6 +731,26 @@ class TestUnknownKinds:
         assert vs["b"]["dimension"] == ["8"]
 
 
+class TestArgumentDefaults:
+    # the initial value of an argument is written as C, which has no d
+    # exponents and no kinds
+    def test_c(self, tmp_path):
+        fpath = tmp_path / "defaults.f90"
+        fpath.write_text(textwrap.dedent("""\
+            subroutine scale(x, tol, n, z)
+              real(8), intent(in) :: x, tol
+              integer, intent(in) :: n
+              complex(8), intent(in) :: z
+              !f2py real(8), optional :: tol = 1.0d-6
+              !f2py integer, optional :: n = 3_8
+              !f2py complex(8), optional :: z = (1.5d0, 0.5_8)
+            end subroutine scale
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        assert [vs[n]["="] for n in ("tol", "n", "z")] == [
+            "1e-06", "3", "(1.5, 0.5)"]
+
+
 class TestLiteralKinds:
     # a kind follows a literal, and is no part of a name
     def test_extents(self, tmp_path):
