@@ -3657,7 +3657,6 @@ def get_parameters(vars, global_params={}, implicitrules=None):
     for n in get_sorted_names(vars):
         if 'attrspec' in vars[n] and 'parameter' in vars[n]['attrspec']:
             param_names.append(n)
-    kind_call_re = re.compile(r'\b(selected_(int|real)_)?kind\s*\(', re.I)
     for n in param_names:
         if '=' in vars[n]:
             v = vars[n]['=']
@@ -3669,15 +3668,6 @@ def get_parameters(vars, global_params={}, implicitrules=None):
             except Exception as msg:
                 params[n] = v
                 outmess(f'get_parameters: got "{msg}" on {n!r}\n')
-            # Handle _dp for gh-6624
-            # Also fixes gh-20460
-            if (not dimspec and isscalar(vars[n]) and params[n] == v
-                    and kind_call_re.search(v)):
-                if real16pattern.search(v):
-                    params[n] = 8
-                elif real8pattern.search(v):
-                    params[n] = 4
-
             if (dimspec or isstring_or_stringarray(vars[n])) and params[n] == v:
                 # unlike a number, an array or a string cannot stand for
                 # its expression
