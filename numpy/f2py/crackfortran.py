@@ -2526,6 +2526,8 @@ def _real_formats_for_long_double(nmant, nexp, maxexp):
 
 # A one-file probe can wait on a cold compiler, so the limit is two minutes.
 _PROBE_COMPILE_TIMEOUT = 120
+# The probe writes one integer and exits, so thirty seconds is enough.
+_PROBE_RUN_TIMEOUT = 30
 
 
 def _compiler_key():
@@ -2558,24 +2560,62 @@ def fortran_compiles(code):
     return _fortran_compiles(_compiler_key(), code)
 
 
-@functools.cache
-def _binary128_kind(compiler):
-    """Whether ``compiler`` folds the binary128 precision to kind 16.
+def _run_selected_real_kind(precision, compiler):
+    """The value ``selected_real_kind(precision, 0)`` has at run time.
 
-    An empty compiler keeps the long-double heuristic, which is gfortran's.
+    A constant argument is folded, and flang's folding can disagree with
+    its runtime. The call goes through a subroutine so it is not folded.
+    ``None`` when ``compiler`` is empty or the program cannot be run.
     """
     if not compiler:
         return None
-    code = ("program p\n"
-            "  integer, parameter :: k = selected_real_kind("
-            f"{_BINARY128_DECIMAL_PRECISION})\n"
-            "  integer, parameter :: check = 1 / merge(1, 0, k == 16)\n"
-            "end program p\n")
-    return _fortran_compiles(compiler, code)
+    argv = shlex.split(compiler)
+    code = (
+        "subroutine sr(p, res)\n"
+        "  integer, intent(in) :: p\n"
+        "  integer, intent(out) :: res\n"
+        "  res = selected_real_kind(p, 0)\n"
+        "end subroutine\n"
+        "program probe\n"
+        "  integer :: res\n"
+        f"  call sr({int(precision)}, res)\n"
+        "  open(10, file='kind.txt', status='replace')\n"
+        "  write(10, *) res\n"
+        "  close(10)\n"
+        "end program\n")
+    try:
+        with tempfile.TemporaryDirectory(prefix='f2py-kind-') as directory:
+            src = os.path.join(directory, 'probe.f90')
+            exe = os.path.join(directory, 'probe')
+            with open(src, 'w') as handle:
+                handle.write(code)
+            compiled = subprocess.run(
+                [*argv, src, '-o', exe], capture_output=True,
+                timeout=_PROBE_COMPILE_TIMEOUT)
+            if compiled.returncode != 0:
+                return None
+            ran = subprocess.run(
+                [exe], cwd=directory, capture_output=True,
+                timeout=_PROBE_RUN_TIMEOUT)
+            if ran.returncode != 0:
+                return None
+            with open(os.path.join(directory, 'kind.txt')) as handle:
+                return int(handle.read())
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
+@functools.cache
+def _binary128_kind(compiler):
+    """Whether the binary128 precision is kind 16 at run time for ``compiler``."""
+    kind = _run_selected_real_kind(_BINARY128_DECIMAL_PRECISION, compiler)
+    if kind is None:
+        return None
+    return kind == 16
 
 
 def _compiler_has_binary128_kind():
-    """Whether the compiler folds the binary128 precision to kind 16.
+    """Whether the binary128 precision is kind 16 at run time.
 
     ``FC`` unset keeps the long-double heuristic, which is gfortran's.
     """
