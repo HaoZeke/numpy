@@ -20,4 +20,13 @@ module parameter_values
   integer, parameter :: n_truncated = 2.7
   real, parameter :: rounded = 2**24 + 1
   integer, parameter :: n_back = int(rounded) - 2**24
+  ! a complex literal has the kind of its more precise part
+  complex, parameter :: z_twice = (1.0, 2.0) * 2, z_cube = (1.0, 2.0) ** 3
+  complex(8), parameter :: z_wide = (1.0d0, 0.1) * 3
+  complex(8), parameter :: z_cmplx = cmplx(0.1d0, 0.2d0, 8)
+  complex(8), parameter :: z_quotient = conjg((1, 2)) / (1, 1)
+  real(8), parameter :: z_real = real(z_wide), z_imag = aimag(z_wide)
+  integer, parameter :: k_literal = kind((1.0d0, 0.1))
+  integer, parameter :: k_cmplx = kind(cmplx(1.0d0, 2.0d0))
+  integer, parameter :: k_real = kind(real((1.0d0, 2.0d0)))
 end module parameter_values
