@@ -180,7 +180,6 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
                                      fp->defs[i].dims.d, NULL, fp->defs[i].data,
                                      NPY_ARRAY_FARRAY, NULL);
             if (v == NULL) {
-                Py_DECREF(descr);
                 goto fail;
             }
             PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
@@ -936,7 +935,6 @@ ndarray_from_pyobj(const int type_num,
           PyArray_NewFromDescr(&PyArray_Type, descr, rank, dims,
                                NULL, NULL, !(intent & F2PY_INTENT_C), NULL);
         if (arr == NULL) {
-          Py_DECREF(descr);
           return NULL;
         }
         if (PyArray_ITEMSIZE(arr) != elsize) {
@@ -1123,7 +1121,6 @@ ndarray_from_pyobj(const int type_num,
         // Warning: in the case of NPY_STRING, PyArray_FromAny may
         // reset descr->elsize, e.g. dtype('S0') becomes dtype('S1').
         if (arr == NULL) {
-          Py_DECREF(descr);
           return NULL;
         }
         if (type_num != NPY_STRING && PyArray_ITEMSIZE(arr) != elsize) {

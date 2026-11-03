@@ -7,6 +7,7 @@ import pytest
 
 import numpy as np
 from numpy._core._type_aliases import c_names_dict as _c_names_dict
+from numpy.testing import HAS_REFCOUNT
 
 from . import util
 
@@ -378,6 +379,19 @@ class TestIntent:
         assert intent.in_.c.is_intent_exact("c", "in")
         assert intent.in_.c.is_intent_exact("in", "c")
         assert not intent.in_.is_intent("c")
+
+
+@pytest.mark.skipif(not HAS_REFCOUNT, reason="Python lacks refcounts")
+def test_failed_conversion_keeps_dtype_refcount():
+    # NumPy releases the dtype reference passed to it even when creating
+    # the array fails, so ndarray_from_pyobj must not release it again.
+    dtype = np.dtype(np.float64)
+    before = sys.getrefcount(dtype)
+    with pytest.raises(ValueError, match="could not convert"):
+        wrap.call(wrap.NPY_DOUBLE, 8, [1], intent.in_.flags, ["spam"])
+    with pytest.raises(ValueError, match="too big"):
+        wrap.call(wrap.NPY_DOUBLE, 8, [2**62], intent.hide.flags, None)
+    assert sys.getrefcount(dtype) == before
 
 
 class TestSharedMemory:
