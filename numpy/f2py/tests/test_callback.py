@@ -1,5 +1,6 @@
 import math
 import platform
+import subprocess
 import sys
 import textwrap
 import threading
@@ -282,7 +283,7 @@ class TestGH18335(util.F2PyTest):
 
 @pytest.mark.slow
 class TestGH18385(util.F2PyTest):
-    # secondary calls the hidden call-back of primary without declaring it
+    # primary and tertiary declare the hidden call-back, secondary does not
     sources = [util.getpath("tests", "src", "callback", "gh18385.f90")]
 
     def test_gh18385(self, monkeypatch):
@@ -291,12 +292,62 @@ class TestGH18385(util.F2PyTest):
                             lambda a, b: calls.append((a, b)), raising=False)
         self.module.primary()
         self.module.secondary()
-        assert calls == [(1, 2), (3, 4)]
+        self.module.tertiary()
+        assert calls == [(1, 2), (3, 4), (5, 6)]
+
+    def test_nested(self, monkeypatch):
+        calls = []
+
+        def callback(a, b):
+            calls.append((a, b))
+            if a == 1:
+                self.module.tertiary()
+            elif a == 5:
+                self.module.secondary()
+
+        monkeypatch.setattr(self.module, "callback", callback, raising=False)
+        self.module.primary()
+        assert calls == [(1, 2), (5, 6), (3, 4)]
+
+    def test_raises(self, monkeypatch):
+        def callback(a, b):
+            raise ValueError(f"from {a}")
+
+        monkeypatch.setattr(self.module, "callback", callback, raising=False)
+        for routine, a in [(self.module.primary, 1),
+                           (self.module.secondary, 3),
+                           (self.module.tertiary, 5)]:
+            with pytest.raises(ValueError, match=f"from {a}"):
+                routine()
 
 
 @pytest.mark.slow
 class TestGH18385PythonTLS(TestGH18385):
     options = ["-DF2PY_USE_PYTHON_TLS"]
+
+
+def test_gh18385_signature_mismatch(tmp_path):
+    # One trampoline serves the two routines, so they must agree on it
+    fpath = tmp_path / "gh18385_mismatch.f90"
+    fpath.write_text(textwrap.dedent("""\
+        subroutine one()
+          external cb
+          !f2py intent(callback, hide) :: cb
+          call cb(1)
+        end subroutine one
+
+        subroutine two()
+          external cb
+          !f2py intent(callback, hide) :: cb
+          call cb(1.0)
+        end subroutine two
+        """))
+    code = f"import sys; sys.path = {sys.path!r}; import numpy.f2py; numpy.f2py.main()"
+    res = subprocess.run([sys.executable, "-c", code, "-m", "mismatch", str(fpath)],
+                         cwd=tmp_path, capture_output=True, text=True)
+    assert res.returncode != 0
+    assert "F2PYError" in res.stderr
+    assert "different signatures" in res.stderr
 
 
 @pytest.mark.slow

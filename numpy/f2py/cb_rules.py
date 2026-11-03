@@ -10,6 +10,7 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 from . import __version__, cfuncs
 from .auxfuncs import (
+    F2PYError,
     applyrules,
     debugcapi,
     dictappend,
@@ -22,6 +23,7 @@ from .auxfuncs import (
     iscomplexfunction,
     isfunction,
     isintent_c,
+    isintent_callback,
     isintent_hide,
     isintent_in,
     isintent_inout,
@@ -53,7 +55,7 @@ cb_routine_rules = {
 #begintitle#
 typedef struct {
     PyObject *capi;
-    PyTupleObject *args_capi;
+    PyObject *args_capi;
     int nofargs;
     jmp_buf jmpbuf;
 } #name#_t;
@@ -90,7 +92,7 @@ static #name#_t *get_active_#name#(void) {
 #static# #rctype# #callbackname# (#optargs##args##strarglens##noargs#) {
     #name#_t cb_local = { NULL, NULL, 0 };
     #name#_t *cb = NULL;
-    PyTupleObject *capi_arglist = NULL;
+    PyObject *capi_arglist = NULL;
     PyObject *capi_return = NULL;
     PyObject *capi_tmp = NULL;
     PyObject *capi_arglist_list = NULL;
@@ -124,11 +126,11 @@ f2py_cb_start_clock();
     goto capi_return_pt;
     }
     if (capi_arglist==NULL) {
-        PyTupleObject *capi_xa = NULL;
+        PyObject *capi_xa = NULL;
         capi_longjmp_ok = 0;
         capi_tmp = PyObject_GetAttrString(#modulename#_module,\"#argname#_extra_args\");
         if (capi_tmp) {
-            capi_xa = (PyTupleObject *)PySequence_Tuple(capi_tmp);
+            capi_xa = PySequence_Tuple(capi_tmp);
             Py_DECREF(capi_tmp);
             if (capi_xa==NULL) {
                 PyErr_SetString(#modulename#_error,\"Failed to convert #modulename#.#argname#_extra_args to tuple.\\n\");
@@ -521,6 +523,10 @@ cb_arg_rules = [
 
 ################## Build call-back module #############
 cb_map = {}
+# The trampoline of an intent(callback) external is the C function of that
+# name, so every routine declaring the external shares the first one built.
+# Keyed by that C name and emptied by f2py2e.buildmodules for each run.
+_extern_cb_map = {}
 
 
 def buildcallbacks(m):
@@ -543,7 +549,6 @@ def buildcallback(rout, um):
     var = rout['vars']
     vrd = capi_maps.cb_routsign2map(rout, um)
     rd = dictappend({}, vrd)
-    cb_map[um].append([rout['name'], rd['name']])
     for r in cb_rout_rules:
         if ('_check' in r and r['_check'](rout)) or ('_check' not in r):
             ar = applyrules(r, vrd, rout)
@@ -637,6 +642,20 @@ def buildcallback(rout, um):
         rd['noargs'] = 'void'
 
     ar = applyrules(cb_routine_rules, rd)
+    if isintent_callback(rout):
+        signature = (replace(cb_routine_rules['cbtypedefs'], dict(rd, name='')),
+                     ar['maxnofargs'], ar['nofoptargs'])
+        name, user_module, shared_signature = _extern_cb_map.setdefault(
+            rd['callbackname'], (rd['name'], um, signature))
+        if name != rd['name']:
+            if signature != shared_signature:
+                raise F2PYError(
+                    f"intent(callback) external {rout['name']!r} has "
+                    f"different signatures in {user_module!r} and {um!r}")
+            cb_map[um].append([rout['name'], name])
+            outmess(f"      shares \"{name}\"\n")
+            return
+    cb_map[um].append([rout['name'], rd['name']])
     cfuncs.callbacks[rd['name']] = ar['body']
     if isinstance(ar['need'], str):
         ar['need'] = [ar['need']]
