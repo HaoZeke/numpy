@@ -49,6 +49,8 @@ from ._dt_helpers import (
     _wrap_types,
 )
 from .auxfuncs import (
+    F2PYError,
+    errmess,
     get_type_members,
     isallocatable,
     isarray,
@@ -1460,8 +1462,15 @@ def wrapper_handles(rout, args, result=None):
             # class() dummy that is neither allocatable nor a pointer,
             # accepts a type() actual, so the wrapper declares type().
             if not _is_polymorphic_arg(var):
-                raise AssertionError(
-                    f"refusing to declare class() for nonpolymorphic {a}")
+                # A nonpolymorphic dummy must not reach the class()
+                # declaration.  Name the routine and the argument so the
+                # failure is the same kind of message crackfortran writes.
+                detail = (
+                    f"wrapper_handles: routine {rout['name']!r} argument "
+                    f"{a!r} is not polymorphic, so the wrapper must not "
+                    f"declare class()")
+                errmess(detail + '\n')
+                raise F2PYError(detail)
             decls.append(f"class({dt['spec']}), {storage} :: f2py_{a}")
             if storage == 'pointer':
                 pre.append(f'nullify(f2py_{a})')
