@@ -51,6 +51,7 @@ class Op(Enum):
     FACTORS = 2_000
     REF = 3_000
     DEREF = 3_001
+    CAST = 3_002
 
 class RelOp(Enum):
     EQ = 1

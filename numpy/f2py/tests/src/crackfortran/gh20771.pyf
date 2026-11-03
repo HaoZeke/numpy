@@ -8,5 +8,10 @@ interface
     integer intent(out), dimension((compute_v?(2*(*range=='A'||(*range=='I' && iu-il+1==n)?n:0)):0)), depend(n,iu,il,compute_v,range) :: isuppz
     integer intent(hide), depend(isuppz) :: m = len(isuppz)
   end subroutine isuppz_len
+  subroutine vl_len(v, vl, m)
+    double precision intent(in) :: v
+    double precision intent(out), depend(v), dimension((int)v+1) :: vl
+    integer intent(hide), depend(vl) :: m = len(vl)
+  end subroutine vl_len
 end interface
 end python module gh20771

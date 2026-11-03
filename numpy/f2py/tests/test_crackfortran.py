@@ -360,7 +360,7 @@ class TestStringLiteralDepend:
 class TestCOperatorsDimSpec:
     # gh-20771: C logical operators in a dimension specification must keep
     # their precedence in the generated C (scipy/scipy#16527)
-    def test_isuppz(self, monkeypatch):
+    def test_dimension(self, monkeypatch):
         # f2py does not lower the case of signature files
         monkeypatch.setattr(crackfortran, "dolowercase", 0)
         fpath = util.getpath("tests", "src", "crackfortran", "gh20771.pyf")
@@ -368,11 +368,12 @@ class TestCOperatorsDimSpec:
             warnings.simplefilter("error", ExprWarning)
             mod = crackfortran.crackfortran([str(fpath)])
         iface = next(b for b in mod if b.get("name") == "gh20771")["body"][0]
-        routine = next(b for b in iface["body"]
-                       if b.get("name") == "isuppz_len")
-        assert routine["vars"]["isuppz"]["dimension"] == [(
+        routines = {b["name"]: b for b in iface["body"]}
+        assert routines["isuppz_len"]["vars"]["isuppz"]["dimension"] == [(
             "(compute_v?2 * (range == 'A' || range == 'I'"
             " && 1 - il + iu == n?n:0):0)")]
+        assert routines["vl_len"]["vars"]["vl"]["dimension"] == [
+            "1 + (int)v"]
 
 
 @pytest.mark.slow
@@ -393,6 +394,10 @@ class TestCOperatorsDimSpecRuntime(util.F2PyTest):
     def test_isuppz_len(self, compute_v, range_, il, iu, size):
         isuppz = self.module.isuppz_len(compute_v, range_, 4, il, iu)
         assert isuppz.tolist() == list(range(1, size + 1))
+
+    @pytest.mark.parametrize("v, size", [(0.0, 1), (2.5, 3), (5.0, 6)])
+    def test_vl_len(self, v, size):
+        assert self.module.vl_len(v).tolist() == list(range(1, size + 1))
 
 
 @pytest.mark.slow

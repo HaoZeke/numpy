@@ -11,6 +11,7 @@ from numpy.f2py.symbolic import (
     as_and,
     as_apply,
     as_array,
+    as_cast,
     as_complex,
     as_deref,
     as_eq,
@@ -146,6 +147,12 @@ class TestSymbolic(util.F2PyTest):
         assert hash(g) is not None
         assert sorted([h, as_not(x), g]) == [as_not(x), g, h]
 
+        c = as_cast("int", x)
+        assert c.op == Op.CAST
+        assert c == c
+        assert c != as_cast("long", x)
+        assert hash(c) is not None
+
     def test_tostring_fortran(self):
         x = as_symbol("x")
         y = as_symbol("y")
@@ -260,6 +267,14 @@ class TestSymbolic(util.F2PyTest):
         assert as_and(as_not(as_eq(x, y)), z).tostring(
             language=Language.Python) == "not x == y and z"
 
+        assert as_cast("int", x).tostring(language=language) == "(int)x"
+        assert as_cast("int", x + y).tostring(
+            language=language) == "(int)(x + y)"
+        assert (2 * as_cast("int", x)).tostring(
+            language=language) == "2 * (int)x"
+        assert as_cast("int", as_cast("long", x)).tostring(
+            language=language) == "(int)(long)x"
+
     def test_operations(self):
         x = as_symbol("x")
         y = as_symbol("y")
@@ -343,6 +358,8 @@ class TestSymbolic(util.F2PyTest):
         assert as_eq(x, y).substitute({x: y + z}) == as_eq(y + z, y)
         assert as_and(x, y).substitute({x: y + z}) == as_and(y + z, y)
         assert as_not(x).substitute({x: z}) == as_not(z)
+        assert as_cast("int", x).substitute({x: y + z}) == as_cast("int",
+                                                                   y + z)
 
     def test_fromstring(self):
 
@@ -458,6 +475,19 @@ class TestSymbolic(util.F2PyTest):
             x, y, as_ternary(z, x, y))
         assert fromstring("f(x ? y : z)") == f(as_ternary(x, y, z))
 
+        assert fromstring("(int)x") == as_cast("int", x)
+        assert fromstring("(int)x + 1") == as_cast("int", x) + 1
+        assert fromstring("(int)x * y") == as_cast("int", x) * y
+        assert fromstring("(int)(x + y)") == as_cast("int", x + y)
+        assert fromstring("(unsigned  long)x") == as_cast("unsigned long", x)
+        assert fromstring("(double *)x") == as_cast("double *", x)
+        assert fromstring("(npy_intp)x") == as_cast("npy_intp", x)
+        assert fromstring("(int)!x") == as_cast("int", as_not(x))
+        assert fromstring("f((int)x)") == f(as_cast("int", x))
+        # a parenthesized name followed by parenthesis may be a function
+        assert fromstring("(f)(x)") == f(x)
+        assert fromstring("(x) * y") == x * y
+
         assert fromstring("x .eq. y", language=Language.Fortran) == as_eq(x, y)
         assert fromstring("x .ne. y", language=Language.Fortran) == as_ne(x, y)
         assert fromstring("x .lt. y", language=Language.Fortran) == as_lt(x, y)
@@ -552,6 +582,8 @@ class TestSymbolic(util.F2PyTest):
 
         pytest.raises(RuntimeError, lambda: (x * x).linear_solve(x))
         pytest.raises(RuntimeError, lambda: as_and(x, y).linear_solve(x))
+        pytest.raises(RuntimeError,
+                      lambda: (as_cast("int", x) + 1).linear_solve(x))
 
     def test_as_numer_denom(self):
         x = as_symbol("x")
@@ -611,3 +643,14 @@ class TestSymbolic(util.F2PyTest):
         assert u == as_ternary(
             as_and(as_eq(jobt, as_number(0)), as_eq(jobu, as_number(3))),
             as_number(0), as_ternary(as_eq(jobu, as_number(1)), m, n))
+
+    def test_c_cast_gh20771(self):
+        # Dimension specifications of SciPy's former specfun.pyf
+        v = as_symbol("v")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ExprWarning)
+            vl = fromstring("(int)v+1")
+            lb = fromstring("abs((int)v)+2")
+        assert vl == as_cast("int", v) + 1
+        assert vl.symbols() == {v}
+        assert lb == as_apply(as_symbol("abs"), as_cast("int", v)) + 2

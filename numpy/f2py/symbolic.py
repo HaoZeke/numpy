@@ -62,6 +62,7 @@ class Op(Enum):
     FACTORS = 2000
     REF = 3000
     DEREF = 3001
+    CAST = 3002
 
 
 class RelOp(Enum):
@@ -242,6 +243,10 @@ class Expr:
         elif op in (Op.REF, Op.DEREF):
             # data is Expr instance
             assert isinstance(data, Expr)
+        elif op is Op.CAST:
+            # data is (<C type name>, <operand>)
+            assert isinstance(data, tuple) and len(data) == 2
+            assert isinstance(data[0], str) and isinstance(data[1], Expr)
         elif op is Op.RELATIONAL:
             # data is (<relop>, <left>, <right>)
             assert isinstance(data, tuple) and len(data) == 3
@@ -430,6 +435,11 @@ class Expr:
             precedence = Precedence.UNARY
         elif self.op is Op.DEREF:
             r = '*' + self.data.tostring(Precedence.UNARY, language=language)
+            precedence = Precedence.UNARY
+        elif self.op is Op.CAST:
+            ctype, operand = self.data
+            r = f'({ctype})' + operand.tostring(Precedence.UNARY,
+                                                language=language)
             precedence = Precedence.UNARY
         elif self.op is Op.RELATIONAL:
             rop, left, right = self.data
@@ -700,6 +710,10 @@ class Expr:
             return normalize(Expr(self.op, operands))
         if self.op in (Op.REF, Op.DEREF):
             return normalize(Expr(self.op, self.data.substitute(symbols_map)))
+        if self.op is Op.CAST:
+            ctype, operand = self.data
+            return normalize(Expr(self.op,
+                                  (ctype, operand.substitute(symbols_map))))
         if self.op is Op.RELATIONAL:
             rop, left, right = self.data
             left = left.substitute(symbols_map)
@@ -760,6 +774,10 @@ class Expr:
         elif self.op in (Op.REF, Op.DEREF):
             return normalize(Expr(self.op,
                                   self.data.traverse(visit, *args, **kwargs)))
+        elif self.op is Op.CAST:
+            ctype, operand = self.data
+            return normalize(Expr(self.op, (
+                ctype, operand.traverse(visit, *args, **kwargs))))
         elif self.op is Op.RELATIONAL:
             rop, left, right = self.data
             left = left.traverse(visit, *args, **kwargs)
@@ -1091,6 +1109,12 @@ def as_deref(expr):
     return Expr(Op.DEREF, expr)
 
 
+def as_cast(ctype, expr):
+    """Return object as C cast expression ``(ctype)expr``.
+    """
+    return Expr(Op.CAST, (ctype, expr))
+
+
 def as_eq(left, right):
     return Expr(Op.RELATIONAL, (RelOp.EQ, left, right))
 
@@ -1190,7 +1214,8 @@ def as_numer_denom(obj):
     if isinstance(obj, Expr):
         obj = normalize(obj)
         if obj.op in (Op.INTEGER, Op.REAL, Op.COMPLEX, Op.SYMBOL,
-                      Op.INDEXING, Op.TERNARY, Op.RELATIONAL, Op.LOGICAL):
+                      Op.INDEXING, Op.TERNARY, Op.RELATIONAL, Op.LOGICAL,
+                      Op.CAST):
             return obj, as_number(1)
         elif obj.op is Op.APPLY:
             if obj.data[0] is ArithOp.DIV and not obj.data[2]:
@@ -1363,6 +1388,12 @@ def split_ternary(s):
                     return parts
                 return None
     return None
+
+
+# C17 6.7.2 type specifier keywords
+c_type_specifiers = frozenset((
+    'void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed',
+    'unsigned', '_Bool', '_Complex'))
 
 
 def fromstring(s, language=Language.C):
@@ -1538,6 +1569,18 @@ class _FromStringWorker:
         # logical NOT operation
         if self.language is Language.C and r.startswith('!'):
             return as_not(self.process(restore(r[1:])))
+
+        # cast operation
+        m = re.match(r'\A(@__f2py_PARENTHESIS_ROUND_\d+@)\s*([\w@!].*)\Z', r)
+        if self.language is Language.C and m:
+            ctype = ' '.join(raw_symbols_map[m.group(1)].split())
+            operand = m.group(2)
+            if (re.match(r'\A[a-zA-Z_]\w*( [a-zA-Z_]\w*)*[ *]*\Z', ctype)
+                    and (not operand.startswith('@__f2py_PARENTHESIS_ROUND_')
+                         # `(name)(...)` may also call a function `name`
+                         or ctype in c_type_specifiers
+                         or ' ' in ctype or '*' in ctype)):
+                return as_cast(ctype, self.process(restore(operand)))
 
         # exponentiation operations
         if self.language is not Language.C and '**' in r:
