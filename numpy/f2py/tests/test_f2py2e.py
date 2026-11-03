@@ -74,57 +74,57 @@ def get_io_paths(fname_inp, mname="untitled"):
 ################
 
 
-@pytest.fixture(scope="session")
-def hello_world_f90(tmpdir_factory):
+@pytest.fixture
+def hello_world_f90(tmp_path):
     """Generates a single f90 file for testing"""
     fdat = util.getpath("tests", "src", "cli", "hiworld.f90").read_text()
-    fn = tmpdir_factory.getbasetemp() / "hello.f90"
+    fn = tmp_path / "hello.f90"
     fn.write_text(fdat, encoding="ascii")
     return fn
 
 
-@pytest.fixture(scope="session")
-def gh23598_warn(tmpdir_factory):
+@pytest.fixture
+def gh23598_warn(tmp_path):
     """F90 file for testing warnings in gh23598"""
     fdat = util.getpath("tests", "src", "crackfortran", "gh23598Warn.f90").read_text()
-    fn = tmpdir_factory.getbasetemp() / "gh23598Warn.f90"
+    fn = tmp_path / "gh23598Warn.f90"
     fn.write_text(fdat, encoding="ascii")
     return fn
 
 
-@pytest.fixture(scope="session")
-def gh22819_cli(tmpdir_factory):
+@pytest.fixture
+def gh22819_cli(tmp_path):
     """F90 file for testing disallowed CLI arguments in ghff819"""
     fdat = util.getpath("tests", "src", "cli", "gh_22819.pyf").read_text()
-    fn = tmpdir_factory.getbasetemp() / "gh_22819.pyf"
+    fn = tmp_path / "gh_22819.pyf"
     fn.write_text(fdat, encoding="ascii")
     return fn
 
 
-@pytest.fixture(scope="session")
-def hello_world_f77(tmpdir_factory):
+@pytest.fixture
+def hello_world_f77(tmp_path):
     """Generates a single f77 file for testing"""
     fdat = util.getpath("tests", "src", "cli", "hi77.f").read_text()
-    fn = tmpdir_factory.getbasetemp() / "hello.f"
+    fn = tmp_path / "hello.f"
     fn.write_text(fdat, encoding="ascii")
     return fn
 
 
-@pytest.fixture(scope="session")
-def retreal_f77(tmpdir_factory):
+@pytest.fixture
+def retreal_f77(tmp_path):
     """Generates a single f77 file for testing"""
     fdat = util.getpath("tests", "src", "return_real", "foo77.f").read_text()
-    fn = tmpdir_factory.getbasetemp() / "foo.f"
+    fn = tmp_path / "foo.f"
     fn.write_text(fdat, encoding="ascii")
     return fn
 
-@pytest.fixture(scope="session")
-def f2cmap_f90(tmpdir_factory):
+@pytest.fixture
+def f2cmap_f90(tmp_path):
     """Generates a single f90 file for testing"""
     fdat = util.getpath("tests", "src", "f2cmap", "isoFortranEnvMap.f90").read_text()
     f2cmap = util.getpath("tests", "src", "f2cmap", ".f2py_f2cmap").read_text()
-    fn = tmpdir_factory.getbasetemp() / "f2cmap.f90"
-    fmap = tmpdir_factory.getbasetemp() / "mapfile"
+    fn = tmp_path / "f2cmap.f90"
+    fmap = tmp_path / "mapfile"
     fn.write_text(fdat, encoding="ascii")
     fmap.write_text(f2cmap, encoding="ascii")
     return fn
