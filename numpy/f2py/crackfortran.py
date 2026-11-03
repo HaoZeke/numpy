@@ -1004,6 +1004,174 @@ def _resolvenameargspattern(line):
     return None, [], None, None
 
 
+# f2py writes an array initialiser as a Fortran array constructor.
+_ARRAY_CTOR_OPEN = '(/'
+_ARRAY_CTOR_CLOSE = '/)'
+_INT_LITERAL = re.compile(r'[+-]?\d+\Z')
+# ``data d(1) / 1 /`` names the array ``d``, not a variable ``d(1)``.
+_ELEMENT_DATA_REF = re.compile(
+    r'\A(?P<name>[A-Za-z_]\w*)\s*\((?P<sub>.*)\)\s*\Z',
+    re.I,
+)
+# Unfinished element-DATA values, keyed by ``id`` of the block ``vars`` dict.
+# Kept off that dict and dropped before ``analyzevars`` returns.
+_pending_element_data = {}
+
+
+def _const_int(text):
+    """Return the integer value of a literal, or None."""
+    text = text.strip()
+    if _INT_LITERAL.match(text) is None:
+        return None
+    return int(text)
+
+
+def _constant_extent_1d(var):
+    """Extent of ``dimension(n)`` or ``dimension(1:n)`` when both ends are literals.
+
+    A lower bound other than 1, a non-literal bound, or a further dimension
+    is not folded. The Fortran compiler still applies those DATA values.
+    """
+    if not isinstance(var, dict):
+        return None
+    specs = []
+    for attr in var.get('attrspec') or ():
+        if not isinstance(attr, str):
+            continue
+        head, sep, rest = attr.partition('(')
+        if sep != '(' or not rest.endswith(')'):
+            continue
+        if head.strip() != 'dimension':
+            continue
+        specs.append(rest[:-1].strip())
+    if len(specs) != 1:
+        return None
+    spec = specs[0]
+    if ',' in spec:
+        return None
+    if ':' in spec:
+        lower_s, sep, upper_s = spec.partition(':')
+        if sep != ':' or ':' in upper_s:
+            return None
+        lower = _const_int(lower_s)
+        upper = _const_int(upper_s)
+        if lower != 1 or upper is None or upper < 1:
+            return None
+        return upper
+    extent = _const_int(spec)
+    if extent is None or extent < 1:
+        return None
+    return extent
+
+
+def _expand_data_values(raw, typespec):
+    """Split a DATA value list, expanding ``n*value`` the way whole-array DATA does."""
+    if typespec == 'complex':
+        matches = re.findall(r'\(.*?\)', raw)
+    else:
+        matches = raw.split(',')
+    if not any('*' in match for match in matches):
+        return [match.strip() for match in matches]
+    expanded = []
+    for match in matches:
+        if '*' not in match:
+            expanded.append(match.strip())
+            continue
+        try:
+            multiplier, value = match.split('*')
+            count = int(multiplier)
+        except ValueError:
+            expanded.append(match.strip())
+            continue
+        expanded.extend([value.strip()] * count)
+    return expanded
+
+
+def _seed_array_ctor(current, extent):
+    """Split an existing ``(/.../)`` initialiser into ``extent`` pieces."""
+    if not isinstance(current, str):
+        return None
+    text = current.strip()
+    if not (text.startswith(_ARRAY_CTOR_OPEN) and text.endswith(_ARRAY_CTOR_CLOSE)):
+        return None
+    inner = text[len(_ARRAY_CTOR_OPEN):-len(_ARRAY_CTOR_CLOSE)]
+    parts = [part.strip() for part in markoutercomma(inner).split('@,@')]
+    if len(parts) != extent or any(part == '' for part in parts):
+        return None
+    return parts
+
+
+def _skip_element_data(obj):
+    outmess(
+        f'analyzeline: element DATA "{obj}" is not folded into an initialiser. '
+        'Skipping.\n'
+    )
+
+
+def _fold_element_data(vars, name, subscript, obj, raw_values, idx):
+    """Collect one ``name(subscript)`` DATA value onto the array ``name``.
+
+    When every element of a constant-extent 1-D array is known, set
+    ``vars[name]['=']`` to ``(/v1, v2, .../)`` in index order. Otherwise
+    leave that entry unchanged. A partial fill stays in ``_pending_element_data``
+    until ``analyzevars`` drops it.
+    """
+    base = rmbadname1(name)
+    var = vars.get(base)
+    extent = _constant_extent_1d(var)
+    index = _const_int(subscript)
+    in_range = (
+        isinstance(var, dict)
+        and extent is not None
+        and index is not None
+        and 1 <= index <= extent
+    )
+    if not in_range:
+        _skip_element_data(obj)
+        return
+    values = _expand_data_values(raw_values, var.get('typespec'))
+    if idx >= len(values):
+        _skip_element_data(obj)
+        return
+    pending = _pending_element_data.setdefault(id(vars), {})
+    slot = pending.get(base)
+    if slot is None or slot['extent'] != extent:
+        seeded = _seed_array_ctor(var.get('='), extent)
+        slot = {
+            'extent': extent,
+            'values': seeded if seeded is not None else [None] * extent,
+            'objects': [],
+        }
+        pending[base] = slot
+    slot['values'][index - 1] = values[idx]
+    if any(part is None for part in slot['values']):
+        slot['objects'].append(obj)
+        return
+    new_val = f"(/{', '.join(slot['values'])}/)"
+    current = var.get('=')
+    if current and current != new_val:
+        outmess(
+            f'analyzeline: changing init expression of "{base}" '
+            f'("{current}") to "{new_val}"\n'
+        )
+    var['='] = new_val
+    del pending[base]
+    if not pending:
+        _pending_element_data.pop(id(vars), None)
+
+
+def _drop_pending_element_data(vars_dict):
+    """Forget unfinished element DATA so it never reaches a ``.pyf`` or wrapper."""
+    if not isinstance(vars_dict, dict):
+        return
+    pending = _pending_element_data.pop(id(vars_dict), None)
+    if not pending:
+        return
+    for slot in pending.values():
+        for obj in slot['objects']:
+            _skip_element_data(obj)
+
+
 def analyzeline(m, case, line):
     """
     Reads each line in the input file in sequence and updates global vars.
@@ -1460,6 +1628,19 @@ def analyzeline(m, case, line):
                     # common /mycom/ mytab
                     # Since in any case it is initialized in the Fortran code
                     outmess(f'Comment line in declaration "{l[1]}" is not supported. Skipping.\n')
+                    continue
+                # ``name(subscripts)`` is an element of ``name``, never a new variable.
+                element = _ELEMENT_DATA_REF.match(v)
+                if element is not None:
+                    _fold_element_data(
+                        vars,
+                        element.group('name'),
+                        element.group('sub'),
+                        v,
+                        l[1],
+                        idx,
+                    )
+                    last_name = rmbadname1(element.group('name'))
                     continue
                 vars.setdefault(v, {})
                 vtype = vars[v].get('typespec')
@@ -2656,6 +2837,7 @@ def analyzevars(block):
     global f90modulevars
 
     setmesstext(block)
+    _drop_pending_element_data(block.get('vars'))
     implicitrules, attrrules = buildimplicitrules(block)
     vars = copy.copy(block['vars'])
     if block['block'] == 'function' and block['name'] not in vars:
@@ -3570,11 +3752,13 @@ post_processing_hooks = []
 def crackfortran(files):
     global usermodules, post_processing_hooks
 
+    _pending_element_data.clear()
     outmess('Reading fortran codes...\n', 0)
     readfortrancode(files, crackline)
     outmess('Post-processing...\n', 0)
     usermodules = []
     postlist = postcrack(grouplist[0])
+    _pending_element_data.clear()
     outmess('Applying post-processing hooks...\n', 0)
     for hook in post_processing_hooks:
         outmess(f'  {hook.__name__}\n', 0)
