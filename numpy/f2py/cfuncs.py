@@ -70,20 +70,10 @@ typedefs['unsigned_short'] = 'typedef unsigned short unsigned_short;'
 typedefs['unsigned_long'] = 'typedef unsigned long unsigned_long;'
 typedefs['signed_char'] = 'typedef signed char signed_char;'
 typedefs['long_long'] = """
-#if defined(NPY_OS_WIN32)
-typedef __int64 long_long;
-#else
 typedef long long long_long;
 typedef unsigned long long unsigned_long_long;
-#endif
 """
-typedefs['unsigned_long_long'] = """
-#if defined(NPY_OS_WIN32)
-typedef __uint64 long_long;
-#else
-typedef unsigned long long unsigned_long_long;
-#endif
-"""
+typedefs['unsigned_long_long'] = 'typedef unsigned long long unsigned_long_long;'
 typedefs['long_double'] = """
 #ifndef _LONG_DOUBLE
 typedef long double long_double;
@@ -272,13 +262,8 @@ cppmacros['pyobj_from_long1'] = r"""
 #define pyobj_from_long1(v) (PyLong_FromLong(v))
 """
 needs['pyobj_from_long_long1'] = ['long_long']
-cppmacros['pyobj_from_long_long1'] = """
-#ifdef HAVE_LONG_LONG
+cppmacros['pyobj_from_long_long1'] = r"""
 #define pyobj_from_long_long1(v) (PyLong_FromLongLong(v))
-#else
-#warning HAVE_LONG_LONG is not available. Redefining pyobj_from_long_long.
-#define pyobj_from_long_long1(v) (PyLong_FromLong(v))
-#endif
 """
 cppmacros['pyobj_from_npy_intp1'] = r"""
 #define pyobj_from_npy_intp1(v) (PyLong_FromSsize_t(v))
@@ -1364,7 +1349,7 @@ cfuncs[
 needs['try_pyarr_from_long_long'] = [
     'pyobj_from_long_long1', 'TRYPYARRAYTEMPLATE', 'long_long']
 cfuncs[
-    'try_pyarr_from_long_long'] = 'static int try_pyarr_from_long_long(PyObject* obj,long_long* v) {\n    TRYPYARRAYTEMPLATE(long_long,\'L\');\n}\n'
+    'try_pyarr_from_long_long'] = 'static int try_pyarr_from_long_long(PyObject* obj,long_long* v) {\n    TRYPYARRAYTEMPLATE(long_long,\'q\');\n}\n'
 needs['try_pyarr_from_npy_intp'] = ['pyobj_from_npy_intp1', 'TRYPYARRAYTEMPLATE']
 cfuncs[
     'try_pyarr_from_npy_intp'] = 'static int try_pyarr_from_npy_intp(PyObject* obj,npy_intp* v) {\n    TRYPYARRAYTEMPLATE(npy_intp,\'n\');\n}\n'

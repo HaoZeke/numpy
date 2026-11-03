@@ -232,6 +232,23 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.j_max == 72)
 
 
+@pytest.mark.slow
+class TestCheckLongLong(util.F2PyTest):
+    # gh-21409: C long is 32 bits on Windows
+    suffix = ".f90"
+    code = """
+subroutine chk8(n)
+  integer(8), intent(in) :: n
+  !f2py check(n > 0) n
+end subroutine chk8
+"""
+
+    def test_check_message(self):
+        n = -2**40
+        with pytest.raises(Exception, match=f"failed for 1st argument n: .*n={n}$"):
+            self.module.chk8(n)
+
+
 def _wrap_f90(funcwrappers2):
     """Reproduce the F90 line-wrapping logic from rules.py buildmodule."""
     lines = []

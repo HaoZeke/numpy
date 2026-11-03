@@ -690,7 +690,8 @@ f2py_report_on_array_copy(PyArrayObject *arr)
     const npy_intp arr_size = PyArray_Size((PyObject *)arr);
     if (arr_size > F2PY_REPORT_ON_ARRAY_COPY) {
         fprintf(stderr,
-                "copied an array: size=%ld, elsize=%" NPY_INTP_FMT "\n",
+                "copied an array: size=%" NPY_INTP_FMT
+                ", elsize=%" NPY_INTP_FMT "\n",
                 arr_size, (npy_intp)PyArray_ITEMSIZE(arr));
     }
 }
