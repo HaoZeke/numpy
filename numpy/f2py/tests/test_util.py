@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import textwrap
+import types
 
 import pytest
 
@@ -36,6 +37,15 @@ def test_missing_meson_skips_test_not_module(monkeypatch, tmp_path):
     with pytest.raises(pytest.skip.Exception, match="meson not present") as exc:
         util.CompilerChecker().check_compilers()
     assert not exc.value.allow_module_level
+
+
+def test_build_module_rejects_imported_name(monkeypatch):
+    # Building under an imported name used to return the earlier module
+    name = "_test_util_imported_name"
+    monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    src = util.getpath("tests", "src", "regression", "inout.f90")
+    with pytest.raises(RuntimeError, match="already in use"):
+        util.build_module([src], module_name=name)
 
 
 class TestNoModuleNoCompilerCheck(util.F2PyTest):

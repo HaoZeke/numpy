@@ -207,6 +207,10 @@ def build_module(source_files, options=[], skip=[], only=[], module_name=None):
 
     code = f"import sys; sys.path = {sys.path!r}; import numpy.f2py; numpy.f2py.main()"
 
+    if module_name in sys.modules:
+        # import_module() would return the module of an earlier, different build
+        raise RuntimeError(f"Module name {module_name!r} already in use.")
+
     d = get_module_dir()
     # gh-27045 : Skip if no compilers are found
     if not has_fortran_compiler():
