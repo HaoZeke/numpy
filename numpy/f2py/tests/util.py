@@ -9,6 +9,7 @@ Utility functions for
 import atexit
 import concurrent.futures
 import contextlib
+import functools
 import glob
 import os
 import shutil
@@ -119,6 +120,28 @@ def has_f90_compiler():
 
 def has_fortran_compiler():
     return (checker.has_f90 and checker.has_f77)
+
+
+@functools.cache
+def has_meson_dependency(name):
+    """Return whether meson finds the dependency ``name`` for C code."""
+    tmpdir = tempfile.mkdtemp()
+    try:
+        with open(os.path.join(tmpdir, "meson.build"), "w") as f:
+            f.write("project('check_dependency', 'c')\n")
+            f.write(f"dependency('{name}')\n")
+        try:
+            runmeson = subprocess.run(
+                ["meson", "setup", "btmp"],
+                check=False,
+                cwd=tmpdir,
+                capture_output=True,
+            )
+        except OSError:
+            return False
+        return runmeson.returncode == 0
+    finally:
+        shutil.rmtree(tmpdir)
 
 
 #

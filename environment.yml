@@ -23,6 +23,7 @@ dependencies:
   - pytest-cov
   - pytest-xdist
   - hypothesis
+  - cmocka # C unit tests of the f2py runtime
   # For type annotations
   - mypy==2.4.0
   - orjson # makes mypy faster
