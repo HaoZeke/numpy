@@ -1350,24 +1350,25 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
     }
     else {
         di = 1;
-        if (PyObject_HasAttrString(fun,\"im_func\")) {
-            tmp_fun = PyObject_GetAttrString(fun,\"im_func\");
-        }
-        else if (PyObject_HasAttrString(fun,\"__call__\")) {
+        if (PyObject_HasAttrString(fun,\"__call__\")) {
             tmp = PyObject_GetAttrString(fun,\"__call__\");
-            if (PyObject_HasAttrString(tmp,\"im_func\"))
-                tmp_fun = PyObject_GetAttrString(tmp,\"im_func\");
+            if (PyObject_HasAttrString(tmp,\"__func__\")) {
+                /* instance of a class that defines __call__ */
+                tmp_fun = PyObject_GetAttrString(tmp,\"__func__\");
+            }
             else {
-                tmp_fun = fun; /* built-in function */
+                /* built-in function, or bound method whose __code__
+                   and __defaults__ are looked up on its __func__ */
+                tmp_fun = fun;
                 Py_INCREF(tmp_fun);
-                tot = maxnofargs;
                 if (PyCFunction_Check(fun)) {
                     /* In case the function has a co_argcount */
                     di = 0;
                 }
-                if (xa != NULL)
-                    tot += PyTuple_Size((PyObject *)xa);
             }
+            tot = maxnofargs;
+            if (xa != NULL)
+                tot += PyTuple_Size((PyObject *)xa);
             Py_XDECREF(tmp);
         }
         else if (PyFortran_Check(fun) || PyFortran_Check1(fun)) {
