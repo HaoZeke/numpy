@@ -124,6 +124,22 @@ otherwise, so Fortran code calling MPI needs:
 
   python -m numpy.f2py -c hello_mpi.f90 -m hello_mpi --dep "mpi[language: 'fortran']"
 
+
+Compiler wrappers can also provide the Fortran MPI headers and link options.
+Select the wrapper with ``FC`` when compiling a source file such as
+``hello_mpi.f90`` that imports the MPI Fortran module:
+
+.. code-block:: bash
+
+  FC=mpifort python -m numpy.f2py -c hello_mpi.f90 -m hello_mpi
+
+The generated extension uses the Fortran compiler for linking, so the
+selected wrapper supplies its libraries during both compilation and
+linking. The same rule applies to site wrappers such as ``FC=ftn``.
+When using an ordinary Fortran compiler instead, request the Fortran MPI
+dependency with ``--dep "mpi[language: 'fortran']"`` as shown above.
+The compiler wrapper and MPI libraries must belong to the same installation.
+
 1.2.5 Libraries
 ^^^^^^^^^^^^^^^
 

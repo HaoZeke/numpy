@@ -1,5 +1,6 @@
 import os
 import platform
+import shutil
 import sys
 from pathlib import Path
 
@@ -370,3 +371,21 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+@pytest.mark.slow
+def test_gh25159_mpi_compiler_wrapper(monkeypatch):
+    wrapper = (os.environ.get("MPIFC") or os.environ.get("MPIF90")
+               or shutil.which("mpifort") or shutil.which("mpif90"))
+    if wrapper is None:
+        pytest.skip("No MPI Fortran compiler wrapper available")
+    monkeypatch.setenv("FC", wrapper)
+    module = util.build_module(
+        [util.getpath("tests", "src", "regression", "gh25159.f90")],
+    )
+    (major, minor, expected_major, expected_minor, initialized,
+     initialized_status, version_status, success) = module.mpi_wrapper_info()
+    assert (major, minor) == (expected_major, expected_minor)
+    assert not initialized
+    assert initialized_status == success
+    assert version_status == success
