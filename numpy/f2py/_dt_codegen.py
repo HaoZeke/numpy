@@ -679,6 +679,30 @@ static int
     return '\n'.join(funcs) + '\n' + getset_array
 
 
+def _gen_repr_return(typename, fmt_str, args):
+    """Return the C statements that return the repr of a type instance.
+
+    The text is formatted twice, first to measure it (C99 7.21.6.5), so
+    that no repr is cut off.  args are the arguments of the format, each
+    after a comma.
+    """
+    fmt = f'"{typename}({fmt_str})"'
+    return f"""\
+    int f2py_len = snprintf(NULL, 0, {fmt}{args});
+    if (f2py_len < 0) {{
+        PyErr_SetString(PyExc_ValueError, "cannot format {typename}");
+        return NULL;
+    }}
+    char *f2py_buf = PyMem_Malloc((size_t)f2py_len + 1);
+    if (f2py_buf == NULL) {{
+        return PyErr_NoMemory();
+    }}
+    snprintf(f2py_buf, (size_t)f2py_len + 1, {fmt}{args});
+    PyObject *f2py_repr = PyUnicode_FromStringAndSize(f2py_buf, f2py_len);
+    PyMem_Free(f2py_buf);
+    return f2py_repr;"""
+
+
 def _gen_tp_repr(typename, members):
     """Generate tp_repr for nice string representation.
 
@@ -753,9 +777,7 @@ Py{typename}_tp_repr(PyObject *selfobj)
         PyErr_Clear();
         return PyUnicode_FromString("{typename}(<invalid>)");
     }}
-    char buf[256];
-    snprintf(buf, sizeof(buf), "{typename}({fmt_str})"{val_str});
-    return PyUnicode_FromString(buf);
+{_gen_repr_return(typename, fmt_str, val_str)}
 }}
 """
 
@@ -2841,9 +2863,7 @@ Py{typename}_tp_repr(PyObject *selfobj)
         PyErr_Clear();
         return PyUnicode_FromString("{typename}(<invalid>)");
     }}
-    char buf[256];
-    snprintf(buf, sizeof(buf), "{typename}({fmt_str})"{val_str});
-    return PyUnicode_FromString(buf);
+{_gen_repr_return(typename, fmt_str, val_str)}
 }}
 """
 
@@ -2898,9 +2918,6 @@ Py{typename}_tp_repr(PyObject *selfobj)
     }}
 {get_str}
     PyErr_Clear();
-    char buf[256];
-    snprintf(buf, sizeof(buf), "{typename}({fmt_str})",
-        {val_str});
-    return PyUnicode_FromString(buf);
+{_gen_repr_return(typename, fmt_str, ', ' + val_str)}
 }}
 """
