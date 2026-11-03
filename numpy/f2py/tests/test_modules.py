@@ -37,6 +37,19 @@ class TestModuleWithoutPublicEntities(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestModuleWithoutWrappableEntities(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "gh19573", "nothing_to_wrap.f90")
+    ]
+
+    def test_gh19573(self):
+        # modules defining only types or interfaces have nothing to wrap
+        assert not hasattr(self.module, "types_only")
+        assert not hasattr(self.module, "interfaces_only")
+        assert self.module.wrapped.double_it(3) == 6
+
+
+@pytest.mark.slow
 class TestModuleDocString(util.F2PyTest):
     sources = [util.getpath("tests", "src", "modules", "module_data_docstring.f90")]
 
