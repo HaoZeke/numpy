@@ -561,19 +561,29 @@ class TestRelationsInDeclarations:
         assert list(vs) == ["more", "less", "neither"]
 
 
+def _least_real_kind():
+    # the kind selected_real_kind(radix=2) returns for this compiler
+    kinds = set(crackfortran._real_formats)
+    if 2 in kinds and 3 in kinds:
+        kinds.remove(3)
+    return min(kinds, key=lambda k: (crackfortran._precision(k), k))
+
+
 class TestSelectedKinds:
     # a kind is selected by its precision, range and radix, as Fortran
     # 2018 16.9.168 to 16.9.170 say, from the model of each kind
     extended = (10 if 10 in crackfortran._real_formats
                 else 16 if 16 in crackfortran._real_formats else -2)
     quad = 16 if 16 in crackfortran._real_formats else -1
+    least = _least_real_kind()
 
     @pytest.mark.parametrize("value, expected", [
         ("selected_real_kind(6, 70)", 8),
         ("selected_real_kind(15, 400)", extended),
         ("selected_real_kind(r=400)", extended),
         ("selected_real_kind(33)", quad),
-        ("selected_real_kind(radix=2)", 4), ("selected_real_kind(7, 0, 2)", 8),
+        ("selected_real_kind(radix=2)", _least_real_kind()),
+        ("selected_real_kind(7, 0, 2)", 8),
         ("selected_real_kind(34)", -1), ("selected_real_kind(6, 5000)", -2),
         ("selected_real_kind(40, 5000)", -3),
         ("selected_real_kind(0, 0, 10)", -5),
@@ -596,7 +606,7 @@ class TestLongDoubleFormats:
         (63, 15, 16384, (4, 8, 10, 16)),
         (52, 11, 1024, (4, 8, 16)),
         (105, 11, 1024, (4, 8)),
-        (112, 15, 16384, (4, 8)),
+        (112, 15, 16384, (4, 8, 16)),
         (23, 8, 128, (4, 8, 16)),
     ])
     def test_cases(self, nmant, nexp, maxexp, kinds):
@@ -610,8 +620,10 @@ class TestLongDoubleFormats:
 
     def test_this_build(self):
         info = np.finfo(np.longdouble)
-        got = crackfortran._real_formats_for_long_double(
-            info.nmant, info.nexp, info.maxexp)
+        got = crackfortran._build_real_formats(
+            info.nmant, info.nexp, info.maxexp,
+            drop_binary128=crackfortran._compiler_has_binary128_kind() is False,
+            half=crackfortran._compiler_half_kinds())
         assert crackfortran._real_formats == got
 
 
@@ -631,6 +643,23 @@ class TestKindSelectors:
         kinds = [vs[n]["kindselector"]["kind"] for n in ("x", "y", "i")]
         assert kinds == ["8", "8", "8"]
         assert vs["buf"]["dimension"] == ["8"]
+
+    def test_literal_kind_suffix(self, tmp_path):
+        # the kind of a literal is its suffix, and an initial value keeps it
+        fpath = tmp_path / "suffix.f90"
+        fpath.write_text(textwrap.dedent("""\
+            subroutine suffix(x)
+              integer, parameter :: k8 = kind(1.0_8), k16 = kind(1.0_16)
+              real(8), optional :: x = 1.5_8
+              real a(k8), b(k16)
+            end subroutine suffix
+            """))
+        block = crackfortran.crackfortran([str(fpath)])[0]
+        vs = block["vars"]
+        assert vs["a"]["dimension"] == ["8"]
+        if 16 in crackfortran._real_formats:
+            assert vs["b"]["dimension"] == ["16"]
+        assert vs["x"]["="] == "1.5"
 
 
 class TestUseParameters:
