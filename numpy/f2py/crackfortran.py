@@ -149,8 +149,11 @@ import itertools
 import math
 import os
 import re
+import shlex
 import string
+import subprocess
 import sys
+import tempfile
 from fractions import Fraction
 from pathlib import Path
 
@@ -2484,6 +2487,17 @@ def get_sorted_names(vars):
 # format, so the model of each kind follows from its storage.
 _integer_kinds = (1, 2, 4, 8, 16)
 
+# binary128 has 112 explicit significand bits.
+_BINARY128_NMANT = 112
+# binary64 has 52 explicit significand bits.
+_BINARY64_NMANT = 52
+# The x87 80-bit extended format has a 63-bit stored fraction plus an explicit integer bit.
+_X87_NMANT = 63
+# binary64's max exponent, which IBM double-double shares.
+_IEEE_DOUBLE_MAXEXP = 1024
+# One digit past 80-bit extended precision, so only binary128 matches.
+_BINARY128_DECIMAL_PRECISION = 19
+
 
 def _real_formats_for_long_double(nmant, nexp, maxexp):
     # Kinds 4 and 8 are binary32 and binary64. gfortran has both on every
@@ -2501,20 +2515,176 @@ def _real_formats_for_long_double(nmant, nexp, maxexp):
     # IBM extended double, two IEEE doubles, when long double has
     # binary64's max exponent and a significand wider than 53 bits
     # (trans-types.cc, the pnan < p branch; numpy/_core/getlimits.py).
-    # That kind is left out. It is also left out when long double is
-    # itself binary128: powerpc64le -mabi=ieeelongdouble keeps kind 16
-    # for the IBM format and uses kind 17 for IEEE binary128
-    # (trans-types.cc). A binary128 long double does not identify
-    # kind 16, so those targets have no kind 16 here either.
-    if (maxexp == 1024 and nmant > 52) or (nmant, maxexp) == (112, 16384):
+    # That format is not binary128, so the kind is left out.
+    # Where long double itself is binary128, as on aarch64 Linux,
+    # real(16) is that type and the kind is in the model.
+    if maxexp == _IEEE_DOUBLE_MAXEXP and nmant > _BINARY64_NMANT:
         return formats
     formats[16] = (15, 113)
     return formats
 
 
-_ldinfo = np.finfo(np.longdouble)
-_real_formats = _real_formats_for_long_double(
-    _ldinfo.nmant, _ldinfo.nexp, _ldinfo.maxexp)
+# A one-file probe can wait on a cold compiler, so the limit is two minutes.
+_PROBE_COMPILE_TIMEOUT = 120
+
+
+def _compiler_key():
+    """``FC`` when it is set, else the empty string that means gfortran."""
+    return os.environ.get('FC') or ''
+
+
+@functools.cache
+def _fortran_compiles(compiler, code):
+    """Whether ``compiler`` compiles ``code``.
+
+    An empty compiler is gfortran, which is what an unset ``FC`` means.
+    """
+    argv = shlex.split(compiler) if compiler else ['gfortran']
+    try:
+        with tempfile.TemporaryDirectory(prefix='f2py-kind-') as directory:
+            src = os.path.join(directory, 'probe.f90')
+            with open(src, 'w') as handle:
+                handle.write(code)
+            run = subprocess.run(
+                [*argv, '-c', src, '-o', os.path.join(directory, 'probe.o')],
+                capture_output=True, timeout=_PROBE_COMPILE_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return run.returncode == 0
+
+
+def fortran_compiles(code):
+    """Whether ``FC``, or gfortran when ``FC`` is unset, compiles ``code``."""
+    return _fortran_compiles(_compiler_key(), code)
+
+
+@functools.cache
+def _binary128_kind(compiler):
+    """Whether ``compiler`` folds the binary128 precision to kind 16.
+
+    An empty compiler keeps the long-double heuristic, which is gfortran's.
+    """
+    if not compiler:
+        return None
+    code = ("program p\n"
+            "  integer, parameter :: k = selected_real_kind("
+            f"{_BINARY128_DECIMAL_PRECISION})\n"
+            "  integer, parameter :: check = 1 / merge(1, 0, k == 16)\n"
+            "end program p\n")
+    return _fortran_compiles(compiler, code)
+
+
+def _compiler_has_binary128_kind():
+    """Whether the compiler folds the binary128 precision to kind 16.
+
+    ``FC`` unset keeps the long-double heuristic, which is gfortran's.
+    """
+    return _binary128_kind(_compiler_key())
+
+
+# binary16 has 5 exponent bits and 11 significand digits.
+_BINARY16_EXP_BITS = 5
+_BINARY16_DIGITS = 11
+# bfloat16 has 8 exponent bits and 8 significand digits.
+_BFLOAT16_EXP_BITS = 8
+_BFLOAT16_DIGITS = 8
+# Kind 2 is binary16 and kind 3 is bfloat16: exponent bits, then digits.
+_HALF_FORMATS = {2: (_BINARY16_EXP_BITS, _BINARY16_DIGITS),
+                 3: (_BFLOAT16_EXP_BITS, _BFLOAT16_DIGITS)}
+
+
+@functools.cache
+def _half_kinds(compiler):
+    """``real(2)`` and ``real(3)`` when ``compiler`` compiles them.
+
+    An empty compiler is gfortran, which has neither kind.
+    """
+    if not compiler:
+        return ()
+    found = []
+    for kind in (2, 3):
+        if _fortran_compiles(compiler, f"real(kind={kind}) :: x\nend\n"):
+            found.append(kind)
+    return tuple(found)
+
+
+def _compiler_half_kinds():
+    """``real(2)`` and ``real(3)`` when ``FC`` compiles them.
+
+    ``FC`` unset means gfortran, which has neither kind.
+    """
+    return _half_kinds(_compiler_key())
+
+
+def _build_real_formats(nmant, nexp, maxexp, drop_binary128=False, half=()):
+    formats = _real_formats_for_long_double(nmant, nexp, maxexp)
+    if drop_binary128 and 16 in formats:
+        del formats[16]
+    for kind in half:
+        formats[kind] = _HALF_FORMATS[kind]
+    return formats
+
+
+@functools.cache
+def _formats_for(compiler):
+    """Real kind models for one compiler, computed once per process."""
+    info = np.finfo(np.longdouble)
+    return _build_real_formats(
+        info.nmant, info.nexp, info.maxexp,
+        drop_binary128=_binary128_kind(compiler) is False,
+        half=_half_kinds(compiler))
+
+
+class _RealFormats(dict):
+    """Kind models for the current compiler, filled when a kind is resolved."""
+
+    def __init__(self):
+        super().__init__()
+        self._key = None
+
+    def _ensure(self):
+        key = _compiler_key()
+        if self._key == key:
+            return
+        formats = _formats_for(key)
+        super().clear()
+        super().update(formats)
+        self._key = key
+
+    def __contains__(self, item):
+        self._ensure()
+        return super().__contains__(item)
+
+    def __getitem__(self, item):
+        self._ensure()
+        return super().__getitem__(item)
+
+    def __iter__(self):
+        self._ensure()
+        return super().__iter__()
+
+    def __len__(self):
+        self._ensure()
+        return super().__len__()
+
+    def __eq__(self, other):
+        self._ensure()
+        return dict(self.items()) == other
+
+    def keys(self):
+        self._ensure()
+        return super().keys()
+
+    def items(self):
+        self._ensure()
+        return super().items()
+
+    def get(self, key, default=None):
+        self._ensure()
+        return super().get(key, default)
+
+
+_real_formats = _RealFormats()
 # character kinds by the names selected_char_kind takes
 _character_kinds = {'ascii': 1, 'iso_10646': 4}
 # Logical kinds f2py holds, the same byte widths as the integer kinds.
@@ -2524,15 +2694,21 @@ _default_kinds = {'integer': 4, 'real': 4, 'complex': 4, 'logical': 4,
                   'character': 1, 'double precision': 8}
 
 
-@functools.cache
 def _model(typespec, kind):
     """Return the radix, digits and least and greatest exponent of the
     model numbers of a kind, with no exponents for an integer."""
+    return _model_for(_compiler_key(), typespec, kind)
+
+
+@functools.cache
+def _model_for(compiler, typespec, kind):
+    """``_model`` for one compiler, so a later compiler is a new result."""
     if typespec == 'integer' and kind in _integer_kinds:
         # every bit but the sign is a digit
         return 2, 8 * kind - 1, None, None
-    if typespec in ('real', 'complex') and kind in _real_formats:
-        bits, digits = _real_formats[kind]
+    formats = _formats_for(compiler)
+    if typespec in ('real', 'complex') and kind in formats:
+        bits, digits = formats[kind]
         # IEEE 754 writes significands from 1 to 2 and the model from 1/2
         # to 1, so the model exponents are one more than IEEE's
         emax = 2 ** (bits - 1)
@@ -2559,16 +2735,24 @@ def _decimal_exponent(x):
     return d
 
 
-@functools.cache
 def _precision(kind):
-    radix, digits, _, _ = _model('real', kind)
+    return _precision_for(_compiler_key(), kind)
+
+
+@functools.cache
+def _precision_for(compiler, kind):
+    radix, digits, _, _ = _model_for(compiler, 'real', kind)
     # INT((p - 1) * LOG10(b)), as the radix is no power of 10
     return _decimal_exponent(Fraction(radix) ** (digits - 1))
 
 
-@functools.cache
 def _range(typespec, kind):
-    radix, _, emin, _ = _model(typespec, kind)
+    return _range_for(_compiler_key(), typespec, kind)
+
+
+@functools.cache
+def _range_for(compiler, typespec, kind):
+    radix, _, emin, _ = _model_for(compiler, typespec, kind)
     huge = _decimal_exponent(_huge_number(typespec, kind))
     if emin is None:
         return huge
@@ -2600,10 +2784,15 @@ def _selected_real_kind_func(p=None, r=None, radix=None):
              if radix is None or _model('real', k)[0] == radix]
     with_p = {k for k in kinds if _precision(k) >= p}
     with_r = {k for k in kinds if _range('real', k) >= r}
-    if with_p & with_r:
+    chosen = with_p & with_r
+    # bfloat16, kind 3, is less precise than binary16, kind 2.
+    # The compiler returns the first matching kind, so kind 3 is used
+    # only when kind 2 does not match.
+    if 2 in chosen and 3 in chosen:
+        chosen = chosen - {3}
+    if chosen:
         # the one of least precision, and then the least kind
-        return _default_integer(min(with_p & with_r,
-                                    key=lambda k: (_precision(k), k)))
+        return _default_integer(min(chosen, key=lambda k: (_precision(k), k)))
     if not kinds:
         return _default_integer(-5)
     if with_p and with_r:
@@ -3774,6 +3963,21 @@ def analyzevars(block):
             svars.append(n)
 
     use_params = get_useparameters(block)
+    # A contained procedure sees its module's parameters, unless it or a
+    # host declares the name. Fortran host association gives it that scope.
+    hidden = set(vars)
+    parent = block.get('parent_block')
+    host = {}
+    while parent:
+        if parent.get('block') == 'module':
+            for key, value in f90moduleparams.get(parent['name'], {}).items():
+                if key not in hidden:
+                    host.setdefault(key, value)
+            break
+        hidden.update(parent.get('vars', {}))
+        parent = parent.get('parent_block')
+    for key, value in host.items():
+        use_params.setdefault(key, value)
     params = get_parameters(vars, use_params, implicitrules)
     declared = _Declarations(vars, params)
     if block['block'] == 'module':
