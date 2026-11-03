@@ -1635,9 +1635,10 @@ def removespaces(expr):
         return expr
     expr2 = expr[0]
     for i in range(1, len(expr) - 1):
+        # relations such as 3 > 2 and .not. x are operators too
         if (expr[i] == ' ' and
-            ((expr[i + 1] in "()[]{}=+-/* ") or
-                (expr[i - 1] in "()[]{}=+-/* "))):
+            ((expr[i + 1] in "()[]{}=+-/*<>. ") or
+                (expr[i - 1] in "()[]{}=+-/*<>. "))):
             continue
         expr2 = expr2 + expr[i]
     expr2 = expr2 + expr[-1]
