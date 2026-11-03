@@ -260,3 +260,13 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestGH7577(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh7577.f90")]
+
+    @pytest.mark.parametrize("name", ["call_complex", "call_double_complex"])
+    def test_complex_valued_callback(self, name):
+        r = getattr(self.module, name)(1 + 2j, lambda z: z * z)
+        assert r == -3 + 4j
