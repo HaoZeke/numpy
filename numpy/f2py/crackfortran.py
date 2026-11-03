@@ -3369,7 +3369,12 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         result = f" result ({block['result']})"
         if block['result'] not in argsl:
             argsl.append(block['result'])
-    body = crack2fortrangen(block['body'], tab + tabchar, as_interface=as_interface)
+    body = block['body']
+    if as_interface and blocktype in ['function', 'subroutine']:
+        # Routines nested directly in a routine are its CONTAINS
+        # procedures, and an interface body has no internal procedures.
+        body = [b for b in body if b['block'] not in ['function', 'subroutine']]
+    body = crack2fortrangen(body, tab + tabchar, as_interface=as_interface)
     vars = vars2fortran(
         block, block['vars'], argsl, tab + tabchar, as_interface=as_interface)
     mess = ''
