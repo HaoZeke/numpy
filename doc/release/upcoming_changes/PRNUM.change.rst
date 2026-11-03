@@ -14,3 +14,6 @@ Previously a string argument that followed such an argument received the
 wrong length. Call-backs returning ``CHARACTER`` and call-backs with
 ``intent(inout)`` string arguments no longer fail to compile with current GCC
 and Clang.
+
+Modules built with ``--no-wrap-functions`` that contain a
+``character(len=n)`` function compile again.
