@@ -112,6 +112,20 @@ class TestModuleProcedure:
         for name in names:
             assert mod["vars"][name]["attrspec"] == ["public"]
 
+    def test_signature_file_procedures(self, tmp_path):
+        # gh-19896: a signature file keeps the procedure statements
+        def procedures(mod):
+            return {b["name"]: b["implementedby"] for b in mod[0]["body"]
+                    if b["block"] == "interface"}
+
+        fpath = util.getpath("tests", "src", "crackfortran", "gh19896.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        pyf = tmp_path / "gh19896.pyf"
+        pyf.write_text(crackfortran.crack2fortran(mod))
+        assert "module procedure dot_real, dot_int" in pyf.read_text()
+        assert procedures(crackfortran.crackfortran([str(pyf)])) == \
+            procedures(mod)
+
     def test_notPublicPrivate(self, tmp_path):
         fpath = util.getpath("tests", "src", "crackfortran", "pubprivmod.f90")
         mod = crackfortran.crackfortran([str(fpath)])
