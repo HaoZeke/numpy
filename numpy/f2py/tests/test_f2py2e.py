@@ -224,8 +224,9 @@ def test_gen_pyf_no_overwrite(capfd, hello_world_f90, monkeypatch):
 
     with util.switchdir(ipath.parent):
         Path("faker.pyf").write_text("Fake news", encoding="ascii")
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as excinfo:
             f2pycli()  # Refuse to overwrite
+        assert excinfo.value.code == 1
         _, err = capfd.readouterr()
         assert "Use --overwrite-signature to overwrite" in err
         assert Path("faker.pyf").read_text(encoding="ascii") == "Fake news"
@@ -264,8 +265,9 @@ def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
     monkeypatch.setattr(
         sys, "argv", ["f2py", "--help-link"]
     )
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as excinfo:
         f2pycli()
+    assert excinfo.value.code == 2
     _, err = capfd.readouterr()
     assert "Unknown option '--help-link'" in err
 
@@ -785,10 +787,27 @@ def test_hlink(capfd, monkeypatch):
     CLI :: --help-link
     """
     monkeypatch.setattr(sys, "argv", ["f2py", "--help-link", "lapack_opt"])
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as excinfo:
         f2pycli()
+    assert excinfo.value.code == 2
     _, err = capfd.readouterr()
     assert "Unknown option '--help-link'" in err
+
+
+@pytest.mark.parametrize("compile_flag", [[], ["-c"]])
+def test_unknown_option_exit_status(hello_world_f90, tmp_path, compile_flag):
+    """Unknown options make f2py fail instead of exiting successfully
+    gh-31409
+
+    CLI :: -<unknown>
+    """
+    cmd = [sys.executable, "-m", "numpy.f2py", *compile_flag,
+           str(hello_world_f90), "-m", "blah", "--unknown-option"]
+    rout = subprocess.run(cmd, capture_output=True, encoding="UTF-8",
+                          cwd=tmp_path)
+    assert rout.returncode == 2
+    assert "Unknown option '--unknown-option'" in rout.stderr
+    assert not list(tmp_path.glob("blah*"))
 
 
 def test_f2cmap(capfd, f2cmap_f90, monkeypatch):
@@ -844,8 +863,9 @@ def test_version(capfd, monkeypatch):
     """
     monkeypatch.setattr(sys, "argv", ["f2py", "-v"])
     # TODO: f2py2e should not call sys.exit() after printing the version
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as excinfo:
         f2pycli()
+    assert not excinfo.value.code
     out, _ = capfd.readouterr()
     import numpy as np
     assert np.__version__ == out.strip()
