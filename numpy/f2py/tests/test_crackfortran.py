@@ -1266,6 +1266,28 @@ class TestComponentHostParameters:
         assert vec["vars"]["x"]["kindselector"] == {"kind": "k"}
 
 
+class TestISOCKinds:
+    # the kinds of iso_c_binding are those of the C processor, so they
+    # stay names, which capi_maps maps to C types
+    def test_kind_names(self, tmp_path):
+        fpath = tmp_path / "isockinds.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module isockinds
+              use iso_c_binding, only: c_long, c_long_double
+              implicit none
+            contains
+              subroutine half(x, n)
+                real(c_long_double), intent(inout) :: x
+                integer(c_long), intent(in) :: n
+                x = x / n
+              end subroutine half
+            end module isockinds
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["body"][0]["vars"]
+        assert vs["x"]["kindselector"] == {"kind": "c_long_double"}
+        assert vs["n"]["kindselector"] == {"kind": "c_long"}
+
+
 class TestGetStrLength:
     def test_stringarray(self, capsys):
         # get_elsize asks for the length of string arrays as well
