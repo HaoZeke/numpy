@@ -1320,9 +1320,9 @@ check_rules = [
         'frompyobj': {debugcapi: '    fprintf(stderr,\"debug-capi:Checking `#check#\'\\n\");'},
         'need': 'len..'
     }, {
-        'frompyobj': '    CHECKSCALAR(#check#,\"#check#\",\"#nth# #varname#\",\"#varshowvalue#\",#varname#) {',
+        'frompyobj': '    CHECKSCALAR(#check#,\"#check#\",\"#nth# #varname#\",\"#name#:#varname#\",pyobj_from_#ctype#1(#varname#)) {',
         'cleanupfrompyobj': '    } /*CHECKSCALAR(#check#)*/',
-        'need': 'CHECKSCALAR',
+        'need': ['CHECKSCALAR', 'pyobj_from_#ctype#1'],
         '_check': l_and(isscalar, l_not(iscomplex)),
         '_break': ''
     }, {

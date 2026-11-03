@@ -1,5 +1,6 @@
 import os
 import platform
+import re
 import sys
 from pathlib import Path
 
@@ -219,6 +220,30 @@ class TestComplexStructCompat(util.F2PyTest):
         self.module.zero_imag(c)
         npt.assert_array_equal(c.imag, [0.0, 0.0, 0.0])
         npt.assert_array_equal(c.real, [1.0, 3.0, 5.0])
+
+
+@pytest.mark.slow
+class TestScalarCheckMessage(util.F2PyTest):
+    # A failing check() on a scalar raises the module error with the value,
+    # not SystemError from PyErr_Format rejecting a printf conversion
+    sources = [util.getpath("tests", "src", "regression", "scalar_check.f90")]
+
+    @pytest.mark.parametrize("nth, name, value, check", [
+        ("1st", "r8", -1.5, "r8 > 0"),
+        ("2nd", "r4", -2.5, "r4 > 0"),
+        ("3rd", "i1", -3, "i1 > 0"),
+        ("4th", "i2", -4, "i2 > 0"),
+        ("5th", "i4", -5, "i4 > 0"),
+        ("6th", "i8", -2**40, "i8 > 0"),
+        ("7th", "c", b"z", "c == 'a'"),
+    ])
+    def test_failed_check(self, nth, name, value, check):
+        args = {"r8": 1, "r4": 1, "i1": 1, "i2": 1, "i4": 1, "i8": 1, "c": b"a"}
+        args[name] = value
+        error = getattr(self.module, f"_{self.module.__name__}_error")
+        msg = f"({check}) failed for {nth} argument {name}: chk:{name}={value!r}"
+        with pytest.raises(error, match=re.escape(msg)):
+            self.module.chk(**args)
 
 
 @pytest.mark.slow

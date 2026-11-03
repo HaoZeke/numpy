@@ -261,6 +261,10 @@ cppmacros['len..'] = """
 cppmacros['pyobj_from_char1'] = r"""
 #define pyobj_from_char1(v) (PyLong_FromLong(v))
 """
+needs['pyobj_from_signed_char1'] = ['signed_char']
+cppmacros['pyobj_from_signed_char1'] = r"""
+#define pyobj_from_signed_char1(v) (PyLong_FromLong(v))
+"""
 cppmacros['pyobj_from_short1'] = r"""
 #define pyobj_from_short1(v) (PyLong_FromLong(v))
 """
@@ -302,6 +306,9 @@ cppmacros['pyobj_from_string1'] = """
 needs['pyobj_from_string1size'] = ['string']
 cppmacros['pyobj_from_string1size'] = """
 #define pyobj_from_string1size(v,len) (PyUnicode_FromStringAndSize((char *)v, len))"""
+needs['pyobj_from_character1'] = ['character']
+cppmacros['pyobj_from_character1'] = """
+#define pyobj_from_character1(v) (Py_BuildValue(\"c\", v))"""
 needs['TRYPYARRAYTEMPLATE'] = ['PRINTPYOBJERR']
 cppmacros['TRYPYARRAYTEMPLATE'] = """
 /* New SciPy */
@@ -540,7 +547,11 @@ cppmacros['CHECKSTRING'] = """
 cppmacros['CHECKSCALAR'] = """
 #define CHECKSCALAR(check,tcheck,name,show,var)\\
     if (!(check)) {\\
-        PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, var);\\
+        PyObject *f2py_check_var = (var);\\
+        if (f2py_check_var != NULL) {\\
+            PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show\"=%R\", f2py_check_var);\\
+            Py_DECREF(f2py_check_var);\\
+        }\\
         /*goto capi_fail;*/\\
     } else """
 # cppmacros['CHECKDIMS']="""
