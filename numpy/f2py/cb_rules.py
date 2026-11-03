@@ -94,7 +94,7 @@ static #name#_t *get_active_#name#(void) {
     PyObject *capi_return = NULL;
     PyObject *capi_tmp = NULL;
     PyObject *capi_arglist_list = NULL;
-    int capi_j,capi_i = 0;
+    int capi_j = 0, capi_i = 0;
     int capi_longjmp_ok = 1;
 #decl#
 #ifdef F2PY_REPORT_ATEXIT
@@ -177,6 +177,17 @@ f2py_cb_stop_clock();
 #endif
     goto capi_return_pt;
 capi_fail:
+    if (capi_return != NULL && capi_j > #nofrets#) {
+        PyObject *exc, *val, *tb;
+        PyErr_Fetch(&exc, &val, &tb);
+        PyErr_Format(exc ? exc : #modulename#_error,
+            \"call-back function #argname# returned a tuple of %d items,\"
+            \" which f2py unpacks into the return values of\"
+            \" 'def #argname#(#docsignature#): return #docreturn#';\"
+            \" return a list or an array to return a single sequence\",
+            capi_j);
+        npy_PyErr_ChainExceptionsCause(exc, val, tb);
+    }
     fprintf(stderr,\"Call-back #name# failed.\\n\");
     Py_XDECREF(capi_return);
     Py_XDECREF(capi_arglist_list);
