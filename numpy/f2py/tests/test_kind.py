@@ -306,7 +306,8 @@ def test_unknown_kind_reported_once(capsys):
     capi_maps._defaulted_kinds.discard(('real', 'wp_unknown'))
     assert capi_maps.getctype(var, 'a') == 'float'
     assert capi_maps.getctype(var, 'b') == 'float'
-    assert capsys.readouterr().err.count('wp_unknown') == 1
+    # the kind is named in the message and again in the override example
+    assert capsys.readouterr().err.count('is mapped to C') == 1
 
 
 def test_character_kind_other_than_one():

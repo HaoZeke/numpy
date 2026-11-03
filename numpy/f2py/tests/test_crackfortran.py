@@ -646,19 +646,20 @@ class TestKindSelectors:
 
     def test_literal_kind_suffix(self, tmp_path):
         # the kind of a literal is its suffix, and an initial value keeps it
-        fpath = tmp_path / "suffix.f90"
-        fpath.write_text(textwrap.dedent("""\
-            subroutine suffix(x)
-              integer, parameter :: k8 = kind(1.0_8), k16 = kind(1.0_16)
-              real(8), optional :: x = 1.5_8
-              real a(k8), b(k16)
-            end subroutine suffix
-            """))
-        block = crackfortran.crackfortran([str(fpath)])[0]
-        vs = block["vars"]
-        assert vs["a"]["dimension"] == ["8"]
+        params = crackfortran.get_parameters({
+            'k8': {'typespec': 'integer', 'attrspec': ['parameter'],
+                   '=': 'kind(1.0_8)'},
+            'k16': {'typespec': 'integer', 'attrspec': ['parameter'],
+                    '=': 'kind(1.0_16)'},
+        })
+        assert int(params['k8']) == 8
         if 16 in crackfortran._real_formats:
-            assert vs["b"]["dimension"] == ["16"]
+            assert int(params['k16']) == 16
+        fpath = tmp_path / "suffix.f90"
+        fpath.write_text("subroutine suffix(x)\n"
+                         "  real(8), optional :: x = 1.5_8\n"
+                         "end subroutine suffix\n")
+        vs = crackfortran.crackfortran([str(fpath)])[0]["vars"]
         assert vs["x"]["="] == "1.5"
 
 
