@@ -3385,6 +3385,9 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     mess = ''
     if 'from' in block and not as_interface:
         mess = f"! in {block['from']}"
+    if block.get('implementedby') and not as_interface:
+        procs = ', '.join(block['implementedby'])
+        body = f'{tab + tabchar}module procedure {procs}{body}'
     if 'entry' in block:
         entry_stmts = ''
         for k, i in list(block['entry'].items()):
