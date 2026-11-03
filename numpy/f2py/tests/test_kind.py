@@ -1,5 +1,6 @@
 import platform
 import sys
+from fractions import Fraction
 
 import pytest
 
@@ -53,6 +54,38 @@ class TestKind(util.F2PyTest):
             assert selectedrealkind(i) == selected_real_kind(
                 i
             ), f"selectedrealkind({i}): expected {selected_real_kind(i)!r} but got {selectedrealkind(i)!r}"
+
+
+def _compiled(value):
+    # a module parameter as f2py exposes the compiler's copy of it
+    value = np.asarray(value)[()]
+    if isinstance(value, np.bytes_):
+        return value.decode()
+    if isinstance(value, np.floating):
+        return Fraction(*value.as_integer_ratio())
+    return int(value)
+
+
+def _cracked(value):
+    # a parameter as crackfortran evaluates it
+    if isinstance(value, crackfortran._Real):
+        return value.value
+    if isinstance(value, (str, crackfortran._Logical)):
+        return value if isinstance(value, str) else int(value.value)
+    return int(value)
+
+
+@pytest.mark.slow
+class TestParameterValues(util.F2PyTest):
+    # parameters are evaluated with Fortran's types and kinds
+    sources = [util.getpath("tests", "src", "kind", "parameter_values.f90")]
+
+    def test_compiler_values(self):
+        crackfortran.crackfortran([str(self.sources[0])])
+        params = crackfortran.f90moduleparams["parameter_values"]
+        mod = self.module.parameter_values
+        assert {n: _compiled(getattr(mod, n)) for n in params} == {
+            n: _cracked(v) for n, v in params.items()}
 
 
 @pytest.mark.slow

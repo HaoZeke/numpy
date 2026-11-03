@@ -498,7 +498,8 @@ class TestParamEval:
                   'nested': {1: 1, 2: 2, 3: 3}}
         dimspec = '(2)'
         ret = crackfortran.param_eval(v, g_params, params, dimspec=dimspec)
-        assert ret == {1: 3.14, 2: 4.0}
+        # 3.14 is a default real, which is single precision
+        assert ret == {1: float(np.float32(3.14)), 2: 4.0}
 
     def test_param_eval_nonstandard_range(self):
         v = '(/ 6, 3, 1 /)'
@@ -695,7 +696,7 @@ class TestRealParameters:
 
 
 class TestLiteralKinds:
-    # kinds are dropped from literals, not from names
+    # a kind follows a literal, and is no part of a name
     def test_extents(self, tmp_path):
         fpath = tmp_path / "kinds.f90"
         fpath.write_text(textwrap.dedent("""\
@@ -718,6 +719,44 @@ class TestLiteralKinds:
         var = {'typespec': 'logical', 'kindselector': {'kind': '1'},
                'attrspec': ['parameter'], '=': '.true._1'}
         assert crackfortran.get_parameters({'yes': var}) == {'yes': True}
+
+
+class TestValueKinds:
+    # each value has the type and kind that Fortran gives it, as gfortran
+    # and flang evaluate it, so a default real is single precision
+    @pytest.mark.parametrize("value, expected", [
+        ("kind(0.0_qp)", 16), ("kind(1.0) + kind(1)", 8), ("kind(1.5d0)", 8),
+        ("kind(1_8 * 1.0)", 4), ("kind(max(1, 2_8))", 8),
+        ("int(0.29 * 100)", 29), ("int((2 ** 24 + 1) * 1.0)", 2 ** 24),
+        ("nint(0.49999999999999994)", 1), ("len('it''s')", 4),
+        ("merge(1, 2, 3 > 2 .and. .not. 1 /= 1)", 1),
+    ])
+    def test_values(self, value, expected):
+        par = {'attrspec': ['parameter']}
+        vars = {'qp': {**par, 'typespec': 'integer', '=': '16'},
+                'k': {**par, 'typespec': 'integer', '=': value}}
+        assert crackfortran.get_parameters(vars)['k'] == expected
+
+    def test_text(self, tmp_path):
+        # the values that f2py -h writes, where an argument's is C
+        fpath = tmp_path / "text.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module text
+              integer(8), parameter :: k = 2_8 + 3_8
+              real(8), parameter :: tenth = 0.1_8, fifth = 2 * tenth
+              real, parameter :: third = 1.0 / 3
+            contains
+              subroutine f(x)
+                real(8), intent(in) :: x
+                !f2py real(8), optional :: x = 1.0 / 3
+              end subroutine f
+            end module text
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        vs = mod["vars"]
+        assert [vs[n]["="] for n in ("k", "tenth", "fifth", "third")] == [
+            "5", "0.1_8", "0.2_8", "0.33333334"]
+        assert mod["body"][0]["vars"]["x"]["="] == "0.3333333333333333"
 
 
 class TestIntegerDivision:
@@ -775,7 +814,7 @@ class TestIntrinsics:
     # intrinsics follow Fortran, so nint rounds halves away from zero
     @pytest.mark.parametrize("value, expected", [
         ("nint(2.5)", 3), ("nint(-2.5)", -3),
-        ("nint(0.49999999999999994)", 0), ("nint(a=7.5, kind=8)", 8),
+        ("nint(0.49999999999999994d0)", 0), ("nint(a=7.5, kind=8)", 8),
         ("int(-2.7)", -2), ("floor(-1.5)", -2), ("ceiling(1.2)", 2),
         ("mod(-7, 3)", -1), ("modulo(-7, 3)", 2), ("sign(4, -1)", -4),
         ("merge(2, 9, 1 > 0)", 2), ("iachar('B')", 66),
