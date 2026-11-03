@@ -18,6 +18,11 @@ def _meson_identifier(prefix: str, value: str, index: int) -> str:
     return f"{prefix}_{index}_{safe_value}"
 
 
+def _meson_string(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
 class MesonTemplate:
     """Template meson build file generation class."""
 
@@ -34,6 +39,8 @@ class MesonTemplate:
         fortran_args: list[str],
         build_type: str,
         python_exe: str,
+        define_macros: list[tuple[str, str | None]] | None = None,
+        undef_macros: list[str] | None = None,
     ):
         self.modulename = modulename
         self.build_template_path = (
@@ -49,6 +56,8 @@ class MesonTemplate:
             self.include_dirs = []
         self.substitutions = {}
         self.objects = object_files
+        self.define_macros = define_macros or []
+        self.undef_macros = undef_macros or []
         # Convert args to '' wrapped variant for meson
         self.fortran_args = [
             f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
@@ -61,6 +70,7 @@ class MesonTemplate:
             self.deps_substitution,
             self.include_substitution,
             self.libraries_substitution,
+            self.macros_substitution,
             self.fortran_args_substitution,
         ]
         self.build_type = build_type
@@ -129,6 +139,20 @@ class MesonTemplate:
             [f"{self.indent}'''{inc}'''," for inc in self.include_dirs]
         )
 
+    def macros_substitution(self) -> None:
+        macros = [
+            f"-D{name}" if value is None else f"-D{name}={value}"
+            for name, value in self.define_macros
+        ]
+        macros.extend(f"-U{name}" for name in self.undef_macros)
+        if macros:
+            args = ", ".join(_meson_string(macro) for macro in macros)
+            self.substitutions["macro_args"] = (
+                f"add_project_arguments([{args}], language : ['c', 'fortran'])"
+            )
+        else:
+            self.substitutions["macro_args"] = ""
+
     def fortran_args_substitution(self) -> None:
         if self.fortran_args:
             self.substitutions["fortran_args"] = (
@@ -186,6 +210,8 @@ class MesonBackend(Backend):
             self.fc_flags,
             self.build_type,
             sys.executable,
+            define_macros=self.define_macros,
+            undef_macros=self.undef_macros,
         )
         src = meson_template.generate_meson_build()
         Path(build_dir).mkdir(parents=True, exist_ok=True)

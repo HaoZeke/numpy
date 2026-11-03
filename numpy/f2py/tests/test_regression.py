@@ -186,6 +186,34 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\n1foo =" not in meson_build
 
 
+def test_meson_macros_reach_c_and_fortran():
+    # gh-28648: -D and -U apply to both languages, undefines last
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = MesonTemplate(
+        modulename="Blah",
+        sources=[Path("gh28648.F90")],
+        deps=[],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=[],
+        build_type="release",
+        python_exe=sys.executable,
+        define_macros=[("NEW_MODEL_PARM", None), ("SCALE", "10"),
+                       ("QUOTED", "it's"), ("WINPATH", r"C:\new")],
+        undef_macros=["NDEBUG"],
+    ).generate_meson_build()
+
+    mparser.Parser(meson_build, "meson.build").parse()
+    assert (
+        r"add_project_arguments(['-DNEW_MODEL_PARM', '-DSCALE=10', "
+        r"'-DQUOTED=it\'s', '-DWINPATH=C:\\new', '-UNDEBUG'], "
+        r"language : ['c', 'fortran'])"
+    ) in meson_build
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():
@@ -202,6 +230,22 @@ def test_gh25784():
         )
     except ImportError as rerr:
         assert "unknown_subroutine_" in str(rerr)
+
+
+@pytest.mark.slow
+class TestDefineMacros(util.F2PyTest):
+    # Check that -D reaches both the Fortran and the C compiler
+    sources = [util.getpath("tests", "src", "regression", "gh28648.F90")]
+    options = ["-DNEW_MODEL_PARM", "-DF2PY_REPORT_ON_ARRAY_COPY=1"]
+
+    def test_gh28648_fortran(self):
+        x = np.array([1.0, 2.0])
+        npt.assert_allclose(self.module.gh28648.run_passive_model(x), 20 * x)
+        npt.assert_allclose(self.module.gh28648.run_active_model(x), 10 * x)
+
+    def test_gh28648_c(self, capfd):
+        self.module.gh28648.run_passive_model([1.0, 2.0])
+        assert "created an array from object" in capfd.readouterr().err
 
 
 @pytest.mark.slow
