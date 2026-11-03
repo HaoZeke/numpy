@@ -3369,6 +3369,10 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         result = f" result ({block['result']})"
         if block['result'] not in argsl:
             argsl.append(block['result'])
+    elif blocktype == 'function' and as_interface:
+        # An interface body declares only argsl, and without a result
+        # clause the function name is the result variable.
+        argsl.append(name)
     body = crack2fortrangen(block['body'], tab + tabchar, as_interface=as_interface)
     vars = vars2fortran(
         block, block['vars'], argsl, tab + tabchar, as_interface=as_interface)
