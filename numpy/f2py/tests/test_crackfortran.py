@@ -458,6 +458,23 @@ class TestFunctionReturn(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestFunctionPrefixKind(util.F2PyTest):
+    # A kind in the FUNCTION statement selects the same C type as in a type
+    # declaration statement.
+    sources = [util.getpath("tests", "src", "crackfortran",
+                            "function_prefix_kind.f90")]
+    # Exact in IEEE 754 binary64, rounds to 1.0 in binary32
+    one_plus_eps = np.nextafter(1.0, 2.0)
+
+    def test_complex(self):
+        z = complex(self.one_plus_eps, -self.one_plus_eps)
+        assert self.module.cplx_kind8(z) == z
+
+    def test_integer(self):
+        assert self.module.int_kind8() == np.iinfo(np.int64).max
+
+
+@pytest.mark.slow
 class TestFortranGroupCounters(util.F2PyTest):
     def test_end_if_comment(self):
         # gh-23533
