@@ -88,6 +88,21 @@ class TestModuleProcedure:
         assert mod["body"][3]["implementedby"] == \
             ["get_int", "get_real"]
 
+    def test_procedure_statements(self):
+        # gh-19896: every procedure statement of a generic interface counts
+        fpath = util.getpath("tests", "src", "crackfortran", "gh19896.f90")
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        procs = {b["name"]: b["implementedby"] for b in mod["body"]
+                 if b["block"] == "interface"}
+        assert procs == {
+            "operator(.dot.)": ["dot_real", "dot_int"],
+            "operator(+)": ["union_bn"],
+            "assignment(=)": ["int_from_char", "real_from_char"],
+        }
+        routines = {b["name"] for b in mod["body"]
+                    if b["block"] in ("function", "subroutine")}
+        assert set().union(*procs.values()) <= routines
+
     def test_notPublicPrivate(self, tmp_path):
         fpath = util.getpath("tests", "src", "crackfortran", "pubprivmod.f90")
         mod = crackfortran.crackfortran([str(fpath)])
