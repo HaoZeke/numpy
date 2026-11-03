@@ -212,6 +212,32 @@ def test_meson_macros_reach_c_and_fortran():
     assert f"fortran_args: [{macros}, '-g']," in meson_build
 
 
+def test_gh26352_intel_windows_symbol_names():
+    # F_FUNC expects lowercase Fortran symbols with a trailing underscore
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = MesonTemplate(
+        modulename="fib1",
+        sources=[Path("fib1.f90")],
+        deps=[],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=[],
+        build_type="release",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+
+    mparser.Parser(meson_build, "meson.build").parse()
+    intel_windows = "if fc.get_id() in ['intel-cl', 'intel-llvm-cl']"
+    assert intel_windows in meson_build
+    start = meson_build.index(intel_windows)
+    block = meson_build[start:meson_build.index("endif", start)]
+    assert "'/names:lowercase', '/assume:underscore'" in block
+    assert "language : 'fortran'" in block
+
+
 @pytest.mark.slow
 class TestDefineMacros(util.F2PyTest):
     # -D options must reach the compiled wrapper
