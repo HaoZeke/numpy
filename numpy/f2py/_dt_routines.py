@@ -287,7 +287,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 f'{li["name"]}={li["name"]}' for li in len_info)
             alloc_stmt = f'    allocate({base_tname}({len_args}) :: obj)'
         else:
-            alloc_stmt = f'    allocate(obj)'
+            alloc_stmt = '    allocate(obj)'
 
         init_lines, loop_depth = _initial_state(
             'obj', _all_components(orig_tb, type_map), type_map,
@@ -300,7 +300,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
         lines.append(
             f'  function f2py_create_{typename}({args_str}) '
             f'result(cptr) bind(c)')
-        lines.append(f'    type(c_ptr) :: cptr')
+        lines.append('    type(c_ptr) :: cptr')
         lines.append(decls_str)
         lines.append(f'    type({type_spec}), pointer :: obj')
         if loop_depth:
@@ -327,7 +327,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     continue  # F2018 7.5.4.8: private ones are not ours
                 lines.append(f'    obj%{mname} = {default_val}')
         lines.append(assigns_str)
-        lines.append(f'    cptr = c_loc(obj)')
+        lines.append('    cptr = c_loc(obj)')
         lines.append(f'  end function f2py_create_{typename}')
         lines.append('')
 
@@ -349,12 +349,12 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
         destr_args = f'cptr{len_arg_str_prefix}'
         lines.append(
             f'  subroutine f2py_destroy_{typename}({destr_args}) bind(c)')
-        lines.append(f'    type(c_ptr), value :: cptr')
+        lines.append('    type(c_ptr), value :: cptr')
         if len_decl_str:
             lines.append(len_decl_str)
         lines.append(f'    type({type_spec}), pointer :: obj')
-        lines.append(f'    call c_f_pointer(cptr, obj)')
-        lines.append(f'    deallocate(obj)')
+        lines.append('    call c_f_pointer(cptr, obj)')
+        lines.append('    deallocate(obj)')
         lines.append(f'  end subroutine f2py_destroy_{typename}')
         lines.append('')
 
@@ -375,22 +375,22 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, idx) '
                     f'result(inner_cptr) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    integer(c_int), value :: idx')
-                lines.append(f'    type(c_ptr) :: inner_cptr')
+                    '    integer(c_int), value :: idx')
+                lines.append('    type(c_ptr) :: inner_cptr')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
                 lines.append(
                     f'    type({inner}), pointer :: inner_obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
-                lines.append(f'    allocate(inner_obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
+                lines.append('    allocate(inner_obj)')
                 lines.append(
                     f'    inner_obj = obj%{mname}(idx)')
                 lines.append(
-                    f'    inner_cptr = c_loc(inner_obj)')
+                    '    inner_cptr = c_loc(inner_obj)')
                 lines.append(
                     f'  end function f2py_get_{typename}_{mname}')
                 lines.append('')
@@ -399,20 +399,20 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_set_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, idx, inner_cptr) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    integer(c_int), value :: idx')
+                    '    integer(c_int), value :: idx')
                 lines.append(
-                    f'    type(c_ptr), value :: inner_cptr')
+                    '    type(c_ptr), value :: inner_cptr')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
                 lines.append(
                     f'    type({inner}), pointer :: inner_obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
-                    f'    call c_f_pointer(inner_cptr, inner_obj)')
+                    '    call c_f_pointer(inner_cptr, inner_obj)')
                 lines.append(
                     f'    obj%{mname}(idx) = inner_obj')
                 lines.append(
@@ -427,16 +427,16 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}) '
                     f'result(inner_cptr) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
-                lines.append(f'    type(c_ptr) :: inner_cptr')
+                lines.append('    type(c_ptr) :: inner_cptr')
                 lines.append(f'    type({type_spec}), pointer :: obj')
                 lines.append(f'    type({inner}), pointer :: inner_obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
-                lines.append(f'    allocate(inner_obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
+                lines.append('    allocate(inner_obj)')
                 lines.append(f'    inner_obj = obj%{mname}')
-                lines.append(f'    inner_cptr = c_loc(inner_obj)')
+                lines.append('    inner_cptr = c_loc(inner_obj)')
                 lines.append(
                     f'  end function f2py_get_{typename}_{mname}')
                 lines.append('')
@@ -445,15 +445,15 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_set_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, inner_cptr) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
-                lines.append(f'    type(c_ptr), value :: inner_cptr')
+                lines.append('    type(c_ptr), value :: inner_cptr')
                 lines.append(f'    type({type_spec}), pointer :: obj')
                 lines.append(f'    type({inner}), pointer :: inner_obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
-                    f'    call c_f_pointer(inner_cptr, inner_obj)')
+                    '    call c_f_pointer(inner_cptr, inner_obj)')
                 lines.append(f'    obj%{mname} = inner_obj')
                 lines.append(
                     f'  end subroutine f2py_set_{typename}_{mname}')
@@ -466,27 +466,27 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_get_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, buf, buflen) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    integer(c_int), value :: buflen')
+                    '    integer(c_int), value :: buflen')
                 lines.append(
-                    f'    character(c_char), intent(out) :: buf(buflen)')
+                    '    character(c_char), intent(out) :: buf(buflen)')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    integer :: i')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    integer :: i')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    do i = 1, min(buflen, '
                     f'len_trim(obj%{mname}))')
                 lines.append(
                     f'      buf(i) = obj%{mname}(i:i)')
-                lines.append(f'    end do')
+                lines.append('    end do')
                 lines.append(
                     f'    do i = len_trim(obj%{mname})+1, buflen')
-                lines.append(f'      buf(i) = \' \'')
-                lines.append(f'    end do')
+                lines.append('      buf(i) = \' \'')
+                lines.append('    end do')
                 lines.append(
                     f'  end subroutine f2py_get_{typename}_{mname}')
                 lines.append('')
@@ -495,24 +495,24 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_set_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, buf, buflen) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    integer(c_int), value :: buflen')
+                    '    integer(c_int), value :: buflen')
                 lines.append(
-                    f'    character(c_char), intent(in) :: buf(buflen)')
+                    '    character(c_char), intent(in) :: buf(buflen)')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    integer :: i, copy_len')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    integer :: i, copy_len')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(f'    obj%{mname} = \' \'')
                 lines.append(
                     f'    copy_len = min(buflen, len(obj%{mname}))')
-                lines.append(f'    do i = 1, copy_len')
+                lines.append('    do i = 1, copy_len')
                 lines.append(
                     f'      obj%{mname}(i:i) = buf(i)')
-                lines.append(f'    end do')
+                lines.append('    end do')
                 lines.append(
                     f'  end subroutine f2py_set_{typename}_{mname}')
                 lines.append('')
@@ -527,14 +527,14 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'_allocated(cptr{len_arg_str_prefix}) '
                     f'result(is_alloc) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    logical(c_bool) :: is_alloc')
+                    '    logical(c_bool) :: is_alloc')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    is_alloc = allocated(obj%{mname})')
                 lines.append(
@@ -547,21 +547,21 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'_len(cptr{len_arg_str_prefix}) '
                     f'result(str_length) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    integer(c_int) :: str_length')
+                    '    integer(c_int) :: str_length')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    if (allocated(obj%{mname})) then')
                 lines.append(
                     f'      str_length = len(obj%{mname})')
-                lines.append(f'    else')
-                lines.append(f'      str_length = 0')
-                lines.append(f'    end if')
+                lines.append('    else')
+                lines.append('      str_length = 0')
+                lines.append('    end if')
                 lines.append(
                     f'  end function f2py_get_{typename}_{mname}'
                     f'_len')
@@ -571,26 +571,26 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_get_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, buf, buflen) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    integer(c_int), value :: buflen')
+                    '    integer(c_int), value :: buflen')
                 lines.append(
-                    f'    character(c_char), intent(out) '
-                    f':: buf(buflen)')
+                    '    character(c_char), intent(out) '
+                    ':: buf(buflen)')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
                 lines.append(
-                    f'    integer :: char_idx')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                    '    integer :: char_idx')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    do char_idx = 1, '
                     f'min(buflen, len(obj%{mname}))')
                 lines.append(
                     f'      buf(char_idx) = '
                     f'obj%{mname}(char_idx:char_idx)')
-                lines.append(f'    end do')
+                lines.append('    end do')
                 lines.append(
                     f'  end subroutine f2py_get_{typename}_{mname}')
                 lines.append('')
@@ -599,33 +599,33 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_set_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, buf, buflen) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    integer(c_int), value :: buflen')
+                    '    integer(c_int), value :: buflen')
                 lines.append(
-                    f'    character(c_char), intent(in) '
-                    f':: buf(buflen)')
+                    '    character(c_char), intent(in) '
+                    ':: buf(buflen)')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
                 lines.append(
-                    f'    integer :: char_idx')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                    '    integer :: char_idx')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    if (allocated(obj%{mname})) '
                     f'deallocate(obj%{mname})')
-                lines.append(f'    if (buflen > 0) then')
+                lines.append('    if (buflen > 0) then')
                 lines.append(
                     f'      allocate(character(buflen) '
                     f':: obj%{mname})')
                 lines.append(
-                    f'      do char_idx = 1, buflen')
+                    '      do char_idx = 1, buflen')
                 lines.append(
                     f'        obj%{mname}(char_idx:char_idx) '
                     f'= buf(char_idx)')
-                lines.append(f'      end do')
-                lines.append(f'    end if')
+                lines.append('      end do')
+                lines.append('    end if')
                 lines.append(
                     f'  end subroutine f2py_set_{typename}_{mname}')
                 lines.append('')
@@ -642,14 +642,14 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'_allocated(cptr{len_arg_str_prefix}) '
                     f'result(is_alloc) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    logical(c_bool) :: is_alloc')
+                    '    logical(c_bool) :: is_alloc')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    is_alloc = allocated(obj%{mname})')
                 lines.append(
@@ -662,14 +662,14 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'_ndim(cptr{len_arg_str_prefix}) '
                     f'result(array_rank) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    integer(c_int) :: array_rank')
+                    '    integer(c_int) :: array_rank')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    array_rank = {ndim}')
                 lines.append(
@@ -681,7 +681,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_get_{typename}_{mname}'
                     f'_shape(cptr{len_arg_str_prefix}, shape_out) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
@@ -689,19 +689,19 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
                 lines.append(
-                    f'    integer :: dim_idx')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                    '    integer :: dim_idx')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    if (allocated(obj%{mname})) then')
                 for dim_idx in range(1, ndim + 1):
                     lines.append(
                         f'      shape_out({dim_idx}) = '
                         f'size(obj%{mname}, {dim_idx})')
-                lines.append(f'    else')
+                lines.append('    else')
                 for dim_idx in range(1, ndim + 1):
                     lines.append(
                         f'      shape_out({dim_idx}) = 0')
-                lines.append(f'    end if')
+                lines.append('    end if')
                 lines.append(
                     f'  end subroutine f2py_get_{typename}_{mname}'
                     f'_shape')
@@ -712,20 +712,20 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'_data(cptr{len_arg_str_prefix}) '
                     f'result(data_ptr) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
-                lines.append(f'    type(c_ptr) :: data_ptr')
+                lines.append('    type(c_ptr) :: data_ptr')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    if (allocated(obj%{mname})) then')
                 lines.append(
                     f'      data_ptr = c_loc(obj%{mname})')
-                lines.append(f'    else')
-                lines.append(f'      data_ptr = c_null_ptr')
-                lines.append(f'    end if')
+                lines.append('    else')
+                lines.append('      data_ptr = c_null_ptr')
+                lines.append('    end if')
                 lines.append(
                     f'  end function f2py_get_{typename}_{mname}'
                     f'_data')
@@ -743,23 +743,23 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_set_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, {dim_args}, src) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 for idx in range(1, ndim + 1):
                     lines.append(
                         f'    integer(c_int), value :: dim_{idx}')
-                lines.append(f'    type(c_ptr), value :: src')
+                lines.append('    type(c_ptr), value :: src')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
                 lines.append(
                     f'    {isoc_type}, pointer :: '
                     f'src_arr({colon_shape})')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    if (allocated(obj%{mname})) '
                     f'deallocate(obj%{mname})')
-                lines.append(f'    if (dim_1 > 0) then')
+                lines.append('    if (dim_1 > 0) then')
                 lines.append(
                     f'      allocate(obj%{mname}'
                     f'({alloc_shape}))')
@@ -768,7 +768,7 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'[{cf_shape}])')
                 lines.append(
                     '      ' + _member_assign(mvar, f'obj%{mname}', 'src_arr'))
-                lines.append(f'    end if')
+                lines.append('    end if')
                 lines.append(
                     f'  end subroutine f2py_set_{typename}_{mname}')
                 lines.append('')
@@ -785,14 +785,14 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'_associated(cptr{len_arg_str_prefix}) '
                     f'result(is_assoc) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    logical(c_bool) :: is_assoc')
+                    '    logical(c_bool) :: is_assoc')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    is_assoc = associated(obj%{mname})')
                 lines.append(
@@ -805,14 +805,14 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'_ndim(cptr{len_arg_str_prefix}) '
                     f'result(array_rank) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
-                    f'    integer(c_int) :: array_rank')
+                    '    integer(c_int) :: array_rank')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    array_rank = {ndim}')
                 lines.append(
@@ -824,25 +824,25 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_get_{typename}_{mname}'
                     f'_shape(cptr{len_arg_str_prefix}, shape_out) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(
                     f'    integer(c_int) :: shape_out({ndim})')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    if (associated(obj%{mname})) then')
                 for dim_idx in range(1, ndim + 1):
                     lines.append(
                         f'      shape_out({dim_idx}) = '
                         f'size(obj%{mname}, {dim_idx})')
-                lines.append(f'    else')
+                lines.append('    else')
                 for dim_idx in range(1, ndim + 1):
                     lines.append(
                         f'      shape_out({dim_idx}) = 0')
-                lines.append(f'    end if')
+                lines.append('    end if')
                 lines.append(
                     f'  end subroutine f2py_get_{typename}_{mname}'
                     f'_shape')
@@ -853,20 +853,20 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'_data(cptr{len_arg_str_prefix}) '
                     f'result(data_ptr) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
-                lines.append(f'    type(c_ptr) :: data_ptr')
+                lines.append('    type(c_ptr) :: data_ptr')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    if (associated(obj%{mname})) then')
                 lines.append(
                     f'      data_ptr = c_loc(obj%{mname})')
-                lines.append(f'    else')
-                lines.append(f'      data_ptr = c_null_ptr')
-                lines.append(f'    end if')
+                lines.append('    else')
+                lines.append('      data_ptr = c_null_ptr')
+                lines.append('    end if')
                 lines.append(
                     f'  end function f2py_get_{typename}_{mname}'
                     f'_data')
@@ -887,13 +887,13 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'_data(cptr{len_arg_str_prefix}) '
                     f'result(data_ptr) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
-                lines.append(f'    type(c_ptr) :: data_ptr')
+                lines.append('    type(c_ptr) :: data_ptr')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 # Determine which LEN param sizes this dimension
                 dim_exprs = [str(d).strip().lower()
                              for d in mvar.get('dimension', [])]
@@ -902,9 +902,9 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'    if (size(obj%{mname}) > 0) then')
                 lines.append(
                     f'      data_ptr = c_loc(obj%{mname})')
-                lines.append(f'    else')
-                lines.append(f'      data_ptr = c_null_ptr')
-                lines.append(f'    end if')
+                lines.append('    else')
+                lines.append('      data_ptr = c_null_ptr')
+                lines.append('    end if')
                 lines.append(
                     f'  end function f2py_get_{typename}_{mname}'
                     f'_data')
@@ -921,19 +921,19 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_set_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, {dim_args}, src) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 for idx in range(1, ndim + 1):
                     lines.append(
                         f'    integer(c_int), value :: dim_{idx}')
-                lines.append(f'    type(c_ptr), value :: src')
+                lines.append('    type(c_ptr), value :: src')
                 lines.append(
                     f'    type({type_spec}), pointer :: obj')
                 lines.append(
                     f'    {isoc_type}, pointer :: '
                     f'src_arr({colon_shape})')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    call c_f_pointer(src, src_arr, '
                     f'[{cf_shape}])')
@@ -960,12 +960,12 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}) '
                     f'result(arrptr) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
-                lines.append(f'    type(c_ptr) :: arrptr')
+                lines.append('    type(c_ptr) :: arrptr')
                 lines.append(f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(f'    arrptr = c_loc(obj%{mname})')
                 lines.append(
                     f'  end function f2py_get_{typename}_{mname}')
@@ -975,13 +975,13 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_set_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, arr) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(f'    {isoc_type}, intent(in) :: arr({total})')
                 lines.append(f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    integer :: i')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    integer :: i')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 if len(dims) == 1:
                     lines.append(
                         '    ' + _member_assign(mvar, f'obj%{mname}', 'arr'))
@@ -997,12 +997,12 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                     f'  function f2py_get_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}) '
                     f'result(val) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(f'    {isoc_type} :: val')
                 lines.append(f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     f'    val = {_member_value(mvar, f"obj%{mname}")}')
                 lines.append(
@@ -1013,12 +1013,12 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'  subroutine f2py_set_{typename}_{mname}'
                     f'(cptr{len_arg_str_prefix}, val) bind(c)')
-                lines.append(f'    type(c_ptr), value :: cptr')
+                lines.append('    type(c_ptr), value :: cptr')
                 if len_decl_str:
                     lines.append(len_decl_str)
                 lines.append(f'    {isoc_type}, value :: val')
                 lines.append(f'    type({type_spec}), pointer :: obj')
-                lines.append(f'    call c_f_pointer(cptr, obj)')
+                lines.append('    call c_f_pointer(cptr, obj)')
                 lines.append(
                     '    ' + _member_assign(mvar, f'obj%{mname}', 'val'))
                 lines.append(
@@ -1875,8 +1875,8 @@ def _gen_proc_pointer_fortran_wrappers(typename, proc_ptrs, module_body):
                     f'{_member_value(result, f"self%{comp}({actual})")}')
         else:
             call = f'call self%{comp}({actual})'
-        lines += [f'  subroutine f2py_call_{typename}_{comp}'
-                  f'({", ".join(dummies)}) bind(c)',
+        lines += [(f'  subroutine f2py_call_{typename}_{comp}'
+                   f'({", ".join(dummies)}) bind(c)'),
                   '    use iso_c_binding',
                   *decls,
                   f'    type({typename}), pointer :: self',
