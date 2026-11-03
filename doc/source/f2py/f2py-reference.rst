@@ -8,6 +8,7 @@ F2PY reference manual
 
    signature-file
    python-usage
+   f2py-support
    buildtools/index
    advanced/use_cases.rst
    advanced/boilerplating.rst
