@@ -251,6 +251,20 @@ In Python:
    bare Fortran routine will be used. For more details, see
    https://github.com/numpy/numpy/issues/26681#issuecomment-2466460943
 
+Call-back functions returning complex values
+--------------------------------------------
+
+Fortran compilers do not agree on how a ``COMPLEX`` function returns its
+result. GNU Fortran (without ``-ff2c``) and LLVM Flang return it by value, the
+way C returns a complex value, while Intel Fortran, NVIDIA HPC Fortran, AMD
+AOCC Flang and ``gfortran -ff2c`` pass the address of the result as a hidden
+first argument. The call-back functions that F2PY generates for ``COMPLEX``
+functions return the result by value unless the generated C code is compiled
+with ``-DF2PY_CB_RETURNCOMPLEX=0``. The ``meson`` backend of ``f2py -c`` adds
+this flag for the Intel and NVIDIA compilers. In any other build that uses a
+compiler with a hidden first argument, add the flag to the C compiler flags,
+for example through the ``CFLAGS`` environment variable.
+
 Resolving arguments to call-back functions
 ------------------------------------------
 
