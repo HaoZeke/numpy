@@ -1,0 +1,27 @@
+python module _gh30167__user__routines
+    interface
+        function fun(x) result (y)
+            double precision intent(in) :: x
+            double precision :: y
+        end function fun
+    end interface
+end python module _gh30167__user__routines
+
+python module _gh30167
+    interface
+        ! The calls follow the Fortran argument order, not the signatures
+        subroutine scale(x, factor, n)
+            callstatement (*f2py_func)(&n, x, &factor)
+            double precision dimension(n), intent(in,out) :: x
+            double precision intent(in) :: factor
+            integer intent(hide), depend(x) :: n = len(x)
+        end subroutine scale
+        subroutine apply(fun, x, n)
+            callstatement (*f2py_func)(cb_fun_in__gh30167__user__routines, &n, x)
+            use _gh30167__user__routines
+            external fun
+            double precision dimension(n), intent(in,out) :: x
+            integer intent(hide), depend(x) :: n = len(x)
+        end subroutine apply
+    end interface
+end python module _gh30167

@@ -719,14 +719,79 @@ def getcallstatement(rout):
     return getmultilineblock(rout, 'callstatement')
 
 
+_c_token = re.compile(
+    r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*|\w+|\S', re.S)
+
+
+def _callstatementproto(rout, cb_map):
+    """Prototype of f2py_func as called in the callstatement of rout.
+
+    Returns None unless every use of f2py_func is a call whose arguments
+    are each a variable of the wrapper, its address or a call-back.
+    """
+    from .capi_maps import getctype
+    # C types of the variables that rules.py declares in the wrapper
+    ctypes = {}
+    for a in getargs2(rout)[0]:
+        var = rout['vars'][a]
+        if not isexternal(var):
+            ctypes[a] = getctype(var) + ('*' if isarray(var) else '')
+            ctypes['&' + a] = ctypes[a] + '*'
+        elif a in cb_map and not isintent_callback(var):
+            cbtype = cb_map[a] + '_typedef'
+            ctypes[cb_map[a]] = ctypes['&' + cb_map[a]] = cbtype
+            ctypes[a + '_cptr'] = cbtype
+    tokens = [t for t in _c_token.findall(getcallstatement(rout))
+              if not t.startswith(('/*', '//'))]
+    protos = set()
+    for i, t in enumerate(tokens):
+        if t != 'f2py_func':
+            continue
+        if tokens[i + 1:i + 2] == ['(']:
+            start = i + 2
+        elif (i >= 2 and tokens[i - 2:i] == ['(', '*']
+                and tokens[i + 1:i + 3] == [')', '(']):
+            start = i + 3
+        else:
+            return None
+        args, depth = [''], 0
+        for tok in tokens[start:]:
+            if tok in ('(', '[', '{'):
+                depth += 1
+            elif tok in (')', ']', '}'):
+                if depth == 0:
+                    break
+                depth -= 1
+            elif tok == ',' and depth == 0:
+                args.append('')
+                continue
+            args[-1] += tok
+        else:
+            return None
+        if args == ['']:
+            args = []
+        if not all(arg in ctypes for arg in args):
+            return None
+        protos.add(','.join(ctypes[arg] for arg in args) or 'void')
+    if len(protos) == 1:
+        return protos.pop()
+    return None
+
+
 def getcallprotoargument(rout, cb_map={}):
     r = getmultilineblock(rout, 'callprotoargument', comment=0)
     if r:
         return r
     if hascallstatement(rout):
-        outmess(
-            'warning: callstatement is defined without callprotoargument\n')
-        return
+        # An empty parameter list declares no parameters from C23 on, so
+        # calls through f2py_func need the prototype spelled out.
+        r = _callstatementproto(rout, cb_map)
+        if r is None:
+            outmess('warning: callstatement is defined without'
+                    ' callprotoargument and f2py cannot infer the prototype'
+                    ' from it; C23 compilers reject calls to f2py_func with'
+                    ' arguments unless callprotoargument is given\n')
+        return r
     from .capi_maps import getctype
     arg_types, arg_types2 = [], []
     if l_and(isstringfunction, l_not(isfunction_wrap))(rout):
