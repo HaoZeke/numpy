@@ -1,13 +1,12 @@
 import re
 
-import numpy as np
 import pytest
+
+import numpy as np
+from numpy.f2py import crackfortran, f90mod_rules
 from numpy.testing import assert_array_equal
 
-from numpy.f2py import crackfortran, f90mod_rules
-
 from . import util
-
 
 SOURCE = util.getpath("tests", "src", "modules", "gh22511_integer_extents.f90")
 
