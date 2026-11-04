@@ -6,6 +6,7 @@ import shlex
 import shutil
 import sys
 import tempfile
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -74,6 +75,71 @@ class CompilerContext:
                 'exe_wrapper or MESON_EXE_WRAPPER')
 
 
+
+class _DeferredCompilerContext:
+    """Resolve machine files only when generation needs compiler settings."""
+
+    def __init__(self, cross_files, native_files, source_dir, runner, fortran_args):
+        self._cross_files = cross_files
+        self._native_files = native_files
+        self._source_dir = source_dir
+        self._runner = runner
+        self._fortran_args = tuple(fortran_args)
+        self._environment = from_environment()
+        self._resolved = None
+        self._failure = None
+        self._lock = threading.RLock()
+
+    def resolve(self):
+        with self._lock:
+            if self._failure is not None:
+                raise self._failure
+            if self._resolved is None:
+                try:
+                    cross = _materialize_machine_files(
+                        self._cross_files, 'cross', self._source_dir,
+                        working_directory=self._environment.working_directory)
+                    native = _materialize_machine_files(
+                        self._native_files, 'native', self._source_dir,
+                        working_directory=self._environment.working_directory)
+                    selected = from_machine_files(
+                        cross, native, source_dir=self._source_dir,
+                        runner=self._runner, environment=self._environment)
+                    if self._fortran_args:
+                        selected = replace(selected, compile_args=(
+                            *selected.compile_args, *self._fortran_args))
+                    self._resolved = selected
+                except CompilerExecutionError as error:
+                    self._failure = error
+                    raise
+                except Exception as error:
+                    self._failure = CompilerExecutionError(
+                        'Cannot resolve configured Meson compiler context: '
+                        + str(error)[:1024])
+                    raise self._failure from error
+            return self._resolved
+
+    def __getattr__(self, name):
+        if name not in CompilerContext.__dataclass_fields__:
+            raise AttributeError(name)
+        return getattr(self.resolve(), name)
+
+    def __bool__(self):
+        return bool(self.resolve())
+
+    def __hash__(self):
+        return hash(self.resolve())
+
+    def __eq__(self, other):
+        if isinstance(other, _DeferredCompilerContext):
+            other = other.resolve()
+        if not isinstance(other, CompilerContext):
+            return NotImplemented
+        return self.resolve() == other
+
+    def require_execution(self):
+        self.resolve().require_execution()
+
 def from_environment(compiler=None):
     compiler = os.environ.get('FC', '') if compiler is None else compiler
     directory = str(Path.cwd())
@@ -95,27 +161,36 @@ def current(compiler=None):
 
 
 def coerce(compiler):
+    if isinstance(compiler, _DeferredCompilerContext):
+        return compiler.resolve()
     if isinstance(compiler, CompilerContext):
         return compiler
     if isinstance(compiler, str):
         return from_environment(compiler)
     context = current()
+    if isinstance(context, _DeferredCompilerContext):
+        context = context.resolve()
     return replace(context, command=tuple(compiler), selected=bool(compiler))
 
 
-def _machine_paths(filenames, kind):
+def _machine_paths(filenames, kind, working_directory=None):
     """Locate machine files in the caller directory or Meson's data paths."""
+    directory = Path(working_directory or Path.cwd())
     result = []
     for filename in filenames:
         expanded = os.path.expanduser(os.path.expandvars(os.fspath(filename)))
-        candidates = [Path(expanded)]
+        candidate = Path(expanded)
+        candidates = [candidate if candidate.is_absolute()
+                      else directory / candidate]
         if sys.platform != 'win32':
             data_home = os.environ.get(
                 'XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
             data_dirs = os.environ.get(
                 'XDG_DATA_DIRS', '/usr/local/share:/usr/share').split(':')
-            candidates.extend(Path(directory) / 'meson' / kind / expanded
-                              for directory in [data_home, *data_dirs])
+            for data_dir in [data_home, *data_dirs]:
+                candidate = Path(data_dir) / 'meson' / kind / expanded
+                candidates.append(candidate if candidate.is_absolute()
+                                  else directory / candidate)
         for candidate in candidates:
             if candidate.is_file():
                 result.append(str(candidate.absolute()))
@@ -123,7 +198,7 @@ def _machine_paths(filenames, kind):
         else:
             # Meson also accepts file descriptors and named pipes directly.
             # Their contents need one shared copy for generation and setup.
-            path = Path(expanded)
+            path = candidates[0]
             if path.exists() and not path.is_dir():
                 result.append(str(path.absolute()))
             else:
@@ -132,12 +207,16 @@ def _machine_paths(filenames, kind):
     return result
 
 
-def _materialize_machine_files(filenames, kind, source_dir):
-    paths = _machine_paths(filenames, kind)
+def _materialize_machine_files(filenames, kind, source_dir,
+                               working_directory=None):
+    base = Path(working_directory or Path.cwd())
+    paths = _machine_paths(filenames, kind, working_directory=base)
     for index, filename in enumerate(paths):
         if Path(filename).is_file():
             continue
-        directory = Path(source_dir or Path.cwd())
+        directory = Path(source_dir or base)
+        if not directory.is_absolute():
+            directory = base / directory
         directory.mkdir(parents=True, exist_ok=True)
         with open(filename, 'rb') as source:
             with tempfile.NamedTemporaryFile(
@@ -150,15 +229,20 @@ def _materialize_machine_files(filenames, kind, source_dir):
         filenames[:] = paths
     return paths
 
-def from_machine_files(cross_files=(), native_files=(), source_dir=None, runner=None):
+def from_machine_files(cross_files=(), native_files=(), source_dir=None,
+                       runner=None, environment=None):
     from mesonbuild.envconfig import MachineInfo, machine_info_can_run
     from mesonbuild.machinefile import parse_machine_files
 
+    context = from_environment() if environment is None else environment
     paths = cross_files or native_files
-    source_dir = str(Path(source_dir or Path.cwd()).resolve())
-    paths = _machine_paths(paths, 'cross' if cross_files else 'native')
+    source_path = Path(source_dir or context.working_directory)
+    if not source_path.is_absolute():
+        source_path = Path(context.working_directory) / source_path
+    source_dir = str(source_path.resolve())
+    paths = _machine_paths(paths, 'cross' if cross_files else 'native',
+                           working_directory=context.working_directory)
     data = parse_machine_files(paths, source_dir)
-    context = from_environment()
     binaries = data.get('binaries', {})
     properties = data.get('properties', {})
     options = data.get('built-in options', {})
@@ -195,19 +279,17 @@ def from_machine_files(cross_files=(), native_files=(), source_dir=None, runner=
 def generation_context(cross_files=(), native_files=(), source_dir=None,
                        runner=None, fortran_args=()):
     if cross_files or native_files:
-        cross_files = _materialize_machine_files(cross_files, 'cross', source_dir)
-        native_files = _materialize_machine_files(native_files, 'native', source_dir)
-        context = from_machine_files(
-            cross_files, native_files, source_dir=source_dir, runner=runner)
+        context = _DeferredCompilerContext(
+            cross_files, native_files, source_dir, runner, fortran_args)
     else:
         context = from_environment()
         if runner is not None:
             context = replace(
                 context, runner=_relative_program(
                     _binary(runner), context.working_directory))
-    if fortran_args:
-        context = replace(
-            context, compile_args=(*context.compile_args, *fortran_args))
+        if fortran_args:
+            context = replace(
+                context, compile_args=(*context.compile_args, *fortran_args))
     token = _active_context.set(context)
     try:
         yield context
