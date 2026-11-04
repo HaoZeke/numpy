@@ -1566,6 +1566,7 @@ f2py_dt_handles_from_pyobj(PyObject *obj, PyTypeObject *type, int want_tag,
                            const char *errmess)
 {
     PyArrayObject *items, *handles;
+    PyObject *owners;
     PyObject **item;
     void **ptr;
     npy_intp i, n;
@@ -1583,6 +1584,12 @@ f2py_dt_handles_from_pyobj(PyObject *obj, PyTypeObject *type, int want_tag,
         return NULL;
     }
     for (d = 0; d < rank; d++) {
+        if ((npy_intp)(int)PyArray_DIM(items, d) != PyArray_DIM(items, d)) {
+            Py_DECREF(items);
+            PyErr_SetString(PyExc_OverflowError,
+                            "derived array extent exceeds native index range");
+            return NULL;
+        }
         if (dims[d] >= 0 && dims[d] != PyArray_DIM(items, d)) {
             PyErr_Format(PyExc_ValueError,
                          "%s: expected %" NPY_INTP_FMT " items in dimension %d,"
@@ -1600,17 +1607,37 @@ f2py_dt_handles_from_pyobj(PyObject *obj, PyTypeObject *type, int want_tag,
         return NULL;
     }
     n = PyArray_SIZE(items);
+    if (n == NPY_MAX_INTP) {
+        Py_DECREF(items);
+        Py_DECREF(handles);
+        PyErr_SetString(PyExc_OverflowError, "Too many derived type owners");
+        return NULL;
+    }
+    owners = PyTuple_New(n + 1);
+    if (owners == NULL) {
+        Py_DECREF(items);
+        Py_DECREF(handles);
+        return NULL;
+    }
+    PyTuple_SET_ITEM(owners, 0, (PyObject *)items);
     item = (PyObject **)PyArray_DATA(items);
     ptr = (void **)PyArray_DATA(handles);
     for (i = 0; i < n; i++) {
         if (!f2py_dt_from_pyobj(ptr + i, &tag, item[i], type, want_tag,
                                 capname, errmess)) {
-            Py_DECREF(items);
+            Py_DECREF(owners);
             Py_DECREF(handles);
             return NULL;
         }
+        PyObject *capsule = ((f2py_dt_object *)item[i])->capsule;
+        Py_INCREF(capsule);
+        PyTuple_SET_ITEM(owners, i + 1, capsule);
     }
-    Py_DECREF(items);
+    /* Keep instances and their allocation alive through callbacks. */
+    if (PyArray_SetBaseObject(handles, owners) < 0) {
+        Py_DECREF(handles);
+        return NULL;
+    }
     return handles;
 }
 """

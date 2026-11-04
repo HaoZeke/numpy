@@ -11,6 +11,13 @@ For non-bind(c) types (opaque pointer path): auto-generated Fortran wrappers
 with bind(c) provide constructor/destructor/getters/setters operating on
 c_ptr. Python classes call these through PyCapsule.
 
+Defined scalar assignment is exposed as ``obj.__fortran_assign__(source)``.
+The method mutates the native destination and returns ``obj``.  The
+``assign_from`` alias is available when no type-bound procedure uses that name.
+Python variable binding does not call Fortran assignment.  NumPy scalar kinds
+select matching intrinsic overloads; Python scalars use default Fortran kinds
+when available and otherwise the supported kind in the interface.
+
 Routines take instances as handles of their Fortran objects, see
 _dt_routines.prepare_routine.  A ``class(T)`` or ``class(*)`` dummy keeps
 the dynamic type of its argument: the instance passes its type tag, and the
@@ -99,6 +106,9 @@ from ._dt_helpers import (  # noqa: F401
     _resolve_type_for_kind,
     _topo_visit,
 )
+from ._dt_imports import _imported_python_exports, _prepare_imported_types
+from ._dt_namespace import _c_module, _prepare_type_namespaces, _restore_python_exports
+from ._dt_operators import _gen_assignment_method_entries
 from ._dt_routines import (  # noqa: F401
     _find_interface_block,
     _gen_defined_io_fortran_wrapper,
@@ -127,9 +137,19 @@ def describe_types(pymod):
     objects; _dt_routines.prepare_routine reads these descriptions.
     """
     from .f90mod_rules import findf90modules
+    modules = list(findf90modules(pymod))
+    _prepare_type_namespaces(modules)
+    modules = _prepare_imported_types(modules)
+    descriptions = [_describe_types(module) for module in modules]
+    counts = {}
+    for entries in descriptions:
+        for name in entries:
+            counts[name] = counts.get(name, 0) + 1
     types = {}
-    for m in findf90modules(pymod):
-        types.update(_describe_types(m))
+    for entries in descriptions:
+        for name, info in entries.items():
+            key = (info['module'].lower(), name) if counts[name] > 1 else name
+            types[key] = info
     return types
 
 
@@ -168,7 +188,13 @@ def buildhooks(pymod):
 
     # Find modules in the pymod
     from .f90mod_rules import findf90modules
-    for m in findf90modules(pymod):
+    modules = list(findf90modules(pymod))
+    _prepare_type_namespaces(modules)
+    modules = _prepare_imported_types(modules)
+    for m in modules:
+        native_module = m
+        m = _c_module(m)
+        init_start = len(ret['initf90modhooks'])
         modulename = m['name']
 
         # Collect module-level routines (for TBP and routine wrapping)
@@ -189,11 +215,11 @@ def buildhooks(pymod):
             # Scan for type-bound procedures
             binding_attrs = {}
             bound_procs = _scan_type_bound_procedures(
-                source_file, typename, binding_attrs)
+                source_file, tb.get('f2py_native_name', typename), binding_attrs)
 
             # Scan for procedure pointer components (F2018 7.5.4.4)
             proc_ptrs = _scan_proc_pointer_components(
-                source_file, typename)
+                source_file, tb.get('f2py_native_name', typename))
 
             # Merge inherited TBPs from parent (F2018 7.5.7)
             parent_name = _get_extends_parent(tb)
@@ -266,12 +292,17 @@ def buildhooks(pymod):
                 f'{{\n{entries}    {{NULL, 0}}\n}};\n')
             ret.setdefault('need', []).append('f2py_dt_any')
 
+        ret['initf90modhooks'][init_start:] = [
+            _restore_python_exports(code, native_module)
+            for code in ret['initf90modhooks'][init_start:]]
+        ret['initf90modhooks'].extend(_imported_python_exports(native_module))
+
     # Prepend the Array API / DLPack helper function (used by all
     # array setters in both bind(c) and opaque code paths).
     if ret['f90modhooks']:
         ret['f90modhooks'][0] = (
             _gen_array_from_any_helper() + ret['f90modhooks'][0])
-        ret.setdefault('need', []).append('f2py_dt_object')
+        ret.setdefault('need', []).extend(['f2py_dt_object', 'string.h'])
 
     # Complex members use npy_cfloat/npy_cdouble (MSVC-compatible) with
     # npy_creal/npy_cpack helpers from npy_math.h. The type definitions
@@ -309,11 +340,13 @@ def _generate_bindc_hooks(ret, typename, typeblock, modulename,
     code_parts.append(_gen_tp_new(typename, type_tag=type_tag))
     code_parts.append(_gen_tp_init(typename, members))
     code_parts.append(_gen_tp_dealloc(typename))
-    code_parts.append(_gen_getset(typename, members))
+    code_parts.append(_gen_getset(typename, members, type_map=type_map))
     code_parts.append(_gen_tp_repr(typename, members))
 
-    # Type-bound procedures
-    has_methods = False
+    # Type-bound procedures and defined assignment
+    ops = _scan_operator_interfaces(module_block, typename, type_map)
+    method_funcs = []
+    method_entries = []
     if bound_procs and routines and type_map:
         method_funcs, method_entries = _gen_type_methods(
             typename, bound_procs, routines, type_map, modulename,
@@ -321,21 +354,25 @@ def _generate_bindc_hooks(ret, typename, typeblock, modulename,
         if method_funcs:
             ret.setdefault('need', []).extend(
                 ['f2py_dt_call_bound', 'f2py_dt_args_match'])
-        if method_funcs:
-            code_parts.extend(method_funcs)
-            methods_table = (
-                f'static PyMethodDef Py{typename}_methods[] = {{\n'
-                + '\n'.join(method_entries) + '\n'
-                + '    {NULL}  /* sentinel */\n'
-                + '};\n')
-            code_parts.append(methods_table)
-            has_methods = True
+    if '=' in ops:
+        declaration, entries = _gen_assignment_method_entries(typename, method_entries)
+        method_funcs.append(declaration)
+        method_entries.extend(entries)
+    has_methods = bool(method_entries)
+    code_parts.extend(method_funcs)
+    if has_methods:
+        methods_table = (
+            f'static PyMethodDef Py{typename}_methods[] = {{\n'
+            + ''.join(f"{entry.rstrip(',')},\n" for entry in method_entries)
+            + '    {NULL}  /* sentinel */\n'
+            + '};\n')
+        code_parts.append(methods_table)
 
     # Operator overloading
     has_number = False
     has_richcompare = False
-    ops = _scan_operator_interfaces(module_block, typename, type_map)
     if ops:
+        ret.setdefault('need', []).append('npy_math.h')
         op_code, has_number, has_richcompare = _gen_operator_c_code(
             typename, ops, type_map)
         code_parts.extend(op_code)
@@ -532,7 +569,7 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
         code_parts.append(
             _gen_opaque_getset(typename, all_members,
                                specializations=specializations,
-                               kind_info=kind_info))
+                               kind_info=kind_info, type_map=type_map))
         code_parts.append(
             _gen_opaque_tp_repr(typename, all_members,
                                 specializations=specializations,
@@ -549,7 +586,8 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
                                               len_info=len_info))
         code_parts.append(_gen_tp_dealloc(typename))
         code_parts.append(_gen_opaque_getset(typename, all_members,
-                                              len_info=len_info))
+                                              len_info=len_info,
+                                              type_map=type_map))
         code_parts.append(_gen_opaque_tp_repr(typename, all_members,
                                                len_info=len_info))
 
@@ -588,6 +626,13 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
                 f'METH_VARARGS | METH_CLASS, '
                 f'"Create {typename} from formatted string"}}')
 
+    ops = _scan_operator_interfaces(module_block, typename, type_map)
+    if '=' in ops:
+        declaration, entries = _gen_assignment_method_entries(
+            typename, all_method_entries)
+        all_method_funcs.append(declaration)
+        all_method_entries.extend(entries)
+
     if all_method_funcs:
         code_parts.extend(all_method_funcs)
         methods_table = (
@@ -602,8 +647,8 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
     # Operator overloading
     has_number = False
     has_richcompare = False
-    ops = _scan_operator_interfaces(module_block, typename, type_map)
     if ops:
+        ret.setdefault('need', []).append('npy_math.h')
         op_code, has_number, has_richcompare = _gen_operator_c_code(
             typename, ops, type_map)
         code_parts.extend(op_code)

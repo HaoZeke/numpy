@@ -726,7 +726,7 @@ def is_fixed_array(var):
         return False
     for dim in var.get('dimension', []):
         dim_str = str(dim).strip()
-        if not dim_str.isdigit() or int(dim_str) <= 0:
+        if not dim_str.isdigit() or int(dim_str) < 0:
             return False
     return True
 

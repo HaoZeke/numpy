@@ -8,12 +8,11 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 
+from ._dt_array_components import record_array_c, record_array_declarations
 from ._dt_helpers import (
     _C_TO_NPY_ENUM,
     _C_TO_PYFORMAT,
     _C_TO_PYOBJ,
-    _FORTRAN_ARITH_OPS,
-    _FORTRAN_CMP_OPS,
     _PYOBJ_TO_C,
     _coarray_as_local,
     _fortran_sym,
@@ -22,7 +21,6 @@ from ._dt_helpers import (
     _get_c_return_type,
     _get_char_len,
     _get_member_ctype,
-    _get_member_isoc_type,
     _get_pointer_ndim,
     _is_allocatable_member,
     _is_array_member,
@@ -35,9 +33,12 @@ from ._dt_helpers import (
     _is_private_member,
     _is_type_array_member,
     _is_type_member,
-    _routine_args,
 )
-from .auxfuncs import hasbody, isfunction, isroutine
+from ._dt_operators import (
+    _gen_operator_c_code as _gen_operator_c_code,
+    _gen_operator_fortran_wrappers as _gen_operator_fortran_wrappers,
+    _scan_operator_interfaces as _scan_operator_interfaces,
+)
 
 
 def _gen_array_from_any_helper():
@@ -82,6 +83,56 @@ f2py_dt_array_from_any(PyObject *value, int typenum, int requirements)
     /* Fallback: lists, __array__ protocol, etc. */
     return PyArray_FROM_OTF(value, typenum, requirements);
 }
+
+static int
+f2py_dt_shape_product(int rank, const npy_intp *dims, npy_intp *total)
+{
+    *total = 1;
+    for (int d = 0; d < rank; d++) {
+        npy_intp extent = dims[d];
+        if (extent < 0 || (extent != 0 && *total > NPY_MAX_INTP / extent)) {
+            PyErr_SetString(PyExc_OverflowError, "derived array shape is out of range");
+            return 0;
+        }
+        *total *= extent;
+    }
+    return 1;
+}
+
+static int
+f2py_dt_checked_shape(PyArrayObject *arr, int rank)
+{
+    npy_intp total;
+    if (PyArray_NDIM(arr) != rank) {
+        PyErr_Format(PyExc_ValueError,
+                     "derived array requires a %dD array, got %dD",
+                     rank, PyArray_NDIM(arr));
+        return 0;
+    }
+    if (!f2py_dt_shape_product(rank, PyArray_DIMS(arr), &total)) return 0;
+    for (int d = 0; d < rank; d++) {
+        npy_intp extent = PyArray_DIM(arr, d);
+        if ((npy_intp)(int)extent != extent) {
+            PyErr_SetString(PyExc_OverflowError, "derived array extent exceeds native index range");
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The capsule pins Fortran storage while result allocation can collect. */
+static PyObject *
+f2py_dt_copy_array(PyObject *owner, int rank, npy_intp *dims, int typenum,
+                    void *data, size_t bytes)
+{
+    Py_INCREF(owner);
+    PyObject *arr = PyArray_EMPTY(rank, dims, typenum, 1);
+    if (arr != NULL && bytes > 0) {
+        memcpy(PyArray_DATA((PyArrayObject *)arr), data, bytes);
+    }
+    Py_DECREF(owner);
+    return arr;
+}
 """
 
 
@@ -92,7 +143,7 @@ def _gen_bindc_struct(typename, members):
         if _is_type_array_member(mvar):
             inner = mvar.get('typename', '').lower()
             dims = _get_array_dims(mvar)
-            dim_str = ''.join(f'[{d}]' for d in dims)
+            dim_str = ''.join(f'[{d}]' for d in reversed(dims))
             lines.append(f'    f2py_{inner}_t {mname}{dim_str};')
         elif _is_type_member(mvar):
             inner = mvar.get('typename', '').lower()
@@ -101,7 +152,7 @@ def _gen_bindc_struct(typename, members):
             ctype = _get_member_ctype(mvar)
             dims = _get_array_dims(mvar)
             if dims:
-                dim_str = ''.join(f'[{d}]' for d in dims)
+                dim_str = ''.join(f'[{d}]' for d in reversed(dims))
                 lines.append(f'    {ctype} {mname}{dim_str};')
             else:
                 lines.append(f'    {ctype} {mname};')
@@ -159,6 +210,33 @@ Py{typename}_tp_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         self->type_tag = {type_tag};  /* F2018 7.3.2.3: polymorphic dispatch tag */
     }}
     return (PyObject *)self;
+}}
+
+static PyTypeObject Py{typename}_Type;
+
+static PyObject *
+f2py_op_{typename}_owner(PyObject *operand)
+{{
+    Py{typename}Object *value = (Py{typename}Object *)operand;
+    if (value->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError, "operand not initialized");
+        return NULL;
+    }}
+    return Py_NewRef(value->capsule);
+}}
+
+static PyObject *
+f2py_op_{typename}_adopt(void *pointer, PyCapsule_Destructor destroy)
+{{
+    PyObject *result = Py{typename}_tp_new(&Py{typename}_Type, NULL, NULL);
+    if (result == NULL) return NULL;
+    ((Py{typename}Object *)result)->capsule = PyCapsule_New(
+        pointer, "f2py.{typename}", destroy);
+    if (((Py{typename}Object *)result)->capsule == NULL) {{
+        Py_DECREF(result);
+        return NULL;
+    }}
+    return result;
 }}
 """
 
@@ -272,7 +350,7 @@ Py{typename}_tp_dealloc(PyObject *selfobj)
 """
 
 
-def _gen_getset(typename, members):
+def _gen_getset(typename, members, type_map=None):
     """Generate tp_getset array with property getters/setters."""
     capsule_name = f'f2py.{typename}'
     funcs = []
@@ -284,109 +362,10 @@ def _gen_getset(typename, members):
         if _is_private_member(mvar):
             continue  # F2018 7.5.4.8: private components not exposed
         if _is_type_array_member(mvar):
-            # Array of derived types -- getter returns list, setter
-            # accepts list
-            inner = mvar.get('typename', '').lower()
-            inner_capsule = f'f2py.{inner}'
-            dims = _get_array_dims(mvar)
-            total = 1
-            for d in dims:
-                total *= d
-
-            getter_name = f'Py{typename}_get_{mname}'
-            funcs.append(f"""\
-static PyObject *
-{getter_name}(PyObject *selfobj, void *closure)
-{{
-    Py{typename}Object *self = (Py{typename}Object *)selfobj;
-    if (self->capsule == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError,
-                        "{typename} object not initialized");
-        return NULL;
-    }}
-    f2py_{typename}_t *data = (f2py_{typename}_t *)PyCapsule_GetPointer(
-        self->capsule, "{capsule_name}");
-    if (data == NULL) return NULL;
-    PyObject *list = PyList_New({total});
-    if (list == NULL) return NULL;
-    for (Py_ssize_t i = 0; i < {total}; i++) {{
-        PyObject *obj = Py{inner}_tp_new(&Py{inner}_Type, NULL, NULL);
-        if (obj == NULL) {{
-            Py_DECREF(list);
-            return NULL;
-        }}
-        f2py_{inner}_t *copy = (f2py_{inner}_t *)PyMem_Malloc(
-            sizeof(f2py_{inner}_t));
-        if (copy == NULL) {{
-            Py_DECREF(obj);
-            Py_DECREF(list);
-            return PyErr_NoMemory();
-        }}
-        memcpy(copy, &data->{mname}[i], sizeof(f2py_{inner}_t));
-        ((Py{inner}Object *)obj)->capsule = PyCapsule_New(
-            copy, "{inner_capsule}", f2py_{inner}_capsule_destructor);
-        if (((Py{inner}Object *)obj)->capsule == NULL) {{
-            PyMem_Free(copy);
-            Py_DECREF(obj);
-            Py_DECREF(list);
-            return NULL;
-        }}
-        PyList_SET_ITEM(list, i, obj);
-    }}
-    return list;
-}}
-""")
-
-            setter_name = f'Py{typename}_set_{mname}'
-            funcs.append(f"""\
-static int
-{setter_name}(PyObject *selfobj, PyObject *value, void *closure)
-{{
-    Py{typename}Object *self = (Py{typename}Object *)selfobj;
-    if (value == NULL) {{
-        PyErr_SetString(PyExc_TypeError,
-                        "Cannot delete {mname} attribute");
-        return -1;
-    }}
-    if (self->capsule == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError,
-                        "{typename} object not initialized");
-        return -1;
-    }}
-    if (!PyList_Check(value) || PyList_Size(value) != {total}) {{
-        PyErr_SetString(PyExc_ValueError,
-                        "{mname} must be a list of {total} {inner} objects");
-        return -1;
-    }}
-    f2py_{typename}_t *data = (f2py_{typename}_t *)PyCapsule_GetPointer(
-        self->capsule, "{capsule_name}");
-    if (data == NULL) return -1;
-    for (Py_ssize_t i = 0; i < {total}; i++) {{
-        PyObject *item = PyList_GET_ITEM(value, i);
-        if (!Py_IS_TYPE(item, &Py{inner}_Type)) {{
-            PyErr_Format(PyExc_TypeError,
-                         "{mname}[%zd] must be a {inner} instance", i);
-            return -1;
-        }}
-        Py{inner}Object *inner_obj = (Py{inner}Object *)item;
-        if (inner_obj->capsule == NULL) {{
-            PyErr_Format(PyExc_RuntimeError,
-                         "{mname}[%zd] not initialized", i);
-            return -1;
-        }}
-        f2py_{inner}_t *inner_data = (f2py_{inner}_t *)
-            PyCapsule_GetPointer(inner_obj->capsule, "{inner_capsule}");
-        if (inner_data == NULL) return -1;
-        memcpy(&data->{mname}[i], inner_data, sizeof(f2py_{inner}_t));
-    }}
-    return 0;
-}}
-""")
-
-            getset_entries.append(
-                f'    {{"{mname}", {getter_name}, {setter_name}, '
-                f'"{mname} member", NULL}},'
-            )
+            code, entry = record_array_c(
+                typename, mname, mvar, type_map, bindc=True)
+            funcs.append(code)
+            getset_entries.append(entry)
             continue
 
         if _is_type_member(mvar):
@@ -547,6 +526,14 @@ static int
             for d in dims:
                 total *= d
             dims_init = ', '.join(str(d) for d in dims)
+            if ndim == 1:
+                create_array = (
+                    f'PyArray_SimpleNewFromData({ndim}, dims, {npy_enum}, '
+                    f'(void *)data->{mname})')
+            else:
+                create_array = (
+                    f'PyArray_New(&PyArray_Type, {ndim}, dims, {npy_enum}, '
+                    f'NULL, (void *)data->{mname}, 0, NPY_ARRAY_FARRAY, NULL)')
 
             getter_name = f'Py{typename}_get_{mname}'
             funcs.append(f"""\
@@ -563,16 +550,17 @@ static PyObject *
         self->capsule, "{capsule_name}");
     if (data == NULL) return NULL;
     npy_intp dims[{ndim}] = {{{dims_init}}};
-    PyObject *arr = PyArray_SimpleNewFromData(
-        {ndim}, dims, {npy_enum}, (void *)data->{mname});
-    if (arr == NULL) return NULL;
-    /* Set self as base so struct stays alive while array is in use */
-    if (PyArray_SetBaseObject((PyArrayObject *)arr,
-                              (PyObject *)self) < 0) {{
+    /* The capsule owns this allocation even if self is reinitialized. */
+    PyObject *owner = Py_NewRef(self->capsule);
+    PyObject *arr = {create_array};
+    if (arr == NULL) {{
+        Py_DECREF(owner);
+        return NULL;
+    }}
+    if (PyArray_SetBaseObject((PyArrayObject *)arr, owner) < 0) {{
         Py_DECREF(arr);
         return NULL;
     }}
-    Py_INCREF(self);
     return arr;
 }}
 """)
@@ -597,16 +585,36 @@ static int
         self->capsule, "{capsule_name}");
     if (data == NULL) return -1;
     PyObject *arr = f2py_dt_array_from_any(value, {npy_enum},
-                                            NPY_ARRAY_IN_ARRAY);
+                                            NPY_ARRAY_FARRAY_RO);
     if (arr == NULL) return -1;
-    if (PyArray_SIZE((PyArrayObject *)arr) != {total}) {{
-        PyErr_SetString(PyExc_ValueError,
-                        "{mname} must have {total} elements");
+    if (!f2py_dt_checked_shape((PyArrayObject *)arr, {ndim})) {{
         Py_DECREF(arr);
         return -1;
     }}
-    memcpy(data->{mname}, PyArray_DATA((PyArrayObject *)arr),
-           {total} * sizeof({ctype}));
+    data = (f2py_{typename}_t *)PyCapsule_GetPointer(
+        self->capsule, "{capsule_name}");
+    if (data == NULL) {{
+        Py_DECREF(arr);
+        return -1;
+    }}
+    if (PyArray_NDIM((PyArrayObject *)arr) != {ndim}) {{
+        PyErr_SetString(PyExc_ValueError, "{mname} has an incorrect rank");
+        Py_DECREF(arr);
+        return -1;
+    }}
+    const npy_intp expected_dims[{ndim}] = {{{dims_init}}};
+    for (int d = 0; d < {ndim}; d++) {{
+        if (PyArray_DIM((PyArrayObject *)arr, d) != expected_dims[d]) {{
+            PyErr_SetString(PyExc_ValueError,
+                            "{mname} has an incorrect shape");
+            Py_DECREF(arr);
+            return -1;
+        }}
+    }}
+    if ((void *)data->{mname} != PyArray_DATA((PyArrayObject *)arr)) {{
+        memcpy(data->{mname}, PyArray_DATA((PyArrayObject *)arr),
+               {total} * sizeof({ctype}));
+    }}
     Py_DECREF(arr);
     return 0;
 }}
@@ -786,334 +794,6 @@ Py{typename}_tp_repr(PyObject *selfobj)
 """
 
 
-def _scan_operator_interfaces(module_block, typename, type_map):
-    """Find operator interfaces that involve a given derived type.
-
-    Scans module body for interface blocks with names like
-    'operator(+)' or 'operator(==)', and finds implementing procedures
-    whose arguments involve the specified typename.
-
-    Returns dict mapping operator symbol to list of
-    (proc_name, proc_block, result_kind) tuples, where result_kind
-    is 'type' (returns derived type) or 'logical' (returns logical).
-    """
-    if not hasbody(module_block):
-        return {}
-
-    # Collect all routines in module for lookup
-    routines = {}
-    for b in module_block['body']:
-        if isroutine(b):
-            routines[b['name'].lower()] = b
-
-    ops = {}
-    for b in module_block['body']:
-        if b.get('block') != 'interface':
-            continue
-        iname = b.get('name', '')
-        # Match 'operator(+)' or 'operator(==)' etc.
-        if not iname.startswith(('operator(', 'assignment(')):
-            continue
-        op_sym = iname[iname.index('(') + 1:iname.rindex(')')]
-
-        # Check if this is an arithmetic or comparison op we support
-        if (op_sym not in _FORTRAN_ARITH_OPS
-                and op_sym not in _FORTRAN_CMP_OPS):
-            continue
-
-        procs = b.get('implementedby', [])
-        for pname in procs:
-            pname_lower = pname.lower()
-            if pname_lower not in routines:
-                continue
-            proc = routines[pname_lower]
-
-            # Check if this procedure involves our type
-            args = _routine_args(proc)
-            involves_type = False
-            for argname in args:
-                var = proc['vars'].get(argname, {})
-                if (var.get('typespec') == 'type'
-                        and var.get('typename', '').lower()
-                        == typename.lower()):
-                    involves_type = True
-                    break
-            if not involves_type:
-                continue
-
-            # Determine result kind
-            if isfunction(proc):
-                result_var = proc['vars'].get(
-                    proc.get('result', proc['name']), {})
-                if result_var.get('typespec') == 'type':
-                    result_kind = 'type'
-                elif result_var.get('typespec') == 'logical':
-                    result_kind = 'logical'
-                else:
-                    continue
-            else:
-                continue  # subroutines can't be operators
-
-            if op_sym not in ops:
-                ops[op_sym] = []
-            ops[op_sym].append((pname_lower, proc, result_kind))
-
-    return ops
-
-
-def _gen_operator_fortran_wrappers(typename, ops, type_map):
-    """Generate Fortran bind(c) wrapper functions for operator impls.
-
-    Returns list of Fortran source lines.
-    """
-    lines = []
-    for proc_list in ops.values():
-        for pname, proc, result_kind in proc_list:
-            args = _routine_args(proc)
-            wrapper_name = f'f2py_op_{typename}_{pname}'
-
-            if result_kind == 'type':
-                # function(a, b) result(c) where c is derived type
-                result_var = proc['vars'].get(
-                    proc.get('result', proc['name']), {})
-                result_typename = result_var.get(
-                    'typename', '').lower()
-
-                lines.append(
-                    f'  function {wrapper_name}('
-                    + ', '.join(f'{a}_ptr' for a in args)
-                    + ') result(cptr) bind(c)')
-                lines.append('    type(c_ptr) :: cptr')
-                for argname in args:
-                    var = proc['vars'].get(argname, {})
-                    if var.get('typespec') == 'type':
-                        lines.append(
-                            f'    type(c_ptr), value :: {argname}_ptr')
-                    else:
-                        isoc = _get_member_isoc_type(var)
-                        if isoc:
-                            lines.append(
-                                f'    {isoc}, value :: {argname}_ptr')
-                # Local variables
-                for argname in args:
-                    var = proc['vars'].get(argname, {})
-                    if var.get('typespec') == 'type':
-                        tname = var.get('typename', '').lower()
-                        lines.append(
-                            f'    type({tname}), pointer :: {argname}')
-                lines.append(
-                    f'    type({result_typename}), pointer :: res')
-                # c_f_pointer for type args
-                for argname in args:
-                    var = proc['vars'].get(argname, {})
-                    if var.get('typespec') == 'type':
-                        lines.append(
-                            f'    call c_f_pointer({argname}_ptr, '
-                            f'{argname})')
-                # Call original function
-                call_args = ', '.join(args)
-                lines.append('    allocate(res)')
-                lines.append(f'    res = {pname}({call_args})')
-                lines.append('    cptr = c_loc(res)')
-                lines.append(f'  end function {wrapper_name}')
-                lines.append('')
-
-            elif result_kind == 'logical':
-                # function(a, b) result(eq) where eq is logical
-                lines.append(
-                    f'  function {wrapper_name}('
-                    + ', '.join(f'{a}_ptr' for a in args)
-                    + ') result(res) bind(c)')
-                lines.append('    integer(c_int) :: res')
-                for argname in args:
-                    var = proc['vars'].get(argname, {})
-                    if var.get('typespec') == 'type':
-                        lines.append(
-                            f'    type(c_ptr), value :: {argname}_ptr')
-                    else:
-                        isoc = _get_member_isoc_type(var)
-                        if isoc:
-                            lines.append(
-                                f'    {isoc}, value :: {argname}_ptr')
-                for argname in args:
-                    var = proc['vars'].get(argname, {})
-                    if var.get('typespec') == 'type':
-                        tname = var.get('typename', '').lower()
-                        lines.append(
-                            f'    type({tname}), pointer :: {argname}')
-                for argname in args:
-                    var = proc['vars'].get(argname, {})
-                    if var.get('typespec') == 'type':
-                        lines.append(
-                            f'    call c_f_pointer({argname}_ptr, '
-                            f'{argname})')
-                call_args = ', '.join(args)
-                lines.append(
-                    f'    if ({pname}({call_args})) then')
-                lines.append('      res = 1')
-                lines.append('    else')
-                lines.append('      res = 0')
-                lines.append('    end if')
-                lines.append(f'  end function {wrapper_name}')
-                lines.append('')
-
-    return lines
-
-
-def _gen_operator_c_code(typename, ops, type_map):
-    """Generate C code for Python operator slots.
-
-    Returns (code_parts, has_number, has_richcompare) where code_parts
-    is a list of C code strings, has_number indicates PyNumberMethods
-    were generated, has_richcompare indicates tp_richcompare was generated.
-    """
-    sym = _fortran_sym(typename)
-    capsule_name = f'f2py.{typename}'
-    # Forward declare the PyTypeObject so operator functions can
-    # reference it (the actual definition comes later)
-    code_parts = [
-        (f'static PyTypeObject Py{typename}_Type;  '
-         '/* forward decl for operators */'),
-    ]
-    nb_slots = {}
-    cmp_ops = {}
-
-    for op_sym, proc_list in ops.items():
-        for pname, proc, result_kind in proc_list:
-            wrapper_sym = f'f2py_op_{sym}_{pname}'
-            args = _routine_args(proc)
-
-            if result_kind == 'type' and op_sym in _FORTRAN_ARITH_OPS:
-                result_var = proc['vars'].get(
-                    proc.get('result', proc['name']), {})
-                result_typename = result_var.get(
-                    'typename', '').lower()
-                result_capsule = f'f2py.{result_typename}'
-
-                # Extern declaration
-                extern_args = []
-                for argname in args:
-                    var = proc['vars'].get(argname, {})
-                    if var.get('typespec') == 'type':
-                        extern_args.append('void *')
-                    else:
-                        ctype = _get_member_ctype(var)
-                        if ctype:
-                            extern_args.append(ctype)
-                code_parts.append(
-                    f'extern void *{wrapper_sym}'
-                    f'({", ".join(extern_args)});')
-
-                # nb_* slot function
-                slot_name = _FORTRAN_ARITH_OPS[op_sym]
-                func_name = f'Py{typename}_{slot_name}'
-
-                code_parts.append(f"""\
-static PyObject *
-{func_name}(PyObject *left, PyObject *right)
-{{
-    if (!Py_IS_TYPE(left, &Py{typename}_Type) ||
-        !Py_IS_TYPE(right, &Py{typename}_Type)) {{
-        Py_RETURN_NOTIMPLEMENTED;
-    }}
-    Py{typename}Object *a = (Py{typename}Object *)left;
-    Py{typename}Object *b = (Py{typename}Object *)right;
-    if (a->capsule == NULL || b->capsule == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError, "operand not initialized");
-        return NULL;
-    }}
-    void *a_ptr = PyCapsule_GetPointer(a->capsule, "{capsule_name}");
-    void *b_ptr = PyCapsule_GetPointer(b->capsule, "{capsule_name}");
-    if (a_ptr == NULL || b_ptr == NULL) return NULL;
-    void *res_ptr = {wrapper_sym}(a_ptr, b_ptr);
-    if (res_ptr == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError, "operator returned NULL");
-        return NULL;
-    }}
-    PyObject *res = Py{result_typename}_tp_new(
-        &Py{result_typename}_Type, NULL, NULL);
-    if (res == NULL) return NULL;
-    ((Py{result_typename}Object *)res)->capsule = PyCapsule_New(
-        res_ptr, "{result_capsule}",
-        f2py_{result_typename}_capsule_destructor);
-    if (((Py{result_typename}Object *)res)->capsule == NULL) {{
-        f2py_destroy_{_fortran_sym(result_typename)}(res_ptr);
-        Py_DECREF(res);
-        return NULL;
-    }}
-    return res;
-}}
-""")
-                nb_slots[slot_name] = func_name
-
-            elif result_kind == 'logical' and op_sym in _FORTRAN_CMP_OPS:
-                # Extern declaration
-                extern_args = []
-                for argname in args:
-                    var = proc['vars'].get(argname, {})
-                    if var.get('typespec') == 'type':
-                        extern_args.append('void *')
-                    else:
-                        ctype = _get_member_ctype(var)
-                        if ctype:
-                            extern_args.append(ctype)
-                code_parts.append(
-                    f'extern int {wrapper_sym}'
-                    f'({", ".join(extern_args)});')
-
-                py_cmp = _FORTRAN_CMP_OPS[op_sym]
-                cmp_ops[py_cmp] = (wrapper_sym, pname)
-
-    # Generate PyNumberMethods if any arithmetic ops
-    has_number = bool(nb_slots)
-    if has_number:
-        lines = [f'static PyNumberMethods Py{typename}_as_number = {{']
-        for slot, func in nb_slots.items():
-            lines.append(f'    .{slot} = {func},')
-        lines.append('};')
-        code_parts.append('\n'.join(lines))
-
-    # Generate tp_richcompare if any comparison ops
-    has_richcompare = bool(cmp_ops)
-    if has_richcompare:
-        cases = []
-        for py_cmp, (wrapper, pname) in cmp_ops.items():
-            cases.append(f"""\
-    case {py_cmp}:
-        result = {wrapper}(a_ptr, b_ptr);
-        if (result) Py_RETURN_TRUE;
-        Py_RETURN_FALSE;""")
-        cases_str = '\n'.join(cases)
-
-        code_parts.append(f"""\
-static PyObject *
-Py{typename}_tp_richcompare(PyObject *left, PyObject *right, int op)
-{{
-    if (!Py_IS_TYPE(left, &Py{typename}_Type) ||
-        !Py_IS_TYPE(right, &Py{typename}_Type)) {{
-        Py_RETURN_NOTIMPLEMENTED;
-    }}
-    Py{typename}Object *a = (Py{typename}Object *)left;
-    Py{typename}Object *b = (Py{typename}Object *)right;
-    if (a->capsule == NULL || b->capsule == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError, "operand not initialized");
-        return NULL;
-    }}
-    void *a_ptr = PyCapsule_GetPointer(a->capsule, "{capsule_name}");
-    void *b_ptr = PyCapsule_GetPointer(b->capsule, "{capsule_name}");
-    if (a_ptr == NULL || b_ptr == NULL) return NULL;
-    int result;
-    switch (op) {{
-{cases_str}
-    default:
-        Py_RETURN_NOTIMPLEMENTED;
-    }}
-}}
-""")
-
-    return code_parts, has_number, has_richcompare
-
-
 def _gen_typeobject(typename, has_methods=False, parent_typename=None,
                     has_number=False, has_richcompare=False,
                     has_tp_str=False):
@@ -1232,12 +912,8 @@ def _gen_opaque_extern_decls(typename, members, specializations=None,
     # Getters and setters -- all take LEN params after void*
     for mname, mvar in members.items():
         if _is_type_array_member(mvar):
-            lines.append(
-                f'extern void *f2py_get_{sym}_{mname}'
-                f'(void *{len_extra_prefix}, int);')
-            lines.append(
-                f'extern void f2py_set_{sym}_{mname}'
-                f'(void *{len_extra_prefix}, int, void *);')
+            lines.extend(record_array_declarations(
+                sym, mname, mvar, len_extra_prefix))
             continue
 
         if _is_type_member(mvar):
@@ -1294,6 +970,9 @@ def _gen_opaque_extern_decls(typename, members, specializations=None,
             lines.append(
                 f'extern void *f2py_get_{sym}_{mname}'
                 f'_data(void *{len_extra_prefix});')
+            lines.append(
+                f'extern void f2py_get_{sym}_{mname}'
+                f'_copy(void *{len_extra_prefix}, void *);')
             continue
 
         if _is_deferred_char_member(mvar):
@@ -1321,6 +1000,9 @@ def _gen_opaque_extern_decls(typename, members, specializations=None,
             lines.append(
                 f'extern void *f2py_get_{sym}_{mname}'
                 f'_data(void *{len_extra_prefix});')
+            lines.append(
+                f'extern void f2py_get_{sym}_{mname}'
+                f'_shape(void *{len_extra_prefix}, int *);')
             set_args = ', '.join(
                 ['void *'] + ['int'] * len(len_param_names)
                 + ['int'] * ndim + ['void *'])
@@ -1357,40 +1039,8 @@ def _gen_opaque_extern_decls(typename, members, specializations=None,
 
 
 def _gen_opaque_extern_decls_one(sym, members):
-    """Generate extern declarations for one specialization."""
-    lines = []
-    args = []
-    for mname, mvar in members.items():
-        if (_is_array_member(mvar) or _is_type_member(mvar)
-                or _is_type_array_member(mvar) or _is_char_member(mvar)
-                or _is_allocatable_member(mvar)
-                or _is_pointer_member(mvar)
-                or _is_deferred_char_member(mvar)):
-            continue
-        ctype = _get_member_ctype(mvar)
-        if ctype and _C_TO_PYFORMAT.get(ctype):
-            args.append(f'{ctype} {mname}')
-    args_str = ', '.join(args) if args else 'void'
-    lines.append(f'extern void *f2py_create_{sym}({args_str});')
-    lines.append(f'extern void f2py_destroy_{sym}(void *);')
-    for mname, mvar in members.items():
-        ctype = _get_member_ctype(mvar)
-        if _is_type_array_member(mvar) or _is_type_member(mvar):
-            continue
-        if _is_char_member(mvar) or _is_allocatable_member(mvar):
-            continue
-        if _is_pointer_member(mvar) or _is_deferred_char_member(mvar):
-            continue
-        dims = _get_array_dims(mvar)
-        if dims:
-            continue
-        if ctype is None or _C_TO_PYFORMAT.get(ctype) is None:
-            continue
-        rtype = _get_c_return_type(ctype)
-        lines.append(f'extern {rtype} f2py_get_{sym}_{mname}(void *);')
-        lines.append(
-            f'extern void f2py_set_{sym}_{mname}(void *, {ctype});')
-    return '\n'.join(lines)
+    """Generate the complete member interface for one specialization."""
+    return _gen_opaque_extern_decls(sym, members)
 
 
 def _gen_opaque_capsule_destructor(typename, specializations=None,
@@ -1772,11 +1422,11 @@ Py{typename}_tp_init(PyObject *selfobj, PyObject *args, PyObject *kwds)
 
 
 def _gen_opaque_getset(typename, members, specializations=None,
-                       kind_info=None, len_info=None):
+                       kind_info=None, len_info=None, type_map=None):
     """Generate getters/setters that call Fortran accessor wrappers."""
     if specializations and kind_info:
         return _gen_opaque_getset_multi(
-            typename, members, specializations, kind_info)
+            typename, members, specializations, kind_info, type_map)
     sym = _fortran_sym(typename)
     capsule_name = f'f2py.{typename}'
     funcs = []
@@ -1815,108 +1465,11 @@ static PyObject *
         if _is_private_member(mvar):
             continue  # F2018 7.5.4.8: private components not exposed
         if _is_type_array_member(mvar):
-            # Array of derived types via opaque path
-            inner = mvar.get('typename', '').lower()
-            inner_sym = _fortran_sym(inner)
-            inner_capsule = f'f2py.{inner}'
-            dims = _get_array_dims(mvar)
-            total = 1
-            for d in dims:
-                total *= d
-
-            getter_name = f'Py{typename}_get_{mname}'
-            funcs.append(f"""\
-static PyObject *
-{getter_name}(PyObject *selfobj, void *closure)
-{{
-    Py{typename}Object *self = (Py{typename}Object *)selfobj;
-    if (self->capsule == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError,
-                        "{typename} object not initialized");
-        return NULL;
-    }}
-    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
-    if (ptr == NULL) return NULL;
-    PyObject *list = PyList_New({total});
-    if (list == NULL) return NULL;
-    for (Py_ssize_t i = 0; i < {total}; i++) {{
-        void *inner_ptr = f2py_get_{sym}_{mname}(ptr, (int)(i + 1));
-        if (inner_ptr == NULL) {{
-            Py_DECREF(list);
-            PyErr_SetString(PyExc_RuntimeError,
-                            "Fortran returned NULL for {mname} element");
-            return NULL;
-        }}
-        PyObject *obj = Py{inner}_tp_new(&Py{inner}_Type, NULL, NULL);
-        if (obj == NULL) {{
-            f2py_destroy_{inner_sym}(inner_ptr);
-            Py_DECREF(list);
-            return NULL;
-        }}
-        ((Py{inner}Object *)obj)->capsule = PyCapsule_New(
-            inner_ptr, "{inner_capsule}",
-            f2py_{inner}_capsule_destructor);
-        if (((Py{inner}Object *)obj)->capsule == NULL) {{
-            f2py_destroy_{inner_sym}(inner_ptr);
-            Py_DECREF(obj);
-            Py_DECREF(list);
-            return NULL;
-        }}
-        PyList_SET_ITEM(list, i, obj);
-    }}
-    return list;
-}}
-""")
-
-            setter_name = f'Py{typename}_set_{mname}'
-            funcs.append(f"""\
-static int
-{setter_name}(PyObject *selfobj, PyObject *value, void *closure)
-{{
-    Py{typename}Object *self = (Py{typename}Object *)selfobj;
-    if (value == NULL) {{
-        PyErr_SetString(PyExc_TypeError,
-                        "Cannot delete {mname} attribute");
-        return -1;
-    }}
-    if (self->capsule == NULL) {{
-        PyErr_SetString(PyExc_RuntimeError,
-                        "{typename} object not initialized");
-        return -1;
-    }}
-    if (!PyList_Check(value) || PyList_Size(value) != {total}) {{
-        PyErr_SetString(PyExc_ValueError,
-                        "{mname} must be a list of {total} {inner} objects");
-        return -1;
-    }}
-    void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
-    if (ptr == NULL) return -1;
-    for (Py_ssize_t i = 0; i < {total}; i++) {{
-        PyObject *item = PyList_GET_ITEM(value, i);
-        if (!Py_IS_TYPE(item, &Py{inner}_Type)) {{
-            PyErr_Format(PyExc_TypeError,
-                         "{mname}[%zd] must be a {inner} instance", i);
-            return -1;
-        }}
-        Py{inner}Object *inner_obj = (Py{inner}Object *)item;
-        if (inner_obj->capsule == NULL) {{
-            PyErr_Format(PyExc_RuntimeError,
-                         "{mname}[%zd] not initialized", i);
-            return -1;
-        }}
-        void *inner_ptr = PyCapsule_GetPointer(
-            inner_obj->capsule, "{inner_capsule}");
-        if (inner_ptr == NULL) return -1;
-        f2py_set_{sym}_{mname}(ptr, (int)(i + 1), inner_ptr);
-    }}
-    return 0;
-}}
-""")
-
-            getset_entries.append(
-                f'    {{"{mname}", {getter_name}, {setter_name}, '
-                f'"{mname} member", NULL}},'
-            )
+            code, entry = record_array_c(
+                typename, mname, mvar, type_map, symbol=sym,
+                len_call=len_call_extra)
+            funcs.append(code)
+            getset_entries.append(entry)
             continue
 
         if _is_type_member(mvar):
@@ -1924,6 +1477,17 @@ static int
             inner = mvar.get('typename', '').lower()
             inner_sym = _fortran_sym(inner)
             inner_capsule = f'f2py.{inner}'
+            from ._dt_helpers import _can_wrap_bindc
+            if _can_wrap_bindc(type_map[inner], type_map):
+                make_owned = f"""\
+    void *owned = PyMem_Malloc(sizeof(f2py_{inner}_t));
+    if (owned == NULL) return PyErr_NoMemory();
+    memcpy(owned, inner_ptr, sizeof(f2py_{inner}_t));
+    inner_ptr = owned;"""
+                release = 'PyMem_Free(inner_ptr);'
+            else:
+                make_owned = ''
+                release = f'f2py_destroy_{inner_sym}(inner_ptr);'
 
             getter_name = f'Py{typename}_get_{mname}'
             funcs.append(f"""\
@@ -1945,13 +1509,17 @@ static PyObject *
                         "Fortran returned NULL for {mname}");
         return NULL;
     }}
+{make_owned}
     PyObject *obj = Py{inner}_tp_new(&Py{inner}_Type, NULL, NULL);
-    if (obj == NULL) return NULL;
+    if (obj == NULL) {{
+        {release}
+        return NULL;
+    }}
     ((Py{inner}Object *)obj)->capsule = PyCapsule_New(
         inner_ptr, "{inner_capsule}",
         f2py_{inner}_capsule_destructor);
     if (((Py{inner}Object *)obj)->capsule == NULL) {{
-        f2py_destroy_{inner_sym}(inner_ptr);
+        {release}
         Py_DECREF(obj);
         return NULL;
     }}
@@ -1991,7 +1559,7 @@ static int
     void *inner_ptr = PyCapsule_GetPointer(
         inner_obj->capsule, "{inner_capsule}");
     if (inner_ptr == NULL) return -1;
-    f2py_set_{sym}_{mname}(ptr, inner_ptr);
+    f2py_set_{sym}_{mname}(ptr{len_call_extra}, inner_ptr);
     return 0;
 }}
 """)
@@ -2019,7 +1587,7 @@ static PyObject *
     if (ptr == NULL) return NULL;
     char buf[{char_len + _C_STRING_NUL}];
     memset(buf, 0, {char_len + _C_STRING_NUL});
-    f2py_get_{sym}_{mname}(ptr, buf, {char_len});
+    f2py_get_{sym}_{mname}(ptr{len_call_extra}, buf, {char_len});
     /* Trim trailing spaces */
     int len = {char_len};
     while (len > 0 && buf[len - 1] == ' ') len--;
@@ -2053,7 +1621,7 @@ static int
     Py_ssize_t slen;
     const char *str = PyUnicode_AsUTF8AndSize(value, &slen);
     if (str == NULL) return -1;
-    f2py_set_{sym}_{mname}(ptr, str, (int)slen);
+    f2py_set_{sym}_{mname}(ptr{len_call_extra}, str, (int)slen);
     return 0;
 }}
 """)
@@ -2085,7 +1653,7 @@ static PyObject *
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
-    {ctype} val = f2py_get_{sym}_{mname}(ptr);
+    {ctype} val = f2py_get_{sym}_{mname}(ptr{len_call_extra});
     return PyComplex_FromDoubles(
         (double){creal_fn}(val),
         (double){cimag_fn}(val));
@@ -2144,34 +1712,21 @@ static PyObject *
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
-    unsigned char is_alloc = f2py_get_{sym}_{mname}_allocated(ptr);
+    unsigned char is_alloc = f2py_get_{sym}_{mname}_allocated(ptr{len_call_extra});
     if (!is_alloc) Py_RETURN_NONE;
     /* Query rank and shape from Fortran (F2018 16.9.182 size intrinsic) */
-    int rank = f2py_get_{sym}_{mname}_ndim(ptr);
+    int rank = f2py_get_{sym}_{mname}_ndim(ptr{len_call_extra});
     int fortran_shape[{ndim}];
-    f2py_get_{sym}_{mname}_shape(ptr, fortran_shape);
+    f2py_get_{sym}_{mname}_shape(ptr{len_call_extra}, fortran_shape);
     npy_intp numpy_dims[{ndim}];
     npy_intp total_elements = 1;
     for (int dim_idx = 0; dim_idx < rank; dim_idx++) {{
         numpy_dims[dim_idx] = (npy_intp)fortran_shape[dim_idx];
-        total_elements *= numpy_dims[dim_idx];
     }}
-    void *data = f2py_get_{sym}_{mname}_data(ptr);
-    /* Allocate NumPy array matching Fortran memory layout.
-       Fortran allocatables are column-major (F2018 8.5.8.1),
-       so multi-dimensional arrays use Fortran order. 1D arrays
-       have identical layout in both C and Fortran order. */
-    PyObject *arr;
-    if (rank > 1) {{
-        arr = PyArray_EMPTY(rank, numpy_dims, {npy_enum},
-                            1 /* fortran_order */);
-    }} else {{
-        arr = PyArray_SimpleNew(rank, numpy_dims, {npy_enum});
-    }}
-    if (arr == NULL) return NULL;
-    memcpy(PyArray_DATA((PyArrayObject *)arr), data,
-           total_elements * sizeof({alloc_ctype}));
-    return arr;
+    if (!f2py_dt_shape_product(rank, numpy_dims, &total_elements)) return NULL;
+    void *data = f2py_get_{sym}_{mname}_data(ptr{len_call_extra});
+    return f2py_dt_copy_array(self->capsule, rank, numpy_dims,
+        {npy_enum}, data, total_elements * sizeof({alloc_ctype}));
 }}
 """)
 
@@ -2201,12 +1756,21 @@ static int
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return -1;
     if (value == Py_None) {{
-        f2py_set_{sym}_{mname}(ptr, {dealloc_args});
+        f2py_set_{sym}_{mname}(ptr{len_call_extra}, {dealloc_args});
         return 0;
     }}
     PyObject *arr = f2py_dt_array_from_any(value, {npy_enum},
-                                            NPY_ARRAY_F_CONTIGUOUS);
+                                            NPY_ARRAY_FARRAY_RO);
     if (arr == NULL) return -1;
+    if (!f2py_dt_checked_shape((PyArrayObject *)arr, {ndim})) {{
+        Py_DECREF(arr);
+        return -1;
+    }}
+    ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) {{
+        Py_DECREF(arr);
+        return -1;
+    }}
     if (PyArray_NDIM((PyArrayObject *)arr) != {ndim}) {{
         PyErr_Format(PyExc_ValueError,
                      "{mname} requires a {ndim}D array, got %dD",
@@ -2214,7 +1778,7 @@ static int
         Py_DECREF(arr);
         return -1;
     }}
-    f2py_set_{sym}_{mname}(ptr, {set_dim_args},
+    f2py_set_{sym}_{mname}(ptr{len_call_extra}, {set_dim_args},
                             PyArray_DATA((PyArrayObject *)arr));
     Py_DECREF(arr);
     return 0;
@@ -2250,31 +1814,25 @@ static PyObject *
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
     /* Check pointer association (F2018 16.9.16 associated()) */
-    unsigned char is_assoc = f2py_get_{sym}_{mname}_associated(ptr);
+    unsigned char is_assoc = f2py_get_{sym}_{mname}_associated(ptr{len_call_extra});
     if (!is_assoc) Py_RETURN_NONE;
     /* Query shape from Fortran (F2018 16.9.182 size()) */
-    int rank = f2py_get_{sym}_{mname}_ndim(ptr);
+    int rank = f2py_get_{sym}_{mname}_ndim(ptr{len_call_extra});
     int fortran_shape[{ndim}];
-    f2py_get_{sym}_{mname}_shape(ptr, fortran_shape);
+    f2py_get_{sym}_{mname}_shape(ptr{len_call_extra}, fortran_shape);
     npy_intp numpy_dims[{ndim}];
     npy_intp total_elements = 1;
     for (int dim_idx = 0; dim_idx < rank; dim_idx++) {{
         numpy_dims[dim_idx] = (npy_intp)fortran_shape[dim_idx];
-        total_elements *= numpy_dims[dim_idx];
     }}
-    void *data = f2py_get_{sym}_{mname}_data(ptr);
-    /* Copy data from Fortran pointer target.
-       Column-major layout for rank > 1 (F2018 8.5.8.1). */
-    PyObject *arr;
-    if (rank > 1) {{
-        arr = PyArray_EMPTY(rank, numpy_dims, {npy_enum},
-                            1 /* fortran_order */);
-    }} else {{
-        arr = PyArray_SimpleNew(rank, numpy_dims, {npy_enum});
+    if (!f2py_dt_shape_product(rank, numpy_dims, &total_elements)) return NULL;
+    PyObject *owner = Py_NewRef(self->capsule);
+    PyObject *arr = PyArray_EMPTY(rank, numpy_dims, {npy_enum}, 1);
+    if (arr != NULL && total_elements > 0) {{
+        f2py_get_{sym}_{mname}_copy(ptr{len_call_extra},
+            PyArray_DATA((PyArrayObject *)arr));
     }}
-    if (arr == NULL) return NULL;
-    memcpy(PyArray_DATA((PyArrayObject *)arr), data,
-           total_elements * sizeof({ptr_ctype}));
+    Py_DECREF(owner);
     return arr;
 }}
 """)
@@ -2315,14 +1873,14 @@ static PyObject *
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
     /* Check allocation status (F2018 16.9.3 allocated()) */
-    unsigned char is_alloc = f2py_get_{sym}_{mname}_allocated(ptr);
+    unsigned char is_alloc = f2py_get_{sym}_{mname}_allocated(ptr{len_call_extra});
     if (!is_alloc) Py_RETURN_NONE;
     /* Query runtime length (F2018 16.9.109 len()) */
-    int str_length = f2py_get_{sym}_{mname}_len(ptr);
+    int str_length = f2py_get_{sym}_{mname}_len(ptr{len_call_extra});
     if (str_length <= 0) return PyUnicode_FromString("");
     char *buffer = (char *)malloc(str_length + {_C_STRING_NUL});
     if (buffer == NULL) return PyErr_NoMemory();
-    f2py_get_{sym}_{mname}(ptr, buffer, str_length);
+    f2py_get_{sym}_{mname}(ptr{len_call_extra}, buffer, str_length);
     buffer[str_length] = '\\0';
     /* Trim trailing spaces (Fortran pads with spaces) */
     int trimmed_length = str_length;
@@ -2355,7 +1913,7 @@ static int
     if (ptr == NULL) return -1;
     if (value == Py_None) {{
         /* Deallocate: pass empty string with length 0 */
-        f2py_set_{sym}_{mname}(ptr, "", 0);
+        f2py_set_{sym}_{mname}(ptr{len_call_extra}, "", 0);
         return 0;
     }}
     if (!PyUnicode_Check(value)) {{
@@ -2366,7 +1924,7 @@ static int
     Py_ssize_t py_str_length;
     const char *str_data = PyUnicode_AsUTF8AndSize(value, &py_str_length);
     if (str_data == NULL) return -1;
-    f2py_set_{sym}_{mname}(ptr, str_data, (int)py_str_length);
+    f2py_set_{sym}_{mname}(ptr{len_call_extra}, str_data, (int)py_str_length);
     return 0;
 }}
 """)
@@ -2412,21 +1970,21 @@ static PyObject *
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
+    int native_dims[{ndim}];
+    f2py_get_{sym}_{mname}_shape(ptr{len_call_extra}, native_dims);
     npy_intp dims[{ndim}];
-{dims_assign}
-    npy_intp total = {total_expr};
+    for (int d = 0; d < {ndim}; d++) dims[d] = native_dims[d];
+    npy_intp total;
+    if (!f2py_dt_shape_product({ndim}, dims, &total)) return NULL;
     if (total <= 0) {{
-        return PyArray_SimpleNew({ndim}, dims, {npy_enum});
+        return PyArray_EMPTY({ndim}, dims, {npy_enum}, 1);
     }}
     void *data = f2py_get_{sym}_{mname}_data(ptr{len_call_extra});
     if (data == NULL) {{
-        return PyArray_SimpleNew({ndim}, dims, {npy_enum});
+        return PyArray_EMPTY({ndim}, dims, {npy_enum}, 1);
     }}
-    PyObject *arr = PyArray_SimpleNew({ndim}, dims, {npy_enum});
-    if (arr == NULL) return NULL;
-    memcpy(PyArray_DATA((PyArrayObject *)arr), data,
-           total * sizeof({ctype}));
-    return arr;
+    return f2py_dt_copy_array(self->capsule, {ndim}, dims,
+        {npy_enum}, data, total * sizeof({ctype}));
 }}
 """)
 
@@ -2454,8 +2012,32 @@ static int
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return -1;
     PyObject *arr = f2py_dt_array_from_any(value, {npy_enum},
-                                            NPY_ARRAY_IN_ARRAY);
+                                            NPY_ARRAY_FARRAY_RO);
     if (arr == NULL) return -1;
+    if (!f2py_dt_checked_shape((PyArrayObject *)arr, {ndim})) {{
+        Py_DECREF(arr);
+        return -1;
+    }}
+    ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) {{
+        Py_DECREF(arr);
+        return -1;
+    }}
+    if (PyArray_NDIM((PyArrayObject *)arr) != {ndim}) {{
+        PyErr_SetString(PyExc_ValueError, "{mname} has an incorrect rank");
+        Py_DECREF(arr);
+        return -1;
+    }}
+    int expected_dims[{ndim}];
+    f2py_get_{sym}_{mname}_shape(ptr{len_call_extra}, expected_dims);
+    for (int d = 0; d < {ndim}; d++) {{
+        if (PyArray_DIM((PyArrayObject *)arr, d) != expected_dims[d]) {{
+            PyErr_SetString(PyExc_ValueError,
+                            "{mname} has an incorrect shape");
+            Py_DECREF(arr);
+            return -1;
+        }}
+    }}
     f2py_set_{sym}_{mname}(ptr{len_call_extra}, {set_dim_args},
                             PyArray_DATA((PyArrayObject *)arr));
     Py_DECREF(arr);
@@ -2495,6 +2077,10 @@ static PyObject *
     }}
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return NULL;
+    if ({total} == 0) {{
+        npy_intp dims[{ndim}] = {{{dims_init}}};
+        return PyArray_EMPTY({ndim}, dims, {npy_enum}, 1);
+    }}
     void *arrptr = f2py_get_{sym}_{mname}(ptr{len_call_extra});
     if (arrptr == NULL) {{
         PyErr_SetString(PyExc_RuntimeError,
@@ -2503,11 +2089,8 @@ static PyObject *
     }}
     npy_intp dims[{ndim}] = {{{dims_init}}};
     /* Copy data out of Fortran memory */
-    PyObject *arr = PyArray_SimpleNew({ndim}, dims, {npy_enum});
-    if (arr == NULL) return NULL;
-    memcpy(PyArray_DATA((PyArrayObject *)arr), arrptr,
-           {total} * sizeof({ctype}));
-    return arr;
+    return f2py_dt_copy_array(self->capsule, {ndim}, dims,
+        {npy_enum}, arrptr, {total} * sizeof({ctype}));
 }}
 """)
 
@@ -2530,13 +2113,30 @@ static int
     void *ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
     if (ptr == NULL) return -1;
     PyObject *arr = f2py_dt_array_from_any(value, {npy_enum},
-                                            NPY_ARRAY_IN_ARRAY);
+                                            NPY_ARRAY_FARRAY_RO);
     if (arr == NULL) return -1;
-    if (PyArray_SIZE((PyArrayObject *)arr) != {total}) {{
-        PyErr_SetString(PyExc_ValueError,
-                        "{mname} must have {total} elements");
+    if (!f2py_dt_checked_shape((PyArrayObject *)arr, {ndim})) {{
         Py_DECREF(arr);
         return -1;
+    }}
+    ptr = PyCapsule_GetPointer(self->capsule, "{capsule_name}");
+    if (ptr == NULL) {{
+        Py_DECREF(arr);
+        return -1;
+    }}
+    if (PyArray_NDIM((PyArrayObject *)arr) != {ndim}) {{
+        PyErr_SetString(PyExc_ValueError, "{mname} has an incorrect rank");
+        Py_DECREF(arr);
+        return -1;
+    }}
+    const npy_intp expected_dims[{ndim}] = {{{dims_init}}};
+    for (int d = 0; d < {ndim}; d++) {{
+        if (PyArray_DIM((PyArrayObject *)arr, d) != expected_dims[d]) {{
+            PyErr_SetString(PyExc_ValueError,
+                            "{mname} has an incorrect shape");
+            Py_DECREF(arr);
+            return -1;
+        }}
     }}
     f2py_set_{sym}_{mname}(ptr{len_call_extra},
         ({ctype} *)PyArray_DATA((PyArrayObject *)arr));
@@ -2612,12 +2212,64 @@ static int
     return '\n'.join(funcs) + '\n' + getset_array
 
 
-def _gen_opaque_getset_multi(typename, members, specializations, kind_info):
+def _gen_kind_array_getset(typename, members, specializations, kind_info,
+                           type_map):
+    """Dispatch numeric array access to the selected KIND representation."""
+    arrays = {name: var for name, var in members.items()
+              if var.get('typespec') != 'type'
+              and (_is_array_member(var) or _is_allocatable_member(var)
+                   or _is_pointer_member(var))
+              and not _is_private_member(var)}
+    if not arrays:
+        return [], []
+    functions, entries = [], []
+    kind_name = kind_info[0]['name']
+    for suffix, _, resolved in specializations:
+        selected = {name: resolved[name] for name in arrays}
+        body = _gen_opaque_getset(typename, selected, type_map=type_map)
+        body = body.rsplit('static PyGetSetDef ', 1)[0]
+        body = body.replace(f'Py{typename}_get_', f'Py{typename}{suffix}_get_')
+        body = body.replace(f'Py{typename}_set_', f'Py{typename}{suffix}_set_')
+        symbol = _fortran_sym(typename)
+        specialized = _fortran_sym(typename + suffix)
+        body = body.replace(f'f2py_get_{symbol}_', f'f2py_get_{specialized}_')
+        body = body.replace(f'f2py_set_{symbol}_', f'f2py_set_{specialized}_')
+        body = body.replace(f'"f2py.{typename}"', f'"f2py.{typename}{suffix}"')
+        functions.append(body)
+    for name in arrays:
+        for operation, returns, arguments, call in (
+                ('get', 'PyObject *', '', 'selfobj, closure'),
+                ('set', 'int', ', PyObject *value', 'selfobj, value, closure')):
+            branches = []
+            for suffix, kinds, _ in specializations:
+                branches.append(
+                    f'    if (self->kind_value == {kinds[kind_name]})\n'
+                    f'        return Py{typename}{suffix}_{operation}_{name}({call});')
+            error = 'NULL' if operation == 'get' else '-1'
+            if operation == 'get':
+                signature = 'PyObject *selfobj, void *closure'
+            else:
+                signature = 'PyObject *selfobj, PyObject *value, void *closure'
+            functions.append(
+                f'static {returns}\nPy{typename}_{operation}_{name}({signature})\n'
+                '{\n'
+                f'    Py{typename}Object *self = (Py{typename}Object *)selfobj;\n'
+                + '\n'.join(branches) + '\n'
+                '    PyErr_SetString(PyExc_ValueError, "Unsupported KIND specialization");\n'
+                f'    return {error};\n' + '}\n')
+        entries.append(
+            f'    {{"{name}", Py{typename}_get_{name}, '
+            f'Py{typename}_set_{name}, "{name} member", NULL}},')
+    return functions, entries
+
+
+def _gen_opaque_getset_multi(typename, members, specializations, kind_info,
+                            type_map=None):
     """Generate multi-kind dispatch getters/setters for PDTs."""
     ki = kind_info[0]
     kname = ki['name']
-    funcs = []
-    getset_entries = []
+    funcs, getset_entries = _gen_kind_array_getset(
+        typename, members, specializations, kind_info, type_map)
 
     # Add read-only 'k' property for the kind value
     getter_name = f'Py{typename}_get_{kname}'

@@ -10,6 +10,7 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 
 from .auxfuncs import (
     _SIMPLE_SCALAR_TYPESPECS,
+    F2PYError,
     get_type_members,
     hasbody,
     is_fixed_array,
@@ -621,6 +622,7 @@ def _get_all_members(typeblock, type_map):
     own_members is the type's own members. Type parameters (KIND/LEN)
     are excluded from both sets.
     """
+    type_map = typeblock.get('f2py_import_context', type_map)
     from collections import OrderedDict
     parent_members = OrderedDict()
     parent_name = _get_extends_parent(typeblock)
@@ -724,6 +726,7 @@ def _describe_types(module):
         parent = _get_extends_parent(tb)
         types[name] = {
             'name': tb['name'],
+            'c_name': tb.get('f2py_c_name', tb['name']),
             'module': module['name'],
             'block': tb,
             'tag': type_tags[name],
@@ -882,13 +885,12 @@ def _coarray_as_local(var):
 def _is_type_member(var):
     """Check if a member is a scalar nested derived type."""
     return (var.get('typespec') == 'type'
-            and not _is_array_member(var))
+            and not isarray(var))
 
 
 def _is_type_array_member(var):
     """Check if a member is a fixed-size array of derived types."""
-    return (var.get('typespec') == 'type'
-            and is_fixed_array(var))
+    return var.get('typespec') == 'type' and isarray(var)
 
 
 def _member_problem(var, len_param_names=()):
@@ -904,11 +906,12 @@ def _member_problem(var, len_param_names=()):
     dims = var.get('dimension', [])
     if typespec == 'type':
         if 'pointer' in attrs or 'allocatable' in attrs:
-            return 'it is a pointer or allocatable of derived type'
-        if dims and not is_fixed_array(var):
+            if dims and all(str(d).strip() == ':' for d in dims):
+                return None
+            return 'it is a pointer or allocatable scalar of derived type'
+        if dims and not (is_fixed_array(var)
+                         or _is_len_sized_array(var, len_param_names)):
             return 'it is an array of derived type without a constant shape'
-        if len(dims) > 1:
-            return f'it is an array of derived type of rank {len(dims)}'
         return None
     if typespec == 'character':
         if _is_deferred_char_member(var) or (_is_char_member(var)
@@ -946,6 +949,12 @@ def _settle_members(typeblock, checked, type_map, settle):
         if (name in hidden or _is_type_parameter(var)
                 or _is_private_member(var)):
             continue
+        if (var.get('typespec') == 'type' and var.get('dimension')
+                and _is_polymorphic_arg(var)):
+            raise F2PYError(
+                f"CLASS component array {typeblock['name']}%{name} requires "
+                "dynamic-type component dispatch; a TYPE element copy "
+                "cannot preserve its dynamic type")
         problem = _member_problem(var, len_param_names)
         if problem is None and var.get('typespec') == 'type':
             inner = var.get('typename', '').lower()
@@ -964,6 +973,7 @@ def _settle_members(typeblock, checked, type_map, settle):
 def _has_coarray_ultimate(typeblock, type_map, seen=()):
     """Check if a type has a coarray ultimate component, directly or in a
     nonpointer nonallocatable component of derived type."""
+    type_map = typeblock.get('f2py_import_context', type_map)
     for var in typeblock.get('vars', {}).values():
         if _is_coarray_member(var):
             return True
@@ -1000,7 +1010,8 @@ def _wrap_types(type_blocks):
     type are hidden anyway, this hides only components whose types f2py
     cannot wrap.
     """
-    type_map = {}
+    parent = type_blocks[0].get('parent_block', {}) if type_blocks else {}
+    type_map = dict(parent.get('f2py_imported_types', {}))
     remaining = list(type_blocks)
     while remaining:
         for settle in (False, True):
@@ -1030,6 +1041,8 @@ def _can_wrap_bindc(typeblock, type_map=None):
     a type with a component f2py cannot expose is wrapped as an opaque
     pointer instead.
     """
+    if 'f2py_import_bindc' in typeblock:
+        return typeblock['f2py_import_bindc']
     if not isbindctype(typeblock) or typeblock.get('f2py_hidden'):
         return False
     if _has_len_params(typeblock):
@@ -1043,12 +1056,16 @@ def _can_wrap_bindc(typeblock, type_map=None):
     for var in get_type_members(typeblock).values():
         if _is_type_parameter(var):
             continue
+        dims = _get_array_dims(var)
+        if dims is not None and 0 in dims:
+            return False
         # the struct has no C type for characters, which opaque types handle
         if _member_problem(var) is not None or _is_char_member(var):
             return False
         if var.get('typespec') == 'type':
             inner = var.get('typename', '').lower()
-            if type_map is None or inner not in type_map:
+            if (type_map is None or inner not in type_map
+                    or not _can_wrap_bindc(type_map[inner], type_map)):
                 return False
     return True
 
@@ -1084,7 +1101,9 @@ def _is_len_sized_array(var, len_param_names):
     if isallocatable(var):
         return False
     dims = var.get('dimension', [])
-    return any(str(d).strip().lower() in len_param_names for d in dims)
+    import re
+    return any(set(re.findall(r"[a-z_]\w*", str(d).lower())) & set(len_param_names)
+               for d in dims)
 
 
 def _can_wrap_opaque(typeblock, type_map=None, settle=False):

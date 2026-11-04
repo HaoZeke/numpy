@@ -923,6 +923,8 @@ arg_rules = [
                  '    int #varname#_tag = 0;',
                  '    PyObject *#varname#_capi = Py_None;',
                  {isunlimitedpolymorphic: '    f2py_dt_any #varname#_any;'},
+                 {isintent_nothide:
+                  '    PyObject *#varname#_dt_owner = NULL;'},
                  {l_and(isintent_hide, isbindc_derivedtype):
                   '    void *#varname#_mem = NULL;'}],
         'argformat': {l_and(isintent_nothide, isrequired): 'O'},
@@ -955,8 +957,14 @@ arg_rules = [
         PyErr_NoMemory();
         f2py_success = 0;
     }"""},
+            {isintent_nothide: """\
+    if (f2py_success && #varname#_tag > 0 && #varname#_capi != Py_None)
+        #varname#_dt_owner = Py_NewRef(
+            ((f2py_dt_object *)#varname#_capi)->capsule);"""},
             '    if (f2py_success) {'],
         'cleanupfrompyobj': [
+            {isintent_nothide:
+             '    Py_XDECREF(#varname#_dt_owner);'},
             {l_and(isintent_hide, isbindc_derivedtype): """\
     if (#varname#_capi == Py_None)
         PyMem_Free(#varname#_mem);"""},

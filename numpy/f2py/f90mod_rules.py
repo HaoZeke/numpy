@@ -118,7 +118,9 @@ def buildhooks(pymod):
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
-        if len(onlyvars) == 0 and len(notvars) == 1 and m['name'] in notvars:
+        from ._dt_imports import _has_imported_type_exports
+        if (len(onlyvars) == 0 and len(notvars) == 1 and m['name'] in notvars
+                and not _has_imported_type_exports(m)):
             outmess(f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n")
             continue
 
@@ -211,7 +213,8 @@ def buildhooks(pymod):
             for b in m['body']:
                 b_name = b['name']
                 if not isroutine(b):
-                    if b['block'] != 'type' or b_name.lower() not in dt_types:
+                    if b['block'] != 'type' or (b_name.lower() not in dt_types
+                            and (m['name'].lower(), b_name.lower()) not in dt_types):
                         outmess("f90mod_rules.buildhooks:"
                                 f" skipping {b['block']} {b_name}\n")
                     continue
@@ -225,7 +228,7 @@ def buildhooks(pymod):
                 # handles of their Fortran objects
                 if derived_type_rules._has_derived_type_args(b):
                     missing = derived_type_rules.prepare_routine(
-                        b, dt_types, params)
+                        b, dt_types, params, uses=m.get('use', {}))
                     if missing:
                         outmess("f90mod_rules.buildhooks:"
                                 f" skipping {b_name}, as f2py cannot pass"

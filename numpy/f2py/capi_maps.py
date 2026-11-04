@@ -618,11 +618,12 @@ def getdtmap(a, var):
     if dt['any']:
         ret['dtanytypes'] = f"f2py_{dt['module']}_any_types"
         return ret
-    ret['dtpytype'] = f"Py{dt['name']}_Type"
+    c_name = dt.get('c_name', dt['name'])
+    ret['dtpytype'] = f"Py{c_name}_Type"
     ret['dttag'] = str(dt['tag'])
     ret['dtkind'] = str(dt['kind'])
     ret['dtcapname'] = f'"{dt["capsule"]}"'
-    ret['dtdestructor'] = f"f2py_{dt['name']}_capsule_destructor"
+    ret['dtdestructor'] = f"f2py_{c_name}_capsule_destructor"
     if dt['poly']:
         ret['dtwanttag'] = '-1'
         ret['dtwantcapname'] = 'NULL'
@@ -630,7 +631,7 @@ def getdtmap(a, var):
         ret['dtwanttag'] = ret['dttag']
         ret['dtwantcapname'] = ret['dtcapname']
     if dt['bindc']:
-        ret['dtsize'] = f"sizeof(f2py_{dt['name']}_t)"
+        ret['dtsize'] = f"sizeof(f2py_{c_name}_t)"
     if 'vector' in dt:
         extents = ', '.join(f'f2py_{a}_n{k}'
                             for k in range(1, dt['vector'] + 1))
