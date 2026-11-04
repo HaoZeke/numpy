@@ -10,3 +10,11 @@ and ``gfortran -ff2c`` use the hidden argument: the ``meson`` backend of
 ``f2py -c`` now passes ``-DF2PY_CB_RETURNCOMPLEX=0`` for the Intel and NVIDIA
 compilers, and any other build that uses such a compiler needs to add it to
 the C compiler flags.
+
+External array-valued functions use explicit interfaces
+------------------------------------------------------------
+F2PY generates an explicit Fortran interface when wrapping an external
+function with an array result, including functions with fixed-shape
+arguments. This preserves the result's array rank at the generated call
+site. In particular, a CHARACTER array result is not declared as a scalar
+CHARACTER result whose length is the array extent.
