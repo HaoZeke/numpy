@@ -1739,6 +1739,9 @@ def buildapi(rout):
         outmess(f"        Constructing wrapper function \"{rout['name']}\"...\n")
     # Routine
     vrd = capi_maps.routsign2map(rout)
+    result_ctype = vrd.get('ctype')
+    if result_ctype in cfuncs.typedefs:
+        cfuncs.append_needs(result_ctype)
     rd = dictappend({}, vrd)
     for r in rout_rules:
         if ('_check' in r and r['_check'](rout)) or ('_check' not in r):
