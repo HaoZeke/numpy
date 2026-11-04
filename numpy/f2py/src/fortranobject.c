@@ -54,6 +54,8 @@ F2PySwapThreadLocalCallbackPtr(char *key, void *ptr)
     PyObject *local_dict, *value;
     void *prev;
 
+    PyObject *saved_exception = PyErr_GetRaisedException();
+
     local_dict = PyThreadState_GetDict();
     if (local_dict == NULL) {
         Py_FatalError(
@@ -86,6 +88,7 @@ F2PySwapThreadLocalCallbackPtr(char *key, void *ptr)
 
     Py_DECREF(value);
 
+    PyErr_SetRaisedException(saved_exception);
     return prev;
 }
 
@@ -94,6 +97,8 @@ F2PyGetThreadLocalCallbackPtr(char *key)
 {
     PyObject *local_dict, *value;
     void *prev;
+
+    PyObject *saved_exception = PyErr_GetRaisedException();
 
     local_dict = PyThreadState_GetDict();
     if (local_dict == NULL) {
@@ -113,6 +118,7 @@ F2PyGetThreadLocalCallbackPtr(char *key)
         prev = NULL;
     }
 
+    PyErr_SetRaisedException(saved_exception);
     return prev;
 }
 
