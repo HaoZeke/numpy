@@ -2439,6 +2439,9 @@ def _gen_opaque_tp_repr(typename, members, specializations=None,
         if _is_type_array_member(mvar):
             inner = mvar.get('typename', '').lower()
             dims = _get_array_dims(mvar)
+            if dims is None:
+                fmt_parts.append(f'{mname}=<array>')
+                continue
             total = 1
             for d in dims:
                 total *= d
