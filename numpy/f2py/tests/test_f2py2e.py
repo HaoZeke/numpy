@@ -632,7 +632,7 @@ debug-capi:Python C/API function blah.hi: successful.
 debug-capi:Freeing memory.
         """)
         assert rout.stdout == eout
-        assert eerr in rout.stderr
+        assert rout.stderr == eerr
 
 
 def test_wrapfunc_def(capfd, hello_world_f90, monkeypatch):
