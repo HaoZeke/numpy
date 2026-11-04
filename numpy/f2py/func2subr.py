@@ -17,6 +17,7 @@ from .auxfuncs import (
     getfortranname,
     hasoptionalargs,
     isabsentcapable,
+    isarray,
     isattr_value,
     isexternal,
     isfortranoptional,
@@ -132,8 +133,11 @@ def createfuncwrapper(rout, signature=0):
                 vars[dn] = dv
                 v['dimension'][i] = dn
     rout['args'].extend(extra_args)
-    need_interface = (bool(extra_args)
-                      or hasoptionalargs(rout))
+    # Optional arguments and external array results require explicit interfaces.
+    need_interface = (
+        bool(extra_args) or hasoptionalargs(rout)
+        or (not ismoduleroutine(rout) and isarray(vars[rout['name']]))
+    )
 
     ret = ['']
 
