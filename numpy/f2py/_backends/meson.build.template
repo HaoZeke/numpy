@@ -63,4 +63,6 @@ ${fortran_args}
                      # Intel Fortran applies -fvisibility to external references
                      # too, and hidden references cannot bind to shared libraries
                      gnu_symbol_visibility : 'default',
+${c_args}
+                     link_language: 'fortran',
                      install : true)
