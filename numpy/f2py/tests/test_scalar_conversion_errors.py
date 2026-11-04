@@ -1,12 +1,19 @@
 """Numeric protocol failures must not select a sequence's first element."""
 
 import gc
+import hashlib
+import json
+import os
+import subprocess
 import sys
+import sysconfig
 import warnings
 import weakref
+from pathlib import Path
+
+import pytest
 
 import numpy as np
-import pytest
 
 from . import util
 
@@ -121,44 +128,62 @@ def test_successful_buffer_numeric_conversion(converter, value):
         assert converter(value) == 2
 
 
-def test_absent_integer_protocol_releases_type_dictionaries(converter):
-    class BaseSequence:
-        def __getitem__(self, index):
-            if index != 0:
-                raise IndexError(index)
-            return 2
+def _assert_type_dictionary_lifetime(case, converter, scalar_modules):
+    native, c_long, long_name = scalar_modules
+    candidates = [(native, name) for name in ("integer4", "integer8", "real4", "real8")]
+    candidates.append((c_long, long_name))
+    selected = [(module, name) for module, name in candidates
+                if getattr(module, name) is converter]
+    assert len(selected) == 1
+    module, name = selected[0]
+    origin = Path(module.__file__).resolve(strict=True)
+    assert Path(module.__spec__.origin).resolve(strict=True) == origin
+    numpy_origin = Path(np.__file__).resolve(strict=True)
+    core_origin = Path(sys.modules["numpy._core._multiarray_umath"].__file__).resolve(strict=True)
+    free_threaded = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+    gil_enabled = getattr(sys, "_is_gil_enabled", lambda: True)()
+    metadata = {
+        "case": case,
+        "module": module.__name__,
+        "origin": str(origin),
+        "sha256": hashlib.sha256(origin.read_bytes()).hexdigest(),
+        "function": name,
+        "numpy_origin": str(numpy_origin),
+        "numpy_sha256": hashlib.sha256(numpy_origin.read_bytes()).hexdigest(),
+        "numpy_core_origin": str(core_origin),
+        "numpy_core_sha256": hashlib.sha256(core_origin.read_bytes()).hexdigest(),
+        "free_threaded": free_threaded,
+        "gil_enabled": gil_enabled,
+        "python_version": list(sys.version_info[:2]),
+    }
+    command = [sys.executable, "-I", "-B"]
+    if free_threaded:
+        command.extend(["-X", "gil=" + str(int(gil_enabled))])
+    command.extend([str(Path(__file__).with_name("_scalar_conversion_lifetime.py")),
+                    json.dumps(metadata)])
+    environment = os.environ.copy()
+    environment.pop("PYTHON_GIL", None)
+    completed = subprocess.run(command, capture_output=True, text=True, env=environment)
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    report = json.loads(completed.stdout)
+    assert report["case"] == case
+    assert report["module_origin"] == str(origin)
+    assert report["module_sha256"] == metadata["sha256"]
+    assert report["function"] == name
+    assert report["numpy_core_origin"] == str(core_origin)
+    assert report["numpy_core_sha256"] == metadata["numpy_core_sha256"]
+    assert report["gil_enabled"] is gil_enabled
+    assert report["pid"] != os.getpid()
+    assert report["converter_calls"] == 20
+    assert report["lifetime_assertions_executed"] is True
 
-    class ChildSequence(BaseSequence):
-        pass
 
-    value = ChildSequence()
-    references = [weakref.ref(BaseSequence), weakref.ref(ChildSequence)]
-    for _ in range(20):
-        assert converter(value) == 2
-    del value, ChildSequence, BaseSequence
-    gc.collect()
-    assert all(reference() is None for reference in references)
+def test_absent_integer_protocol_releases_type_dictionaries(converter, scalar_modules):
+    _assert_type_dictionary_lifetime('test_absent_integer_protocol_releases_type_dictionaries', converter, scalar_modules)
 
 
-def test_truncation_protocol_releases_type_dictionary(converter):
-    class TruncatedSequence:
-        def __trunc__(self):
-            return 2
-
-        def __getitem__(self, index):
-            if index != 0:
-                raise IndexError(index)
-            return 2
-
-    reference = weakref.ref(TruncatedSequence)
-    value = TruncatedSequence()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        for _ in range(20):
-            assert converter(value) == 2
-    del value, TruncatedSequence
-    gc.collect()
-    assert reference() is None
+def test_truncation_protocol_releases_type_dictionary(converter, scalar_modules):
+    _assert_type_dictionary_lifetime('test_truncation_protocol_releases_type_dictionary', converter, scalar_modules)
 
 
 @pytest.mark.parametrize("category", [ConversionWarning, ConversionTypeWarning])
