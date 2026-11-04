@@ -3,6 +3,7 @@ import textwrap
 import pytest
 
 import numpy as np
+from numpy.f2py import capi_maps, crackfortran
 from numpy.f2py.tests import util
 from numpy.testing import assert_array_equal, assert_equal, assert_raises
 
@@ -642,3 +643,121 @@ class TestBCCharHandling(util.F2PyTest):
     def test_gh25286(self):
         info = self.module.charint('T')
         assert info == 2
+
+
+def _gh21672_character_decls(filename):
+    # Parsed signature after crackfortran post-processing.
+    path = util.getpath("tests", "src", "string", filename)
+    blocks = crackfortran.crackfortran([str(path)])
+    found = {}
+
+    def walk(items, prefix):
+        for block in items or []:
+            if not isinstance(block, dict):
+                continue
+            name = block.get("name") or ""
+            here = f"{prefix}.{name}" if prefix else name
+            for varname, var in (block.get("vars") or {}).items():
+                if var.get("typespec") == "character" and "dimension" in var:
+                    found[f"{here}.{varname}"] = var
+            walk(block.get("body"), here)
+
+    walk(blocks, "")
+    return found
+
+
+def _assert_gh21672_len(var, selector):
+    # F2018 R803/R807: array of 10 elements, each of character length 8.
+    assert var["dimension"] == ["10"]
+    assert var["charselector"] == selector
+    assert capi_maps.getstrlength(var) == "8"
+
+
+class TestGH21672Signature:
+    # gh-21672: `character gamma(10)*8` in fixed and free form, plus the
+    # `character*8` and `character(len=8)` spellings.
+    star = {"*": "8"}
+    length = {"len": "8"}
+
+    def test_fixed_form(self):
+        decls = _gh21672_character_decls("gh21672_fixed.f")
+        expected = {
+            "gh21672_fixed_entity.inp": self.star,
+            "gh21672_fixed_entity.gamma": self.star,
+            "gh21672_fixed_star.inp": self.star,
+            "gh21672_fixed_star.gamma": self.star,
+            "gh21672_fixed_entity_out.gamma": self.star,
+        }
+        assert set(decls) == set(expected)
+        for name, selector in expected.items():
+            _assert_gh21672_len(decls[name], selector)
+
+    def test_free_form(self):
+        decls = _gh21672_character_decls("gh21672_free.f90")
+        expected = {
+            "gh21672_free.gamma": self.star,
+            "gh21672_free.delta": self.star,
+            "gh21672_free.epsilon": self.length,
+            "gh21672_free.store_gamma.inp": self.star,
+            "gh21672_free.store_delta.inp": self.star,
+            "gh21672_free.store_epsilon.inp": self.length,
+            "gh21672_free.echo_entity.gamma_in": self.star,
+            "gh21672_free.echo_entity.echoed": self.star,
+        }
+        assert set(decls) == set(expected)
+        for name, selector in expected.items():
+            _assert_gh21672_len(decls[name], selector)
+
+
+@pytest.mark.slow
+class TestGH21672CharacterArray(util.F2PyTest):
+    # Set values from Python and read them back. Shape is (10,) and each
+    # element is 8 bytes, for the entity*len form and the reference forms.
+    sources = [
+        util.getpath("tests", "src", "string", "gh21672_fixed.f"),
+        util.getpath("tests", "src", "string", "gh21672_free.f90"),
+    ]
+
+    def _values(self):
+        return np.array([f"{i:08d}".encode("ascii") for i in range(10)],
+                        dtype="S8")
+
+    def _assert_array(self, arr, values):
+        assert arr.shape == (10,)
+        assert arr.dtype.itemsize == 8
+        assert_array_equal(arr, values)
+
+    def test_fixed_entity_roundtrip(self):
+        values = self._values()
+        self.module.gh21672_fixed_entity(values)
+        got = self.module.gh21672ent.gamma
+        self._assert_array(got, values)
+        got[1] = b"abcdefgh"
+        assert got[1] == b"abcdefgh"
+
+    def test_fixed_star_roundtrip(self):
+        values = self._values()
+        self.module.gh21672_fixed_star(values)
+        self._assert_array(self.module.gh21672star.gamma, values)
+
+    def test_fixed_entity_out(self):
+        got = self.module.gh21672_fixed_entity_out()
+        expected = np.array([b"abcdefgh"] * 10, dtype="S8")
+        self._assert_array(got, expected)
+
+    def test_free_module_roundtrip(self):
+        values = self._values()
+        mod = self.module.gh21672_free
+        for name, store in (
+            ("gamma", mod.store_gamma),
+            ("delta", mod.store_delta),
+            ("epsilon", mod.store_epsilon),
+        ):
+            arr = getattr(mod, name)
+            assert arr.shape == (10,)
+            assert arr.dtype.itemsize == 8
+            store(values)
+            self._assert_array(getattr(mod, name), values)
+        self._assert_array(mod.echo_entity(values), values)
+        mod.gamma[2] = b"zzzzzzzz"
+        assert bytes(mod.gamma[2]) == b"zzzzzzzz"
