@@ -18,6 +18,7 @@ from .auxfuncs import (
     isallocatablearray,
     isallocatablearray_hide,
     isallocatablearray_out,
+    isarray,
     isexternal,
     isfunction,
     isfunction_wrap,
@@ -175,7 +176,10 @@ def createfuncwrapper(rout, signature=0):
         args = [newname] + rout['args']
     allocatables = [a for a in args
                     if a != name and isallocatablearray(vars[a])]
-    need_interface = bool(extra_args or allocatables)
+    # Array results and allocatable arguments require an explicit interface.
+    need_interface = bool(extra_args or allocatables) or (
+        not f90mode and isarray(vars[name])
+    )
 
     l_tmpl = var2fixfortran(vars, name, '@@@NAME@@@', f90mode)
     if l_tmpl[:13] == 'character*(*)':
