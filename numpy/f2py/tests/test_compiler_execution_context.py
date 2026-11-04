@@ -4,8 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from numpy.f2py import _compiler_context as context
-from numpy.f2py import crackfortran
+from numpy.f2py import _compiler_context as context, crackfortran
 
 from . import util
 
@@ -71,6 +70,7 @@ def test_generation_context_restores_on_error(monkeypatch):
 
 def test_compile_generation_uses_cross_context_before_backend(monkeypatch, tmp_path):
     import sys
+
     from numpy.f2py import f2py2e
 
     machine_file = tmp_path / 'cross.ini'
@@ -232,7 +232,6 @@ def test_unknown_source_expression_keeps_ordinary_fallback():
     assert crackfortran.param_eval('unresolved_name', {}, {}) == 'unresolved_name'
 
 
-
 @pytest.mark.parametrize('failure', ['missing', 'timeout', 'nonzero'])
 def test_configured_compiler_failures_have_execution_diagnostics(monkeypatch, failure):
     def run(*args, **kwargs):
@@ -295,7 +294,6 @@ fortran = ['native-fc']
     assert configured.runner == ()
 
 
-
 def test_named_cross_file_uses_meson_data_directory(monkeypatch, tmp_path):
     directory = tmp_path / 'meson' / 'cross'
     directory.mkdir(parents=True)
@@ -314,7 +312,6 @@ needs_exe_wrapper = true
         assert selected.command == ('target-fc',)
         assert selected.runner == ('qemu-aarch64',)
         assert files == [str(filename)]
-
 
 
 def test_fast_integer_probe_uses_same_cross_compiler_context(monkeypatch):

@@ -103,7 +103,6 @@ def coerce(compiler):
     return replace(context, command=tuple(compiler), selected=bool(compiler))
 
 
-
 def _machine_paths(filenames, kind):
     """Locate machine files in the caller directory or Meson's data paths."""
     result = []
