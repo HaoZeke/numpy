@@ -41,6 +41,7 @@ fortranobject_lib = static_library('_fortranobject',
                      fortranobject_c,
                      include_directories: [inc_np],
                      dependencies: py_dep,
+${c_args}
                      gnu_symbol_visibility: 'hidden',
                      )
 # gh-25000
@@ -76,5 +77,4 @@ ${lib_dir_list}
                      ],
 ${fortran_args}
 ${c_args}
-                     link_language: 'fortran',
                      install : true)
