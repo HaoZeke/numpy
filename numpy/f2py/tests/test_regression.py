@@ -360,6 +360,8 @@ class TestPickleFortranRoutine(util.F2PyTest):
 
     def _assert_pickle_label_hidden(self, obj):
         assert "_f2py_pickle_kind" not in obj.__dict__
+        assert "_f2py_pickle_kind" not in dir(obj)
+        assert "_f2py_pickle_name" not in obj.__dict__
         assert "_f2py_pickle_name" not in dir(obj)
 
     def test_f90_module_refuses_pickle(self):
