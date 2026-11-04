@@ -2172,7 +2172,8 @@ def _block_uses_intrinsic_module(block):
     for modname in usedict:
         if modname.lower() in _INTRINSIC_MODULE_VARS:
             return True
-    for child in block.get('body', []):
+    for child in [*block.get('body', []),
+                  *block.get('f2py_operator_procedures', {}).values()]:
         if _block_uses_intrinsic_module(child):
             return True
     return False
@@ -2203,6 +2204,9 @@ def postcrack2(block, tab='', param_map=None):
                     val = kind['kind']
                     if val in param_map:
                         kind['kind'] = param_map[val]
+    for name, procedure in block.get('f2py_operator_procedures', {}).items():
+        block['f2py_operator_procedures'][name] = postcrack2(
+            procedure, tab=tab + '\t', param_map=param_map)
     new_body = [postcrack2(b, tab=tab + '\t', param_map=param_map)
                 for b in block['body']]
     block['body'] = new_body
@@ -2439,6 +2443,16 @@ def analyzebody(block, args, tab=''):
         if 'attrspec' not in value or 'public' not in value['attrspec']
     }
 
+    operator_procedures = {
+        name.lower()
+        for interface in block['body']
+        if interface.get('block') == 'interface'
+        and (interface.get('name', '').lower().replace(' ', '').startswith(
+                 'operator(')
+             or interface.get('name', '').lower().replace(' ', '') == 'assignment(=)')
+        for name in interface.get('implementedby', [])
+    } if block.get('block') == 'module' else set()
+
     body = []
     for b in block['body']:
         b['parent_block'] = block
@@ -2449,6 +2463,12 @@ def analyzebody(block, args, tab=''):
                 as_ = b['args']
             # Add private members to skipfuncs for gh-23879
             if b['name'] in maybe_private.keys():
+                if b['name'].lower() in operator_procedures:
+                    # Generic expressions need analyzed signatures, while
+                    # private implementations remain outside the public body.
+                    procedure = postcrack(b, as_, tab=tab + '\t')
+                    block.setdefault('f2py_operator_procedures', {})[
+                        b['name'].lower()] = procedure
                 skipfuncs.append(b['name'])
             if b['name'] in skipfuncs:
                 continue

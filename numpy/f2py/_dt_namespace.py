@@ -147,7 +147,8 @@ def _c_module(module):
                 var['typename'] = names[native]
             attributes(var)
         attributes(block)
-        for child in block.get('body', []):
+        for child in [*block.get('body', []),
+                      *block.get('f2py_operator_procedures', {}).values()]:
             declarations(child)
 
     declarations(result)

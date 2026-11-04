@@ -91,8 +91,9 @@ def _scan_operator_interfaces(module_block, typename, type_map):
     """Find supported scalar operator signatures involving a wrapped type."""
     if not hasbody(module_block):
         return {}
-    routines = {b['name'].lower(): b for b in module_block['body']
-                if isroutine(b)}
+    routines = dict(module_block.get('f2py_operator_procedures', {}))
+    routines.update({b['name'].lower(): b for b in module_block['body']
+                     if isroutine(b)})
     native_name = type_map[typename.lower()].get(
         'f2py_native_name', typename).lower()
     ops = {}
