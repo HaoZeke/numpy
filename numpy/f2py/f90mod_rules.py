@@ -18,6 +18,7 @@ import re
 import numpy as np
 
 from . import capi_maps, cfuncs, func2subr
+from ._parameter_metadata import storage_parameters
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -29,8 +30,6 @@ from .crackfortran import (
     undo_rmbadname,
     undo_rmbadname1,
 )
-
-from ._parameter_metadata import storage_parameters
 
 options = {}
 

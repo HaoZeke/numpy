@@ -52,7 +52,7 @@ def test_only_integer_selector_dependencies_are_evaluated(monkeypatch):
     result = f90mod_rules._parameter_variable(target, module(variables))
     assert result['charselector']['f2py_len'] == '4'
     assert result['dimension'] == ['0']
-    assert calls == [set(['n'])]
+    assert calls == [{'n'}]
 
 
 def test_len_and_kind_inquiries_do_not_materialize_character(monkeypatch):
