@@ -375,9 +375,17 @@ PyFortranObject_NewAsAttr(PyObject *module, FortranDataDef *defs)
 static int
 fortran_traverse(PyObject *obj, visitproc visit, void *arg)
 {
+    PyTypeObject *type = Py_TYPE(obj);
+#ifdef Py_TARGET_ABI3T
+    PyFortranObjectData *fp = (PyFortranObjectData *)
+            PyObject_GetTypeData_DuringGC(obj, type);
+#else
     PyFortranObjectData *fp = fortran_data(obj);
-    Py_VISIT(Py_TYPE(obj));
-    Py_VISIT(fp->dict);
+#endif
+    Py_VISIT(type);
+    if (fp != NULL) {
+        Py_VISIT(fp->dict);
+    }
     return 0;
 }
 
@@ -806,7 +814,12 @@ F2PyRuntime_Init(PyObject *module)
 int
 F2PyRuntime_Traverse(PyObject *module, visitproc visit, void *arg)
 {
+#ifdef Py_TARGET_ABI3T
+    F2PyRuntimeState *state = (F2PyRuntimeState *)
+            PyModule_GetState_DuringGC(module);
+#else
     F2PyRuntimeState *state = (F2PyRuntimeState *)PyModule_GetState(module);
+#endif
     if (state != NULL) {
         Py_VISIT(state->fortran_type);
         Py_VISIT(state->error);
