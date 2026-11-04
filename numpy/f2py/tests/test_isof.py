@@ -154,3 +154,38 @@ class TestGH30352Module(util.F2PyTest):
 
     def test_integer_function(self):
         assert self.module.gh30352.add_ik(2**32, 2**32) == 2**33
+
+
+@pytest.mark.slow
+class TestModernFortranFibonacci(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "isofenv", "gh23633.f90"),
+        util.getpath("tests", "src", "isofenv", "gh23633_modern.f90"),
+    ]
+    expected = np.array([0, 1, 1, 2, 3, 5, 8, 13], dtype=np.float64)
+
+    @pytest.mark.parametrize("name", ["fib_selected", "fib_renamed", "fib_intrinsic"])
+    @pytest.mark.parametrize("length", [0, 1, 2, 8])
+    def test_input_array_kind(self, name, length):
+        sentinel = -999.0
+        guarded = np.full(length + 2, sentinel, dtype=np.float64)
+        values = guarded[1:-1]
+        values.fill(0)
+        getattr(self.module, name)(values)
+        assert_array_equal(values, self.expected[:length])
+        assert_array_equal(guarded[[0, -1]], [sentinel, sentinel])
+
+    @pytest.mark.parametrize("name", ["fib_selected_out", "fib_renamed_out", "fib"])
+    @pytest.mark.parametrize("length", [0, 1, 2, 8])
+    def test_output_array_kind(self, name, length):
+        values = getattr(self.module, name)(length)
+        assert values.dtype == np.dtype(np.float64)
+        assert_array_equal(values, self.expected[:length])
+
+    def test_prefix_array_view(self):
+        length = 8
+        prefix_length = 6
+        values = np.zeros(length, dtype=np.float64)
+        self.module.fib_selected(values[:prefix_length])
+        assert_array_equal(values[:prefix_length], self.expected[:prefix_length])
+        assert_array_equal(values[prefix_length:], np.zeros(length - prefix_length))
