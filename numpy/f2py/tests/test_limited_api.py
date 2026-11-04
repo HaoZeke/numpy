@@ -67,7 +67,7 @@ def test_type_behavior(limited_api_probe):
     cls = type(obj)
     assert cls.__name__ == "fortran"
     assert cls.__module__ == "builtins"
-    assert repr(cls) == "<class 'fortran'>"
+    assert repr(cls) == "<class 'builtins.fortran'>"
     assert obj() is None
     assert repr(obj) == "<fortran function identity>"
     assert "__name__" in dir(obj)
