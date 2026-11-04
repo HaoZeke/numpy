@@ -139,6 +139,7 @@ TODO:
     The above may be solved by creating appropriate preprocessor program, for example.
 
 """
+import ast
 import codecs
 import copy
 import fileinput
@@ -2523,6 +2524,99 @@ def _selected_real_kind_func(p, r=0, radix=0):
     return -1
 
 
+def _eval_integer_parameter(expression, g_params, params, *, convert=True):
+    """Evaluate a declared INTEGER initializer with Fortran arithmetic."""
+    expression = str(expression)
+    kind_pattern = re.compile(r'\bkind\s*\(([^()]*)\)', re.I)
+
+    def kind_inquiries(text):
+        return kind_pattern.sub(
+            lambda match: 'kind(' + repr(match.group(1)) + ')', text)
+
+    # Literal contents retain their spelling during kind inquiry rewriting.
+    pieces = []
+    start = 0
+    for match in _quoted_string_re.finditer(expression):
+        pieces.append(kind_inquiries(expression[start:match.start()]))
+        pieces.append(match.group())
+        start = match.end()
+    pieces.append(kind_inquiries(expression[start:]))
+    expression = ''.join(pieces).strip()
+
+    def normalize_numbers(text):
+        pattern = r'(?<![\w.])(\d+(?:\.\d*)?|\.\d+)([ed][+-]?\d+)?(?:_(?:[a-z]\w*|\d+))?(?![\w.])'
+
+        def literal(match):
+            number = match.group(1) + (match.group(2) or '')
+            if '.' not in number and not match.group(2):
+                return str(int(number))
+            return number.lower().replace('d', 'e')
+
+        return re.sub(pattern, literal, text, flags=re.I)
+
+    pieces = []
+    start = 0
+    for match in _quoted_string_re.finditer(expression):
+        pieces.append(normalize_numbers(expression[start:match.start()]))
+        pieces.append(match.group())
+        start = match.end()
+    pieces.append(normalize_numbers(expression[start:]))
+    expression = ''.join(pieces).strip()
+
+    def divide(left, right):
+        if type(left) is int and type(right) is int:
+            quotient = abs(left) // abs(right)
+            return -quotient if (left < 0) != (right < 0) else quotient
+        return left / right
+
+    def power(left, right):
+        if type(left) is int and type(right) is int and right < 0:
+            if left == 0:
+                raise ZeroDivisionError('zero raised to a negative integer power')
+            if left == 1:
+                return 1
+            if left == -1:
+                return -1 if right % 2 else 1
+            return 0
+        return left ** right
+
+    namespace = dict(g_params)
+    namespace.update(params)
+    helper_names = []
+    for name, function in (('__f2py_parameter_divide', divide),
+                           ('__f2py_parameter_power', power)):
+        while name in namespace:
+            name += '_'
+        namespace[name] = function
+        helper_names.append(name)
+
+    class IntegerOperators(ast.NodeTransformer):
+        def visit_BinOp(self, node):
+            self.generic_visit(node)
+            if isinstance(node.op, ast.Div):
+                function = helper_names[0]
+            elif isinstance(node.op, ast.Pow):
+                function = helper_names[1]
+            else:
+                return node
+            return ast.copy_location(
+                ast.Call(func=ast.Name(id=function, ctx=ast.Load()),
+                         args=[node.left, node.right], keywords=[]),
+                node)
+
+    tree = IntegerOperators().visit(ast.parse(expression, mode='eval'))
+    value = eval(compile(ast.fix_missing_locations(tree),
+                         '<f2py integer parameter>', 'eval'), namespace)
+    if not convert:
+        if type(value) is not int:
+            raise ValueError('INTEGER specification expression required')
+        return value
+    if type(value) not in (int, float):
+        raise ValueError('INTEGER parameter initializer must be numeric')
+    # Conversion belongs to the declared INTEGER assignment, not each extent.
+    return int(value)
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2543,6 +2637,7 @@ def get_parameters(vars, global_params={}):
     for n in param_names:
         if '=' in vars[n]:
             v = vars[n]['=']
+            integer_expression = v if isinteger(vars[n]) and not isarray(vars[n]) else None
             if islogical(vars[n]):
                 v = v.lower()
                 for repl in [
@@ -2608,9 +2703,12 @@ def get_parameters(vars, global_params={}):
             elif real8pattern.search(v):
                 v = 4
             try:
-                params[n] = param_eval(v, g_params, params, dimspec=dimspec)
+                if integer_expression is not None:
+                    params[n] = _eval_integer_parameter(integer_expression, g_params, params)
+                else:
+                    params[n] = param_eval(v, g_params, params, dimspec=dimspec)
             except Exception as msg:
-                params[n] = v
+                params[n] = integer_expression if integer_expression is not None else v
                 outmess(f'get_parameters: got "{msg}" on {n!r}\n')
 
             if isstring(vars[n]) and isinstance(params[n], int):
@@ -2715,7 +2813,10 @@ def analyzevars(block):
             if 'len' in vars[n]['charselector']:
                 l = vars[n]['charselector']['len']
                 try:
-                    l = str(eval(l, {}, params))
+                    if 'parameter' in vars[n].get('attrspec', []):
+                        l = str(_eval_integer_parameter(l, dict(), params, convert=False))
+                    else:
+                        l = str(eval(l, {}, params))
                 except Exception:
                     pass
                 vars[n]['charselector']['len'] = l
@@ -2796,6 +2897,17 @@ def analyzevars(block):
                             f'variable {d!r}\n'
                         )
 
+                    if 'parameter' in vars[n].get('attrspec', []):
+                        bounds = markoutercomma(d, ':').split('@:@')
+                        if len(bounds) in (1, 2):
+                            try:
+                                values = [_eval_integer_parameter(value, dict(), params, convert=False)
+                                          for value in bounds]
+                            except (ValueError, TypeError, ArithmeticError, SyntaxError, NameError):
+                                pass
+                            else:
+                                d = str(values[0] if len(values) == 1
+                                        else max(0, values[1] - values[0] + 1))
                     dim_char = ':' if d == ':' else '*'
                     if d == dim_char:
                         dl = [dim_char]
@@ -2966,7 +3078,11 @@ def analyzevars(block):
                 if not vars[n]['depend']:
                     del vars[n]['depend']
             if isscalar(vars[n]):
-                vars[n]['='] = _eval_scalar(vars[n]['='], params)
+                if (isinteger(vars[n]) and 'parameter' in vars[n]['attrspec']
+                        and type(params.get(n)) is int):
+                    vars[n]['='] = str(params[n])
+                else:
+                    vars[n]['='] = _eval_scalar(vars[n]['='], params)
 
     for n in list(vars.keys()):
         if n == block['name']:  # n is block name
