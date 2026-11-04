@@ -208,7 +208,11 @@ class TestF77CallbackPythonTLS(TestF77Callback):
 def test_callback_saved_interface():
     path = util.getpath("tests", "src", "callback", "gh17797.f90")
     blocks = crackfortran.crackfortran([str(path)])
-    interface = blocks[0]["saved_interface"]
+    routine, = (
+        block for block in blocks
+        if block["block"] == "function" and block["name"] == "gh17797"
+    )
+    interface = routine["saved_interface"]
     lines = [line.strip() for line in interface.splitlines()]
     assert "external f" not in lines
     assert "function f(e_0_e) result (r)" in lines
