@@ -556,6 +556,27 @@ def f2py_parser():
 def get_newer_options(iline):
     iline = list(iline)
     parser = f2py_parser()
+    include_options = ('--include-paths', '--include_paths')
+    consumes_value = False
+    for index, argument in enumerate(iline):
+        if argument == '--':
+            break
+        if consumes_value:
+            consumes_value = False
+            continue
+        if argument == '-I' or argument in include_options:
+            consumes_value = True
+            continue
+        if (parser.allow_abbrev and argument.startswith('--')
+                and '=' not in argument):
+            matches = [option for option in include_options
+                       if option.startswith(argument)]
+            if len(matches) == 1:
+                consumes_value = True
+                continue
+        option, separator, value = argument.partition(' ')
+        if separator and option in include_options:
+            iline[index] = f'{option}={value}'
     args, remain = parser.parse_known_args(iline)
     ipaths = args.include_paths
     if args.include_paths is None:
