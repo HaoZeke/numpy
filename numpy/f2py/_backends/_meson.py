@@ -165,6 +165,8 @@ class MesonBackend(Backend):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dependencies = self.extra_dat.get("dependencies", [])
+        self.cross_files = self.extra_dat.get("cross_files", [])
+        self.native_files = self.extra_dat.get("native_files", [])
         self.meson_build_dir = "bbdir"
         self.build_type = "debug" if "--debug" in self.fc_flags else "release"
         self.fc_flags = _get_flags(self.fc_flags)
@@ -219,7 +221,13 @@ class MesonBackend(Backend):
         subprocess.run(command, cwd=cwd, check=True)
 
     def run_meson(self, build_dir: Path):
-        setup_command = ["meson", "setup", self.meson_build_dir]
+        setup_command = [
+            "meson",
+            "setup",
+            *_machine_file_args("--cross-file", self.cross_files),
+            *_machine_file_args("--native-file", self.native_files),
+            self.meson_build_dir,
+        ]
         self._run_subprocess_command(setup_command, build_dir)
         compile_command = ["meson", "compile", "-C", self.meson_build_dir]
         self._run_subprocess_command(compile_command, build_dir)
@@ -284,6 +292,17 @@ def _get_macro_args(define_macros, undef_macros):
     args += [f"-U{name}" for name in undef_macros]
     return args
 
+
+def _machine_file_args(option, filenames):
+    args = []
+    for filename in filenames:
+        # meson setup runs in the build directory, so files given relative to
+        # the caller's directory must be made absolute; names not found there
+        # are left for meson to look up in its cross/native file directories.
+        if os.path.exists(filename):
+            filename = os.path.abspath(filename)
+        args += [option, filename]
+    return args
 
 def _get_flags(fc_flags):
     flag_values = []
