@@ -1366,8 +1366,9 @@ def analyzeline(m, case, line):
         if last_name is not None:
             previous_context = ('variable', last_name, groupcounter)
     elif case == 'moduleprocedure':
-        groupcache[groupcounter]['implementedby'] = \
-            [x.strip() for x in m.group('after').split(',')]
+        names = m.group('after').lstrip().removeprefix('::')
+        groupcache[groupcounter].setdefault('implementedby', []).extend(
+            x.strip() for x in names.split(','))
     elif case == 'parameter':
         edecl = groupcache[groupcounter]['vars']
         ll = m.group('after').strip()[1:-1]
@@ -2881,9 +2882,19 @@ def analyzevars(block):
     params = get_parameters(vars, use_params)
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
+    # Generic accessibility names carry metadata rather than data declarations.
+    interface_names = {
+        ''.join(body['name'].lower().split()) for body in block['body']
+        if body['block'] in ('interface', 'abstract interface')}
+    interface_names.update(
+        ''.join(name.lower().split()) for name in vars
+        if re.fullmatch(r'(?:operator|assignment)\(.*\)',
+                        ''.join(name.lower().split())))
     dep_matches = {}
     name_match = re.compile(r'[A-Za-z][\w$]*').match
     for v in list(vars.keys()):
+        if ''.join(v.lower().split()) in interface_names:
+            continue
         m = name_match(v)
         if m:
             n = v[m.start():m.end()]
@@ -2895,6 +2906,8 @@ def analyzevars(block):
     # block; type names are not data entities and are never implicitly typed
     typenames = {b['name'] for b in block['body'] if b['block'] == 'type'}
     for n in svars:
+        if ''.join(n.lower().split()) in interface_names:
+            continue
         if n[0] in list(attrrules.keys()):
             vars[n] = setattrspec(vars[n], attrrules[n[0]])
         if 'typespec' not in vars[n] and n not in typenames:
