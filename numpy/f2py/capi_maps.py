@@ -143,6 +143,7 @@ def load_f2cmap_file(f2cmap_file):
     global f2cmap_all, f2cmap_mapped
 
     f2cmap_all = copy.deepcopy(f2cmap_default)
+    f2cmap_mapped = []
 
     if f2cmap_file is None:
         # Default value
