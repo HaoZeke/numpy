@@ -1094,8 +1094,12 @@ def test_compile_extra_objects(meson_build_of, hello_world_f90, tmp_path):
         (tmp_path / obj).touch()
     mbld = meson_build_of("-m", "blah", str(hello_world_f90), *objs)
     objects = re.search(r"objects: \[(.*?)\]", mbld, re.DOTALL).group(1)
-    for obj in objs:
-        assert f"'''{tmp_path / obj}'''" in objects
+    link_args = re.search(r"link_args: \[(.*?)\]", mbld, re.DOTALL).group(1)
+    assert objects.strip() == f"'''{tmp_path / objs[0]}''',"
+    for library in objs[1:]:
+        absolute_path = f"'''{tmp_path / library}'''"
+        assert absolute_path in link_args
+        assert absolute_path not in objects
 
 
 def test_compile_relative_paths(meson_build_of, hello_world_f90, tmp_path):
