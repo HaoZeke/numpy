@@ -184,7 +184,7 @@ class MesonBackend(Backend):
         # Command line paths are relative to the working directory, while
         # meson resolves paths from build_dir, where meson.build is written
         self.include_dirs = [
-            _meson_include_dir(d, self.build_dir) for d in self.include_dirs or []
+            Path(d).absolute() for d in self.include_dirs or []
         ]
         self.library_dirs = [Path(d).absolute() for d in self.library_dirs]
 
