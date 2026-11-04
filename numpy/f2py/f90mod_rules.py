@@ -93,7 +93,9 @@ def _parameter_variable(var, module):
     var = copy.deepcopy(var)
     parameters = get_parameters(module['vars'], get_useparameters(module))
 
-    def extent(expression, maximum=int(np.iinfo(np.intp).max)):
+    maximum_extent = int(np.iinfo(np.intp).max)
+
+    def extent(expression, maximum=maximum_extent):
         value = _eval_scalar(str(expression), parameters)
         if not isinstance(value, str) or not re.fullmatch(r'[+-]?[0-9]+', value.strip()):
             raise ValueError('Cannot determine module PARAMETER storage extent ' + repr(expression))
