@@ -200,7 +200,8 @@ class TestDerivedOperatorDispatch(util.F2PyTest):
 
     def test_array_operator_procedure_keeps_ordinary_interface(self):
         values = [self.module.small_value(value=n) for n in (1, 2, 3, 4)]
-        assert self.module.small_array_sum(values[:2], values[2:]) == 10
+        assert self.module.operator_dispatch_mod.small_array_sum(
+            values[:2], values[2:]) == 10
 
     def test_defined_assignment_from_integer(self):
         value = self.module.small_value(value=1)

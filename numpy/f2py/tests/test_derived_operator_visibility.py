@@ -66,7 +66,7 @@ class TestPrivateOperatorInterfaces(util.F2PyTest):
 
     def test_public_procedure_remains_callable(self):
         value = self.module.private_value(value=3)
-        assert self.module.public_value_total(value) == 3
+        assert self.module.default_private_operators.public_value_total(value) == 3
 
     def test_explicit_private_implementation(self):
         left = self.module.explicit_value(value=3)
