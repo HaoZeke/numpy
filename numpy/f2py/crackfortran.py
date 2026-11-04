@@ -2637,7 +2637,11 @@ def get_parameters(vars, global_params={}):
     for n in param_names:
         if '=' in vars[n]:
             v = vars[n]['=']
-            integer_expression = v if isinteger(vars[n]) and not isarray(vars[n]) else None
+            dimspec = ([s.removeprefix('dimension').strip()
+                        for s in vars[n]['attrspec']
+                        if s.startswith('dimension')] or [None])[0]
+            integer_expression = (v if isinteger(vars[n]) and not isarray(vars[n])
+                                  and dimspec is None else None)
             if islogical(vars[n]):
                 v = v.lower()
                 for repl in [
@@ -2691,10 +2695,6 @@ def get_parameters(vars, global_params={}):
             elif iscomplex(vars[n]):
                 outmess(f'get_parameters[TODO]: '
                         f'implement evaluation of complex expression {v}\n')
-
-            dimspec = ([s.removeprefix('dimension').strip()
-                        for s in vars[n]['attrspec']
-                       if s.startswith('dimension')] or [None])[0]
 
             # Handle _dp for gh-6624
             # Also fixes gh-20460
