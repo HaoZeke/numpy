@@ -154,6 +154,7 @@ import string
 import subprocess
 import sys
 import tempfile
+import weakref
 from fractions import Fraction
 from pathlib import Path
 
@@ -2789,6 +2790,18 @@ def _selected_int_kind_func(r):
                                 key=lambda k: (_range('integer', k), k)))
 
 
+class _ProbeDirectory:
+    """Keep a cached probe alive and clean its directory explicitly."""
+
+    def __init__(self):
+        directory = tempfile.TemporaryDirectory(prefix='f2py-kind-')
+        self.name = directory.name
+        self._cleanup = weakref.finalize(self, directory.cleanup)
+
+    def cleanup(self):
+        self._cleanup()
+
+
 @functools.lru_cache(maxsize=8)
 def _selected_real_kind_program(context, kinds):
     """Build a query with the argument kinds and target execution context."""
@@ -2796,7 +2809,7 @@ def _selected_real_kind_program(context, kinds):
     if not context.command:
         raise _compiler_context.CompilerExecutionError(
             'FC must identify a Fortran compiler')
-    owner = tempfile.TemporaryDirectory(prefix='f2py-kind-')
+    owner = _ProbeDirectory()
     directory = Path(owner.name)
     source = directory / 'probe.f90'
     object_file = directory / 'probe.o'
