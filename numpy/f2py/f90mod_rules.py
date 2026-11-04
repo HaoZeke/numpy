@@ -168,6 +168,10 @@ def buildhooks(pymod):
             var = m['vars'][n]
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
+                if (var.get('typespec') in ('type', 'class')
+                        and capi_maps.getctype(var, n) == 'void'):
+                    outmess(f'\t\t\tSkipping unsupported derived variable "{n}".\n')
+                    continue
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
