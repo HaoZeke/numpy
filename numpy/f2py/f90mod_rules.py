@@ -24,7 +24,10 @@ from . import capi_maps, cfuncs, func2subr
 # code, it is safest to use import * pending a major refactoring of f2py.
 from .auxfuncs import *
 from .crackfortran import (
-    _eval_scalar, get_parameters, get_useparameters, undo_rmbadname,
+    _eval_scalar,
+    get_parameters,
+    get_useparameters,
+    undo_rmbadname,
     undo_rmbadname1,
 )
 
@@ -83,7 +86,6 @@ fgetdims2_sa = """\
       end if
       flag = 2
       call f2pysetdata(d,allocated(d))"""
-
 
 
 def _parameter_variable(var, module):

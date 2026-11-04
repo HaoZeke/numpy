@@ -1,15 +1,14 @@
 import copy
 import re
 
-import numpy as np
 import pytest
-from numpy.testing import assert_array_equal
 
+import numpy as np
 from numpy.f2py import crackfortran, f90mod_rules
 from numpy.f2py.f2py2e import run_main
+from numpy.testing import assert_array_equal
 
 from . import util
-
 
 ORIGINAL = util.getpath("tests", "src", "modules", "gh22511_original.f90")
 STORAGE = util.getpath("tests", "src", "modules", "gh22511_storage.f90")
