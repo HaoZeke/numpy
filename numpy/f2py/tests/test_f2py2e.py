@@ -11,11 +11,7 @@ from pathlib import Path
 import pytest
 
 from numpy.f2py._backends._meson import MesonBackend
-from numpy.f2py.f2py2e import (
-    get_newer_options,
-    main as f2pycli,
-    preparse_sysargv,
-)
+from numpy.f2py.f2py2e import get_newer_options, main as f2pycli, preparse_sysargv
 from numpy.testing._private.utils import NOGIL_BUILD
 
 from . import util
@@ -1147,7 +1143,6 @@ def test_compile_relative_include_dir(tmp_path, monkeypatch):
     assert rout.stdout.strip() == "42"
 
 
-
 def cli_meson_build(monkeypatch, tmp_path, fsrc, *flags):
     """Run ``f2py -c`` with `flags` up to writing meson.build and return it
 
@@ -1164,7 +1159,6 @@ def cli_meson_build(monkeypatch, tmp_path, fsrc, *flags):
     return (bdir / "meson.build").read_text()
 
 
-
 def test_meson_backend_default(capfd, monkeypatch):
     """Check that meson is the default backend and needs no warning
 
@@ -1174,7 +1168,6 @@ def test_meson_backend_default(capfd, monkeypatch):
     assert preparse_sysargv()["backend"] == "meson"
     out, err = capfd.readouterr()
     assert "distutils" not in out + err
-
 
 
 @pytest.mark.parametrize("opts, shown, hint", [
@@ -1209,7 +1202,6 @@ def test_reject_removed_distutils_options(capfd, hello_world_f90, monkeypatch, o
     assert hint in err
 
 
-
 def test_no_distutils_backend_all_options(capfd, hello_world_f90, monkeypatch):
     """Check that every rejected option is reported at once
 
@@ -1224,7 +1216,6 @@ def test_no_distutils_backend_all_options(capfd, hello_world_f90, monkeypatch):
     _, err = capfd.readouterr()
     assert "  --fcompiler=gnu95: " in err
     assert "  --opt=-O3: " in err
-
 
 
 def test_npd_debug(hello_world_f90, monkeypatch, tmp_path):
@@ -1242,7 +1233,6 @@ def test_npd_debug(hello_world_f90, monkeypatch, tmp_path):
     assert "buildtype=release" in meson_build
 
 
-
 def test_npd_define(hello_world_f90, monkeypatch, tmp_path):
     """
     CLI :: -D<define>
@@ -1255,7 +1245,6 @@ def test_npd_define(hello_world_f90, monkeypatch, tmp_path):
     mparser.Parser(meson_build, "meson.build").parse()
     c_args = ", ".join(f"'''{macro}'''" for macro in macros)
     assert f"c_args: [{c_args}]" in meson_build
-
 
 
 def test_npd_undefine(hello_world_f90, monkeypatch, tmp_path):
