@@ -2073,6 +2073,10 @@ def postcrack(block, args=None, tab=''):
                         str(block))
     if 'name' in block and not block['name'] == 'unknown_interface':
         outmess(f"{tab}Block: {block['name']}\n", 0)
+    if (block.get('block') in ('function', 'subroutine')
+            and 'saved_interface' not in block):
+        block['saved_interface'] = crack2fortrangen(
+            block, '\n' + ' ' * 6, as_interface=True)
     block = analyzeargs(block)
     block = analyzecommon(block)
     block['vars'] = analyzevars(block)
