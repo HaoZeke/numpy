@@ -3443,7 +3443,14 @@ def analyzeargs(block):
                 if a not in block['vars']:
                     block['vars'][a] = {}
 
-    for b in block['body']:
+    # Dummy procedures can be declared inside an explicit interface.
+    callback_blocks = list(block['body'])
+    for interface in block['body']:
+        if interface['block'] == 'interface':
+            callback_blocks.extend(
+                routine for routine in interface['body']
+                if routine['block'] in ('function', 'subroutine'))
+    for b in callback_blocks:
         if b['name'] in args:
             if 'externals' not in block:
                 block['externals'] = []
@@ -3699,7 +3706,8 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
                 continue
         if 'typespec' not in vars[a]:
             if 'attrspec' in vars[a] and 'external' in vars[a]['attrspec']:
-                if a in args:
+                if (a in args and
+                        (not as_interface or a not in block.get('interfaced', []))):
                     ret = f'{ret}{tab}external {a}'
                 continue
             if a in typenames:
