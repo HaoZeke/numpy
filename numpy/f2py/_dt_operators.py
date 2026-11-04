@@ -58,6 +58,35 @@ def _operator_is_array(var):
                    for attr in var.get('attrspec', [])))
 
 
+def _module_symbol_private(module, name):
+    """Resolve module accessibility, including the default PRIVATE statement."""
+    variables = {key.lower().replace(' ', ''): value
+                 for key, value in module.get('vars', {}).items()}
+    attrs = variables.get(name.lower().replace(' ', ''), {}).get('attrspec', [])
+    if 'public' in attrs:
+        return False
+    if 'private' in attrs:
+        return True
+    return 'private' in variables.get('', {}).get('attrspec', [])
+
+
+def _operator_actual_call(proc, pname, arguments):
+    """Use an accessible generic when its specific implementation is private."""
+    op = proc.get('f2py_operator_generic')
+    if op == '=':
+        return arguments[0] + ' = (' + arguments[1] + ')'
+    if op is not None:
+        if len(arguments) == 1:
+            return '(' + op + ' (' + arguments[0] + '))'
+        return '((' + arguments[0] + ') ' + op + ' (' + arguments[1] + '))'
+    return pname + '(' + ', '.join(arguments) + ')'
+
+
+def _operator_assignment_call(proc, pname, arguments):
+    call = _operator_actual_call(proc, pname, arguments)
+    return call if proc.get('f2py_operator_generic') == '=' else 'call ' + call
+
+
 def _scan_operator_interfaces(module_block, typename, type_map):
     """Find supported scalar operator signatures involving a wrapped type."""
     if not hasbody(module_block):
@@ -72,6 +101,8 @@ def _scan_operator_interfaces(module_block, typename, type_map):
         assignment = name == 'assignment(=)'
         if (block.get('block') != 'interface'
                 or not (name.startswith('operator(') or assignment)):
+            continue
+        if _module_symbol_private(module_block, name):
             continue
         op = '=' if assignment else name[len('operator('):-1]
         if (not assignment and op not in _FORTRAN_ARITH_OPS
@@ -106,6 +137,8 @@ def _scan_operator_interfaces(module_block, typename, type_map):
                            else 'scalar')
             if op in _FORTRAN_CMP_OPS and result_kind != 'logical':
                 raise ValueError('comparison operator must return logical')
+            if _module_symbol_private(module_block, pname):
+                proc = dict(proc, f2py_operator_generic=op)
             ops.setdefault(op, []).append((pname, proc, result_kind))
             seen.add(pname)
     return ops
@@ -168,22 +201,25 @@ def _gen_operator_fortran_wrappers(typename, ops, type_map):
         for arg, actual, var in zip(dummy, actual_names, args):
             if _operator_kind(var) == 't':
                 lines += [f'    call c_f_pointer({arg}, {actual})']
-        actual = ', '.join(a if _operator_kind(v) == 't'
-                           else _member_actual(v, a)
-                           for a, v in zip(actual_names, args))
-        call = f'{pname}({actual})'
+        arguments = [a if _operator_kind(v) == 't' else _member_actual(v, a)
+                     for a, v in zip(actual_names, args)]
+        call = _operator_actual_call(proc, pname, arguments)
         if result_kind == 'assignment':
+            assignment = _operator_assignment_call(proc, pname, arguments)
+            if alias_copy:
+                alias_assignment = _operator_assignment_call(
+                    proc, pname, [actual_names[0], rhs])
             lines += [f'    {returned} = 0_c_int']
             if alias_copy:
                 lines += [f'    if (c_associated({dummy[0]}, {dummy[1]})) then',
                           (f'      allocate({rhs}, source={actual_names[1]}, '
                            f'stat={returned})'),
                           f'      if ({returned} /= 0) return',
-                          f'      call {pname}({actual_names[0]}, {rhs})',
+                          f'      {alias_assignment}',
                           f'      deallocate({rhs})', '    else',
-                          f'      call {call}', '    end if']
+                          f'      {assignment}', '    end if']
             else:
-                lines += [f'    call {call}']
+                lines += [f'    {assignment}']
         elif result_kind == 'type':
             lines += [f'    {returned} = c_null_ptr',
                       f'    allocate({value}, source={call}, stat={status})',

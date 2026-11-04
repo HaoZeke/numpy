@@ -218,6 +218,10 @@ def buildhooks(pymod):
                         outmess("f90mod_rules.buildhooks:"
                                 f" skipping {b['block']} {b_name}\n")
                     continue
+                if isprivate(m['vars'].get(b_name, {})):
+                    outmess("f90mod_rules.buildhooks: not exporting private"
+                            f" procedure {b_name}\n")
+                    continue
                 if b_name.lower() in finals:
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b_name}, which finalizes a"
