@@ -1095,7 +1095,7 @@ def test_compile_extra_objects(meson_build_of, hello_world_f90, tmp_path):
     mbld = meson_build_of("-m", "blah", str(hello_world_f90), *objs)
     objects = re.search(r"objects: \[(.*?)\]", mbld, re.DOTALL).group(1)
     for obj in objs:
-        assert f"'''{obj}'''" in objects
+        assert f"'''{tmp_path / obj}'''" in objects
 
 
 def test_compile_relative_paths(meson_build_of, hello_world_f90, tmp_path):
@@ -1112,7 +1112,7 @@ def test_compile_relative_paths(meson_build_of, hello_world_f90, tmp_path):
     assert "'''gen'''" in mbld
     assert f"'''-L{tmp_path / 'lib'}'''" in mbld
     objects = re.search(r"objects: \[(.*?)\]", mbld, re.DOTALL).group(1)
-    assert objects.split() == ["'''extra.o''',"]
+    assert objects.split() == [f"'''{tmp_path / 'objs' / 'extra.o'}''',"]
 
 
 @pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
