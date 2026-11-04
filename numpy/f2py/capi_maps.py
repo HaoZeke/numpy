@@ -583,6 +583,30 @@ def sign2map(a, var):
     return ret
 
 
+def _fortran_source_comment(rout):
+    """Name the original definition range without changing C line directives."""
+    location = rout.get('_source_location')
+    if not isinstance(location, dict):
+        return ''
+    filename = location.get('filename')
+    first = location.get('start_line')
+    end_filename = location.get('end_filename', filename)
+    last = location.get('end_line')
+    if (not isinstance(filename, str) or not filename
+            or not isinstance(end_filename, str) or not end_filename
+            or type(first) is not int or first < 1
+            or type(last) is not int or last < 1
+            or filename == end_filename and last < first):
+        return ''
+
+    def quoted(value):
+        return ascii(value).replace('*/', '* /').replace('#', r'\x23')
+
+    start = f'{quoted(filename)}:{first}'
+    end = str(last) if end_filename == filename else f'{quoted(end_filename)}:{last}'
+    return f'/* Fortran source: {start}-{end} */'
+
+
 def routsign2map(rout):
     """
     name,NAME,begintitle,endtitle
@@ -597,6 +621,7 @@ def routsign2map(rout):
            'name_lower': name.lower(),
            'NAME': name.upper(),
            'begintitle': gentitle(name),
+           'sourcecomment': _fortran_source_comment(rout),
            'endtitle': gentitle(f'end of {name}'),
            'fortranname': fname,
            'FORTRANNAME': fname.upper(),

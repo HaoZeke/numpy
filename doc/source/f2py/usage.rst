@@ -322,3 +322,21 @@ Example ``meson.build``:
 For more details and advanced usage, see the Meson build guide in the
 user documentation or refer to SciPy's Meson build files for real-world
 examples: https://github.com/scipy/scipy/tree/main/meson.build
+
+
+Relating generated C wrappers to Fortran source
+---------------------------------------------
+
+Each generated C wrapper carries a ``Fortran source`` comment immediately
+above its declaration. The comment identifies the input file and the line
+range of the corresponding Fortran procedure. For example::
+
+    /* Fortran source: 'solver.f90':12-27 */
+
+When a compiler reports an error in ``<module>module.c``, inspect the source
+comment above that wrapper to locate the associated Fortran definition.
+Continued declarations retain their first physical line, and procedures
+read from an INCLUDE file name that file. A signature-file declaration names
+its ``.pyf`` source rather than claiming a location in the implementation.
+File names are quoted and escaped in the comment. C ``#line`` directives
+are unchanged, so a C diagnostic still identifies the generated C statement.

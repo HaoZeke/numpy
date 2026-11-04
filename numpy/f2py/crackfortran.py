@@ -179,6 +179,7 @@ debug = []
 # Global variables
 beginpattern = ''
 currentfilename = ''
+current_source_location = None
 expectbegin = 1
 f90modulevars = {}
 filepositiontext = ''
@@ -200,7 +201,8 @@ usermodules = []
 def reset_global_f2py_vars():
     global groupcounter, grouplist, neededmodule, expectbegin
     global skipblocksuntil, usermodules, f90modulevars, gotnextfile
-    global filepositiontext, currentfilename, skipfunctions, skipfuncs
+    global filepositiontext, currentfilename, current_source_location
+    global skipfunctions, skipfuncs
     global onlyfuncs, include_paths, previous_context
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
     global f77modulename, skipemptyends, ignorecontains, dolowercase, debug
@@ -228,6 +230,7 @@ def reset_global_f2py_vars():
     gotnextfile = 1
     filepositiontext = ''
     currentfilename = ''
+    current_source_location = None
     skipfunctions = []
     skipfuncs = []
     onlyfuncs = []
@@ -364,10 +367,11 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     """
     global gotnextfile, filepositiontext, currentfilename, sourcecodeform, strictf77
     global beginpattern, quiet, verbose, dolowercase, include_paths
+    global current_source_location
 
     if not istop:
         saveglobals = gotnextfile, filepositiontext, currentfilename, sourcecodeform, strictf77,\
-            beginpattern, quiet, verbose, dolowercase
+            beginpattern, quiet, verbose, dolowercase, current_source_location
     if ffile == []:
         return
     localdolowercase = dolowercase
@@ -384,6 +388,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     if istop:
         dowithline('', -1)
     ll, l1 = '', ''
+    ll_location = None
     spacedigits = [' '] + [str(_m) for _m in range(10)]
     filepositiontext = ''
     fin = fileinput.FileInput(ffile, openhook=openhook)
@@ -398,6 +403,9 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 ' correctly.')
         if not l:
             break
+        physical_filename = fin.filename()
+        physical_line = fin.filelineno()
+        emitted_location = ll_location
         if fin.isfirstline():
             filepositiontext = ''
             currentfilename = fin.filename()
@@ -467,6 +475,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             if (not cont or strictf77) and (len(l) > 5 and not l[5] == ' '):
                 # Continuation of a previous line
                 ll = ll + l[6:]
+                origin = ll_location[:2] if ll_location else (physical_filename, physical_line)
+                ll_location = (*origin, fin.filename(), fin.filelineno())
                 finalline = ''
                 origfinalline = ''
             else:
@@ -475,6 +485,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     l = r.group('line')  # Continuation follows ..
                 if cont:
                     ll = ll + cont2.match(l).group('line')
+                    origin = ll_location[:2] if ll_location else (physical_filename, physical_line)
+                    ll_location = (*origin, fin.filename(), fin.filelineno())
                     finalline = ''
                     origfinalline = ''
                 else:
@@ -487,6 +499,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                         finalline = ll
                     origfinalline = ll
                     ll = l
+                    ll_location = (physical_filename, physical_line, fin.filename(), fin.filelineno())
 
         elif sourcecodeform == 'free':
             if not cont and ext == '.pyf' and mline_mark.match(l):
@@ -506,6 +519,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 l = r.group('line')  # Continuation follows ..
             if cont:
                 ll = ll + cont2.match(l).group('line')
+                origin = ll_location[:2] if ll_location else (physical_filename, physical_line)
+                ll_location = (*origin, fin.filename(), fin.filelineno())
                 finalline = ''
                 origfinalline = ''
             else:
@@ -517,12 +532,14 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     finalline = ll
                 origfinalline = ll
                 ll = l
+                ll_location = (physical_filename, physical_line, fin.filename(), fin.filelineno())
             cont = (r is not None)
         else:
             raise ValueError(
                 f"Flag sourcecodeform must be either 'fix' or 'free': {repr(sourcecodeform)}")
         filepositiontext = (f'Line #{fin.filelineno() - 1} '
                             f'in {currentfilename}:"{l1}"\n\t')
+        current_source_location = emitted_location
         m = includeline.match(origfinalline)
         if m:
             fn = m.group('name')
@@ -551,6 +568,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         finalline = ll
     origfinalline = ll
     filepositiontext = f'Line #{fin.filelineno() - 1} in {currentfilename}:"{l1}"\n\t'
+    current_source_location = ll_location
     m = includeline.match(origfinalline)
     if m:
         fn = m.group('name')
@@ -571,12 +589,13 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     else:
         dowithline(finalline)
     filepositiontext = ''
+    current_source_location = None
     fin.close()
     if istop:
         dowithline('', 1)
     else:
         gotnextfile, filepositiontext, currentfilename, sourcecodeform, strictf77,\
-            beginpattern, quiet, verbose, dolowercase = saveglobals
+            beginpattern, quiet, verbose, dolowercase, current_source_location = saveglobals
 
 
 # Crack line
@@ -838,6 +857,10 @@ def crackline(line, reset=0):
                             f'{groupname[groupcounter]!r}\n\t{filepositiontext}')
         if skipblocksuntil == groupcounter:
             skipblocksuntil = -1
+        location = groupcache[groupcounter].get('_source_location')
+        if location is not None and current_source_location is not None:
+            location['end_filename'] = current_source_location[2]
+            location['end_line'] = current_source_location[3]
         grouplist[groupcounter - 1].append(groupcache[groupcounter])
         grouplist[groupcounter - 1][-1]['body'] = grouplist[groupcounter]
         del grouplist[groupcounter]
@@ -1136,6 +1159,12 @@ def analyzeline(m, case, line):
         groupcache[groupcounter]['prefix'] = m.group('before')
         groupcache[groupcounter]['name'] = rmbadname1(name)
         groupcache[groupcounter]['result'] = result
+        if case == 'begin' and block in ('function', 'subroutine') and current_source_location is not None:
+            filename, first, end_filename, last = current_source_location
+            groupcache[groupcounter]['_source_location'] = {
+                'filename': filename, 'start_line': first,
+                'end_filename': end_filename, 'end_line': last,
+            }
         if groupcounter == 1:
             groupcache[groupcounter]['from'] = currentfilename
         elif f77modulename and groupcounter == 3:
