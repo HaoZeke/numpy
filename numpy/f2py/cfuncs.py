@@ -901,6 +901,97 @@ short_from_pyobj(short* v, PyObject *obj, const char *errmess) {
 """
 
 
+cfuncs['f2py_has_scalar_conversion'] = """
+/* Distinguish a failed numeric protocol from an unsupported conversion. */
+static int
+f2py_has_scalar_conversion(PyObject *obj, int integer)
+{
+    void *slot = PyType_GetSlot(Py_TYPE(obj), integer ? Py_nb_int : Py_nb_float);
+    if (slot != NULL) {
+        return 1;
+    }
+    if (PyErr_Occurred()) {
+        return -1;
+    }
+    slot = PyType_GetSlot(Py_TYPE(obj), Py_nb_index);
+    if (slot != NULL) {
+        return 1;
+    }
+    if (PyErr_Occurred()) {
+        return -1;
+    }
+#if PY_VERSION_HEX < 0x030e0000
+    /* int() also recognizes __trunc__; inspect classes without descriptors. */
+    if (integer) {
+        PyObject *key = PyUnicode_FromString("__trunc__");
+        int found = 0;
+        if (key == NULL) {
+            return -1;
+        }
+#if PY_VERSION_HEX >= 0x030d0000 && defined(Py_GIL_DISABLED) && !defined(PYPY_VERSION) && !defined(GRAALVM_PYTHON)
+        /* The owned lookup synchronizes access to a replaceable type MRO. */
+        PyObject *method = _PyType_LookupRef(Py_TYPE(obj), key);
+        found = method != NULL;
+        Py_XDECREF(method);
+#else
+        PyObject *mro = Py_XNewRef(Py_TYPE(obj)->tp_mro);
+        for (Py_ssize_t i = 0; mro && i < PyTuple_GET_SIZE(mro); i++) {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(mro, i);
+#if PY_VERSION_HEX >= 0x030c0000 && !defined(PYPY_VERSION) && !defined(GRAALVM_PYTHON)
+            PyObject *dict = PyType_GetDict(base);
+#else
+            PyObject *dict = Py_XNewRef(base->tp_dict);
+#endif
+            int contains = dict && PyDict_GetItemWithError(dict, key) != NULL;
+            Py_XDECREF(dict);
+            if (contains) {
+                found = 1;
+                break;
+            }
+            if (PyErr_Occurred()) {
+                found = -1;
+                break;
+            }
+        }
+        Py_XDECREF(mro);
+#endif
+        if (PyErr_Occurred()) {
+            found = -1;
+        }
+        Py_DECREF(key);
+        return found;
+    }
+#endif
+    return 0;
+}
+"""
+
+
+cfuncs['f2py_scalar_fallback'] = """
+/* Return a new reference only for the supported nonnumeric fallback paths. */
+static PyObject *
+f2py_scalar_fallback(PyObject *obj)
+{
+    if (!(PyErr_ExceptionMatches(PyExc_TypeError) ||
+          PyErr_ExceptionMatches(PyExc_ValueError)) ||
+            PyErr_ExceptionMatches(PyExc_Warning)) {
+        return NULL;
+    }
+    if (PyComplex_Check(obj)) {
+        PyErr_Clear();
+        return PyObject_GetAttrString(obj, "real");
+    }
+    if (PySequence_Check(obj) &&
+            !(PyBytes_Check(obj) || PyUnicode_Check(obj))) {
+        PyErr_Clear();
+        return PySequence_GetItem(obj, 0);
+    }
+    return NULL;
+}
+"""
+
+
+needs['int_from_pyobj'] = ['f2py_has_scalar_conversion', 'f2py_scalar_fallback']
 cfuncs['int_from_pyobj'] = """
 static int
 int_from_pyobj(int* v, PyObject *obj, const char *errmess)
@@ -912,6 +1003,10 @@ int_from_pyobj(int* v, PyObject *obj, const char *errmess)
         return !(*v == -1 && PyErr_Occurred());
     }
 
+    int has_conversion = f2py_has_scalar_conversion(obj, 1);
+    if (has_conversion < 0) {
+        return 0;
+    }
     tmp = PyNumber_Long(obj);
     if (tmp) {
         *v = Npy__PyLong_AsInt(tmp);
@@ -919,38 +1014,30 @@ int_from_pyobj(int* v, PyObject *obj, const char *errmess)
         return !(*v == -1 && PyErr_Occurred());
     }
 
-    if (PyComplex_Check(obj)) {
-        PyErr_Clear();
-        tmp = PyObject_GetAttrString(obj,\"real\");
+    if (has_conversion) {
+        return 0;
     }
-    else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
-        /*pass*/;
-    }
-    else if (PySequence_Check(obj)) {
-        PyErr_Clear();
-        tmp = PySequence_GetItem(obj, 0);
-    }
-
+    tmp = f2py_scalar_fallback(obj);
     if (tmp) {
-        if (int_from_pyobj(v, tmp, errmess)) {
+        int success;
+        if (Py_EnterRecursiveCall(" while converting a f2py scalar")) {
             Py_DECREF(tmp);
-            return 1;
+            return 0;
         }
+        success = int_from_pyobj(v, tmp, errmess);
+        Py_LeaveRecursiveCall();
         Py_DECREF(tmp);
+        return success;
     }
-
-    {
-        PyObject* err = PyErr_Occurred();
-        if (err == NULL) {
-            err = #modulename#_error;
-        }
-        PyErr_SetString(err, errmess);
+    if (!PyErr_Occurred()) {
+        PyErr_SetString(#modulename#_error, errmess);
     }
     return 0;
 }
 """
 
 
+needs['long_from_pyobj'] = ['f2py_has_scalar_conversion', 'f2py_scalar_fallback']
 cfuncs['long_from_pyobj'] = """
 static int
 long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
@@ -961,6 +1048,10 @@ long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
         return !(*v == -1 && PyErr_Occurred());
     }
 
+    int has_conversion = f2py_has_scalar_conversion(obj, 1);
+    if (has_conversion < 0) {
+        return 0;
+    }
     tmp = PyNumber_Long(obj);
     if (tmp) {
         *v = PyLong_AsLong(tmp);
@@ -968,38 +1059,32 @@ long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
         return !(*v == -1 && PyErr_Occurred());
     }
 
-    if (PyComplex_Check(obj)) {
-        PyErr_Clear();
-        tmp = PyObject_GetAttrString(obj,\"real\");
+    if (has_conversion) {
+        return 0;
     }
-    else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
-        /*pass*/;
-    }
-    else if (PySequence_Check(obj)) {
-        PyErr_Clear();
-        tmp = PySequence_GetItem(obj, 0);
-    }
-
+    tmp = f2py_scalar_fallback(obj);
     if (tmp) {
-        if (long_from_pyobj(v, tmp, errmess)) {
+        int success;
+        if (Py_EnterRecursiveCall(" while converting a f2py scalar")) {
             Py_DECREF(tmp);
-            return 1;
+            return 0;
         }
+        success = long_from_pyobj(v, tmp, errmess);
+        Py_LeaveRecursiveCall();
         Py_DECREF(tmp);
+        return success;
     }
-    {
-        PyObject* err = PyErr_Occurred();
-        if (err == NULL) {
-            err = #modulename#_error;
-        }
-        PyErr_SetString(err, errmess);
+    if (!PyErr_Occurred()) {
+        PyErr_SetString(#modulename#_error, errmess);
     }
     return 0;
 }
 """
 
 
-needs['long_long_from_pyobj'] = ['long_long']
+needs['long_long_from_pyobj'] = [
+    'long_long', 'f2py_has_scalar_conversion',
+    'f2py_scalar_fallback']
 cfuncs['long_long_from_pyobj'] = """
 static int
 long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
@@ -1011,6 +1096,10 @@ long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
         return !(*v == -1 && PyErr_Occurred());
     }
 
+    int has_conversion = f2py_has_scalar_conversion(obj, 1);
+    if (has_conversion < 0) {
+        return 0;
+    }
     tmp = PyNumber_Long(obj);
     if (tmp) {
         *v = PyLong_AsLongLong(tmp);
@@ -1018,31 +1107,23 @@ long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
         return !(*v == -1 && PyErr_Occurred());
     }
 
-    if (PyComplex_Check(obj)) {
-        PyErr_Clear();
-        tmp = PyObject_GetAttrString(obj,\"real\");
+    if (has_conversion) {
+        return 0;
     }
-    else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
-        /*pass*/;
-    }
-    else if (PySequence_Check(obj)) {
-        PyErr_Clear();
-        tmp = PySequence_GetItem(obj, 0);
-    }
-
+    tmp = f2py_scalar_fallback(obj);
     if (tmp) {
-        if (long_long_from_pyobj(v, tmp, errmess)) {
+        int success;
+        if (Py_EnterRecursiveCall(" while converting a f2py scalar")) {
             Py_DECREF(tmp);
-            return 1;
+            return 0;
         }
+        success = long_long_from_pyobj(v, tmp, errmess);
+        Py_LeaveRecursiveCall();
         Py_DECREF(tmp);
+        return success;
     }
-    {
-        PyObject* err = PyErr_Occurred();
-        if (err == NULL) {
-            err = #modulename#_error;
-        }
-        PyErr_SetString(err,errmess);
+    if (!PyErr_Occurred()) {
+        PyErr_SetString(#modulename#_error, errmess);
     }
     return 0;
 }
@@ -1077,6 +1158,7 @@ long_double_from_pyobj(long_double* v, PyObject *obj, const char *errmess)
 """
 
 
+needs['double_from_pyobj'] = ['f2py_has_scalar_conversion', 'f2py_scalar_fallback']
 cfuncs['double_from_pyobj'] = """
 static int
 double_from_pyobj(double* v, PyObject *obj, const char *errmess)
@@ -1087,6 +1169,10 @@ double_from_pyobj(double* v, PyObject *obj, const char *errmess)
         return !(*v == -1.0 && PyErr_Occurred());
     }
 
+    int has_conversion = f2py_has_scalar_conversion(obj, 0);
+    if (has_conversion < 0) {
+        return 0;
+    }
     tmp = PyNumber_Float(obj);
     if (tmp) {
         *v = PyFloat_AsDouble(tmp);
@@ -1094,26 +1180,23 @@ double_from_pyobj(double* v, PyObject *obj, const char *errmess)
         return !(*v == -1.0 && PyErr_Occurred());
     }
 
-    if (PyComplex_Check(obj)) {
-        PyErr_Clear();
-        tmp = PyObject_GetAttrString(obj,\"real\");
+    if (has_conversion) {
+        return 0;
     }
-    else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
-        /*pass*/;
-    }
-    else if (PySequence_Check(obj)) {
-        PyErr_Clear();
-        tmp = PySequence_GetItem(obj, 0);
-    }
-
+    tmp = f2py_scalar_fallback(obj);
     if (tmp) {
-        if (double_from_pyobj(v,tmp,errmess)) {Py_DECREF(tmp); return 1;}
+        int success;
+        if (Py_EnterRecursiveCall(" while converting a f2py scalar")) {
+            Py_DECREF(tmp);
+            return 0;
+        }
+        success = double_from_pyobj(v, tmp, errmess);
+        Py_LeaveRecursiveCall();
         Py_DECREF(tmp);
+        return success;
     }
-    {
-        PyObject* err = PyErr_Occurred();
-        if (err==NULL) err = #modulename#_error;
-        PyErr_SetString(err,errmess);
+    if (!PyErr_Occurred()) {
+        PyErr_SetString(#modulename#_error, errmess);
     }
     return 0;
 }
