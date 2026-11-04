@@ -4,12 +4,19 @@ from numpy import array
 
 from . import util
 
+# 123.6 is not integral, so the integer converters warn and then truncate.
+_RETURN_INTEGER_TRUNC = (
+    r"f2py scalar argument got a non-integer float for an integer "
+    r"argument; truncating it is deprecated \(gh-24394\)"
+)
+
 
 @pytest.mark.slow
 class TestReturnInteger(util.F2PyTest):
     def check_function(self, t, tname):
         assert t(123) == 123
-        assert t(123.6) == 123
+        with pytest.warns(DeprecationWarning, match=_RETURN_INTEGER_TRUNC):
+            assert t(123.6) == 123
         assert t("123") == 123
         assert t(-123) == -123
         assert t([123]) == 123

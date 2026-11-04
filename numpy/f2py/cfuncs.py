@@ -901,6 +901,88 @@ short_from_pyobj(short* v, PyObject *obj, const char *errmess) {
 """
 
 
+needs['f2py_lossy_scalar_warn'] = ['math.h']
+cppmacros['f2py_lossy_scalar_warn'] = r"""
+/*
+ * Shared gh-24394 text for the scalar converters.
+ * F2PY_PYERR_WARN_FAILED is the PyErr_WarnEx failure value.
+ */
+#define F2PY_PYERR_WARN_FAILED (-1)
+#define F2PY_SCALAR_SEQ_WARN_PREFIX \
+    "f2py scalar argument got a sequence of length "
+#define F2PY_SCALAR_SEQ_WARN_SUFFIX \
+    "; only the first element is used, which is deprecated (gh-24394)"
+#define F2PY_SCALAR_CPLX_WARN \
+    "f2py scalar argument got a complex value with a nonzero imaginary part; dropping it is deprecated (gh-24394)"
+#define F2PY_SCALAR_TRUNC_WARN \
+    "f2py scalar argument got a non-integer float for an integer argument; truncating it is deprecated (gh-24394)"
+/* Decimal width of the most negative Py_ssize_t, including the sign. */
+#define F2PY_SCALAR_SEQ_LEN_CHARS 20
+/* Each sizeof includes a NUL, which covers the terminator. */
+#define F2PY_SCALAR_SEQ_WARN_BUFSZ \
+    (sizeof(F2PY_SCALAR_SEQ_WARN_PREFIX) + F2PY_SCALAR_SEQ_LEN_CHARS \
+     + sizeof(F2PY_SCALAR_SEQ_WARN_SUFFIX))
+
+static int
+f2py_warn_scalar_sequence(Py_ssize_t length)
+{
+    char message[F2PY_SCALAR_SEQ_WARN_BUFSZ];
+    (void)PyOS_snprintf(message, sizeof(message), "%s%zd%s",
+                        F2PY_SCALAR_SEQ_WARN_PREFIX, length,
+                        F2PY_SCALAR_SEQ_WARN_SUFFIX);
+    return PyErr_WarnEx(PyExc_DeprecationWarning, message, 1);
+}
+
+static int
+f2py_warn_scalar_complex(void)
+{
+    return PyErr_WarnEx(PyExc_DeprecationWarning, F2PY_SCALAR_CPLX_WARN, 1);
+}
+
+static int
+f2py_warn_scalar_trunc(void)
+{
+    return PyErr_WarnEx(PyExc_DeprecationWarning, F2PY_SCALAR_TRUNC_WARN, 1);
+}
+
+/*
+ * Warn before integer conversion truncates a non-integral float.
+ * Returns the PyErr_WarnEx status, or 0 when no warning is needed.
+ * NaN and inf are not integral: trunc(inf) compares equal to itself.
+ */
+static int
+f2py_warn_nonintegral_float(PyObject *obj)
+{
+    double value;
+    int is_float = 0;
+
+    if (PyFloat_Check(obj)) {
+        value = PyFloat_AsDouble(obj);
+        is_float = 1;
+    }
+    else if (PyArray_IsScalar(obj, Floating) ||
+             (PyArray_Check(obj) &&
+              PyArray_NDIM((PyArrayObject *)obj) == 0 &&
+              PyArray_ISFLOAT((PyArrayObject *)obj))) {
+        value = PyFloat_AsDouble(obj);
+        is_float = 1;
+    }
+    if (!is_float) {
+        return 0;
+    }
+    if (PyErr_Occurred()) {
+        PyErr_Clear();
+        return 0;
+    }
+    if (!isfinite(value) || value != trunc(value)) {
+        return f2py_warn_scalar_trunc();
+    }
+    return 0;
+}
+"""
+
+
+needs['int_from_pyobj'] = ['f2py_lossy_scalar_warn']
 cfuncs['int_from_pyobj'] = """
 static int
 int_from_pyobj(int* v, PyObject *obj, const char *errmess)
@@ -912,6 +994,11 @@ int_from_pyobj(int* v, PyObject *obj, const char *errmess)
         return !(*v == -1 && PyErr_Occurred());
     }
 
+    /* Warn before PyNumber_Long truncates a non-integral float. */
+    if (f2py_warn_nonintegral_float(obj) == F2PY_PYERR_WARN_FAILED) {
+        return 0;
+    }
+
     tmp = PyNumber_Long(obj);
     if (tmp) {
         *v = Npy__PyLong_AsInt(tmp);
@@ -919,15 +1006,35 @@ int_from_pyobj(int* v, PyObject *obj, const char *errmess)
         return !(*v == -1 && PyErr_Occurred());
     }
 
+    /* Keep a Warning that a filter turned into an error (gh-24394). */
+    if (PyErr_ExceptionMatches(PyExc_Warning)) {
+        return 0;
+    }
+
     if (PyComplex_Check(obj)) {
+        double imag = PyComplex_ImagAsDouble(obj);
+        int lossy = imag != 0.0;
         PyErr_Clear();
+        if (lossy &&
+                f2py_warn_scalar_complex() == F2PY_PYERR_WARN_FAILED) {
+            return 0;
+        }
         tmp = PyObject_GetAttrString(obj,\"real\");
     }
     else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
         /*pass*/;
     }
     else if (PySequence_Check(obj)) {
+        Py_ssize_t seq_len;
         PyErr_Clear();
+        seq_len = PySequence_Size(obj);
+        if (seq_len < 0) {
+            PyErr_Clear();
+        }
+        else if (seq_len > 1 &&
+                f2py_warn_scalar_sequence(seq_len) == F2PY_PYERR_WARN_FAILED) {
+            return 0;
+        }
         tmp = PySequence_GetItem(obj, 0);
     }
 
@@ -951,6 +1058,7 @@ int_from_pyobj(int* v, PyObject *obj, const char *errmess)
 """
 
 
+needs['long_from_pyobj'] = ['f2py_lossy_scalar_warn']
 cfuncs['long_from_pyobj'] = """
 static int
 long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
@@ -961,6 +1069,11 @@ long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
         return !(*v == -1 && PyErr_Occurred());
     }
 
+    /* Warn before PyNumber_Long truncates a non-integral float. */
+    if (f2py_warn_nonintegral_float(obj) == F2PY_PYERR_WARN_FAILED) {
+        return 0;
+    }
+
     tmp = PyNumber_Long(obj);
     if (tmp) {
         *v = PyLong_AsLong(tmp);
@@ -968,15 +1081,35 @@ long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
         return !(*v == -1 && PyErr_Occurred());
     }
 
+    /* Keep a Warning that a filter turned into an error (gh-24394). */
+    if (PyErr_ExceptionMatches(PyExc_Warning)) {
+        return 0;
+    }
+
     if (PyComplex_Check(obj)) {
+        double imag = PyComplex_ImagAsDouble(obj);
+        int lossy = imag != 0.0;
         PyErr_Clear();
+        if (lossy &&
+                f2py_warn_scalar_complex() == F2PY_PYERR_WARN_FAILED) {
+            return 0;
+        }
         tmp = PyObject_GetAttrString(obj,\"real\");
     }
     else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
         /*pass*/;
     }
     else if (PySequence_Check(obj)) {
+        Py_ssize_t seq_len;
         PyErr_Clear();
+        seq_len = PySequence_Size(obj);
+        if (seq_len < 0) {
+            PyErr_Clear();
+        }
+        else if (seq_len > 1 &&
+                f2py_warn_scalar_sequence(seq_len) == F2PY_PYERR_WARN_FAILED) {
+            return 0;
+        }
         tmp = PySequence_GetItem(obj, 0);
     }
 
@@ -999,7 +1132,7 @@ long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
 """
 
 
-needs['long_long_from_pyobj'] = ['long_long']
+needs['long_long_from_pyobj'] = ['long_long', 'f2py_lossy_scalar_warn']
 cfuncs['long_long_from_pyobj'] = """
 static int
 long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
@@ -1011,6 +1144,11 @@ long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
         return !(*v == -1 && PyErr_Occurred());
     }
 
+    /* Warn before PyNumber_Long truncates a non-integral float. */
+    if (f2py_warn_nonintegral_float(obj) == F2PY_PYERR_WARN_FAILED) {
+        return 0;
+    }
+
     tmp = PyNumber_Long(obj);
     if (tmp) {
         *v = PyLong_AsLongLong(tmp);
@@ -1018,15 +1156,35 @@ long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
         return !(*v == -1 && PyErr_Occurred());
     }
 
+    /* Keep a Warning that a filter turned into an error (gh-24394). */
+    if (PyErr_ExceptionMatches(PyExc_Warning)) {
+        return 0;
+    }
+
     if (PyComplex_Check(obj)) {
+        double imag = PyComplex_ImagAsDouble(obj);
+        int lossy = imag != 0.0;
         PyErr_Clear();
+        if (lossy &&
+                f2py_warn_scalar_complex() == F2PY_PYERR_WARN_FAILED) {
+            return 0;
+        }
         tmp = PyObject_GetAttrString(obj,\"real\");
     }
     else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
         /*pass*/;
     }
     else if (PySequence_Check(obj)) {
+        Py_ssize_t seq_len;
         PyErr_Clear();
+        seq_len = PySequence_Size(obj);
+        if (seq_len < 0) {
+            PyErr_Clear();
+        }
+        else if (seq_len > 1 &&
+                f2py_warn_scalar_sequence(seq_len) == F2PY_PYERR_WARN_FAILED) {
+            return 0;
+        }
         tmp = PySequence_GetItem(obj, 0);
     }
 
@@ -1077,6 +1235,7 @@ long_double_from_pyobj(long_double* v, PyObject *obj, const char *errmess)
 """
 
 
+needs['double_from_pyobj'] = ['f2py_lossy_scalar_warn']
 cfuncs['double_from_pyobj'] = """
 static int
 double_from_pyobj(double* v, PyObject *obj, const char *errmess)
@@ -1094,15 +1253,35 @@ double_from_pyobj(double* v, PyObject *obj, const char *errmess)
         return !(*v == -1.0 && PyErr_Occurred());
     }
 
+    /* Keep a Warning that a filter turned into an error (gh-24394). */
+    if (PyErr_ExceptionMatches(PyExc_Warning)) {
+        return 0;
+    }
+
     if (PyComplex_Check(obj)) {
+        double imag = PyComplex_ImagAsDouble(obj);
+        int lossy = imag != 0.0;
         PyErr_Clear();
+        if (lossy &&
+                f2py_warn_scalar_complex() == F2PY_PYERR_WARN_FAILED) {
+            return 0;
+        }
         tmp = PyObject_GetAttrString(obj,\"real\");
     }
     else if (PyBytes_Check(obj) || PyUnicode_Check(obj)) {
         /*pass*/;
     }
     else if (PySequence_Check(obj)) {
+        Py_ssize_t seq_len;
         PyErr_Clear();
+        seq_len = PySequence_Size(obj);
+        if (seq_len < 0) {
+            PyErr_Clear();
+        }
+        else if (seq_len > 1 &&
+                f2py_warn_scalar_sequence(seq_len) == F2PY_PYERR_WARN_FAILED) {
+            return 0;
+        }
         tmp = PySequence_GetItem(obj, 0);
     }
 
