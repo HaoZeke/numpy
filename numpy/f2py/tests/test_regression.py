@@ -226,8 +226,8 @@ def test_meson_build_has_macros(tmp_path):
     )
     meson_build = backend.write_meson_build(tmp_path).read_text()
     mparser.Parser(meson_build, "meson.build").parse()
-    args = ("'''-DF2PY_REPORT_ON_ARRAY_COPY=1''', '''-DNO_APPEND_FORTRAN''', "
-            "'''-UNDEBUG'''")
+    args = ("'-DF2PY_REPORT_ON_ARRAY_COPY=1', '-DNO_APPEND_FORTRAN', "
+            "'-UNDEBUG'")
     assert f"c_args: [{args}]," in meson_build
     assert f"fortran_args: [{args}]," in meson_build
 
