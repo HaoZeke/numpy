@@ -147,6 +147,7 @@ import fileinput
 import functools
 import itertools
 import math
+import operator
 import os
 import re
 import shlex
@@ -164,7 +165,7 @@ except ImportError:
 
 import numpy as np
 
-from . import __version__, symbolic
+from . import __version__, _compiler_context, symbolic
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -2535,20 +2536,27 @@ def _compiler_key():
     return os.environ.get('FC') or ''
 
 
+def _compiler_context_key():
+    return _compiler_context.current(_compiler_key())
+
+
 @functools.cache
 def _fortran_compiles(compiler, code):
-    """Whether ``compiler`` compiles ``code``.
-
-    An empty compiler is gfortran, which is what an unset ``FC`` means.
-    """
-    argv = shlex.split(compiler) if compiler else ['gfortran']
+    """Whether the configured compiler accepts the Fortran source."""
+    context = _compiler_context.coerce(compiler)
+    if context.selected and not context.command:
+        raise _compiler_context.CompilerExecutionError(
+            'FC must identify a Fortran compiler')
+    command = context.command or ('gfortran',)
     try:
         with tempfile.TemporaryDirectory(prefix='f2py-kind-') as directory:
             src = os.path.join(directory, 'probe.f90')
             with open(src, 'w') as handle:
                 handle.write(code)
             run = subprocess.run(
-                [*argv, '-c', src, '-o', os.path.join(directory, 'probe.o')],
+                [*command, *context.compile_args, '-c', src,
+                 '-o', os.path.join(directory, 'probe.o')],
+                cwd=context.working_directory or None,
                 capture_output=True, timeout=_PROBE_COMPILE_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -2557,50 +2565,17 @@ def _fortran_compiles(compiler, code):
 
 def fortran_compiles(code):
     """Whether ``FC``, or gfortran when ``FC`` is unset, compiles ``code``."""
-    return _fortran_compiles(_compiler_key(), code)
+    return _fortran_compiles(_compiler_context_key(), code)
 
 
 def _run_selected_real_kind(precision, compiler):
-    """The value ``selected_real_kind(precision, 0)`` has at run time.
-
-    A constant argument is folded, and flang's folding can disagree with
-    its runtime. The call goes through a subroutine so it is not folded.
-    ``None`` when ``compiler`` is empty or the program cannot be run.
-    """
+    """Evaluate the selected compiler's runtime precision inquiry."""
     if not compiler:
         return None
-    argv = shlex.split(compiler)
-    code = (
-        "subroutine sr(p, res)\n"
-        "  integer, intent(in) :: p\n"
-        "  integer, intent(out) :: res\n"
-        "  res = selected_real_kind(p, 0)\n"
-        "end subroutine\n"
-        "program probe\n"
-        "  integer :: res\n"
-        f"  call sr({int(precision)}, res)\n"
-        "  open(10, file='kind.txt', status='replace')\n"
-        "  write(10, *) res\n"
-        "  close(10)\n"
-        "end program\n")
+    context = _compiler_context.coerce(compiler)
+    context.require_execution()
     try:
-        with tempfile.TemporaryDirectory(prefix='f2py-kind-') as directory:
-            src = os.path.join(directory, 'probe.f90')
-            exe = os.path.join(directory, 'probe')
-            with open(src, 'w') as handle:
-                handle.write(code)
-            compiled = subprocess.run(
-                [*argv, src, '-o', exe], capture_output=True,
-                timeout=_PROBE_COMPILE_TIMEOUT)
-            if compiled.returncode != 0:
-                return None
-            ran = subprocess.run(
-                [exe], cwd=directory, capture_output=True,
-                timeout=_PROBE_RUN_TIMEOUT)
-            if ran.returncode != 0:
-                return None
-            with open(os.path.join(directory, 'kind.txt')) as handle:
-                return int(handle.read())
+        return _execute_selected_real_kind(context, precision, 0, None)
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
 
@@ -2619,7 +2594,7 @@ def _compiler_has_binary128_kind():
 
     ``FC`` unset keeps the long-double heuristic, which is gfortran's.
     """
-    return _binary128_kind(_compiler_key())
+    return _binary128_kind(_compiler_context_key())
 
 
 # binary16 has 5 exponent bits and 11 significand digits.
@@ -2653,7 +2628,7 @@ def _compiler_half_kinds():
 
     ``FC`` unset means gfortran, which has neither kind.
     """
-    return _half_kinds(_compiler_key())
+    return _half_kinds(_compiler_context_key())
 
 
 def _build_real_formats(nmant, nexp, maxexp, drop_binary128=False, half=()):
@@ -2683,7 +2658,7 @@ class _RealFormats(dict):
         self._key = None
 
     def _ensure(self):
-        key = _compiler_key()
+        key = _compiler_context_key()
         if self._key == key:
             return
         formats = _formats_for(key)
@@ -2737,7 +2712,7 @@ _default_kinds = {'integer': 4, 'real': 4, 'complex': 4, 'logical': 4,
 def _model(typespec, kind):
     """Return the radix, digits and least and greatest exponent of the
     model numbers of a kind, with no exponents for an integer."""
-    return _model_for(_compiler_key(), typespec, kind)
+    return _model_for(_compiler_context_key(), typespec, kind)
 
 
 @functools.cache
@@ -2776,7 +2751,7 @@ def _decimal_exponent(x):
 
 
 def _precision(kind):
-    return _precision_for(_compiler_key(), kind)
+    return _precision_for(_compiler_context_key(), kind)
 
 
 @functools.cache
@@ -2787,7 +2762,7 @@ def _precision_for(compiler, kind):
 
 
 def _range(typespec, kind):
-    return _range_for(_compiler_key(), typespec, kind)
+    return _range_for(_compiler_context_key(), typespec, kind)
 
 
 @functools.cache
@@ -2815,9 +2790,142 @@ def _selected_int_kind_func(r):
                                 key=lambda k: (_range('integer', k), k)))
 
 
+@functools.lru_cache(maxsize=8)
+def _selected_real_kind_program(context, kinds):
+    """Build a query with the argument kinds and target execution context."""
+    context.require_execution()
+    if not context.command:
+        raise _compiler_context.CompilerExecutionError(
+            'FC must identify a Fortran compiler')
+    owner = tempfile.TemporaryDirectory(prefix='f2py-kind-')
+    directory = Path(owner.name)
+    source = directory / 'probe.f90'
+    object_file = directory / 'probe.o'
+    executable = directory / 'probe'
+    declarations = ''
+    for name, kind in zip(('p', 'r', 'radix'), kinds):
+        selector = '' if kind is None else f'(kind={kind})'
+        declarations += f'      integer{selector} :: {name}\n'
+    program = """      program f2py_kind_probe
+      implicit none
+      integer :: mask, result, status
+@DECLARATIONS@      read(*, *, iostat=status) mask, p, r, radix
+      if (status /= 0) stop 2
+      select case (mask)
+      case (1)
+        result = selected_real_kind(p=p)
+      case (2)
+        result = selected_real_kind(r=r)
+      case (3)
+        result = selected_real_kind(p=p, r=r)
+      case (4)
+        result = selected_real_kind(radix=radix)
+      case (5)
+        result = selected_real_kind(p=p, radix=radix)
+      case (6)
+        result = selected_real_kind(r=r, radix=radix)
+      case (7)
+        result = selected_real_kind(p=p, r=r, radix=radix)
+      case default
+        stop 2
+      end select
+      write(*, '(i0)') result
+      end program f2py_kind_probe
+"""
+    try:
+        source.write_text(program.replace('@DECLARATIONS@', declarations),
+                          encoding='ascii')
+        commands = (
+            ('compile', [*context.command, *context.compile_args,
+                         '-c', str(source), '-o', str(object_file)]),
+            ('link', [*context.command, *context.link_args,
+                      str(object_file), '-o', str(executable)]),
+        )
+        for phase, command in commands:
+            completed = subprocess.run(
+                command, cwd=context.working_directory or None,
+                capture_output=True, timeout=_PROBE_COMPILE_TIMEOUT, check=False)
+            if completed.returncode:
+                raise _compiler_context.CompilerExecutionError(
+                    f'selected_real_kind probe {phase} failed: '
+                    + completed.stderr.decode(errors='replace')[-1024:])
+    except (OSError, subprocess.SubprocessError) as error:
+        owner.cleanup()
+        raise _compiler_context.CompilerExecutionError(
+            'Cannot compile or link the configured Fortran kind probe') from error
+    except BaseException:
+        owner.cleanup()
+        raise
+    return owner, executable
+
+
+def _kind_argument_kind(value):
+    if value is None:
+        return None
+    kind = getattr(value, 'kind', None)
+    if kind is not None:
+        kind = operator.index(kind)
+        if kind <= 0:
+            raise ValueError('An INTEGER argument kind must be positive')
+        return kind
+    number = operator.index(value)
+    if -(1 << 31) <= number < (1 << 31):
+        return None
+    for kind in (8, 16):
+        if -(1 << (8 * kind - 1)) <= number < (1 << (8 * kind - 1)):
+            return kind
+    raise ValueError('Intrinsic argument exceeds supported INTEGER widths')
+
+
+def _execute_selected_real_kind(context, p, r, radix):
+    context.require_execution()
+    values = (p, r, radix)
+    kinds = tuple(_kind_argument_kind(value) for value in values)
+    mask = sum(1 << index for index, value in enumerate(values)
+               if value is not None)
+    arguments = [0 if value is None else operator.index(value)
+                 for value in values]
+    owner, executable = _selected_real_kind_program(context, kinds)
+    query = ' '.join(str(value) for value in (mask, *arguments)) + '\n'
+    command = [*context.runner, str(executable)]
+    try:
+        completed = subprocess.run(
+            command, input=query.encode('ascii'), cwd=owner.name,
+            capture_output=True, timeout=_PROBE_RUN_TIMEOUT, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise _compiler_context.CompilerExecutionError(
+            'Cannot execute the configured Fortran kind probe') from error
+    try:
+        output = completed.stdout.decode('ascii', errors='strict').strip()
+    except UnicodeDecodeError as error:
+        raise _compiler_context.CompilerExecutionError(
+            'Fortran kind probe output must be an ASCII integer') from error
+    if completed.returncode or re.fullmatch(r'-?[0-9]+', output) is None:
+        raise _compiler_context.CompilerExecutionError(
+            'Configured Fortran kind probe execution failed: '
+            + completed.stderr.decode(errors='replace')[-1024:])
+    return int(output)
+
+
+def _selected_real_kind_from_compiler(compiler, flags, p, r, radix):
+    context = _compiler_context.coerce(compiler)
+    context = _compiler_context.replace(
+        context, compile_args=tuple(flags), selected=True)
+    return _execute_selected_real_kind(context, p, r, radix)
+
+
 def _selected_real_kind_func(p=None, r=None, radix=None):
     if p is None and r is None and radix is None:
         raise TypeError('selected_real_kind takes at least one argument')
+    compiler = _compiler_context_key()
+    if compiler:
+        command = compiler.command
+        if not command:
+            raise _compiler_context.CompilerExecutionError(
+            'FC must identify a Fortran compiler')
+        flags = compiler.compile_args
+        return _default_integer(_selected_real_kind_from_compiler(
+            command, flags, p, r, radix))
     p = 0 if p is None else p
     r = 0 if r is None else r
     kinds = [k for k in _real_formats
@@ -3793,6 +3901,8 @@ def _fit_length(value, var, g_params, params):
     try:
         length = _fortran_eval(sel.get('len', sel.get('*', '1')), g_params,
                                params)
+    except _compiler_context.CompilerExecutionError:
+        raise
     except Exception:
         # an assumed length, e.g. len=*, is the length of the value
         return value
@@ -3831,6 +3941,8 @@ def _declared_type(name, var, params, implicitrules=None):
         try:
             kind = _fortran_eval(selector['kind'], {}, params)
             return typespec, _kind_arg(kind, typespec)
+        except _compiler_context.CompilerExecutionError:
+            raise
         except Exception:
             return typespec, None
     if '*' in selector and typespec != 'character':
@@ -3878,7 +3990,7 @@ class _Declarations(collections.abc.Mapping):
         return len(self.vars)
 
 
-def get_parameters(vars, global_params={}, implicitrules=None):
+def _get_typed_parameters(vars, global_params={}, implicitrules=None):
     params = copy.copy(global_params)
     g_params = collections.ChainMap(global_params,
                                     _Declarations(vars, params))
@@ -3894,6 +4006,8 @@ def get_parameters(vars, global_params={}, implicitrules=None):
                        if s.startswith('dimension')] or [None])[0]
             try:
                 params[n] = param_eval(v, g_params, params, dimspec=dimspec)
+            except _compiler_context.CompilerExecutionError:
+                raise
             except Exception as msg:
                 params[n] = v
                 outmess(f'get_parameters: got "{msg}" on {n!r}\n')
@@ -3919,6 +4033,25 @@ def get_parameters(vars, global_params={}, implicitrules=None):
     return params
 
 
+def _public_parameter_value(value):
+    """Expose Python integers without changing other exact Fortran values."""
+    if isinstance(value, _Integer):
+        return int(value)
+    if isinstance(value, dict):
+        return {key: _public_parameter_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_public_parameter_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_public_parameter_value(item) for item in value)
+    return value
+
+
+def get_parameters(vars, global_params={}, implicitrules=None):
+    """Return parameters with plain Python integers and indexed dictionaries."""
+    return _public_parameter_value(
+        _get_typed_parameters(vars, global_params, implicitrules))
+
+
 def _eval_dimension(d, params, declared={}):
     """Evaluate a dimension, length or kind that is a constant integer
     expression, in which an inquiry may ask about a declared variable.
@@ -3928,6 +4061,8 @@ def _eval_dimension(d, params, declared={}):
     """
     try:
         value = _fortran_eval(d, declared, params)
+    except _compiler_context.CompilerExecutionError:
+        raise
     except Exception:
         return d
     return str(value) if isinstance(value, int) else d
@@ -3951,6 +4086,8 @@ def _eval_scalar(value, params, c_literals=False):
         result = _fortran_eval(value, {}, params, c_literals)
     except (NameError, SyntaxError, TypeError):
         return value
+    except _compiler_context.CompilerExecutionError:
+        raise
     except Exception as msg:
         errmess(f'"{msg}" in evaluating {value!r} '
                 f'(available names: {list(params)})\n')
@@ -4015,7 +4152,7 @@ def analyzevars(block):
         parent = parent.get('parent_block')
     for key, value in host.items():
         use_params.setdefault(key, value)
-    params = get_parameters(vars, use_params, implicitrules)
+    params = _get_typed_parameters(vars, use_params, implicitrules)
     declared = _Declarations(vars, params)
     if block['block'] == 'module':
         # kept for get_useparameters, as the analysis below reduces the
@@ -4346,6 +4483,8 @@ def analyzevars(block):
                                 try:
                                     kindselect['kind'] = eval(
                                         kindselect['kind'], {}, params)
+                                except _compiler_context.CompilerExecutionError:
+                                    raise
                                 except Exception:
                                     pass
                             vars[n]['kindselector'] = kindselect
@@ -4475,6 +4614,8 @@ def _extend_parameter_items(values, item, g_params, params, implied):
     """Append constructor values, preserving explicit-shape diagnostics."""
     try:
         values.extend(_eval_items(item, g_params, params))
+    except _compiler_context.CompilerExecutionError:
+        raise
     except Exception as msg:
         if implied:
             raise
@@ -4501,6 +4642,8 @@ def param_eval(v, g_params, params, dimspec=None):
     if dimspec is None:
         try:
             p = _fortran_eval(v, g_params, params)
+        except _compiler_context.CompilerExecutionError:
+            raise
         except Exception as msg:
             p = v
             outmess(f'param_eval: got "{msg}" on {v!r}\n')

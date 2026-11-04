@@ -12,15 +12,24 @@ __version__ = "$Revision: 1.27 $"[10:-1]
 
 f2py_version = 'See `f2py -v`'
 
+import copy
+import re
+
 import numpy as np
 
-from . import capi_maps, func2subr
+from . import capi_maps, cfuncs, func2subr
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
 # code, it is safest to use import * pending a major refactoring of f2py.
 from .auxfuncs import *
-from .crackfortran import undo_rmbadname, undo_rmbadname1
+from .crackfortran import (
+    _eval_scalar,
+    _get_typed_parameters,
+    get_useparameters,
+    undo_rmbadname,
+    undo_rmbadname1,
+)
 
 options = {}
 
@@ -79,6 +88,55 @@ fgetdims2_sa = """\
       call f2pysetdata(d,allocated(d))"""
 
 
+def _parameter_variable(var, module):
+    """Resolve constant storage dimensions without emitting a global VLA."""
+    var = copy.deepcopy(var)
+    parameters = _get_typed_parameters(module['vars'], get_useparameters(module))
+
+    maximum_extent = int(np.iinfo(np.intp).max)
+
+    def extent(expression, maximum=maximum_extent):
+        value = _eval_scalar(str(expression), parameters)
+        if not isinstance(value, str) or not re.fullmatch(r'[+-]?[0-9]+', value.strip()):
+            raise ValueError('Cannot determine module PARAMETER storage extent ' + repr(expression))
+        try:
+            size = int(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"Cannot determine module PARAMETER storage extent {expression!r}"
+            ) from error
+        size = max(0, size)
+        if size > maximum:
+            raise ValueError('Module PARAMETER storage extent exceeds its C representation')
+        return str(size)
+
+    if 'dimension' in var:
+        var['dimension'] = [extent(value) for value in var['dimension']]
+    if isstring_or_stringarray(var):
+        selector = var['charselector']
+        length = selector.get('f2py_len', selector.get('len', selector.get('*', '1')))
+        selector['f2py_len'] = extent(length, int(np.iinfo(np.intc).max))
+    return var
+
+
+def _parameter_storage(var, ctype, elsize):
+    """Compute checked storage counts as Python integers."""
+    count = 1
+    for dimension in var.get('dimension', []):
+        count *= int(dimension)
+    if isstring_or_stringarray(var):
+        storage_type = 'char'
+        count *= int(elsize)
+        itemsize = 1
+    else:
+        storage_type = ctype
+        itemsize = int(np.dtype(capi_maps.c2pycode_map[ctype]).itemsize)
+    maximum = int(np.iinfo(np.intp).max)
+    if count < 0 or count > maximum or count * itemsize > maximum:
+        raise ValueError('Module PARAMETER storage size exceeds npy_intp')
+    return storage_type, count
+
+
 def buildhooks(pymod):
     from . import rules
     ret = {'f90modhooks': [], 'initf90modhooks': [], 'body': [],
@@ -86,35 +144,6 @@ def buildhooks(pymod):
            'separatorsfor': {'includes0': '\n', 'includes': '\n'},
            'docs': ['"Fortran 90/95 modules:\\n"'],
            'latexdoc': []}
-    # gh-22511: a parameter can reach f2pysetupfunc as a temporary,
-    # so keep a copy of it rather than the pointer.  The copy is a struct
-    # assignment, as the setup function has the module variables in scope
-    # and any of them could shadow a function or typedef name.  The struct
-    # is named after the entry in f2py_<module>_def, since joining module
-    # and variable names with _ need not give a unique name.
-    parameter_rules = {
-        'f90modhooks': {
-            l_not(isstring_or_stringarray):
-                'struct f2py_#f90modulename#_def_#index# '
-                '{#ctype# capi_data[#size#];};\n',
-            isstring: 'struct f2py_#f90modulename#_def_#index# '
-                      '{char capi_data[#size#];};\n',
-            isstringarray: 'struct f2py_#f90modulename#_def_#index# '
-                           '{char capi_data[#size#][#elsize#];};\n',
-        },
-        'setdata': ('\t{\n'
-                    '\t\tstatic struct f2py_#f90modulename#_def_#index# capi_copy;\n'
-                    '\t\tcapi_copy = '
-                    '*(struct f2py_#f90modulename#_def_#index# *)#varname#;\n'
-                    '\t\tf2py_#f90modulename#_def[i_f2py++].data = '
-                    '(char *)&capi_copy;\n'
-                    '\t}'),
-        'need': [rules.typedef_need_dict,
-                 {l_or(iscomplex, iscomplexarray, isint1array): '#ctype#'}],
-        # an empty parameter has nothing to copy, and C has no empty arrays
-        '_check': l_and(isparameter, lambda var: '0' not in (
-            capi_maps.get_elsize(var), *var.get('dimension', []))),
-    }
     fhooks = ['']
 
     def fadd(line, s=fhooks):
@@ -138,14 +167,6 @@ def buildhooks(pymod):
             var = m['vars'][n]
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
-                if isparameter(var) and ('*' in var.get('dimension', []) or
-                                         capi_maps.get_elsize(var) == '-1'):
-                    outmess(f"\t\t\tSkipping {n} since f2py could not "
-                            "evaluate its size...\n")
-                    continue
-                if var.get('typespec') == 'type':
-                    outmess(f"\t\t\tSkipping {n} since it is of derived type...\n")
-                    continue
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
@@ -182,8 +203,10 @@ def buildhooks(pymod):
             dadd(note)
         if onlyvars:
             dadd('\\begin{description}')
-        for i, n in enumerate(onlyvars):
+        for index, n in enumerate(onlyvars):
             var = m['vars'][n]
+            if 'parameter' in var.get('attrspec', []):
+                var = _parameter_variable(var, m)
             modobjs.append(n)
             ct = capi_maps.getctype(var, n)
             at = capi_maps.c2capi_map[ct]
@@ -224,14 +247,30 @@ def buildhooks(pymod):
                 fargs.append(n)
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
-                ar = applyrules(parameter_rules, {**vrd, **dm, 'varname': n,
-                                                  'ctype': ct, 'elsize': elsize,
-                                                  'index': str(i)},
-                                var)
-                if ar:
-                    ret['f90modhooks'].append(ar['f90modhooks'])
-                iadd(ar.get('setdata',
-                            f"\tf2py_{m['name']}_def[i_f2py++].data = {n};"))
+                if 'parameter' in var.get('attrspec', []):
+                    # The compiler can pass a constant through a temporary.
+                    # Copy its representation while that address is valid.
+                    # File-scope typed storage supplies alignment and lifetime.
+                    storage = f"f2py_{m['name']}_def_{index}_data"
+                    while storage in m['vars'] or storage in notvars:
+                        storage += '_'
+                    counter = 'f2py_copy_index'
+                    while counter in m['vars'] or counter == storage:
+                        counter += '_'
+                    storage_type, count = _parameter_storage(var, ct, elsize)
+                    if storage_type in cfuncs.typedefs and storage_type not in ret['need']:
+                        ret['need'].append(storage_type)
+                    ret['f90modhooks'].append(
+                        f'static {storage_type} {storage}[({count}) > 0 ? ({count}) : 1];\n')
+                    iadd(f'\tfor (unsigned long long {counter} = 0; '
+                         f'{counter} < (({count}) > 0 ? sizeof({storage}) : 0); '
+                         f'++{counter}) {{')
+                    iadd(f'\t\t((unsigned char *){storage})[{counter}] = '
+                         f'((unsigned char *){n})[{counter}];')
+                    iadd('\t}')
+                    iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = (char *){storage};")
+                else:
+                    iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
         if onlyvars:
             dadd('\\end{description}')
         if hasbody(m):
@@ -286,13 +325,24 @@ def buildhooks(pymod):
              f'F2PYINIT{m_name.upper()})(f2py_setup_{m_name});')
         iadd('}\n')
         ret['f90modhooks'] = ret['f90modhooks'] + chooks + ihooks
+        constants = [
+            '\t\t{\n\t\t\tPyObject *v = PyDict_GetItemString('
+            f'((PyFortranObject *)tmp)->dict, "{undo_rmbadname1(n)}");\n'
+            '\t\t\tif (v != NULL)\n\t\t\t\tPyArray_CLEARFLAGS('
+            '(PyArrayObject *)v, NPY_ARRAY_WRITEABLE);\n\t\t}'
+            for n in onlyvars
+            if 'parameter' in m['vars'][n].get('attrspec', [])]
         ret['initf90modhooks'] = [
             '\t{',
             ('\t\tPyObject *tmp = '
             f'PyFortranObject_New(f2py_{m_name}_def,f2py_init_{m_name});'),
             '\t\tif (tmp == NULL) return -1;',
-            f'\t\tPyDict_SetItemString(d, "{m_name}", tmp);',
-            '\t\tPy_XDECREF(tmp);',
+            *constants,
+            f'\t\tif (PyDict_SetItemString(d, "{m_name}", tmp) < 0) {{',
+            '\t\t\tPy_DECREF(tmp);',
+            '\t\t\treturn -1;',
+            '\t\t}',
+            '\t\tPy_DECREF(tmp);',
             '\t}',
         ] + ret["initf90modhooks"]
         fadd('')

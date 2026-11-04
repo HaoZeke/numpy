@@ -13,3 +13,11 @@ Kind names such as ``real128`` and ``c_float128`` map as their kind numbers.
 ``c_int_fast16_t`` and ``c_int_fast32_t`` take the kind the Fortran compiler gives them.
 A module procedure sees the named constants of its module.
 ``check()`` prints a ``real(2)`` scalar as a number.
+
+External array-valued functions use explicit interfaces
+------------------------------------------------------------
+F2PY generates an explicit Fortran interface when wrapping an external
+function with an array result, including functions with fixed-shape
+arguments. This preserves the result's array rank at the generated call
+site. In particular, a CHARACTER array result is not declared as a scalar
+CHARACTER result whose length is the array extent.

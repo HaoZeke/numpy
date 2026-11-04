@@ -204,8 +204,8 @@ def _fast_c_type(name):
     """The probed C type, unless a ``.f2py_f2cmap`` entry names this kind."""
     if name in _fast_user_override:
         return None
-    from .crackfortran import _compiler_key
-    ctype = _fast_integer_ctype(name, _compiler_key())
+    from .crackfortran import _compiler_context_key
+    ctype = _fast_integer_ctype(name, _compiler_context_key())
     if ctype is not None:
         f2cmap_all['integer'][name] = ctype
     return ctype

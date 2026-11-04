@@ -36,12 +36,6 @@ fortranobject_c = incdir_f2py / 'fortranobject.c'
 inc_np = include_directories(incdir_numpy, incdir_f2py)
 # gh-25000
 quadmath_dep = fc.find_library('quadmath', required: false)
-# LLVM flang links its runtime only when it drives the link, except on
-# Windows, where its objects name the runtime library themselves
-link_kwargs = {}
-if fc.get_id() == 'llvm-flang' and host_machine.system() != 'windows'
-  link_kwargs = {'link_language': 'fortran'}
-endif
 
 ${lib_declarations}
 ${lib_dir_declarations}
@@ -66,5 +60,6 @@ ${lib_list}
 ${lib_dir_list}
                      ],
 ${fortran_args}
-                     kwargs: link_kwargs,
+${c_args}
+                     link_language: 'fortran',
                      install : true)
