@@ -5,8 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from numpy.f2py import _compiler_context as context
-from numpy.f2py import crackfortran, f2py2e
+from numpy.f2py import _compiler_context as context, crackfortran, f2py2e
 
 
 def test_no_query_forwards_machine_file_names_without_reading(monkeypatch):

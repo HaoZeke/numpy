@@ -75,7 +75,6 @@ class CompilerContext:
                 'exe_wrapper or MESON_EXE_WRAPPER')
 
 
-
 class _DeferredCompilerContext:
     """Resolve machine files only when generation needs compiler settings."""
 
