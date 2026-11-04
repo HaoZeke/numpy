@@ -248,9 +248,7 @@ def test_untitled_cli(capfd, hello_world_f90, monkeypatch):
 
 @pytest.mark.slow
 def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
-    """Check that distutils-only options fail
-    CLI :: --fcompiler --help-link
-    """
+    """Distutils-only options fail with a migration hint."""
     MNAME = "hi"
     foutl = get_io_paths(hello_world_f90, mname=MNAME)
     ipath = foutl.f90inp
@@ -258,18 +256,21 @@ def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
         sys, "argv", f"f2py {ipath} -c --fcompiler=gfortran -m {MNAME}".split()
     )
     with util.switchdir(ipath.parent):
-        compiler_check_f2pycli()
-        out, _ = capfd.readouterr()
-        assert "--fcompiler cannot be used with meson" in out
+        with pytest.raises(SystemExit) as excinfo:
+            compiler_check_f2pycli()
+        assert excinfo.value.code == 2
+        out, err = capfd.readouterr()
+        assert not out
+        assert "  --fcompiler=gfortran: " in err
+        assert "FC environment variable" in err
 
-    monkeypatch.setattr(
-        sys, "argv", ["f2py", "--help-link"]
-    )
+    monkeypatch.setattr(sys, "argv", ["f2py", "--help-link"])
     with pytest.raises(SystemExit) as excinfo:
         f2pycli()
     assert excinfo.value.code == 2
-    _, err = capfd.readouterr()
-    assert "Unknown option '--help-link'" in err
+    out, err = capfd.readouterr()
+    assert not out
+    assert "  --help-link: link dependencies with --dep <dependency>" in err
 
 def test_f2py_skip(capfd, retreal_f77, monkeypatch):
     """Tests that functions can be skipped
@@ -773,16 +774,14 @@ def test_inclpath_order():
 
 
 def test_hlink(capfd, monkeypatch):
-    """The numpy.distutils system_info listing is gone
-
-    CLI :: --help-link
-    """
+    """The removed resource-listing option fails with its replacement."""
     monkeypatch.setattr(sys, "argv", ["f2py", "--help-link", "lapack_opt"])
     with pytest.raises(SystemExit) as excinfo:
         f2pycli()
     assert excinfo.value.code == 2
-    _, err = capfd.readouterr()
-    assert "Unknown option '--help-link'" in err
+    out, err = capfd.readouterr()
+    assert not out
+    assert "  --help-link: link dependencies with --dep <dependency>" in err
 
 
 @pytest.mark.parametrize("compile_flag", [[], ["-c"]])
@@ -956,18 +955,17 @@ def meson_build_of(monkeypatch, tmp_path):
 
 
 def test_compile_backend(meson_build_of, hello_world_f90, capfd):
-    """meson is the default and only backend, distutils falls back to it
-
-    CLI :: -c --backend
-    """
+    """Meson is the default backend; explicit distutils is rejected."""
     meson_build_of("-m", "blah", str(hello_world_f90))
     out, _ = capfd.readouterr()
     assert "distutils" not in out
 
-    meson_build_of("-m", "blah", str(hello_world_f90), "--backend", "distutils")
-    out, _ = capfd.readouterr()
-    assert ("The distutils backend has been removed, "
-            "using the meson backend instead.") in out
+    with pytest.raises(SystemExit) as excinfo:
+        meson_build_of("-m", "blah", str(hello_world_f90), "--backend", "distutils")
+    assert excinfo.value.code == 2
+    out, err = capfd.readouterr()
+    assert not out
+    assert "  --backend distutils: drop it, meson is the only backend" in err
 
 
 def test_compile_links_with_fortran(meson_build_of, hello_world_f90):
@@ -991,15 +989,15 @@ def test_compile_links_with_fortran(meson_build_of, hello_world_f90):
     "--noarch",
     "--link-lapack_opt",
 ])
-def test_compile_distutils_option(meson_build_of, hello_world_f90, flag):
-    """numpy.distutils-only options are accepted but not passed to meson
-
-    CLI :: -c --fcompiler= --compiler= --help-fcompiler --f77exec= --f90exec=
-           --opt= --arch= --noopt --noarch --link-<resource>
-    """
-    mbld = meson_build_of("-m", "blah", str(hello_world_f90), flag)
-    assert "'''hello.f90'''" in mbld
-    assert flag.split("=", 1)[-1] not in mbld
+def test_compile_distutils_option(meson_build_of, hello_world_f90, flag, capfd):
+    """Distutils-only compiler options fail instead of being ignored."""
+    with pytest.raises(SystemExit) as excinfo:
+        meson_build_of("-m", "blah", str(hello_world_f90), flag)
+    assert excinfo.value.code == 2
+    out, err = capfd.readouterr()
+    assert not out
+    assert f"  {flag}: " in err
+    assert "https://numpy.org/doc/stable/f2py/buildtools/distutils-to-meson.html" in err
 
 
 def test_compile_fortran_flags(meson_build_of, hello_world_f90):
@@ -1243,7 +1241,7 @@ def test_npd_define(hello_world_f90, monkeypatch, tmp_path):
               '-DVERSION="1.0"']
     meson_build = cli_meson_build(monkeypatch, tmp_path, hello_world_f90, *macros)
     mparser.Parser(meson_build, "meson.build").parse()
-    c_args = ", ".join(f"'''{macro}'''" for macro in macros)
+    c_args = ", ".join(f"'{macro}'" for macro in macros)
     assert f"c_args: [{c_args}]" in meson_build
 
 
@@ -1254,4 +1252,4 @@ def test_npd_undefine(hello_world_f90, monkeypatch, tmp_path):
     meson_build = cli_meson_build(
         monkeypatch, tmp_path, hello_world_f90, "-UNDEBUG", "-DFOO"
     )
-    assert "c_args: ['''-DFOO''', '''-UNDEBUG''']" in meson_build
+    assert "c_args: ['-DFOO', '-UNDEBUG']" in meson_build
