@@ -1988,7 +1988,7 @@ def get_usedict(block):
 
 
 def get_useparameters(block, param_map=None):
-    global f90modulevars
+    global f90moduleparams
 
     if param_map is None:
         param_map = {}
@@ -1997,7 +1997,7 @@ def get_useparameters(block, param_map=None):
         return param_map
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
-        if usename not in f90modulevars:
+        if usename not in f90moduleparams:
             outmess(f'get_useparameters: no module {usename} info used by '
                     f'{block.get("name")}\n')
             continue
