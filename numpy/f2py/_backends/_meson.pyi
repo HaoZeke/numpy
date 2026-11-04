@@ -14,8 +14,8 @@ class MesonTemplate:
     include_dirs: Final[list[str | Path]]
     substitutions: Final[dict[str, str]]
     objects: Final[list[str | Path]]
-    c_args: Final[list[str]]
     fortran_args: Final[list[str]]
+    c_args: Final[list[str]]
     pipeline: Final[list[Callable[[], None]]]
     build_type: Final[str]
     python_exe: Final[str]
@@ -35,7 +35,7 @@ class MesonTemplate:
         fortran_args: list[str],
         build_type: str,
         python_exe: str,
-        macro_args: list[str] | None = None,
+        c_args: list[str] | None = None,
     ) -> None: ...
 
     #
@@ -45,8 +45,8 @@ class MesonTemplate:
     def deps_substitution(self) -> None: ...
     def libraries_substitution(self) -> None: ...
     def include_substitution(self) -> None: ...
-    def c_args_substitution(self) -> None: ...
     def fortran_args_substitution(self) -> None: ...
+    def c_args_substitution(self) -> None: ...
 
     #
     def meson_build_template(self) -> str: ...
