@@ -29,6 +29,11 @@ extern "C" {
 #include <stdlib.h>
 #include <string.h>
 
+/* Opaque NumPy instance access requires its 2.5 API for abi3t. */
+#if defined(Py_TARGET_ABI3T) && !defined(NPY_TARGET_VERSION)
+#define NPY_TARGET_VERSION NPY_2_5_API_VERSION
+#endif
+
 #ifndef NPY_NO_DEPRECATED_API
 #define NPY_NO_DEPRECATED_API NPY_API_VERSION
 #endif
