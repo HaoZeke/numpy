@@ -2837,8 +2837,8 @@ def _selected_real_kind_program(context, kinds):
         commands = (
             ('compile', [*context.command, *context.compile_args,
                          '-c', str(source), '-o', str(object_file)]),
-            ('link', [*context.command, *context.link_args,
-                      str(object_file), '-o', str(executable)]),
+            ('link', [*context.command, str(object_file),
+                      *context.link_args, '-o', str(executable)]),
         )
         for phase, command in commands:
             completed = subprocess.run(

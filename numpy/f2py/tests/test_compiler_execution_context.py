@@ -128,7 +128,11 @@ def test_query_compiles_links_then_runs_only_executable_through_wrapper(
             crackfortran._Integer(2**40, 8))
         assert value == -1
         assert invocations[0][0][:3] == ['target-fc', '-O3', '-c']
-        assert invocations[1][0][:2] == ['target-fc', '-lm']
+        object_file = invocations[0][0][-1]
+        executable = invocations[1][0][-1]
+        assert invocations[1][0] == [
+            'target-fc', object_file, '-lm', '-o', executable,
+        ]
         assert invocations[2][0][:3] == ['qemu-aarch64', '-L', '/target tree']
         assert invocations[2][1]['input'] == b'5 1099511627776 0 1099511627776\n'
         program = Path(invocations[0][0][3]).read_text()
