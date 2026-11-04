@@ -362,7 +362,7 @@ def build_fortran_library(source_files, name):
     srcs = ", ".join(f"'{Path(fn).name}'" for fn in source_files)
     (d / "meson.build").write_text(
         f"project('{name}', 'fortran')\n"
-        f"static_library('{name}', [{srcs}], pic: true)\n"
+        f"static_library('{name}', [{srcs}], pic: true, install: true)\n"
     )
     for cmd in (["meson", "setup", "build"], ["meson", "compile", "-C", "build"]):
         p = subprocess.run(cmd, cwd=d, capture_output=True, text=True)
