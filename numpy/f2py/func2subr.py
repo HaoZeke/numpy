@@ -15,6 +15,7 @@ from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
     getfortranname,
+    isarray,
     isexternal,
     isfunction,
     isfunction_wrap,
@@ -108,7 +109,10 @@ def createfuncwrapper(rout, signature=0):
                 vars[dn] = dv
                 v['dimension'][i] = dn
     rout['args'].extend(extra_args)
-    need_interface = bool(extra_args)
+    # Array results require an explicit interface for fixed-shape inputs too.
+    need_interface = bool(extra_args) or (
+        not ismoduleroutine(rout) and isarray(vars[rout['name']])
+    )
 
     ret = ['']
 
