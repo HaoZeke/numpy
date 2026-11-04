@@ -155,6 +155,7 @@ except ImportError:
     charset_normalizer = None
 
 from . import __version__, symbolic
+from ._derived_expr import _fortran_eval
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -182,6 +183,35 @@ currentfilename = ''
 expectbegin = 1
 f90modulevars = {}
 filepositiontext = ''
+
+# Kind names from iso_fortran_env.
+# f2py's kind maps already use the byte size as the kind number:
+# integer 1, 2, 4 and 8, and real 4 and 8.
+# The standard names the bit width and leaves the kind number to the compiler.
+# real128 is left unresolved, as c_long_double is.
+# Unit numbers and IOSTAT values are left to the compiler.
+# The generated Fortran uses the compiler's symbols for those.
+
+
+def _make_param(typespec, value):
+    return {'typespec': typespec, 'attrspec': ['parameter'], '=': str(value)}
+
+
+_ISO_FORTRAN_ENV_VARS = {
+    'int8': _make_param('integer', 1),
+    'int16': _make_param('integer', 2),
+    'int32': _make_param('integer', 4),
+    'int64': _make_param('integer', 8),
+    'real32': _make_param('integer', 4),
+    'real64': _make_param('integer', 8),
+}
+
+# The kinds of iso_c_binding are those of the companion C processor
+# (F2018 18.2.2), such as c_long_double, which is 10 for gfortran on
+# x86-64, so they stay names and capi_maps maps them to C types.
+_INTRINSIC_MODULE_VARS = {
+    'iso_fortran_env': _ISO_FORTRAN_ENV_VARS,
+}
 gotnextfile = 1
 groupcache = None
 groupcounter = 0
@@ -584,7 +614,7 @@ beforethisafter = r'\s*(?P<before>%s(?=\s*(\b(%s)\b)))'\
     r'\s*(?P<this>(\b(%s)\b))'\
     r'\s*(?P<after>%s)\s*\Z'
 ##
-fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|byte'
+fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*).+-]*\))|class(?=\s*\([\w\s,=(*).+-]*\))|byte'
 typespattern = re.compile(
     beforethisafter % ('', fortrantypes, fortrantypes, '.*'), re.I), 'type'
 typespattern4implicit = re.compile(beforethisafter % (
@@ -599,9 +629,11 @@ subroutinepattern = re.compile(beforethisafter % (
 groupbegins77 = r'program|block\s*data'
 beginpattern77 = re.compile(
     beforethisafter % ('', groupbegins77, groupbegins77, '.*'), re.I), 'begin'
+# "type is (...)" is a type guard of SELECT TYPE (F2018 11.1.11), not the
+# definition of a type named is
 groupbegins90 = groupbegins77 + \
     r'|module(?!\s*procedure)|python\s*module|(abstract|)\s*interface|'\
-    r'type(?!\s*\()'
+    r'type(?!\s*\()(?!\s*is\s*\()'
 beginpattern90 = re.compile(
     beforethisafter % ('', groupbegins90, groupbegins90, '.*'), re.I), 'begin'
 groupends = (r'end|endprogram|endblockdata|endmodule|endpythonmodule|'
@@ -652,6 +684,8 @@ usepattern = re.compile(
     beforethisafter % ('', 'use', 'use', '.*'), re.I), 'use'
 containspattern = re.compile(
     beforethisafter % ('', 'contains', 'contains', ''), re.I), 'contains'
+sequencepattern = re.compile(
+    beforethisafter % ('', 'sequence', 'sequence', ''), re.I), 'sequence'
 formatpattern = re.compile(
     beforethisafter % ('', 'format', 'format', '.*'), re.I), 'format'
 # Non-fortran and f2py-specific statements
@@ -782,7 +816,7 @@ def crackline(line, reset=0):
                 formatpattern,
                 beginpattern, functionpattern, subroutinepattern,
                 implicitpattern, typespattern, commonpattern,
-                callpattern, usepattern, containspattern,
+                callpattern, usepattern, containspattern, sequencepattern,
                 entrypattern,
                 f2pyenhancementspattern,
                 multilinepattern,
@@ -861,6 +895,21 @@ def crackline(line, reset=0):
         if 0 <= skipblocksuntil <= groupcounter:
             return
         skipblocksuntil = groupcounter
+    elif pat[1] == 'sequence':
+        # SEQUENCE statement inside a type block (F2018 7.5.2.3).
+        # Add 'sequence' to the type's attrspec so wrapping code can
+        # detect it via issequencetype().
+        if groupcache[groupcounter].get('block') == 'type':
+            tname = groupcache[groupcounter].get('name', '')
+            # The parent block stores type attributes in vars[typename]
+            if groupcounter > 0:
+                parent = groupcache[groupcounter - 1]
+                if tname in parent.get('vars', {}):
+                    attrs = parent['vars'][tname].get('attrspec', [])
+                    if 'sequence' not in attrs:
+                        attrs.append('sequence')
+                    parent['vars'][tname]['attrspec'] = attrs
+        return
     else:
         if 0 <= skipblocksuntil <= groupcounter:
             return
@@ -1133,7 +1182,11 @@ def analyzeline(m, case, line):
         if not name:
             name = 'unknown_' + block.replace(' ', '_')
         groupcache[groupcounter]['prefix'] = m.group('before')
-        groupcache[groupcounter]['name'] = rmbadname1(name)
+        # a derived type keeps its name, which declarations, extends()
+        # and the attributes stored above refer to, and which only ever
+        # appears in C inside longer identifiers
+        groupcache[groupcounter]['name'] = (
+            name if block == 'type' else rmbadname1(name))
         groupcache[groupcounter]['result'] = result
         if groupcounter == 1:
             groupcache[groupcounter]['from'] = currentfilename
@@ -1596,13 +1649,35 @@ def cracktypespec0(typespec, ll):
     d = m1.groupdict()
     for k in list(d.keys()):
         d[k] = unmarkouterparen(d[k])
-    if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type']:
+    if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type', 'class']:
         selector = d['this']
         ll = d['after']
+    # Normalize class(T) to type(T) but preserve polymorphic marker
+    # (F2018 7.3.2.3: CLASS type specifier for polymorphic entities)
+    is_polymorphic = False
+    is_unlimited_poly = False
+    if typespec == 'class':
+        typespec = 'type'
+        # Check for CLASS(*) -- unlimited polymorphism
+        if selector and selector.strip() == '(*)':
+            is_unlimited_poly = True
+        else:
+            is_polymorphic = True
     i = ll.find('::')
     if i >= 0:
         attr = ll[:i].strip()
         ll = ll[i + 2:]
+    # Inject polymorphic attribute so downstream code can detect it
+    if is_polymorphic:
+        if attr:
+            attr = attr + ', polymorphic'
+        else:
+            attr = 'polymorphic'
+    elif is_unlimited_poly:
+        if attr:
+            attr = attr + ', unlimited_polymorphic'
+        else:
+            attr = 'unlimited_polymorphic'
     return typespec, selector, attr, ll
 
 
@@ -1612,6 +1687,8 @@ kindselector = re.compile(
     r'\s*(\(\s*(kind\s*=)?\s*(?P<kind>.*)\s*\)|\*\s*(?P<kind2>.*?))\s*\Z', re.I)
 charselector = re.compile(
     r'\s*(\((?P<lenkind>.*)\)|\*\s*(?P<charlen>.*))\s*\Z', re.I)
+typenamepattern = re.compile(
+    r'\s*\(\s*(?P<name>\w+)\s*(?P<params>\(.*\))?\s*\)', re.I)
 lenkindpattern = re.compile(
     r'\s*(kind\s*=\s*(?P<kind>.*?)\s*(@,@\s*len\s*=\s*(?P<len>.*)|)'
     r'|(len\s*=\s*|)(?P<len2>.*?)\s*(@,@\s*(kind\s*=\s*|)(?P<kind2>.*)'
@@ -1684,6 +1761,7 @@ def updatevars(typespec, selector, attrspec, entitydecl):
 
     last_name = None
     kindselect, charselect, typename = cracktypespec(typespec, selector)
+    typeparams = cracktypeparams(typespec, selector)
     # Clean up outer commas, whitespace and undesired chars from attrspec
     if attrspec:
         attrspec = [x.strip() for x in markoutercomma(attrspec).split('@,@')]
@@ -1698,7 +1776,14 @@ def updatevars(typespec, selector, attrspec, entitydecl):
                 a = s + a[len(s):]
             l.append(a)
         attrspec = l
-    el = [x.strip() for x in markoutercomma(entitydecl).split('@,@')]
+    # Strip pointer default initialization before entity splitting.
+    # F2018 R741: component-initialization is "=> null-init" or
+    # "=> initial-data-target" for pointer components (7.5.4.6).
+    # This must happen before space-based splitting, otherwise
+    # "data(:) => null()" becomes three tokens: "data(:)", "=>", "null()".
+    entitydecl_clean = re.sub(
+        r'\s*=>\s*null\s*\(\s*\)', '', entitydecl, flags=re.I)
+    el = [x.strip() for x in markoutercomma(entitydecl_clean).split('@,@')]
     el1 = []
     for e in el:
         for e1 in [x.strip() for x in markoutercomma(removespaces(markinnerspaces(e)), comma=' ').split('@ @')]:
@@ -1751,6 +1836,8 @@ def updatevars(typespec, selector, attrspec, entitydecl):
             elif typename and (not edecl['typename'] == typename):
                 outmess(f'updatevars: attempt to change the typename of "{ename}" '
                         f'("{edecl["typename"]}") to "{typename}". Ignoring.\n')
+            if typeparams and 'typeparams' not in edecl:
+                edecl['typeparams'] = typeparams
             if 'attrspec' not in edecl:
                 edecl['attrspec'] = copy.copy(attrspec)
             elif attrspec:
@@ -1762,13 +1849,31 @@ def updatevars(typespec, selector, attrspec, entitydecl):
             edecl['kindselector'] = copy.copy(kindselect)
             edecl['charselector'] = copy.copy(charselect)
             edecl['typename'] = typename
+            if typeparams:
+                edecl['typeparams'] = typeparams
             edecl['attrspec'] = copy.copy(attrspec)
         if 'external' in (edecl.get('attrspec') or []) and e in groupcache[groupcounter]['args']:
             if 'externals' not in groupcache[groupcounter]:
                 groupcache[groupcounter]['externals'] = []
             groupcache[groupcounter]['externals'].append(e)
-        if m.group('after'):
-            m1 = lenarraypattern.match(markouterparen(m.group('after')))
+        after = m.group('after')
+        # a coarray-spec follows the array-spec and precedes the length and
+        # the initialization (F2018 R803); brackets inside parentheses or
+        # after = construct arrays
+        depth, bracket = 0, -1
+        for i, c in enumerate(after):
+            depth += {'(': 1, ')': -1}.get(c, 0)
+            if depth == 0 and c in '=[':
+                bracket = i if c == '[' else -1
+                break
+        if bracket != -1:
+            closing = after.find(']', bracket)
+            if closing != -1:
+                edecl['attrspec'] = [*(edecl.get('attrspec') or []),
+                                     f'codimension{after[bracket:closing + 1]}']
+                after = after[:bracket] + after[closing + 1:]
+        if after:
+            m1 = lenarraypattern.match(markouterparen(after))
             if m1:
                 d1 = m1.groupdict()
                 for lk in ['len', 'array', 'init']:
@@ -1838,7 +1943,7 @@ def updatevars(typespec, selector, attrspec, entitydecl):
 
             else:
                 outmess('updatevars: could not crack entity declaration "%s". Ignoring.\n' % (
-                    ename + m.group('after')))
+                    ename + after))
         for k in list(edecl.keys()):
             if not edecl[k]:
                 del edecl[k]
@@ -1896,7 +2001,8 @@ def cracktypespec(typespec, selector):
             for k, i in list(charselect.items()):
                 charselect[k] = rmbadname1(i)
         elif typespec == 'type':
-            typename = re.match(r'\s*\(\s*(?P<name>\w+)\s*\)', selector, re.I)
+            # Match type(Name) or type(Name(params)) for parameterized types
+            typename = typenamepattern.match(selector)
             if typename:
                 typename = typename.group('name')
             else:
@@ -1904,6 +2010,16 @@ def cracktypespec(typespec, selector):
         else:
             outmess(f'cracktypespec: no selector used for {repr(selector)}\n')
     return kindselect, charselect, typename
+
+
+def cracktypeparams(typespec, selector):
+    """Return the type parameter list of a ``type(name(...))`` selector."""
+    if typespec != 'type' or not selector:
+        return None
+    m = typenamepattern.match(selector)
+    if m and m.group('params'):
+        return m.group('params')[1:-1].strip()
+    return None
 ######
 
 
@@ -2000,16 +2116,38 @@ def get_useparameters(block, param_map=None):
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
         if usename not in f90modulevars:
-            outmess(f'get_useparameters: no module {usename} info used by '
-                    f'{block.get("name")}\n')
-            continue
-        mvars = f90modulevars[usename]
+            if usename in _INTRINSIC_MODULE_VARS:
+                mvars = _INTRINSIC_MODULE_VARS[usename]
+            else:
+                outmess(f'get_useparameters: no module {usename} info used by '
+                        f'{block.get("name")}\n')
+                continue
+        else:
+            mvars = f90modulevars[usename]
         params = get_parameters(mvars)
         if not params:
             continue
-        # XXX: apply mapping
+        # Apply use...only / renaming mapping (F2018 11.2.2)
         if mapping:
-            errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
+            only = mapping.get('only', 0)
+            name_map = mapping.get('map', {})
+            if only:
+                # use module, only: a, b => c
+                # Only import listed names, applying renames
+                filtered = {}
+                for local_name, mod_name in name_map.items():
+                    mod_name_l = mod_name.lower()
+                    if mod_name_l in params:
+                        filtered[local_name.lower()] = params[mod_name_l]
+                params = filtered
+            elif name_map:
+                # use module, a => b (rename without only)
+                renamed = dict(params)
+                for local_name, mod_name in name_map.items():
+                    mod_name_l = mod_name.lower()
+                    if mod_name_l in renamed:
+                        renamed[local_name.lower()] = renamed.pop(mod_name_l)
+                params = renamed
         for k, v in list(params.items()):
             if k in param_map:
                 outmess(f'get_useparameters: overriding parameter {k!r} with'
@@ -2019,10 +2157,24 @@ def get_useparameters(block, param_map=None):
     return param_map
 
 
+def _block_uses_intrinsic_module(block):
+    """Check if block or children use an intrinsic module."""
+    if isinstance(block, list):
+        return any(_block_uses_intrinsic_module(b) for b in block)
+    usedict = block.get('use', {})
+    for modname in usedict:
+        if modname.lower() in _INTRINSIC_MODULE_VARS:
+            return True
+    for child in block.get('body', []):
+        if _block_uses_intrinsic_module(child):
+            return True
+    return False
+
+
 def postcrack2(block, tab='', param_map=None):
     global f90modulevars
 
-    if not f90modulevars:
+    if not f90modulevars and not _block_uses_intrinsic_module(block):
         return block
     if isinstance(block, list):
         ret = [postcrack2(g, tab=tab + '\t', param_map=param_map)
@@ -2551,6 +2703,22 @@ def get_parameters(vars, global_params={}):
                 ]:
                     v = v.replace(*repl)
 
+            # KIND uses the literal's exponent and named kind suffix.
+            # Its integer result does not alter ordinary parameter values.
+            if kind_re.fullmatch(v):
+                try:
+                    kind_value = _fortran_eval(v, global_params, params)
+                except (NameError, SyntaxError, TypeError, ValueError,
+                        OverflowError, KeyError):
+                    pass
+                else:
+                    if (isinstance(kind_value, int)
+                            and not isinstance(kind_value, bool)):
+                        params[n] = int(kind_value)
+                        if n.lower() != n:
+                            params[n.lower()] = params[n]
+                        continue
+
             v = kind_re.sub(r'kind("\1")', v)
             v = selected_int_kind_re.sub(r'selected_int_kind(\1)', v)
 
@@ -2647,6 +2815,18 @@ def _eval_scalar(value, params):
     return value
 
 
+def _eval_derived_spec(value, params):
+    """Resolve an integer specification expression for a derived member."""
+    try:
+        result = _fortran_eval(value, {}, params)
+    except (NameError, SyntaxError, TypeError, ValueError, OverflowError,
+            KeyError):
+        return value
+    if isinstance(result, int) and not isinstance(result, bool):
+        return str(int(result))
+    return value
+
+
 def analyzevars(block):
     """
     Sets correct dimension information for each variable/parameter
@@ -2679,7 +2859,16 @@ def analyzevars(block):
         if n not in args:
             svars.append(n)
 
-    params = get_parameters(vars, get_useparameters(block))
+    use_params = get_useparameters(block)
+    host = block.get('parent_block', {})
+    if block['block'] == 'type' and host.get('block') == 'module':
+        # Type components inherit module parameters unless a component or
+        # type parameter declares the same name (F2018 19.5.1.4).
+        host_params = get_parameters(host.get('vars', {}),
+                                     get_useparameters(host))
+        use_params = {**{k: v for k, v in host_params.items() if k not in vars},
+                      **use_params}
+    params = get_parameters(vars, use_params)
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
     dep_matches = {}
@@ -2716,6 +2905,8 @@ def analyzevars(block):
         if 'charselector' in vars[n]:
             if 'len' in vars[n]['charselector']:
                 l = vars[n]['charselector']['len']
+                if block['block'] == 'type':
+                    l = _eval_derived_spec(l, params)
                 try:
                     l = str(eval(l, {}, params))
                 except Exception:
@@ -2725,6 +2916,7 @@ def analyzevars(block):
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
                 l = vars[n]['kindselector']['kind']
+                l = _eval_derived_spec(l, params)
                 try:
                     l = str(eval(l, {}, params))
                 except Exception:
@@ -2786,6 +2978,10 @@ def analyzevars(block):
                 for d in rmbadname(
                         [x.strip() for x in markoutercomma(dim).split('@,@')]
                 ):
+                    if block['block'] == 'type':
+                        bounds = markoutercomma(d, ':').split('@:@')
+                        d = ':'.join(_eval_derived_spec(bound, params)
+                                     for bound in bounds)
                     # d is the expression inside the dimension declaration
                     # Evaluate `d` with respect to params
                     try:
@@ -3007,6 +3203,9 @@ def analyzevars(block):
                             vars[n]['charselector'] = charselect
                         if typename:
                             vars[n]['typename'] = typename
+                            typeparams = cracktypeparams(typespec, selector)
+                            if typeparams:
+                                vars[n]['typeparams'] = typeparams
                         if ispure:
                             vars[n] = setattrspec(vars[n], 'pure')
                         if isrec:
@@ -3469,7 +3668,9 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         if 'externals' in block and a in block['externals']:
             if isintent_callback(vars[a]):
                 ret = f'{ret}{tab}intent(callback) {a}'
-            ret = f'{ret}{tab}external {a}'
+            # An explicit interface gives the dummy its EXTERNAL attribute.
+            if not as_interface or a not in block.get('interfaced', []):
+                ret = f'{ret}{tab}external {a}'
             if isoptional(vars[a]):
                 ret = f'{ret}{tab}optional {a}'
             if a in vars and 'typespec' not in vars[a]:
@@ -3504,7 +3705,10 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             continue
         vardef = vars[a]['typespec']
         if vardef == 'type' and 'typename' in vars[a]:
-            vardef = f"{vardef}({vars[a]['typename']})"
+            typename = vars[a]['typename']
+            if 'typeparams' in vars[a]:
+                typename = f"{typename}({vars[a]['typeparams']})"
+            vardef = f'{vardef}({typename})'
         selector = {}
         if 'kindselector' in vars[a]:
             selector = vars[a]['kindselector']

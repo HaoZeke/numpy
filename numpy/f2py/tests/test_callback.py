@@ -9,6 +9,7 @@ import traceback
 import pytest
 
 import numpy as np
+from numpy.f2py import crackfortran
 
 from . import util
 
@@ -204,6 +205,17 @@ class TestF77CallbackPythonTLS(TestF77Callback):
     options = ["-DF2PY_USE_PYTHON_TLS"]
 
 
+def test_callback_saved_interface():
+    path = util.getpath("tests", "src", "callback", "gh17797.f90")
+    blocks = crackfortran.crackfortran([str(path)])
+    interface = blocks[0]["saved_interface"]
+    lines = [line.strip() for line in interface.splitlines()]
+    assert "external f" not in lines
+    assert "function f(e_0_e) result (r)" in lines
+    assert "integer(kind=8) :: r" in lines
+    assert "external f" in crackfortran.crack2fortran(blocks)
+
+
 @pytest.mark.slow
 class TestF90Callback(util.F2PyTest):
     sources = [util.getpath("tests", "src", "callback", "gh17797.f90")]
@@ -215,6 +227,11 @@ class TestF90Callback(util.F2PyTest):
         y = np.array([1, 2, 3], dtype=np.int64)
         r = self.module.gh17797(incr, y)
         assert r == 123 + 1 + 2 + 3
+
+    def test_callback_integer8_result(self):
+        y = np.array([1, 2, 3], dtype=np.int64)
+        r = self.module.gh17797(lambda x: 2**40 + x, y)
+        assert r == 2**40 + 1 + 2 + 3
 
 
 @pytest.mark.slow

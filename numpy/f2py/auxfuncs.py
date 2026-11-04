@@ -42,7 +42,12 @@ __all__ = [
     'isunsigned_long_long', 'isunsigned_long_longarray', 'isunsigned_short',
     'isunsigned_shortarray', 'l_and', 'l_not', 'l_or', 'outmess', 'replace',
     'show', 'stripcomma', 'throw_error', 'isattr_value', 'getuseblocks',
-    'process_f2cmap_dict', 'containscommon', 'containsderivedtypes'
+    'process_f2cmap_dict', 'containscommon', 'containsderivedtypes',
+    'isparameter',
+    'isderivedtype', 'isbindctype', 'get_type_members',
+    'is_simple_derived_type', 'is_fixed_array', 'get_type_by_name',
+    'isvalidintrinsicmod', 'isunlimitedpolymorphic', 'isbindc_derivedtype',
+    'hashandles', 'isderivedtype_vector', 'isnullable_derivedtype'
 ]
 
 
@@ -312,7 +317,7 @@ def issubroutine(rout):
 def issubroutine_wrap(rout):
     if isintent_c(rout):
         return 0
-    return issubroutine(rout) and hasassumedshape(rout)
+    return issubroutine(rout) and (hasassumedshape(rout) or hashandles(rout))
 
 def isattr_value(var):
     return 'value' in var.get('attrspec', [])
@@ -603,6 +608,219 @@ def containsderivedtypes(rout):
             if hasderivedtypes(b):
                 return 1
     return 0
+
+
+def isderivedtype(var):
+    """Check if a variable declaration has typespec == 'type'."""
+    return var.get('typespec') == 'type'
+
+
+def isunlimitedpolymorphic(var):
+    return 'unlimited_polymorphic' in var.get('attrspec', [])
+
+
+def isbindc_derivedtype(var):
+    return var.get('f2py_dt', {}).get('bindc', False)
+
+
+def isderivedtype_vector(var):
+    """Check if an argument is an allocatable or pointer array of derived
+    type that Fortran makes, passed as a buffer of handles."""
+    return 'vector' in var.get('f2py_dt', {})
+
+
+def isnullable_derivedtype(var):
+    """Check if an argument is an allocatable or pointer scalar of derived
+    type, which None passes unallocated or disassociated."""
+    return ('f2py_dt' in var and not isarray(var)
+            and (isallocatable(var) or 'pointer' in var.get('attrspec', [])))
+
+
+def hashandles(rout):
+    """Check if a routine takes derived type arguments as handles."""
+    return any('f2py_dt' in v for v in rout['vars'].values())
+
+
+def isbindctype(block):
+    """Check if a type block has the bind(c) attribute.
+
+    crackfortran stores the type's attributes (like bind(c)) in the
+    parent module's vars dict under the type name, not on the type
+    block itself.
+    """
+    attrspec = block.get('attrspec', [])
+    if isinstance(attrspec, dict):
+        attrspec = list(attrspec.keys())
+    for attr in attrspec:
+        if isinstance(attr, str) and 'bind(c)' in attr.lower():
+            return True
+    if block.get('bind_c', False):
+        return True
+    # Check parent module's vars dict for type attributes
+    parent = block.get('parent_block')
+    if parent and block.get('name'):
+        tname = block['name']
+        parent_var = parent.get('vars', {}).get(tname, {})
+        parent_attrspec = parent_var.get('attrspec', [])
+        if isinstance(parent_attrspec, dict):
+            parent_attrspec = list(parent_attrspec.keys())
+        for attr in parent_attrspec:
+            if isinstance(attr, str) and 'bind(c)' in attr.lower():
+                return True
+    return False
+
+
+def issequencetype(block):
+    """Check if a type block has the SEQUENCE attribute.
+
+    SEQUENCE types (F2018 7.5.2.3) have a defined storage order. Unlike
+    bind(c) types they do not guarantee C layout, but their members are
+    stored contiguously and in declaration order. crackfortran records the
+    attribute in the type block's attrspec when it encounters a bare
+    ``sequence`` statement inside a type body.
+    """
+    attrspec = block.get('attrspec', [])
+    if isinstance(attrspec, dict):
+        attrspec = list(attrspec.keys())
+    for attr in attrspec:
+        if isinstance(attr, str) and attr.lower() == 'sequence':
+            return True
+    if block.get('parent_block'):
+        parent = block['parent_block']
+        tname = block.get('name', '')
+        parent_var = parent.get('vars', {}).get(tname, {})
+        parent_attrspec = parent_var.get('attrspec', [])
+        if isinstance(parent_attrspec, dict):
+            parent_attrspec = list(parent_attrspec.keys())
+        for attr in parent_attrspec:
+            if isinstance(attr, str) and attr.lower() == 'sequence':
+                return True
+    return False
+
+
+# Known scalar numeric types for simple derived type detection
+_SIMPLE_SCALAR_TYPESPECS = {'integer', 'real', 'double precision',
+                            'logical', 'complex', 'double complex'}
+
+
+def get_type_members(typeblock):
+    """Return {name: var_dict} for the members of a type block that f2py
+    exposes, which leaves out those _dt_helpers._settle_members hides."""
+    hidden = typeblock.get('f2py_hidden', {})
+    return {name: var for name, var in typeblock.get('vars', {}).items()
+            if name not in hidden}
+
+
+def is_fixed_array(var):
+    """Check if var is a fixed-size array (all dimensions are integer literals).
+
+    Returns True for declarations like ``real :: data(3)`` or
+    ``real :: matrix(3,3)`` but False for ``real :: x(:)`` (assumed shape),
+    ``real, allocatable :: a(:)`` or anything with variable dimensions.
+    """
+    if not isarray(var):
+        return False
+    if isallocatable(var):
+        return False
+    if 'pointer' in var.get('attrspec', []):
+        return False
+    for dim in var.get('dimension', []):
+        dim_str = str(dim).strip()
+        if not dim_str.isdigit() or int(dim_str) <= 0:
+            return False
+    return True
+
+
+def is_simple_derived_type(typeblock):
+    """Check if all members are wrappable numeric types.
+
+    Returns True if the type has no allocatable, pointer, or nested
+    derived type members -- only scalar numerics and fixed-size arrays
+    of numerics.
+    """
+    members = get_type_members(typeblock)
+    if not members:
+        return False
+    # Count real (non-type-parameter) members
+    has_data_members = False
+    for var in members.values():
+        # Skip type parameters (KIND/LEN from parameterized types)
+        # F2018 7.5.3 -- these are not data members
+        attrspec = var.get('attrspec', [])
+        if 'kind' in attrspec or 'len' in attrspec:
+            continue
+        has_data_members = True
+        typespec = var.get('typespec', '')
+        if typespec == 'type':
+            # Nested derived type member (scalar or fixed-size array)
+            if isallocatable(var):
+                return False
+            if 'pointer' in var.get('attrspec', []):
+                return False
+            if isarray(var) and not is_fixed_array(var):
+                return False
+            continue
+        if typespec == 'character':
+            cs = var.get('charselector', {})
+            char_len = cs.get('len') or cs.get('*')
+            if char_len is None:
+                return False
+            # Deferred-length allocatable characters are allowed
+            # (F2018 7.4.4.2 paragraph 3, character(:), allocatable)
+            if str(char_len).strip() == ':' and isallocatable(var):
+                continue
+            # Fixed-length character members are allowed
+            try:
+                int(char_len)
+            except (ValueError, TypeError):
+                return False
+            continue
+        if typespec not in _SIMPLE_SCALAR_TYPESPECS:
+            return False
+        # Allocatable numeric arrays of any rank are allowed
+        # (F2003 allocatable components, F2018 9.7.1)
+        if isallocatable(var) and isarray(var):
+            dims = var.get('dimension', [])
+            if (len(dims) >= 1
+                    and all(str(d).strip() == ':' for d in dims)):
+                continue
+            return False
+        if isallocatable(var):
+            return False
+        attrspec = var.get('attrspec', [])
+        # Pointer numeric arrays are allowed (read-only from Python)
+        # F2018 7.5.4.6 "Pointer components"
+        if 'pointer' in attrspec:
+            if isarray(var):
+                dims = var.get('dimension', [])
+                if (len(dims) >= 1
+                        and all(str(d).strip() == ':' for d in dims)):
+                    continue
+            return False
+        # Arrays are allowed only if fixed-size or LEN-sized
+        if isarray(var) and not is_fixed_array(var):
+            # Check if this is a LEN-parameterized array (F2018 7.5.3)
+            # whose dimensions reference LEN type parameters
+            dims = var.get('dimension', [])
+            len_params = {n for n, v in members.items()
+                          if 'len' in v.get('attrspec', [])}
+            if not all(str(d).strip().lower() in len_params
+                       for d in dims):
+                return False
+    return has_data_members
+
+
+def get_type_by_name(module, typename):
+    """Find a type block by name in a module body.
+
+    Returns the type block dict, or None if not found.
+    """
+    if not hasbody(module):
+        return None
+    for b in module['body']:
+        if b.get('block') == 'type' and b.get('name', '').lower() == typename.lower():
+            return b
+    return None
 
 
 def containsmodule(block):
@@ -1025,3 +1243,20 @@ def process_f2cmap_dict(f2cmap_all, new_map, c2py_map, verbose=False):
                 )
 
     return f2cmap_all, f2cmap_mapped
+
+
+# Intrinsic modules recognized by the Fortran standard
+# Reference: J3/21-007 (Draft Fortran 202x)
+_intrinsic_modules = [
+    "iso_c_binding", "iso_fortran_env",
+    "ieee_exceptions", "ieee_arithmetic", "ieee_features"
+]
+
+
+def isvalidintrinsicmod(modu):
+    """Check if modu is a standard Fortran intrinsic module name."""
+    return modu in _intrinsic_modules
+
+
+def isparameter(var):
+    return 'attrspec' in var and 'parameter' in var['attrspec']

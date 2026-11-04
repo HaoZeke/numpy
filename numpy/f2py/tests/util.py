@@ -11,6 +11,7 @@ import concurrent.futures
 import contextlib
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,7 @@ import pytest
 import numpy
 from numpy._utils import asunicode
 from numpy.f2py._backends._meson import MesonBackend
+from numpy.f2py.crackfortran import split_by_unquoted
 from numpy.testing import IS_IOS, IS_WASM, temppath
 
 #
@@ -119,6 +121,164 @@ def has_f90_compiler():
 
 def has_fortran_compiler():
     return (checker.has_f90 and checker.has_f77)
+
+
+def fortran_builds(code, args=()):
+    """Return whether the Fortran compiler builds ``code`` into an object,
+    with the compiler arguments ``args``.
+
+    ``compiler.compiles()`` cannot answer this: its result is not checked by
+    ``check_language``, and for LLVM flang Meson adds clang-only
+    ``-Werror=`` options that make every check fail.  Building a static
+    library uses the same flags as the extension modules under test.
+    """
+    if sys.platform == "win32" or not has_f90_compiler():
+        return False
+    tmpdir = tempfile.mkdtemp()
+    try:
+        with open(os.path.join(tmpdir, "meson.build"), "w") as f:
+            f.write("project('check_build', 'fortran')\n")
+            f.write(f"static_library('check', 'check.f90', "
+                    f"fortran_args: {list(args)!r})\n")
+        with open(os.path.join(tmpdir, "check.f90"), "w") as f:
+            f.write(code)
+        for cmd in (["meson", "setup", "btmp"],
+                    ["meson", "compile", "-C", "btmp"]):
+            if subprocess.run(cmd, check=False, cwd=tmpdir,
+                              capture_output=True).returncode != 0:
+                return False
+        return True
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+_pdt_support = None
+
+
+def has_pdt_support():
+    """Check if the Fortran compiler supports KIND type parameters.
+
+    Cached after the first call.
+    """
+    global _pdt_support
+    if _pdt_support is None:
+        _pdt_support = fortran_builds(
+            'module pdt_check\n'
+            '  implicit none\n'
+            '  type :: vec(k)\n'
+            '    integer, kind :: k = kind(0.0d0)\n'
+            '    real(k) :: x\n'
+            '  end type vec\n'
+            'contains\n'
+            '  subroutine make(v)\n'
+            '    type(vec(kind(0.0))), intent(out) :: v\n'
+            '    v%x = 0\n'
+            '  end subroutine make\n'
+            'end module pdt_check\n'
+        )
+    return _pdt_support
+
+
+_pdt_len_support = None
+
+
+def has_pdt_len_support():
+    """Check if the Fortran compiler handles LEN type parameters as f2py
+    wraps them.
+
+    The handle of a LEN-parameterized object is ``c_loc`` of a pointer
+    allocated with the requested length.  F2018 18.2.3.6 only allows
+    ``c_loc`` on noninteroperable scalars without length type parameters,
+    so this needs a compiler that accepts it as an extension; LLVM flang
+    rejects it and cannot lower LEN-parameterized objects either.  Cached
+    after the first call.
+    """
+    global _pdt_len_support
+    if _pdt_len_support is None:
+        _pdt_len_support = fortran_builds(
+            'module pdt_len_check\n'
+            '  use iso_c_binding, only: c_ptr, c_loc\n'
+            '  implicit none\n'
+            '  type :: vec(n)\n'
+            '    integer, len :: n\n'
+            '    real :: x(n)\n'
+            '  end type vec\n'
+            'contains\n'
+            '  function make(n) result(cptr)\n'
+            '    integer, intent(in) :: n\n'
+            '    type(c_ptr) :: cptr\n'
+            '    type(vec(n=n)), pointer :: v\n'
+            '    allocate(vec(n=n) :: v)\n'
+            '    cptr = c_loc(v)\n'
+            '  end function make\n'
+            'end module pdt_len_check\n'
+        )
+    return _pdt_len_support
+
+
+_polymorphic_support = None
+
+# LLVM flang 18 exits here; flang 20 and gfortran compile this module.
+_POLYMORPHIC_PROBE = (
+    'module class_check\n'
+    '  implicit none\n'
+    '  type :: item\n'
+    '    integer :: n\n'
+    '  end type item\n'
+    'contains\n'
+    '  subroutine touch(x)\n'
+    '    class(item), intent(inout) :: x\n'
+    '    x%n = 1\n'
+    '  end subroutine touch\n'
+    'end module class_check\n'
+)
+
+
+def fortran_source_text(text):
+    """Return free-form Fortran with comments removed and lines joined.
+
+    A ``!`` inside a ``'...'`` or ``"..."`` literal is not a comment.
+    The cut is ``split_by_unquoted``, the same one crackfortran uses
+    when it reads free-form source.
+    """
+    pending = ''
+    code = []
+    for line in text.splitlines():
+        line, _comment = split_by_unquoted(line, '!')
+        line = line.rstrip()
+        if line.lstrip().startswith('&'):
+            line = line.lstrip()[1:]
+        if line.endswith('&'):
+            pending += line[:-1]
+            continue
+        code.append(pending + line)
+        pending = ''
+    if pending:
+        code.append(pending)
+    return '\n'.join(code)
+
+
+def fortran_declares_class(text):
+    """Return whether free-form Fortran declares a ``class`` entity.
+
+    Comments are dropped and continuation lines are joined first, so a
+    routine that only mentions ``class`` in a comment does not count.
+    """
+    return re.search(r'\bclass\s*\(', fortran_source_text(text), re.I) is not None
+
+
+def has_polymorphic_support():
+    """Return whether the Fortran compiler lowers a ``class`` dummy.
+
+    LLVM flang 18 aborts while lowering polymorphic types, with
+    ``not yet implemented: support for polymorphic types``.  flang 20
+    and gfortran compile the same snippet.  The probe runs once and is
+    cached for the rest of the session.
+    """
+    global _polymorphic_support
+    if _polymorphic_support is None:
+        _polymorphic_support = fortran_builds(_POLYMORPHIC_PROBE)
+    return _polymorphic_support
 
 
 #
@@ -399,6 +559,20 @@ class F2PyTest:
             pytest.skip("No Fortran 90 compiler available")
         if needs_pyf and not self._has_fortran_compiler:
             pytest.skip("No Fortran compiler available")
+
+        # class is required for a passed-object dummy and for defined
+        # I/O.  Other dummies can be type.  Flang 18 aborts on class.
+        blobs = []
+        if self.code:
+            blobs.append(self.code)
+        for src in self.sources or []:
+            path = Path(src)
+            if path.suffix.lower() in {'.f', '.f90', '.for', '.ftn', '.pyf'}:
+                blobs.append(path.read_text(encoding='utf-8'))
+        if (any(fortran_declares_class(blob) for blob in blobs)
+                and not has_polymorphic_support()):
+            pytest.skip("Fortran compiler cannot lower polymorphic "
+                        "types (CLASS)")
 
         # Build the module
         if self.code is not None:

@@ -101,3 +101,12 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+class TestModuleWithoutEntries(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "modules", "type_only.f90")]
+
+    def test_import(self):
+        # f2py skips every entity, so the module object has no entries
+        assert not hasattr(self.module.type_only, "current")

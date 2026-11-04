@@ -62,6 +62,7 @@ includes['npy_math.h'] = '#include "numpy/npy_math.h"'
 
 includes['arrayobject.h'] = '#include "fortranobject.h"'
 includes['stdarg.h'] = '#include <stdarg.h>'
+includes['complex.h'] = '#include <complex.h>'
 
 ############# Type definitions ###############
 
@@ -1479,6 +1480,515 @@ capi_fail:
     return 0;
 }
 """
+
+# Instances of wrapped derived types share this layout, so that routine
+# arguments can be converted without knowing the type.
+typedefs['f2py_dt_object'] = """\
+typedef struct {
+    PyObject_HEAD
+    PyObject *capsule;  /* holds the Fortran object */
+    int type_tag;       /* concrete type, for class(T) dispatch */
+    int kind_value;     /* KIND parameter of a parameterized type */
+} f2py_dt_object;"""
+needs['f2py_dt_from_pyobj'] = ['f2py_dt_object']
+cfuncs['f2py_dt_from_pyobj'] = """
+/* Set *ptr to the Fortran object of an instance of type.  A negative
+   want_tag accepts extensions of type, as class(T) does; otherwise the
+   instance has to be of type itself.  capname, unless NULL, is the
+   specialization of a parameterized type that the instance has to hold. */
+static int
+f2py_dt_from_pyobj(void **ptr, int *tag, PyObject *obj, PyTypeObject *type,
+                   int want_tag, const char *capname, const char *errmess)
+{
+    f2py_dt_object *dt = (f2py_dt_object *)obj;
+    if (!PyObject_TypeCheck(obj, type)
+            || (want_tag >= 0 && dt->type_tag != want_tag)) {
+        PyErr_Format(PyExc_TypeError, "%s: expected %s, not %s",
+                     errmess, type->tp_name, Py_TYPE(obj)->tp_name);
+        return 0;
+    }
+    if (dt->capsule == NULL) {
+        PyErr_Format(PyExc_ValueError, "%s: %s instance is not initialized",
+                     errmess, type->tp_name);
+        return 0;
+    }
+    if (capname != NULL && !PyCapsule_IsValid(dt->capsule, capname)) {
+        PyErr_Format(PyExc_TypeError, "%s: expected %s, not %s",
+                     errmess, capname, PyCapsule_GetName(dt->capsule));
+        return 0;
+    }
+    *ptr = PyCapsule_GetPointer(dt->capsule, PyCapsule_GetName(dt->capsule));
+    if (*ptr == NULL) {
+        return 0;
+    }
+    *tag = dt->type_tag;
+    return 1;
+}
+"""
+needs['f2py_dt_to_pyobj'] = ['f2py_dt_object']
+cfuncs['f2py_dt_to_pyobj'] = """
+/* Return a new instance of type that owns the Fortran object at ptr, or
+   None for no object, which is an unallocated or disassociated dummy or
+   result.  On failure the object is destroyed, unless not even its capsule
+   is made. */
+static PyObject *
+f2py_dt_to_pyobj(void *ptr, PyTypeObject *type, int type_tag, int kind_value,
+                 const char *capname, PyCapsule_Destructor destructor)
+{
+    f2py_dt_object *dt;
+    PyObject *capsule;
+    if (ptr == NULL) {
+        Py_RETURN_NONE;
+    }
+    capsule = PyCapsule_New(ptr, capname, destructor);
+    if (capsule == NULL) {
+        return NULL;
+    }
+    dt = (f2py_dt_object *)type->tp_alloc(type, 0);
+    if (dt == NULL) {
+        Py_DECREF(capsule);
+        return NULL;
+    }
+    dt->capsule = capsule;
+    dt->type_tag = type_tag;
+    dt->kind_value = kind_value;
+    return (PyObject *)dt;
+}
+"""
+needs['f2py_dt_handles_from_pyobj'] = ['f2py_dt_from_pyobj']
+cfuncs['f2py_dt_handles_from_pyobj'] = """
+/* Return an array of the Fortran objects of a sequence of instances of
+   type, in Fortran order.  dims are the extents the argument has to have,
+   where -1 takes the extent of the sequence. */
+static PyArrayObject *
+f2py_dt_handles_from_pyobj(PyObject *obj, PyTypeObject *type, int want_tag,
+                           const char *capname, int rank, npy_intp *dims,
+                           const char *errmess)
+{
+    PyArrayObject *items, *handles;
+    PyObject **item;
+    void **ptr;
+    npy_intp i, n;
+    int tag, d;
+    items = (PyArrayObject *)PyArray_FROM_OTF(obj, NPY_OBJECT,
+                                              NPY_ARRAY_F_CONTIGUOUS);
+    if (items == NULL) {
+        return NULL;
+    }
+    if (PyArray_NDIM(items) != rank) {
+        PyErr_Format(PyExc_TypeError,
+                     "%s: expected a rank-%d sequence of %s, got rank %d",
+                     errmess, rank, type->tp_name, PyArray_NDIM(items));
+        Py_DECREF(items);
+        return NULL;
+    }
+    for (d = 0; d < rank; d++) {
+        if (dims[d] >= 0 && dims[d] != PyArray_DIM(items, d)) {
+            PyErr_Format(PyExc_ValueError,
+                         "%s: expected %" NPY_INTP_FMT " items in dimension %d,"
+                         " got %" NPY_INTP_FMT,
+                         errmess, dims[d], d, PyArray_DIM(items, d));
+            Py_DECREF(items);
+            return NULL;
+        }
+        dims[d] = PyArray_DIM(items, d);
+    }
+    handles = (PyArrayObject *)PyArray_EMPTY(rank, PyArray_DIMS(items),
+                                             NPY_UINTP, 1);
+    if (handles == NULL) {
+        Py_DECREF(items);
+        return NULL;
+    }
+    n = PyArray_SIZE(items);
+    item = (PyObject **)PyArray_DATA(items);
+    ptr = (void **)PyArray_DATA(handles);
+    for (i = 0; i < n; i++) {
+        if (!f2py_dt_from_pyobj(ptr + i, &tag, item[i], type, want_tag,
+                                capname, errmess)) {
+            Py_DECREF(items);
+            Py_DECREF(handles);
+            return NULL;
+        }
+    }
+    Py_DECREF(items);
+    return handles;
+}
+"""
+needs['f2py_dt_from_handles'] = ['f2py_dt_to_pyobj']
+cfuncs['f2py_dt_from_handles'] = """
+/* Return new instances of type for an array of Fortran objects, as a list
+   for rank 1 and as an object array in Fortran order otherwise.  Objects
+   that cannot be returned are destroyed. */
+static PyObject *
+f2py_dt_from_handles(void **ptr, int rank, npy_intp *dims, PyTypeObject *type,
+                     int type_tag, int kind_value, const char *capname,
+                     PyCapsule_Destructor destructor)
+{
+    PyObject *ret, **items;
+    npy_intp i, n = 1;
+    int d;
+    for (d = 0; d < rank; d++) {
+        n *= dims[d];
+    }
+    if (rank == 1) {
+        ret = PyList_New(n);
+    }
+    else {
+        ret = PyArray_EMPTY(rank, dims, NPY_OBJECT, 1);
+    }
+    for (i = 0; ret != NULL && i < n; i++) {
+        PyObject *item = f2py_dt_to_pyobj(ptr[i], type, type_tag, kind_value,
+                                          capname, destructor);
+        if (item == NULL) {
+            Py_CLEAR(ret);
+            i++;
+            break;
+        }
+        if (rank == 1) {
+            PyList_SET_ITEM(ret, i, item);
+        }
+        else {
+            items = (PyObject **)PyArray_DATA((PyArrayObject *)ret);
+            Py_XSETREF(items[i], item);
+        }
+    }
+    if (ret == NULL) {
+        PyObject *exc = PyErr_GetRaisedException();
+        for (; i < n; i++) {
+            if (ptr[i] != NULL) {
+                PyObject *rest = PyCapsule_New(ptr[i], capname, destructor);
+                Py_XDECREF(rest);
+            }
+        }
+        PyErr_SetRaisedException(exc);
+    }
+    return ret;
+}
+"""
+
+needs['f2py_dt_from_vector'] = ['f2py_dt_from_handles', 'string.h']
+cfuncs['f2py_dt_from_vector'] = """
+/* Return new instances of type for an allocatable or pointer array of
+   derived type that Fortran made, as f2py_dt_from_handles does, or None
+   when it is not allocated, which a negative first extent tells.  buffer
+   holds the handles of copies of its elements and is released with
+   free_handles.  A bind(c) type has its elements copied to memory that
+   its instances own, copy_size bytes each. */
+static PyObject *
+f2py_dt_from_vector(void *buffer, int rank, const npy_intp *extents,
+                    PyTypeObject *type, int type_tag, int kind_value,
+                    const char *capname, PyCapsule_Destructor destructor,
+                    size_t copy_size, void (*free_handles)(void *, int))
+{
+    npy_intp dims[F2PY_MAX_DIMS], i, n = 1;
+    void **ptr = (void **)buffer, **copies = NULL;
+    PyObject *ret = NULL;
+    int d;
+    if (extents[0] < 0) {
+        Py_RETURN_NONE;
+    }
+    for (d = 0; d < rank; d++) {
+        dims[d] = extents[d];
+        n *= dims[d];
+    }
+    if (copy_size > 0 && n > 0) {
+        copies = PyMem_Calloc(n, sizeof(void *));
+        for (i = 0; copies != NULL && i < n; i++) {
+            copies[i] = PyMem_Malloc(copy_size);
+            if (copies[i] == NULL) {
+                for (; i > 0; i--) {
+                    PyMem_Free(copies[i - 1]);
+                }
+                PyMem_Free(copies);
+                copies = NULL;
+                break;
+            }
+            memcpy(copies[i], ptr[i], copy_size);
+        }
+        if (copies == NULL) {
+            PyErr_NoMemory();
+        }
+        ptr = copies;
+    }
+    if (copy_size == 0 || n == 0 || copies != NULL) {
+        ret = f2py_dt_from_handles(ptr, rank, dims, type, type_tag,
+                                   kind_value, capname, destructor);
+    }
+    PyMem_Free(copies);
+    if (buffer != NULL) {
+        free_handles(buffer, (int)n);
+    }
+    return ret;
+}
+"""
+cfuncs['f2py_dt_call_bound'] = """
+/* Call routine name of Fortran module modname of module, the binding of a
+   type-bound procedure, with self as its passed-object argument.  That is
+   positional argument pos of the routine, or keyword passname when fewer
+   positional arguments are given, and none when pos is negative. */
+static PyObject *
+f2py_dt_call_bound(PyObject *module, const char *modname, const char *name,
+                   PyObject *self, Py_ssize_t pos, const char *passname,
+                   PyObject *args, PyObject *kwds)
+{
+    PyObject *fmod, *routine, *ret = NULL, *newargs = NULL, *newkwds = NULL;
+    Py_ssize_t i, n = PyTuple_GET_SIZE(args);
+    fmod = PyObject_GetAttrString(module, modname);
+    if (fmod == NULL) {
+        return NULL;
+    }
+    routine = PyObject_GetAttrString(fmod, name);
+    Py_DECREF(fmod);
+    if (routine == NULL) {
+        return NULL;
+    }
+    if (pos < 0) {
+        ret = PyObject_Call(routine, args, kwds);
+    }
+    else if (n >= pos) {
+        newargs = PyTuple_New(n + 1);
+        if (newargs != NULL) {
+            for (i = 0; i <= n; i++) {
+                PyObject *item = (i < pos ? PyTuple_GET_ITEM(args, i)
+                                  : i == pos ? self
+                                  : PyTuple_GET_ITEM(args, i - 1));
+                Py_INCREF(item);
+                PyTuple_SET_ITEM(newargs, i, item);
+            }
+            ret = PyObject_Call(routine, newargs, kwds);
+        }
+    }
+    else {
+        newkwds = (kwds == NULL ? PyDict_New() : PyDict_Copy(kwds));
+        if (newkwds != NULL
+                && PyDict_SetItemString(newkwds, passname, self) == 0) {
+            ret = PyObject_Call(routine, args, newkwds);
+        }
+    }
+    Py_XDECREF(newargs);
+    Py_XDECREF(newkwds);
+    Py_DECREF(routine);
+    return ret;
+}
+"""
+typedefs['f2py_dt_dummy'] = """\
+typedef struct {
+    const char *name;
+    char kind;           /* i, f, c, b, s, t for a derived type, o for class(*) */
+    int ndim;            /* not rank, which the module defines as a macro */
+    PyTypeObject *type;  /* of a derived type */
+    int required;
+} f2py_dt_dummy;"""
+needs['f2py_dt_args_match'] = ['f2py_dt_dummy']
+cfuncs['f2py_dt_args_match'] = """
+/* Tell whether args and kwds fit the dummy arguments of a specific
+   procedure, ending with an entry without name, by their types and
+   ranks, so that a generic type-bound procedure can pick its specific
+   procedure (F2018 15.4.3.4.5). */
+static int
+f2py_dt_args_match(PyObject *args, PyObject *kwds, const f2py_dt_dummy *dummy)
+{
+    Py_ssize_t i, n = PyTuple_GET_SIZE(args), keywords = 0;
+    for (i = 0; dummy->name != NULL; i++, dummy++) {
+        PyObject *v = NULL;
+        int ok;
+        if (i < n) {
+            v = PyTuple_GET_ITEM(args, i);
+        }
+        else if (kwds != NULL) {
+            v = PyDict_GetItemString(kwds, dummy->name);
+            keywords += (v != NULL);
+        }
+        if (v == NULL) {
+            if (dummy->required) {
+                return 0;
+            }
+            continue;
+        }
+        if (dummy->ndim > 0 || PyArray_Check(v)) {
+            if (!PyArray_Check(v)) {
+                ok = (dummy->ndim > 0 && PySequence_Check(v)
+                      && !PyUnicode_Check(v) && !PyBytes_Check(v));
+            }
+            else {
+                char kind = PyArray_DESCR((PyArrayObject *)v)->kind;
+                ok = (PyArray_NDIM((PyArrayObject *)v) == dummy->ndim
+                      && (kind == dummy->kind
+                          || (kind == 'u' && dummy->kind == 'i')
+                          || (kind == 'S' && dummy->kind == 's')
+                          || (kind == 'U' && dummy->kind == 's')
+                          || (kind == 'O' && dummy->kind == 't')));
+            }
+        }
+        else if (dummy->kind == 'o') {
+            ok = 1;
+        }
+        else if (dummy->kind == 't') {
+            ok = PyObject_TypeCheck(v, dummy->type);
+        }
+        else if (dummy->kind == 'b') {
+            ok = PyBool_Check(v) || PyArray_IsScalar(v, Bool);
+        }
+        else if (dummy->kind == 'i') {
+            ok = ((PyLong_Check(v) && !PyBool_Check(v))
+                  || PyArray_IsScalar(v, Integer));
+        }
+        else if (dummy->kind == 'f') {
+            ok = PyFloat_Check(v) || PyArray_IsScalar(v, Floating);
+        }
+        else if (dummy->kind == 'c') {
+            ok = PyComplex_Check(v) || PyArray_IsScalar(v, ComplexFloating);
+        }
+        else {
+            ok = PyUnicode_Check(v) || PyBytes_Check(v);
+        }
+        if (!ok) {
+            return 0;
+        }
+    }
+    return n <= i && (kwds == NULL || PyDict_Size(kwds) == keywords);
+}
+"""
+
+# CLASS(*) arguments take Python and NumPy scalars as these Fortran types,
+# and instances of the derived types of their module with their type tags.
+# Each entry is (tag, Fortran type, member of f2py_dt_any).
+dt_any_intrinsics = [
+    (-1, 'logical', 'l'),
+    (-2, 'integer', 'i'),
+    (-3, 'integer(c_int8_t)', 'i8'),
+    (-4, 'integer(c_int16_t)', 'i16'),
+    (-5, 'integer(c_int32_t)', 'i32'),
+    (-6, 'integer(c_int64_t)', 'i64'),
+    (-7, 'real(c_float)', 'f'),
+    (-8, 'real(c_double)', 'd'),
+    (-9, 'complex(c_float_complex)', 'cf'),
+    (-10, 'complex(c_double_complex)', 'cd'),
+]
+_dt_any_tags = {member: tag for tag, _, member in dt_any_intrinsics}
+typedefs['f2py_dt_any'] = """\
+typedef struct {
+    PyTypeObject *type;
+    int type_tag;
+} f2py_dt_any_type;
+typedef union {
+    int l;
+    int i;
+    npy_int8 i8;
+    npy_int16 i16;
+    npy_int32 i32;
+    npy_int64 i64;
+    float f;
+    double d;
+    npy_cfloat cf;
+    npy_cdouble cd;
+} f2py_dt_any;"""
+needs['f2py_dt_any_from_pyobj'] = ['f2py_dt_any', 'f2py_dt_from_pyobj',
+                                   'npy_math.h']
+cfuncs['f2py_dt_any_from_pyobj'] = """
+/* Set *ptr to the value of a CLASS(*) argument and *tag to its type.
+   Scalars are stored in *value; types lists the derived types the
+   argument may also have, up to an entry with type NULL. */
+static int
+f2py_dt_any_from_pyobj(void **ptr, int *tag, f2py_dt_any *value,
+                       PyObject *obj, const f2py_dt_any_type *types,
+                       const char *errmess)
+{
+    *ptr = value;
+    if (PyBool_Check(obj)) {
+        value->l = (obj == Py_True);
+        *tag = @l@;
+        return 1;
+    }
+    if (PyArray_IsScalar(obj, Generic)) {
+        PyArray_Descr *descr = PyArray_DescrFromScalar(obj);
+        int elsize, kind;
+        if (descr == NULL) {
+            return 0;
+        }
+        elsize = (int)PyDataType_ELSIZE(descr);
+        kind = descr->kind;
+        Py_DECREF(descr);
+        *tag = 0;
+        if (kind == 'b') {
+            value->l = PyObject_IsTrue(obj);
+            *tag = @l@;
+        }
+        else if (kind == 'i' && elsize == sizeof(npy_int8)) {
+            *tag = @i8@;
+        }
+        else if (kind == 'i' && elsize == sizeof(npy_int16)) {
+            *tag = @i16@;
+        }
+        else if (kind == 'i' && elsize == sizeof(npy_int32)) {
+            *tag = @i32@;
+        }
+        else if (kind == 'i' && elsize == sizeof(npy_int64)) {
+            *tag = @i64@;
+        }
+        else if (kind == 'f' && elsize == sizeof(float)) {
+            *tag = @f@;
+        }
+        else if (kind == 'f' && elsize == sizeof(double)) {
+            *tag = @d@;
+        }
+        else if (kind == 'c' && elsize == sizeof(npy_cfloat)) {
+            *tag = @cf@;
+        }
+        else if (kind == 'c' && elsize == sizeof(npy_cdouble)) {
+            *tag = @cd@;
+        }
+        if (*tag == 0) {
+            PyErr_Format(PyExc_TypeError, "%s: no Fortran type for %s",
+                         errmess, Py_TYPE(obj)->tp_name);
+            return 0;
+        }
+        if (kind != 'b') {
+            PyArray_ScalarAsCtype(obj, value);
+        }
+        return 1;
+    }
+    if (PyLong_Check(obj)) {
+        long v = PyLong_AsLong(obj);
+        if (v == -1 && PyErr_Occurred()) {
+            return 0;
+        }
+        if (v < INT_MIN || v > INT_MAX) {
+            PyErr_Format(PyExc_OverflowError,
+                         "%s: %ld does not fit a default integer",
+                         errmess, v);
+            return 0;
+        }
+        value->i = (int)v;
+        *tag = @i@;
+        return 1;
+    }
+    if (PyFloat_Check(obj)) {
+        value->d = PyFloat_AsDouble(obj);
+        *tag = @d@;
+        return 1;
+    }
+    if (PyComplex_Check(obj)) {
+        value->cd = npy_cpack(PyComplex_RealAsDouble(obj),
+                              PyComplex_ImagAsDouble(obj));
+        *tag = @cd@;
+        return 1;
+    }
+    for (; types->type != NULL; types++) {
+        if (PyObject_TypeCheck(obj, types->type)
+                && ((f2py_dt_object *)obj)->type_tag == types->type_tag) {
+            return f2py_dt_from_pyobj(ptr, tag, obj, types->type,
+                                      types->type_tag, NULL, errmess);
+        }
+    }
+    PyErr_Format(PyExc_TypeError, "%s: no Fortran type for %s",
+                 errmess, Py_TYPE(obj)->tp_name);
+    return 0;
+}
+"""
+for _member, _tag in _dt_any_tags.items():
+    cfuncs['f2py_dt_any_from_pyobj'] = (
+        cfuncs['f2py_dt_any_from_pyobj'].replace(f'@{_member}@', str(_tag)))
 
 
 def buildcfuncs():

@@ -582,3 +582,168 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+
+class TestTypeParameters:
+    # a declaration keeps the parameters of its type(name(...)), so that
+    # signatures declare a parameterized type as the source does
+    def test_kept(self, tmp_path):
+        fpath = tmp_path / "pdt.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module pdt
+              implicit none
+              type :: vec(k)
+                integer, kind :: k = kind(0.0d0)
+                real(k) :: x
+              end type vec
+            contains
+              subroutine scale(v, a)
+                type(vec(kind(0.0d0))), intent(inout) :: v
+                real, intent(in) :: a
+                v%x = a * v%x
+              end subroutine scale
+            end module pdt
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])
+        v = mod[0]["body"][1]["vars"]["v"]
+        assert v["typename"] == "vec"
+        assert v["typeparams"] == "kind(0.0d0)"
+        assert ("type(vec(kind(0.0d0))) intent(inout) :: v"
+                in crackfortran.crack2fortran(mod))
+
+
+class TestTypeNames:
+    # a derived type keeps a name that crackfortran renames for variables,
+    # as its attributes and the types that extend it use that name
+    def test_kept(self, tmp_path):
+        fpath = tmp_path / "names.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module names
+              type, abstract :: shape
+              end type shape
+              type, extends(shape) :: square
+                real :: side
+              end type square
+            end module names
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        assert [b["name"] for b in mod["body"]] == ["shape", "square"]
+        assert mod["vars"]["shape"]["attrspec"] == ["abstract"]
+        assert mod["vars"]["square"]["attrspec"] == ["extends(shape)"]
+
+
+class TestTypeGuards:
+    # a type guard of SELECT TYPE does not begin a type definition
+    def test_select_type(self, tmp_path):
+        fpath = tmp_path / "guards.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module guards
+              type :: base
+              end type base
+              type, extends(base) :: child
+              end type child
+            contains
+              integer function which(x)
+                class(base), intent(in) :: x
+                select type (x)
+                type is (child)
+                  which = 2
+                class default
+                  which = 1
+                end select
+              end function which
+              subroutine after(n)
+                integer, intent(out) :: n
+                n = 0
+              end subroutine after
+            end module guards
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        assert [b["name"] for b in mod["body"]] == [
+            "base", "child", "which", "after"]
+        assert mod["body"][2]["body"] == []
+
+
+class TestCoarraySpecs:
+    # a coarray-spec is kept as a codimension attribute, and brackets in
+    # an initialization still construct an array
+    def test_entities(self, tmp_path):
+        fpath = tmp_path / "coarrays.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module coarrays
+              real :: x(3)[*]
+              type :: field
+                real, allocatable :: values(:)[:]
+                integer :: a(3) = [1, 2, 3]
+                integer :: b(size([1, 2]))[*]
+              end type field
+            end module coarrays
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        x = mod["vars"]["x"]
+        assert (x["attrspec"], x["dimension"]) == (["codimension[*]"], ["3"])
+        vs = mod["body"][0]["vars"]
+        assert vs["values"]["attrspec"] == ["codimension[:]", "allocatable"]
+        assert vs["values"]["dimension"] == [":"]
+        assert vs["a"]["="] == "[1, 2, 3]"
+        assert vs["b"]["attrspec"] == ["codimension[*]"]
+        assert vs["b"]["dimension"] == ["2"]
+
+
+class TestComponentHostParameters:
+    # the components of a type see the parameters of its module, except
+    # where a name of the type hides them
+    def test_kinds_and_sizes(self, tmp_path):
+        # selected_real_kind(15, 307) selects binary64, whose kind is 8.
+        # nlen and npts are the sizes the component declarations use.
+        _p64 = 15
+        _r64 = 307
+        _kind_double = "8"
+        _name_len = "6"
+        _npts = "3"
+        fpath = tmp_path / "host.f90"
+        fpath.write_text(textwrap.dedent(f"""\
+            module host
+              implicit none
+              integer, parameter :: dp = selected_real_kind({_p64}, {_r64})
+              integer, parameter :: k = kind(1.0), nlen = {_name_len}, npts = {_npts}
+              type :: sample
+                real(dp) :: a
+                character(len=nlen) :: name
+                real(dp) :: pts(npts)
+              end type sample
+              type :: vec(k)
+                integer, kind :: k = kind(0.0d0)
+                real(k) :: x
+              end type vec
+            end module host
+            """))
+        sample, vec = crackfortran.crackfortran([str(fpath)])[0]["body"]
+        vs = sample["vars"]
+        assert vs["a"]["kindselector"] == {"kind": _kind_double}
+        assert vs["name"]["charselector"] == {"len": _name_len}
+        assert vs["pts"]["kindselector"] == {"kind": _kind_double}
+        assert vs["pts"]["dimension"] == [_npts]
+        assert vec["vars"]["x"]["kindselector"] == {"kind": "k"}
+
+
+class TestISOCKinds:
+    # the kinds of iso_c_binding are those of the C processor, so they
+    # stay names, which capi_maps maps to C types
+    def test_kind_names(self, tmp_path):
+        fpath = tmp_path / "isockinds.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module isockinds
+              use iso_c_binding, only: c_long, c_long_double
+              implicit none
+            contains
+              subroutine half(x, n)
+                real(c_long_double), intent(inout) :: x
+                integer(c_long), intent(in) :: n
+                x = x / n
+              end subroutine half
+            end module isockinds
+            """))
+        vs = crackfortran.crackfortran([str(fpath)])[0]["body"][0]["vars"]
+        assert vs["x"]["kindselector"] == {"kind": "c_long_double"}
+        assert vs["n"]["kindselector"] == {"kind": "c_long"}

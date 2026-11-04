@@ -77,6 +77,7 @@ from .auxfuncs import (
     isarray,
     isarrayofstrings,
     isattr_value,
+    isbindc_derivedtype,
     ischaracter,
     ischaracter_or_characterarray,
     ischaracterarray,
@@ -84,6 +85,8 @@ from .auxfuncs import (
     iscomplexarray,
     iscomplexfunction,
     iscomplexfunction_warn,
+    isderivedtype,
+    isderivedtype_vector,
     isdummyroutine,
     isexternal,
     isfunction,
@@ -107,6 +110,7 @@ from .auxfuncs import (
     islong_long,
     islong_longfunction,
     ismoduleroutine,
+    isnullable_derivedtype,
     isoptional,
     isrequired,
     isscalar,
@@ -117,6 +121,7 @@ from .auxfuncs import (
     issubroutine,
     issubroutine_wrap,
     isthreadsafe,
+    isunlimitedpolymorphic,
     isunsigned,
     isunsigned_char,
     isunsigned_chararray,
@@ -153,7 +158,7 @@ for k in ['decl',
           'routine_defs', 'externroutines',
           'initf2pywraphooks',
           'commonhooks', 'initcommonhooks',
-          'f90modhooks', 'initf90modhooks']:
+          'f90modhooks', 'f90modtypes', 'initf90modhooks']:
     sepdict[k] = '\n'
 
 #################### Rules for C/API module #################
@@ -215,6 +220,9 @@ static PyObject *#modulename#_module;
 
 """ + gentitle("See f2py2e/cb_rules.py: buildcallback") + """
 #callbacks#
+
+""" + gentitle("See f2py2e/derived_type_rules.py: buildhooks") + """
+#f90modtypes#
 
 """ + gentitle("See f2py2e/rules.py: buildapi") + """
 #body#
@@ -361,6 +369,7 @@ defmod_rules = [
      'externroutines': '/*eof externroutines*/',
      'routine_defs': '/*eof routine_defs*/',
      'initf90modhooks': '/*eof initf90modhooks*/',
+     'f90modtypes': '/*eof f90modtypes*/',
      'initf2pywraphooks': '/*eof initf2pywraphooks*/',
      'initcommonhooks': '/*eof initcommonhooks*/',
      'latexdoc': '',
@@ -884,6 +893,156 @@ arg_rules = [
         'docreturn': '#outvarname#,',
         'returnformat': '#varrformat#',
         '_check': isintent_out
+    },
+    # Derived types, passed to Fortran as handles of their objects
+    {  # an allocatable or pointer array that Fortran makes
+        'decl': ['    void *#varname# = NULL;',
+                 '    PyObject *#varname#_capi = Py_None;',
+                 '    extern void #dtvectorfree#(void *, int);'],
+        'callfortran': '&#varname#,',
+        'return': ',#varname#_capi',
+        'need': 'f2py_dt_from_vector',
+        '_check': isderivedtype_vector,
+        '_break': '',
+    }, {
+        'pyobjfrom': """\
+        #varname#_capi = f2py_dt_from_vector(#varname#, #dtvectorextents#,
+            &#dtpytype#, #dttag#, #dtkind#, #dtcapname#, #dtdestructor#,
+            #dtcopysize#, #dtvectorfree#);
+        if (#varname#_capi == NULL)
+            f2py_success = 0;
+        if (f2py_success) {""",
+        'closepyobjfrom':
+            '        } /*if (f2py_success) of #varname# pyobjfrom*/',
+        '_check': isderivedtype_vector,
+        '_depend': '',
+        '_break': '',
+    },
+    {
+        'decl': ['    void *#varname# = NULL;',
+                 '    int #varname#_tag = 0;',
+                 '    PyObject *#varname#_capi = Py_None;',
+                 {isunlimitedpolymorphic: '    f2py_dt_any #varname#_any;'},
+                 {l_and(isintent_hide, isbindc_derivedtype):
+                  '    void *#varname#_mem = NULL;'}],
+        'argformat': {l_and(isintent_nothide, isrequired): 'O'},
+        'keyformat': {l_and(isintent_nothide, isoptional): 'O'},
+        'args_capi': {l_and(isintent_nothide, isrequired): ',&#varname#_capi'},
+        'keys_capi': {l_and(isintent_nothide, isoptional): ',&#varname#_capi'},
+        'callfortran': '&#varname#,',
+        'return': {isintent_out: ',#varname#_capi'},
+        'need': [{l_not(isunlimitedpolymorphic): 'f2py_dt_from_pyobj'},
+                 {isunlimitedpolymorphic: 'f2py_dt_any_from_pyobj'},
+                 {isintent_out: 'f2py_dt_to_pyobj'}],
+        '_check': l_and(isderivedtype, isscalar),
+        '_break': '',
+    }, {
+        'frompyobj': [
+            {l_and(isintent_nothide,
+                   l_or(isoptional, isnullable_derivedtype)):
+             '    if (#varname#_capi != Py_None)'},
+            {l_and(isintent_nothide, l_not(isunlimitedpolymorphic)): """\
+        f2py_success = f2py_dt_from_pyobj(&#varname#, &#varname#_tag,
+            #varname#_capi, &#dtpytype#, #dtwanttag#, #dtwantcapname#,
+            "#pyname#() #nth# (#varname#)");"""},
+            {l_and(isintent_nothide, isunlimitedpolymorphic): """\
+        f2py_success = f2py_dt_any_from_pyobj(&#varname#, &#varname#_tag,
+            &#varname#_any, #varname#_capi, #dtanytypes#,
+            "#pyname#() #nth# (#varname#)");"""},
+            {l_and(isintent_hide, isbindc_derivedtype): """\
+    #varname# = #varname#_mem = PyMem_Calloc(1, #dtsize#);
+    if (#varname# == NULL) {
+        PyErr_NoMemory();
+        f2py_success = 0;
+    }"""},
+            '    if (f2py_success) {'],
+        'cleanupfrompyobj': [
+            {l_and(isintent_hide, isbindc_derivedtype): """\
+    if (#varname#_capi == Py_None)
+        PyMem_Free(#varname#_mem);"""},
+            '    } /*if (f2py_success) of #varname#*/'],
+        'pyobjfrom': [
+            {l_and(isintent_out, isintent_nothide):
+             '        Py_INCREF(#varname#_capi);'},
+            {l_and(isintent_out, isintent_hide): """\
+        #varname#_capi = f2py_dt_to_pyobj(#varname#, &#dtpytype#, #dttag#,
+            #dtkind#, #dtcapname#, #dtdestructor#);
+        if (#varname#_capi == NULL)
+            f2py_success = 0;"""},
+            {isintent_out: '        if (f2py_success) {'}],
+        'closepyobjfrom': {
+            isintent_out: '        } /*if (f2py_success) of #varname# pyobjfrom*/'},
+        '_check': l_and(isderivedtype, isscalar),
+        '_depend': '',
+        '_break': '',
+    },
+    {
+        'decl': ['    void **#varname# = NULL;',
+                 '    npy_intp #varname#_Dims[#rank#] = {#rank*[-1]#};',
+                 '    const int #varname#_Rank = #rank#;',
+                 '    PyArrayObject *capi_#varname#_as_array = NULL;',
+                 '    PyObject *#varname#_capi = Py_None;'],
+        'argformat': {l_and(isintent_nothide, isrequired): 'O'},
+        'keyformat': {l_and(isintent_nothide, isoptional): 'O'},
+        'args_capi': {l_and(isintent_nothide, isrequired): ',&#varname#_capi'},
+        'keys_capi': {l_and(isintent_nothide, isoptional): ',&#varname#_capi'},
+        'callfortran': '#varname#,',
+        'return': {isintent_out: ',#varname#_capi'},
+        'need': ['len..', {isintent_nothide: 'f2py_dt_handles_from_pyobj'},
+                 {isintent_out: 'f2py_dt_from_handles'}],
+        '_check': l_and(isderivedtype, isarray),
+        '_break': '',
+    }, {
+        'frompyobj': [
+            '    #setdims#;',
+            {isintent_nothide: """\
+    capi_#varname#_as_array = f2py_dt_handles_from_pyobj(#varname#_capi,
+        &#dtpytype#, #dtwanttag#, #dtwantcapname#, #varname#_Rank,
+        #varname#_Dims, "#pyname#() #nth# (#varname#)");"""},
+            {isintent_hide: """\
+    capi_#varname#_as_array = (PyArrayObject *)PyArray_ZEROS(
+        #varname#_Rank, #varname#_Dims, NPY_UINTP, 1);"""},
+            """\
+    if (capi_#varname#_as_array == NULL) {
+        f2py_success = 0;
+    } else {
+        #varname# = (void **)PyArray_DATA(capi_#varname#_as_array);""",
+            {l_and(isintent_hide, isbindc_derivedtype): """\
+        for (npy_intp capi_i = 0;
+                capi_i < PyArray_SIZE(capi_#varname#_as_array); capi_i++) {
+            #varname#[capi_i] = PyMem_Calloc(1, #dtsize#);
+            if (#varname#[capi_i] == NULL) {
+                PyErr_NoMemory();
+                f2py_success = 0;
+                break;
+            }
+        }"""},
+            ],
+        'cleanupfrompyobj': [
+            {l_and(isintent_hide, isbindc_derivedtype): """\
+        if (#varname#_capi == Py_None) {
+            for (npy_intp capi_i = 0;
+                    capi_i < PyArray_SIZE(capi_#varname#_as_array); capi_i++)
+                PyMem_Free(#varname#[capi_i]);
+        }"""},
+            """\
+        Py_DECREF(capi_#varname#_as_array);
+    }  /* if (capi_#varname#_as_array == NULL) ... else of #varname# */"""],
+        'pyobjfrom': [
+            {l_and(isintent_out, isintent_nothide):
+             '        Py_INCREF(#varname#_capi);'},
+            {l_and(isintent_out, isintent_hide): """\
+        #varname#_capi = f2py_dt_from_handles(#varname#, #varname#_Rank,
+            #varname#_Dims, &#dtpytype#, #dttag#, #dtkind#, #dtcapname#,
+            #dtdestructor#);
+        if (#varname#_capi == NULL)
+            f2py_success = 0;"""},
+            {isintent_out: '        if (f2py_success) {'}],
+        'closepyobjfrom': {
+            isintent_out: '        } /*if (f2py_success) of #varname# pyobjfrom*/'},
+        '_check': l_and(isderivedtype, isarray),
+        '_depend': '',
+        '_break': '',
     },
     # Externals (call-back functions)
     {  # Common

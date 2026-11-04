@@ -155,9 +155,6 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
     while (defs[fp->len].name != NULL) {
         fp->len++;
     }
-    if (fp->len == 0) {
-        goto fail;
-    }
     fp->defs = defs;
     for (i = 0; i < fp->len; i++) {
         if (fp->defs[i].rank == -1) { /* Is Fortran routine */

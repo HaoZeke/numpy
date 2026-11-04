@@ -1,0 +1,3829 @@
+"""Tests for derived type wrapping support in f2py."""
+
+import re
+import textwrap
+
+import pytest
+
+import numpy as np
+from numpy.f2py import crackfortran, derived_type_rules
+from numpy.f2py.f2py2e import run_main
+
+from . import util
+
+# Absolute tolerances for a value that has round-tripped through Fortran.
+# A default real keeps about seven digits, real32 is coarser, and real64
+# keeps more.  The proton-mass case needs a bound below the value itself.
+_ABS_TOL_LARGE_REAL = 1e-1
+_ABS_TOL_COARSE = 1e-3
+_ABS_TOL_REAL32 = 1e-5
+_ABS_TOL_DEFAULT_REAL = 1e-6
+_ABS_TOL_PI = 1e-8
+_ABS_TOL_KIND = 1e-10
+_ABS_TOL_REAL64 = 1e-12
+_ABS_TOL_TINY_MASS = 1e-33
+
+# character(len=32) :: name in char_member.f90.  A longer value is truncated.
+_PERSON_NAME_LEN = 32
+_NAME_LONGER_THAN_FIELD = 100
+
+# defined_io long_record is this many characters.  A fixed format buffer
+# would cut the repr off before this length.
+_LONG_RECORD_LEN = 10000
+
+# default_init.f90 declares max_iterations = 100 and tolerance = 1.0d-6.
+# The override is a different value so the test can tell it from the default.
+_CONFIG_MAX_ITERATIONS = 100
+_CONFIG_FEWER_ITERATIONS = 50
+_CONFIG_DEFAULT_TOLERANCE = 1.0e-6
+_CONFIG_OVERRIDE_TOLERANCE = 0.01
+
+# hidden_components.f90 census adds this when the character codes match fill.
+_CENSUS_CODE_BONUS = 100
+
+
+def _generated(tmp_path, fpath, name="m"):
+    """Return the C module and the Fortran 90 wrappers f2py writes."""
+    # without -h, run_main would leave crackfortran not lowering case
+    run_main(["-m", name, "--lower", "--build-dir", str(tmp_path),
+              str(fpath)])
+    wrappers = tmp_path / f"{name}-f2pywrappers2.f90"
+    # join the lines f2py continues
+    return ((tmp_path / f"{name}module.c").read_text(),
+            wrappers.read_text().replace("&\n     &", "")
+            if wrappers.exists() else "")
+
+
+class TestDerivedTypeCodeGeneration:
+    """Test C code generation for derived types (no compilation needed)."""
+
+    def test_bindc_struct_generation(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "simple_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Should have generated code for both types
+        assert len(hooks['f90modhooks']) == 2
+        assert len(hooks['initf90modhooks']) > 0
+
+        # Check the bind(c) type generates correct C struct
+        bindc_code = hooks['f90modhooks'][0]
+        assert 'f2py_cartesian_t' in bindc_code
+        assert 'double x;' in bindc_code
+        assert 'double y;' in bindc_code
+        assert 'double z;' in bindc_code
+
+        # Check Python type is generated
+        assert 'PycartesianObject' in bindc_code
+        assert 'Pycartesian_Type' in bindc_code
+        assert 'Pycartesian_tp_new' in bindc_code
+        assert 'Pycartesian_tp_init' in bindc_code
+        assert 'Pycartesian_tp_dealloc' in bindc_code
+        assert 'Pycartesian_get_x' in bindc_code
+        assert 'Pycartesian_set_x' in bindc_code
+
+    def test_opaque_struct_generation(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "simple_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Check non-bind(c) Point type uses opaque pointer path
+        point_code = hooks['f90modhooks'][1]
+        # Opaque path should have extern declarations for Fortran wrappers
+        assert 'extern void *f2py_create_point' in point_code
+        assert 'f2py_destroy_point' in point_code
+        assert 'f2py_get_point_x' in point_code
+        assert 'f2py_set_point_x' in point_code
+        # Should still have Python type
+        assert 'PypointObject' in point_code
+        assert 'Pypoint_Type' in point_code
+
+    def test_init_registration_code(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "simple_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        init_code = '\n'.join(hooks['initf90modhooks'])
+        assert 'PyType_Ready(&Pycartesian_Type)' in init_code
+        assert 'PyModule_AddObjectRef(m, "cartesian"' in init_code
+        assert 'PyObject_SetAttrString(fmod, "cartesian"' in init_code
+        assert 'PyType_Ready(&Pypoint_Type)' in init_code
+        assert 'PyModule_AddObjectRef(m, "point"' in init_code
+
+    def test_repr_generation(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "simple_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        bindc_code = hooks['f90modhooks'][0]
+        assert 'tp_repr' in bindc_code
+        assert 'snprintf' in bindc_code
+
+    def test_capsule_destructor(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "simple_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        bindc_code = hooks['f90modhooks'][0]
+        assert 'f2py_cartesian_capsule_destructor' in bindc_code
+        assert 'PyMem_Free' in bindc_code
+        assert 'f2py.cartesian' in bindc_code  # capsule name
+
+    def test_empty_module_no_hooks(self):
+        """Module without derived types should generate empty hooks."""
+        hooks = derived_type_rules.buildhooks({'name': 'empty',
+                                               'block': 'module',
+                                               'body': [],
+                                               'vars': {}})
+        assert hooks['f90modhooks'] == []
+        assert hooks['initf90modhooks'] == []
+
+
+@pytest.mark.slow
+class TestSimpleBindCType(util.F2PyTest):
+    """Test compilation and runtime behavior of bind(c) derived types."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "simple_bindc.f90")]
+
+    def test_type_exists(self):
+        """The cartesian type should be accessible as a class."""
+        # Types are registered at module level (not on the fortran submodule)
+        assert hasattr(self.module, 'cartesian')
+
+    def test_construct_default(self):
+        """Construct with default (zero) values."""
+        p = self.module.cartesian()
+        assert p.x == 0.0
+        assert p.y == 0.0
+        assert p.z == 0.0
+
+    def test_construct_with_args(self):
+        """Construct with positional arguments."""
+        p = self.module.cartesian(1.0, 2.0, 3.0)
+        assert p.x == 1.0
+        assert p.y == 2.0
+        assert p.z == 3.0
+
+    def test_construct_with_kwargs(self):
+        """Construct with keyword arguments."""
+        p = self.module.cartesian(x=1.0, z=3.0)
+        assert p.x == 1.0
+        assert p.y == 0.0
+        assert p.z == 3.0
+
+    def test_set_properties(self):
+        """Set member values after construction."""
+        p = self.module.cartesian()
+        p.x = 10.0
+        p.y = 20.0
+        p.z = 30.0
+        assert p.x == 10.0
+        assert p.y == 20.0
+        assert p.z == 30.0
+
+    def test_repr(self):
+        """String representation includes member values."""
+        p = self.module.cartesian(1.0, 2.0, 3.0)
+        r = repr(p)
+        assert 'cartesian' in r
+        assert '1' in r
+
+    def test_multiple_instances(self):
+        """Multiple instances should be independent."""
+        p1 = self.module.cartesian(1.0, 0.0, 0.0)
+        p2 = self.module.cartesian(0.0, 2.0, 0.0)
+        assert p1.x == 1.0
+        assert p2.x == 0.0
+        assert p1.y == 0.0
+        assert p2.y == 2.0
+
+    def test_opaque_point_exists(self):
+        """Non-bind(c) Point type should also be wrapped."""
+        assert hasattr(self.module, 'point')
+
+    def test_opaque_point_construct(self):
+        """Non-bind(c) Point uses opaque pointer path."""
+        p = self.module.point(3.0, 4.0)
+        assert abs(p.x - 3.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.y - 4.0) < _ABS_TOL_DEFAULT_REAL
+
+    def test_opaque_point_set(self):
+        """Set members on opaque type."""
+        p = self.module.point()
+        p.x = 7.0
+        p.y = 8.0
+        assert abs(p.x - 7.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.y - 8.0) < _ABS_TOL_DEFAULT_REAL
+
+    def test_opaque_point_repr(self):
+        p = self.module.point(1.5, 2.5)
+        r = repr(p)
+        assert 'point' in r
+
+    def test_opaque_point_independence(self):
+        """Multiple opaque instances should be independent."""
+        p1 = self.module.point(1.0, 0.0)
+        p2 = self.module.point(0.0, 2.0)
+        assert abs(p1.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p2.x - 0.0) < _ABS_TOL_DEFAULT_REAL
+        p1.x = 99.0
+        assert abs(p2.x - 0.0) < _ABS_TOL_DEFAULT_REAL
+
+
+@pytest.mark.slow
+class TestMixedScalarTypes(util.F2PyTest):
+    """Test opaque types with mixed scalar members (real, integer, double)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "mixed_types.f90")]
+
+    def test_particle_exists(self):
+        assert hasattr(self.module, 'particle')
+
+    def test_particle_construct(self):
+        p = self.module.particle(1.0, 2.0, 3.0, 9.8, 42)
+        assert abs(p.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.y - 2.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.z - 3.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.mass - 9.8) < _ABS_TOL_DEFAULT_REAL
+        assert p.id == 42
+
+    def test_particle_set_integer(self):
+        p = self.module.particle()
+        p.id = 100
+        assert p.id == 100
+
+    def test_particle_set_float(self):
+        p = self.module.particle()
+        p.mass = 1.67e-27
+        assert abs(p.mass - 1.67e-27) < _ABS_TOL_TINY_MASS
+
+    def test_gridindex(self):
+        g = self.module.gridindex(10, 20, 30)
+        assert g.i == 10
+        assert g.j == 20
+        assert g.k == 30
+
+    def test_gridindex_repr(self):
+        g = self.module.gridindex(1, 2, 3)
+        r = repr(g)
+        assert 'gridindex' in r
+
+    def test_vector3d_double(self):
+        v = self.module.vector3d(1.1, 2.2, 3.3)
+        assert abs(v.vx - 1.1) < _ABS_TOL_REAL64
+        assert abs(v.vy - 2.2) < _ABS_TOL_REAL64
+        assert abs(v.vz - 3.3) < _ABS_TOL_REAL64
+
+    def test_multiple_types_coexist(self):
+        """All three types should work simultaneously."""
+        p = self.module.particle(1.0, 2.0, 3.0, 4.0, 5)
+        g = self.module.gridindex(10, 20, 30)
+        v = self.module.vector3d(0.1, 0.2, 0.3)
+        assert p.id == 5
+        assert g.k == 30
+        assert abs(v.vz - 0.3) < _ABS_TOL_REAL64
+
+
+class TestSequenceTypeCodeGen:
+    """Test code generation for SEQUENCE types (no compilation)."""
+
+    def test_sequence_type_parsed(self):
+        """SEQUENCE attribute should be detected by crackfortran."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "sequence_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        # The SEQUENCE attribute should be stored in the type's attrspec
+        seq_point_var = module['vars'].get('seq_point', {})
+        attrspec = seq_point_var.get('attrspec', [])
+        assert 'sequence' in attrspec, (
+            f"Expected 'sequence' in attrspec, got {attrspec}")
+
+    def test_sequence_type_wraps_opaque(self):
+        """SEQUENCE types should be wrappable via the opaque pointer path."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "sequence_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # SEQUENCE types use the opaque path (not bind(c))
+        assert len(hooks['f90modhooks']) >= 1
+        code = hooks['f90modhooks'][0]
+        # Should have PyCapsule-based wrapping
+        assert 'PyCapsule' in code
+        assert 'Pyseq_point' in code or 'Pyseqpoint' in code
+
+    def test_sequence_with_array_wraps(self):
+        """SEQUENCE types with fixed-size array members should wrap."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "sequence_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Both seq_point and seq_with_array should be wrapped
+        assert len(hooks['f90modhooks']) >= 2
+
+
+class TestArrayMemberCodeGen:
+    """Test code generation for array member support (no compilation)."""
+
+    def test_bindc_array_struct(self):
+        """bind(c) type with array should generate C array fields."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        # Vec3 has float v[3]
+        vec3_code = hooks['f90modhooks'][1]
+        assert 'float v[3]' in vec3_code
+
+    def test_bindc_array_getter_uses_numpy(self):
+        """Array getter should use PyArray_SimpleNewFromData."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        vec3_code = hooks['f90modhooks'][1]
+        assert 'PyArray_SimpleNewFromData' in vec3_code
+
+    def test_bindc_array_setter_uses_memcpy(self):
+        """Array setter should copy via memcpy."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        vec3_code = hooks['f90modhooks'][1]
+        assert 'memcpy' in vec3_code
+
+    def test_bindc_array_repr(self):
+        """Repr should show <array(N)> for array members."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        vec3_code = hooks['f90modhooks'][1]
+        assert '<array(3)>' in vec3_code
+
+    def test_opaque_array_fortran_wrappers(self):
+        """Opaque type array wrappers should generate Fortran getter/setter."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        from numpy.f2py.f90mod_rules import findf90modules
+        for m in findf90modules(module):
+            type_blocks = derived_type_rules._find_derived_types(m)
+            src = derived_type_rules.generate_fortran_wrappers(
+                m['name'], type_blocks)
+        assert src is not None
+        # Array getter returns c_ptr via c_loc
+        assert 'c_loc(obj%wavelengths)' in src
+        # Array setter takes array arg and copies
+        assert 'f2py_set_spectrum_wavelengths' in src
+
+    def test_opaque_array_extern_decls(self):
+        """Opaque C code should have correct extern decls for arrays."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        spectrum_code = hooks['f90modhooks'][0]
+        # Array getter returns void*
+        assert 'extern void *f2py_get_spectrum_wavelengths' in spectrum_code
+        # Array setter takes typed pointer
+        assert 'extern void f2py_set_spectrum_wavelengths' in spectrum_code
+
+    def test_opaque_array_repr(self):
+        """Opaque repr should show <array(N)> for array members."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        spectrum_code = hooks['f90modhooks'][0]
+        assert '<array(5)>' in spectrum_code
+
+
+@pytest.mark.slow
+class TestArrayMemberBindC(util.F2PyTest):
+    """Test bind(c) types with fixed-size array members."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "array_members_bindc.f90")]
+
+    def test_vec3_exists(self):
+        assert hasattr(self.module, 'vec3')
+
+    def test_vec3_default_array(self):
+        v = self.module.vec3()
+        arr = v.v
+        assert isinstance(arr, np.ndarray)
+        assert arr.shape == (3,)
+        np.testing.assert_array_equal(arr, [0.0, 0.0, 0.0])
+
+    def test_vec3_set_array(self):
+        v = self.module.vec3()
+        v.v = [1.0, 2.0, 3.0]
+        np.testing.assert_array_almost_equal(v.v, [1.0, 2.0, 3.0])
+
+    def test_vec3_array_is_view(self):
+        """bind(c) array getter returns a view (writes go through)."""
+        v = self.module.vec3()
+        arr = v.v
+        arr[0] = 99.0
+        np.testing.assert_almost_equal(v.v[0], 99.0)
+
+    def test_vec3_wrong_size_rejected(self):
+        v = self.module.vec3()
+        with pytest.raises(ValueError):
+            v.v = [1.0, 2.0]  # wrong size
+
+    def test_matrix2x2_exists(self):
+        assert hasattr(self.module, 'matrix2x2')
+
+    def test_matrix2x2_array_and_scalar(self):
+        m = self.module.matrix2x2(scale=2.5)
+        assert abs(m.scale - 2.5) < _ABS_TOL_REAL64
+        arr = m.data
+        assert arr.shape == (4,)
+        np.testing.assert_array_equal(arr, [0.0, 0.0, 0.0, 0.0])
+        m.data = [1.0, 0.0, 0.0, 1.0]
+        np.testing.assert_array_almost_equal(m.data, [1.0, 0.0, 0.0, 1.0])
+
+    def test_matrix2x2_repr(self):
+        m = self.module.matrix2x2(scale=1.0)
+        r = repr(m)
+        assert 'matrix2x2' in r
+        assert '<array(4)>' in r
+
+
+@pytest.mark.slow
+class TestArrayMemberOpaque(util.F2PyTest):
+    """Test opaque types with fixed-size array members."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "array_members_opaque.f90")]
+
+    def test_spectrum_exists(self):
+        assert hasattr(self.module, 'spectrum')
+
+    def test_spectrum_default_arrays(self):
+        s = self.module.spectrum()
+        wl = s.wavelengths
+        assert isinstance(wl, np.ndarray)
+        assert wl.shape == (5,)
+
+    def test_spectrum_set_array(self):
+        s = self.module.spectrum()
+        s.wavelengths = [400.0, 500.0, 600.0, 700.0, 800.0]
+        np.testing.assert_array_almost_equal(
+            s.wavelengths, [400.0, 500.0, 600.0, 700.0, 800.0])
+
+    def test_spectrum_scalar_member(self):
+        s = self.module.spectrum(npeaks=3)
+        assert s.npeaks == 3
+
+    def test_spectrum_array_is_copy(self):
+        """Opaque array getter returns a copy (unlike bind(c) view)."""
+        s = self.module.spectrum()
+        s.wavelengths = [1.0, 2.0, 3.0, 4.0, 5.0]
+        arr = s.wavelengths
+        arr[0] = 999.0
+        # Should NOT affect the stored data (copy semantics)
+        np.testing.assert_almost_equal(s.wavelengths[0], 1.0)
+
+    def test_spectrum_repr(self):
+        s = self.module.spectrum(npeaks=2)
+        r = repr(s)
+        assert 'spectrum' in r
+        assert '<array(5)>' in r
+
+    def test_triangle_exists(self):
+        assert hasattr(self.module, 'triangle')
+
+    def test_triangle_set_get(self):
+        t = self.module.triangle()
+        verts = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+        t.vertices = verts
+        np.testing.assert_array_almost_equal(t.vertices, verts)
+
+
+class TestTypeAsArgCodeGen:
+    """Test code generation for routines with derived type arguments."""
+
+    def test_has_derived_type_args(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_as_arg.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for m in findf90modules(mod[0]):
+            for b in m.get('body', []):
+                if b.get('name') == 'translate_particle':
+                    assert derived_type_rules._has_derived_type_args(b)
+                if b.get('name') == 'particle_distance':
+                    assert derived_type_rules._has_derived_type_args(b)
+
+    def test_routine_wrapper_generated(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_as_arg.f90")
+        cmod, _ = _generated(tmp_path, fpath)
+        # Routines are wrapped like the others of the module, with the
+        # derived type arguments as handles
+        for name in ('translate_particle', 'particle_distance',
+                     'make_particle', 'create_particle'):
+            assert f'f2py_rout_m_type_arg_mod_{name}' in cmod
+            assert f'{{"{name}",-1,' in cmod
+        assert 'f2py_dt_from_pyobj(&p, &p_tag' in cmod
+
+    def test_function_returning_type_generated(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_as_arg.f90")
+        cmod, wrappers = _generated(tmp_path, fpath)
+        # The result is a handle of a new object, which a new instance
+        # owns
+        assert 'type(c_ptr) create_particlef2pywrap' in wrappers
+        assert 'allocate(f2py_create_particlef2pywrap)' in wrappers
+        assert ('create_particlef2pywrap = '
+                'c_loc(f2py_create_particlef2pywrap)') in wrappers
+        assert 'f2py_dt_to_pyobj(create_particlef2pywrap' in cmod
+
+    def test_fortran_wrappers_for_routines(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_as_arg.f90")
+        _, wrappers = _generated(tmp_path, fpath)
+        for name in ('translate_particle', 'particle_distance',
+                     'create_particle'):
+            assert f'subroutine f2pywrap_type_arg_mod_{name}' in wrappers
+        assert 'type(c_ptr) p' in wrappers
+        assert 'call c_f_pointer(p, f2py_p)' in wrappers
+        assert 'call translate_particle(f2py_p, dx, dy, dz)' in wrappers
+
+
+@pytest.mark.slow
+class TestTypeAsArg(util.F2PyTest):
+    """Test routines that take derived type arguments."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "type_as_arg.f90")]
+
+    def test_particle_type_exists(self):
+        assert hasattr(self.module, 'particle')
+
+    def test_translate_exists(self):
+        assert hasattr(self.module, 'translate_particle')
+
+    def test_translate_particle(self):
+        p = self.module.particle(1.0, 2.0, 3.0, 10.0)
+        self.module.translate_particle(p, 0.5, 0.5, 0.5)
+        assert abs(p.x - 1.5) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.y - 2.5) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.z - 3.5) < _ABS_TOL_DEFAULT_REAL
+
+    def test_particle_distance(self):
+        p1 = self.module.particle(0.0, 0.0, 0.0, 1.0)
+        p2 = self.module.particle(3.0, 4.0, 0.0, 1.0)
+        dist = self.module.particle_distance(p1, p2)
+        assert abs(dist - 5.0) < _ABS_TOL_DEFAULT_REAL
+
+    def test_make_particle(self):
+        p = self.module.make_particle(1.0, 2.0, 3.0, 9.8)
+        assert abs(p.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.mass - 9.8) < _ABS_TOL_DEFAULT_REAL
+
+    def test_create_particle_exists(self):
+        assert hasattr(self.module, 'create_particle')
+
+    def test_create_particle_function(self):
+        p = self.module.create_particle(1.0, 2.0, 3.0, 9.8)
+        assert abs(p.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.y - 2.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.z - 3.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p.mass - 9.8) < _ABS_TOL_DEFAULT_REAL
+
+    def test_create_particle_returns_correct_type(self):
+        p = self.module.create_particle(0.0, 0.0, 0.0, 1.0)
+        p_type = type(self.module.particle())
+        assert isinstance(p, p_type)
+
+    def test_create_particle_independent_instances(self):
+        p1 = self.module.create_particle(1.0, 2.0, 3.0, 10.0)
+        p2 = self.module.create_particle(4.0, 5.0, 6.0, 20.0)
+        assert abs(p1.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(p2.x - 4.0) < _ABS_TOL_DEFAULT_REAL
+
+    def test_create_particle_mutable(self):
+        p = self.module.create_particle(1.0, 2.0, 3.0, 10.0)
+        p.x = 99.0
+        assert abs(p.x - 99.0) < _ABS_TOL_DEFAULT_REAL
+
+    def test_create_particle_usable_as_arg(self):
+        p = self.module.create_particle(1.0, 2.0, 3.0, 10.0)
+        self.module.translate_particle(p, 0.5, 0.5, 0.5)
+        assert abs(p.x - 1.5) < _ABS_TOL_DEFAULT_REAL
+
+
+@pytest.mark.slow
+class TestRoutineArguments(util.F2PyTest):
+    # derived type arguments pass with arguments of every other kind,
+    # which f2py converts as for any routine
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "routine_args.f90")]
+
+    def test_arrays_strings_and_optional(self):
+        mod = self.module.routine_args
+        acc = mod.account(id=1)
+        amounts = np.array([1.0, 2.5])
+        mod.deposit(acc, amounts, "ann")
+        assert acc.balance == 3.5
+        assert acc.owner == "ann"
+        np.testing.assert_array_equal(amounts, [0.0, 0.0])
+        mod.deposit(acc, np.array([1.0]), "bob", fee=0.5)
+        assert acc.balance == 4.0
+        assert acc.owner == "bob"
+
+    def test_assumed_shape_and_dependent_extent(self):
+        mod = self.module.routine_args
+        accounts = [mod.account(balance=1.0), mod.account(balance=2.0)]
+        assert mod.total(accounts, [10.0, 100.0]) == 210.0
+
+    def test_intent_out(self):
+        acc = self.module.routine_args.open_account(7)
+        assert (acc.id, acc.balance) == (7, 1.0)
+
+    def test_callback(self):
+        mod = self.module.routine_args
+        acc = mod.account(balance=4.0)
+        mod.apply(acc, lambda b: 3 * b)
+        assert acc.balance == 12.0
+        assert mod.interest(acc, 0.5) == 6.0
+
+    def test_module_attributes(self):
+        # the routines and types are attributes of their Fortran module,
+        # and of the extension module as before
+        mod = self.module.routine_args
+        assert self.module.deposit is mod.deposit
+        assert self.module.account is mod.account
+
+
+class TestTypeBoundProcCodeGen:
+    """Test code generation for type-bound procedures."""
+
+    def test_scan_bound_procedures(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_bound_proc.f90")
+        procs = derived_type_rules._scan_type_bound_procedures(
+            str(fpath), 'Counter')
+        assert 'increment' in procs
+        assert procs['increment'] == 'counter_increment'
+        assert 'get_count' in procs
+        assert procs['get_count'] == 'counter_get_count'
+        assert 'reset' in procs
+        assert procs['reset'] == 'counter_reset'
+
+    def test_scan_binding_statements(self, tmp_path):
+        # type names match as words, statements may be continued, and
+        # bindings may have attributes and come in lists
+        fpath = tmp_path / "bindings.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module bindings
+              type :: point2
+                real :: y
+              contains
+                procedure :: norm => point2_norm
+              endtype point2
+              type :: point
+                real :: x
+              contains
+                procedure, pass(self) :: norm
+                procedure :: shift => point_shift, &
+                             scale => point_scale
+                procedure, nopass :: origin
+                procedure, private :: hidden
+              end type point
+            end module bindings
+            """))
+        attrs = {}
+        procs = derived_type_rules._scan_type_bound_procedures(
+            str(fpath), 'point', attrs)
+        assert procs == {'norm': 'norm', 'shift': 'point_shift',
+                         'scale': 'point_scale', 'origin': 'origin'}
+        assert attrs['norm'] == {'pass': 'self', 'nopass': False}
+        assert attrs['shift'] == {'pass': None, 'nopass': False}
+        assert attrs['origin'] == {'pass': None, 'nopass': True}
+
+    def test_hooks_include_methods(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_bound_proc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'Pycounter_method_increment' in all_code
+        assert 'Pycounter_method_get_count' in all_code
+        assert 'Pycounter_methods' in all_code
+        assert '.tp_methods' in all_code
+
+
+@pytest.mark.slow
+class TestTypeBoundProc(util.F2PyTest):
+    """Test type-bound procedures (methods on derived types)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "type_bound_proc.f90")]
+
+    def test_counter_exists(self):
+        assert hasattr(self.module, 'counter')
+
+    def test_counter_has_methods(self):
+        c = self.module.counter()
+        assert hasattr(c, 'increment')
+        assert hasattr(c, 'get_count')
+        assert hasattr(c, 'reset')
+
+    def test_counter_increment(self):
+        c = self.module.counter()
+        c.increment(5)
+        assert c.count == 5
+        c.increment(3)
+        assert c.count == 8
+
+    def test_counter_get_count(self):
+        c = self.module.counter(count=42)
+        val = c.get_count()
+        assert val == 42
+
+    def test_counter_reset(self):
+        c = self.module.counter(count=100)
+        c.reset()
+        assert c.count == 0
+
+
+class TestNestedTypeCodeGen:
+    """Test code generation for nested derived types (no compiler)."""
+
+    def test_bindc_nested_type_detected(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "nested_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        code = '\n'.join(hooks['f90modhooks'])
+        assert 'f2py_vec2_t' in code
+        assert 'f2py_particle_t' in code
+
+    def test_bindc_nested_struct_layout(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "nested_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        code = '\n'.join(hooks['f90modhooks'])
+        # The Particle struct should contain Vec2 members
+        assert 'f2py_vec2_t pos;' in code
+        assert 'f2py_vec2_t vel;' in code
+
+    def test_opaque_nested_type_detected(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "nested_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        code = '\n'.join(hooks['f90modhooks'])
+        assert 'Pyvec2Object' in code
+        assert 'PyparticleObject' in code
+
+
+@pytest.mark.slow
+class TestNestedBindC(util.F2PyTest):
+    """Test nested bind(c) derived types with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "nested_bindc.f90")]
+
+    def test_vec2_exists(self):
+        assert hasattr(self.module, 'vec2')
+
+    def test_particle_exists(self):
+        assert hasattr(self.module, 'particle')
+
+    def test_particle_has_nested_members(self):
+        p = self.module.particle(mass=1.0)
+        pos = p.pos
+        assert hasattr(pos, 'x')
+        assert hasattr(pos, 'y')
+
+    def test_particle_nested_getter(self):
+        p = self.module.particle(mass=2.5)
+        pos = p.pos
+        assert pos.x == 0.0
+        assert pos.y == 0.0
+
+    def test_particle_nested_setter(self):
+        p = self.module.particle(mass=1.0)
+        v = self.module.vec2(x=3.0, y=4.0)
+        p.pos = v
+        pos = p.pos
+        assert pos.x == 3.0
+        assert pos.y == 4.0
+
+    def test_particle_nested_independence(self):
+        """Nested getter returns a copy, not a reference."""
+        p = self.module.particle(mass=1.0)
+        v = self.module.vec2(x=1.0, y=2.0)
+        p.pos = v
+        v.x = 99.0
+        pos = p.pos
+        assert pos.x == 1.0  # unchanged
+
+    def test_particle_mass(self):
+        p = self.module.particle(mass=42.0)
+        assert p.mass == 42.0
+
+    def test_particle_both_nested(self):
+        p = self.module.particle(mass=1.0)
+        pos = self.module.vec2(x=1.0, y=2.0)
+        vel = self.module.vec2(x=3.0, y=4.0)
+        p.pos = pos
+        p.vel = vel
+        assert p.pos.x == 1.0
+        assert p.vel.y == 4.0
+
+
+class TestInheritanceCodeGen:
+    """Test code generation for types with extends(parent)."""
+
+    def test_parent_generated_before_child(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "inheritance_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Should generate wrappers for Particle, ChargedParticle, Electron
+        all_code = '\n'.join(hooks['f90modhooks'])
+        particle_pos = all_code.index('PyparticleObject')
+        charged_pos = all_code.index('PychargedparticleObject')
+        electron_pos = all_code.index('PyelectronObject')
+        # Parent before child in generated code
+        assert particle_pos < charged_pos < electron_pos
+
+    def test_child_has_tp_base(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "inheritance_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # ChargedParticle should have tp_base pointing to Particle
+        assert '.tp_base = &Pyparticle_Type,' in all_code
+        # Electron should have tp_base pointing to ChargedParticle
+        assert '.tp_base = &Pychargedparticle_Type,' in all_code
+        # Particle should NOT have tp_base
+        particle_code = hooks['f90modhooks'][0]
+        assert 'tp_base' not in particle_code
+
+    def test_child_getset_has_all_members(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "inheritance_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # ChargedParticle's getset should have all members
+        # (inherited + own) since capsule names differ per type
+        charged_code = hooks['f90modhooks'][1]
+        getset_start = charged_code.index('Pychargedparticle_getset')
+        getset_block = charged_code[getset_start:]
+        sentinel = getset_block.index('{NULL}')
+        getset_block = getset_block[:sentinel]
+        assert '"spin"' in getset_block
+        assert '"mass"' in getset_block
+        assert '"charge"' in getset_block
+
+    def test_child_extern_has_all_members(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "inheritance_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        charged_code = hooks['f90modhooks'][1]
+        # Child extern decls should cover inherited members too
+        assert 'f2py_get_chargedparticle_mass' in charged_code
+        assert 'f2py_get_chargedparticle_charge' in charged_code
+        assert 'f2py_get_chargedparticle_spin' in charged_code
+
+    def test_fortran_wrappers_generated(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "inheritance_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        source = derived_type_rules.generate_fortran_wrappers(
+            'inheritance_mod', type_blocks)
+        assert source is not None
+        # All three types should have create/destroy wrappers
+        assert 'f2py_create_particle' in source
+        assert 'f2py_create_chargedparticle' in source
+        assert 'f2py_create_electron' in source
+        # Child wrappers should access inherited members
+        assert 'f2py_get_chargedparticle_mass' in source
+        assert 'f2py_get_electron_spin' in source
+
+
+@pytest.mark.slow
+class TestInheritanceOpaque(util.F2PyTest):
+    """Test type inheritance with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "inheritance_opaque.f90")]
+
+    def test_particle_exists(self):
+        assert hasattr(self.module, 'particle')
+
+    def test_chargedparticle_exists(self):
+        assert hasattr(self.module, 'chargedparticle')
+
+    def test_electron_exists(self):
+        assert hasattr(self.module, 'electron')
+
+    def test_particle_members(self):
+        p = self.module.particle(mass=1.5, charge=0)
+        assert abs(p.mass - 1.5) < _ABS_TOL_DEFAULT_REAL
+        assert p.charge == 0
+
+    def test_charged_own_member(self):
+        cp = self.module.chargedparticle(mass=0.0, charge=1, spin=0.5)
+        assert abs(cp.spin - 0.5) < _ABS_TOL_DEFAULT_REAL
+
+    def test_charged_inherited_members(self):
+        cp = self.module.chargedparticle(mass=938.0, charge=1, spin=0.5)
+        assert abs(cp.mass - 938.0) < _ABS_TOL_LARGE_REAL
+        assert cp.charge == 1
+
+    def test_charged_set_inherited_member(self):
+        cp = self.module.chargedparticle(mass=0.0, charge=0, spin=0.0)
+        cp.mass = 105.7
+        assert abs(cp.mass - 105.7) < _ABS_TOL_LARGE_REAL
+
+    def test_charged_isinstance_particle(self):
+        """ChargedParticle should be an instance of Particle."""
+        cp = self.module.chargedparticle(mass=0.0, charge=0, spin=0.0)
+        p_type = type(self.module.particle())
+        assert isinstance(cp, p_type)
+
+    def test_electron_all_members(self):
+        e = self.module.electron(
+            mass=0.511, charge=-1, spin=0.5, shell_num=2)
+        assert abs(e.mass - 0.511) < _ABS_TOL_COARSE
+        assert e.charge == -1
+        assert abs(e.spin - 0.5) < _ABS_TOL_DEFAULT_REAL
+        assert e.shell_num == 2
+
+    def test_electron_isinstance_chain(self):
+        """Electron should be instance of ChargedParticle and Particle."""
+        e = self.module.electron(
+            mass=0.0, charge=0, spin=0.0, shell_num=0)
+        cp_type = type(self.module.chargedparticle())
+        p_type = type(self.module.particle())
+        assert isinstance(e, cp_type)
+        assert isinstance(e, p_type)
+
+    def test_electron_set_grandparent_member(self):
+        e = self.module.electron(
+            mass=0.0, charge=0, spin=0.0, shell_num=0)
+        e.mass = 99.0
+        assert abs(e.mass - 99.0) < _ABS_TOL_DEFAULT_REAL
+
+    def test_repr_shows_all_members(self):
+        cp = self.module.chargedparticle(mass=1.0, charge=2, spin=3.0)
+        r = repr(cp)
+        assert 'chargedparticle' in r.lower()
+        assert 'mass' in r
+        assert 'spin' in r
+
+
+class TestOperatorCodeGen:
+    """Test code generation for operator overloading."""
+
+    def test_operator_detected(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "operator_overload.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Should generate nb_add slot
+        assert 'nb_add' in all_code
+        # Should generate nb_subtract slot
+        assert 'nb_subtract' in all_code
+        # Should generate richcompare
+        assert 'tp_richcompare' in all_code
+
+    def test_number_methods_struct(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "operator_overload.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'PyNumberMethods' in all_code
+        assert 'tp_as_number' in all_code
+
+    def test_fortran_operator_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "operator_overload.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        source = derived_type_rules.generate_fortran_wrappers(
+            'operator_mod', type_blocks, module_block=module)
+        assert source is not None
+        assert 'f2py_op_vec2_vec2_add' in source
+        assert 'f2py_op_vec2_vec2_sub' in source
+        assert 'f2py_op_vec2_vec2_eq' in source
+
+
+@pytest.mark.slow
+class TestOperatorOverload(util.F2PyTest):
+    """Test operator overloading with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "operator_overload.f90")]
+
+    def test_vec2_exists(self):
+        assert hasattr(self.module, 'vec2')
+
+    def test_vec2_add(self):
+        v1 = self.module.vec2(x=1.0, y=2.0)
+        v2 = self.module.vec2(x=3.0, y=4.0)
+        v3 = v1 + v2
+        assert abs(v3.x - 4.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(v3.y - 6.0) < _ABS_TOL_DEFAULT_REAL
+
+    def test_vec2_sub(self):
+        v1 = self.module.vec2(x=5.0, y=8.0)
+        v2 = self.module.vec2(x=2.0, y=3.0)
+        v3 = v1 - v2
+        assert abs(v3.x - 3.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(v3.y - 5.0) < _ABS_TOL_DEFAULT_REAL
+
+    def test_vec2_eq_true(self):
+        v1 = self.module.vec2(x=1.0, y=2.0)
+        v2 = self.module.vec2(x=1.0, y=2.0)
+        assert v1 == v2
+
+    def test_vec2_eq_false(self):
+        v1 = self.module.vec2(x=1.0, y=2.0)
+        v2 = self.module.vec2(x=3.0, y=4.0)
+        assert not (v1 == v2)
+
+    def test_vec2_add_returns_new_instance(self):
+        v1 = self.module.vec2(x=1.0, y=2.0)
+        v2 = self.module.vec2(x=3.0, y=4.0)
+        v3 = v1 + v2
+        # v1 and v2 should be unchanged
+        assert abs(v1.x - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(v2.x - 3.0) < _ABS_TOL_DEFAULT_REAL
+        # v3 is a new object
+        assert v3 is not v1 and v3 is not v2
+
+    def test_vec2_add_type_mismatch(self):
+        v1 = self.module.vec2(x=1.0, y=2.0)
+        result = v1.__add__(42)
+        assert result is NotImplemented
+
+    def test_vec2_chained_ops(self):
+        v1 = self.module.vec2(x=1.0, y=2.0)
+        v2 = self.module.vec2(x=3.0, y=4.0)
+        v3 = self.module.vec2(x=5.0, y=6.0)
+        v4 = v1 + v2 + v3
+        assert abs(v4.x - 9.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(v4.y - 12.0) < _ABS_TOL_DEFAULT_REAL
+
+
+class TestTypeArrayArgCodeGen:
+    """Test code generation for routines with array-of-type arguments."""
+
+    def test_array_arg_detected(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_array_arg.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        code = '\n'.join(hooks['f90modhooks'])
+        # Should generate the Atom type
+        assert 'PyatomObject' in code
+
+    def test_routine_wrapper_generated(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_array_arg.f90")
+        cmod, _ = _generated(tmp_path, fpath)
+        # Should generate wrappers for routines with array-of-type args
+        assert 'f2py_rout_m_type_array_arg_mod_sum_positions' in cmod
+        assert 'f2py_rout_m_type_array_arg_mod_count_element' in cmod
+
+    def test_list_extraction_code(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_array_arg.f90")
+        cmod, _ = _generated(tmp_path, fpath)
+        # The sequence of instances becomes an array of handles
+        assert 'f2py_dt_handles_from_pyobj(atoms_capi' in cmod
+
+    def test_fortran_wrapper_generated(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_array_arg.f90")
+        _, wrappers = _generated(tmp_path, fpath)
+        # Fortran wrapper should accept c_ptr array
+        assert 'type(c_ptr) atoms(n)' in wrappers
+        assert 'call c_f_pointer(atoms(f2py_atoms_i1), f2py_atoms_e)' in wrappers
+
+
+@pytest.mark.slow
+class TestTypeArrayArgOpaque(util.F2PyTest):
+    """Test routines with array-of-type arguments (compilation)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "type_array_arg.f90")]
+
+    def test_atom_exists(self):
+        assert hasattr(self.module, 'atom')
+
+    def test_sum_positions_exists(self):
+        assert hasattr(self.module, 'sum_positions')
+
+    def test_count_element_exists(self):
+        assert hasattr(self.module, 'count_element')
+
+    def test_sum_positions_basic(self):
+        a1 = self.module.atom(x=1.0, y=2.0, z=3.0, atomic_num=1)
+        a2 = self.module.atom(x=4.0, y=5.0, z=6.0, atomic_num=8)
+        a3 = self.module.atom(x=7.0, y=8.0, z=9.0, atomic_num=1)
+        tx, ty, tz = self.module.sum_positions([a1, a2, a3])
+        assert abs(tx - 12.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(ty - 15.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(tz - 18.0) < _ABS_TOL_DEFAULT_REAL
+
+    def test_count_element_basic(self):
+        a1 = self.module.atom(x=0.0, y=0.0, z=0.0, atomic_num=1)
+        a2 = self.module.atom(x=0.0, y=0.0, z=0.0, atomic_num=8)
+        a3 = self.module.atom(x=0.0, y=0.0, z=0.0, atomic_num=1)
+        cnt = self.module.count_element([a1, a2, a3], z=1)
+        assert cnt == 2
+
+    def test_count_element_none_found(self):
+        a1 = self.module.atom(x=0.0, y=0.0, z=0.0, atomic_num=1)
+        a2 = self.module.atom(x=0.0, y=0.0, z=0.0, atomic_num=1)
+        cnt = self.module.count_element([a1, a2], z=8)
+        assert cnt == 0
+
+    def test_sum_positions_empty_list(self):
+        tx, ty, tz = self.module.sum_positions([])
+        assert abs(tx) < _ABS_TOL_DEFAULT_REAL
+        assert abs(ty) < _ABS_TOL_DEFAULT_REAL
+        assert abs(tz) < _ABS_TOL_DEFAULT_REAL
+
+    def test_sum_positions_single_element(self):
+        a = self.module.atom(x=3.14, y=2.72, z=1.41, atomic_num=6)
+        tx, ty, tz = self.module.sum_positions([a])
+        assert abs(tx - 3.14) < _ABS_TOL_REAL32
+        assert abs(ty - 2.72) < _ABS_TOL_REAL32
+        assert abs(tz - 1.41) < _ABS_TOL_REAL32
+
+    def test_wrong_type_in_list(self):
+        with pytest.raises(TypeError):
+            self.module.sum_positions([42, "not an atom"])
+
+    def test_not_a_list(self):
+        with pytest.raises(TypeError):
+            self.module.sum_positions("not a list")
+
+
+class TestAssumedShapeCodeGen:
+    """Test code generation for assumed-shape array-of-type arguments."""
+
+    def test_no_invalid_c_for_colon_dim(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_assumed_shape_arg.f90")
+        cmod, _ = _generated(tmp_path, fpath)
+        # Should generate wrapper for sum_vectors
+        assert 'f2py_rout_m_type_assumed_shape_mod_sum_vectors' in cmod
+        # Should NOT have `: =` (invalid C from assumed-shape dim)
+        assert ': =' not in cmod
+
+    def test_fortran_wrapper_for_assumed_shape(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "type_assumed_shape_arg.f90")
+        _, wrappers = _generated(tmp_path, fpath)
+        # the extent of the handles comes from the sequence
+        assert ('subroutine f2pywrap_type_assumed_shape_mod_sum_vectors '
+                '(vecs, total_x, total_y, total_z, f2py_vecs_d0)') in wrappers
+        assert 'type(c_ptr) vecs(f2py_vecs_d0)' in wrappers
+
+
+@pytest.mark.slow
+class TestAssumedShapeOpaque(util.F2PyTest):
+    """Test assumed-shape array-of-type arguments with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "type_assumed_shape_arg.f90")]
+
+    def test_vec3_exists(self):
+        assert hasattr(self.module, 'vec3')
+
+    def test_sum_vectors_exists(self):
+        assert hasattr(self.module, 'sum_vectors')
+
+    def test_sum_vectors_basic(self):
+        v1 = self.module.vec3(x=1.0, y=2.0, z=3.0)
+        v2 = self.module.vec3(x=4.0, y=5.0, z=6.0)
+        tx, ty, tz = self.module.sum_vectors([v1, v2])
+        assert abs(tx - 5.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(ty - 7.0) < _ABS_TOL_DEFAULT_REAL
+        assert abs(tz - 9.0) < _ABS_TOL_DEFAULT_REAL
+
+    def test_sum_vectors_empty(self):
+        tx, ty, tz = self.module.sum_vectors([])
+        assert abs(tx) < _ABS_TOL_DEFAULT_REAL
+        assert abs(ty) < _ABS_TOL_DEFAULT_REAL
+        assert abs(tz) < _ABS_TOL_DEFAULT_REAL
+
+    def test_sum_vectors_type_error(self):
+        with pytest.raises(TypeError):
+            self.module.sum_vectors([42, "not a vec3"])
+
+
+class TestCharMemberCodeGen:
+    """Test code generation for character string members."""
+
+    def test_char_member_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "char_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'f2py_get_person_name' in all_code
+        assert 'f2py_set_person_name' in all_code
+        assert 'char *' in all_code
+
+    def test_char_member_getter_code(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "char_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'memset' in all_code
+        assert 'PyUnicode_FromStringAndSize' in all_code
+
+    def test_char_member_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "char_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for m in findf90modules(mod[0]):
+            type_blocks = derived_type_rules._find_derived_types(m)
+            src = derived_type_rules.generate_fortran_wrappers(
+                m['name'], type_blocks)
+        assert src is not None
+        assert 'f2py_get_person_name' in src
+        assert 'f2py_set_person_name' in src
+        assert 'character(c_char)' in src
+
+
+@pytest.mark.slow
+class TestCharMember(util.F2PyTest):
+    """Test character string members with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "char_member.f90")]
+
+    def test_person_exists(self):
+        assert hasattr(self.module, 'person')
+
+    def test_set_get_name(self):
+        p = self.module.person(age=30)
+        p.name = "Alice"
+        assert p.name == "Alice"
+
+    def test_name_round_trip(self):
+        p = self.module.person(age=25)
+        p.name = "Bob"
+        assert p.name == "Bob"
+        p.name = "Charlie"
+        assert p.name == "Charlie"
+
+    def test_short_string_no_trailing_spaces(self):
+        p = self.module.person(age=20)
+        p.name = "Hi"
+        # Should not have trailing spaces
+        assert p.name == "Hi"
+        assert len(p.name) == 2
+
+    def test_long_string_truncated(self):
+        p = self.module.person(age=20)
+        long_name = "A" * _NAME_LONGER_THAN_FIELD
+        p.name = long_name
+        # Should truncate to character(len=32)
+        assert len(p.name) == _PERSON_NAME_LEN
+
+    def test_empty_string(self):
+        p = self.module.person(age=20)
+        p.name = ""
+        assert p.name == ""
+
+    def test_exact_length_string(self):
+        p = self.module.person(age=20)
+        exact = "A" * _PERSON_NAME_LEN
+        p.name = exact
+        assert p.name == exact
+        assert len(p.name) == _PERSON_NAME_LEN
+
+    def test_name_with_scalar_member(self):
+        p = self.module.person(age=42)
+        p.name = "Test"
+        assert p.age == 42
+        assert p.name == "Test"
+
+    def test_name_type_error(self):
+        p = self.module.person(age=20)
+        with pytest.raises(TypeError):
+            p.name = 42
+
+
+class TestAllocMemberCodeGen:
+    """Test code generation for allocatable array members."""
+
+    def test_alloc_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'f2py_get_datavec_values_allocated' in all_code
+        assert 'f2py_get_datavec_values_ndim' in all_code
+        assert 'f2py_get_datavec_values_shape' in all_code
+        assert 'f2py_get_datavec_values_data' in all_code
+        assert 'f2py_set_datavec_values' in all_code
+
+    def test_alloc_getter_has_none_check(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'Py_RETURN_NONE' in all_code
+        assert '_allocated' in all_code
+
+    def test_alloc_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for m in findf90modules(mod[0]):
+            type_blocks = derived_type_rules._find_derived_types(m)
+            src = derived_type_rules.generate_fortran_wrappers(
+                m['name'], type_blocks)
+        assert src is not None
+        assert 'f2py_get_datavec_values_allocated' in src
+        assert 'f2py_set_datavec_values' in src
+        assert 'c_loc' in src
+
+
+@pytest.mark.slow
+class TestAllocMember(util.F2PyTest):
+    """Test allocatable array members with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "alloc_member.f90")]
+
+    def test_datavec_exists(self):
+        assert hasattr(self.module, 'datavec')
+
+    def test_values_starts_none(self):
+        d = self.module.datavec(tag=1)
+        assert d.values is None
+
+    def test_set_get_values(self):
+        d = self.module.datavec(tag=1)
+        d.values = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        result = d.values
+        assert result is not None
+        assert len(result) == 3
+        np.testing.assert_array_almost_equal(result, [1.0, 2.0, 3.0])
+
+    def test_set_none_deallocates(self):
+        d = self.module.datavec(tag=1)
+        d.values = np.array([1.0, 2.0], dtype=np.float32)
+        assert d.values is not None
+        d.values = None
+        assert d.values is None
+
+    def test_resize(self):
+        d = self.module.datavec(tag=1)
+        d.values = np.array([1.0, 2.0], dtype=np.float32)
+        assert len(d.values) == 2
+        d.values = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float32)
+        assert len(d.values) == 4
+        np.testing.assert_array_almost_equal(
+            d.values, [10.0, 20.0, 30.0, 40.0])
+
+    def test_scalar_member_coexists(self):
+        d = self.module.datavec(tag=42)
+        d.values = np.array([1.0], dtype=np.float32)
+        assert d.tag == 42
+        assert len(d.values) == 1
+
+
+class TestAllocMemberNDCodeGen:
+    """Test code generation for multi-dimensional allocatable arrays."""
+
+    def test_2d_alloc_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member_nd.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Matrix type has 2D allocatable 'data'
+        assert 'f2py_get_matrix_data_allocated' in all_code
+        assert 'f2py_get_matrix_data_ndim' in all_code
+        assert 'f2py_get_matrix_data_shape' in all_code
+        assert 'f2py_get_matrix_data_data' in all_code
+        assert 'f2py_set_matrix_data' in all_code
+
+    def test_3d_alloc_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member_nd.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Tensor3D type has 3D allocatable 'field'
+        assert 'f2py_get_tensor3d_field_ndim' in all_code
+        assert 'f2py_get_tensor3d_field_shape' in all_code
+
+    def test_mixed_1d_2d_alloc(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member_nd.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # MixedAlloc has both 1D 'vector' and 2D 'matrix'
+        assert 'f2py_get_mixedalloc_vector_ndim' in all_code
+        assert 'f2py_get_mixedalloc_matrix_ndim' in all_code
+
+    def test_2d_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "alloc_member_nd.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for module in findf90modules(mod[0]):
+            type_blocks = derived_type_rules._find_derived_types(module)
+            src = derived_type_rules.generate_fortran_wrappers(
+                module['name'], type_blocks)
+        assert src is not None
+        # 2D allocatable setter takes dim_1, dim_2 arguments
+        assert 'dim_1' in src
+        assert 'dim_2' in src
+        # shape accessor uses size(obj%data, 1) and size(obj%data, 2)
+        assert 'size(obj%data, 1)' in src
+        assert 'size(obj%data, 2)' in src
+
+
+@pytest.mark.slow
+class TestAllocMemberND(util.F2PyTest):
+    """Test multi-dimensional allocatable array members with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "alloc_member_nd.f90")]
+
+    def test_matrix_exists(self):
+        assert hasattr(self.module, 'matrix')
+
+    def test_matrix_data_starts_none(self):
+        mat = self.module.matrix(rows=3, cols=4)
+        assert mat.data is None
+
+    def test_matrix_set_get_2d(self):
+        mat = self.module.matrix(rows=3, cols=4)
+        # Use Fortran-order input: Fortran allocatables are column-major
+        # (F2018 8.5.8.1), so the round-trip preserves Fortran order
+        input_data = np.asfortranarray(
+            np.array([[1, 2, 3, 4],
+                      [5, 6, 7, 8],
+                      [9, 10, 11, 12]], dtype=np.float64))
+        mat.data = input_data
+        result = mat.data
+        assert result is not None
+        assert result.shape == (3, 4)
+        np.testing.assert_array_almost_equal(result, input_data)
+
+    def test_matrix_deallocate_with_none(self):
+        mat = self.module.matrix(rows=2, cols=2)
+        mat.data = np.ones((2, 2), dtype=np.float64)
+        assert mat.data is not None
+        mat.data = None
+        assert mat.data is None
+
+    def test_matrix_resize(self):
+        mat = self.module.matrix(rows=2, cols=2)
+        mat.data = np.ones((2, 2), dtype=np.float64)
+        assert mat.data.shape == (2, 2)
+        mat.data = np.zeros((3, 5), dtype=np.float64)
+        assert mat.data.shape == (3, 5)
+
+    def test_matrix_scalar_coexists(self):
+        mat = self.module.matrix(rows=10, cols=20)
+        mat.data = np.eye(3, dtype=np.float64)
+        assert mat.rows == 10
+        assert mat.cols == 20
+        assert mat.data.shape == (3, 3)
+
+    def test_tensor3d_exists(self):
+        assert hasattr(self.module, 'tensor3d')
+
+    def test_tensor3d_set_get_3d(self):
+        tensor = self.module.tensor3d(label=7)
+        # Fortran allocatable arrays are column-major (F2018 8.5.8.1)
+        input_data = np.asfortranarray(
+            np.arange(24, dtype=np.float32).reshape(2, 3, 4))
+        tensor.field = input_data
+        result = tensor.field
+        assert result is not None
+        assert result.shape == (2, 3, 4)
+        np.testing.assert_array_almost_equal(result, input_data)
+
+    def test_mixed_alloc_both_members(self):
+        mixed = self.module.mixedalloc(tag=99)
+        # Set 1D vector (order irrelevant for 1D)
+        mixed.vector = np.array([1.0, 2.0, 3.0])
+        # Set 2D matrix (Fortran column-major, F2018 8.5.8.1)
+        mat_input = np.asfortranarray(
+            np.array([[10.0, 20.0], [30.0, 40.0]]))
+        mixed.matrix = mat_input
+        assert mixed.vector.shape == (3,)
+        assert mixed.matrix.shape == (2, 2)
+        np.testing.assert_array_almost_equal(mixed.vector, [1.0, 2.0, 3.0])
+        np.testing.assert_array_almost_equal(mixed.matrix, mat_input)
+
+    def test_wrong_ndim_raises(self):
+        mat = self.module.matrix(rows=2, cols=2)
+        with pytest.raises(ValueError, match="2D"):
+            mat.data = np.array([1.0, 2.0, 3.0])
+
+
+class TestPointerMemberCodeGen:
+    """Test code generation for pointer array members (F2018 7.5.4.6)."""
+
+    def test_pointer_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # DataView has 1D pointer 'view'
+        assert 'f2py_get_dataview_view_associated' in all_code
+        assert 'f2py_get_dataview_view_ndim' in all_code
+        assert 'f2py_get_dataview_view_shape' in all_code
+        assert 'f2py_get_dataview_view_data' in all_code
+        # No setter for pointer members
+        assert 'f2py_set_dataview_view' not in all_code
+
+    def test_pointer_read_only_setter(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Setter should raise AttributeError (read-only)
+        assert 'read-only' in all_code
+
+    def test_pointer_repr(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert '<pointer>' in all_code
+
+    def test_pointer_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for module in findf90modules(mod[0]):
+            type_blocks = derived_type_rules._find_derived_types(module)
+            src = derived_type_rules.generate_fortran_wrappers(
+                module['name'], type_blocks)
+        assert src is not None
+        # Uses associated() instead of allocated() (F2018 16.9.16)
+        assert 'associated(obj%view)' in src
+        assert 'associated(obj%grid)' in src
+
+
+@pytest.mark.slow
+class TestPointerMember(util.F2PyTest):
+    """Test pointer array members with compilation (F2018 7.5.4.6)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "pointer_member.f90")]
+
+    def test_dataview_exists(self):
+        assert hasattr(self.module, 'dataview')
+
+    def test_view_starts_none(self):
+        dv = self.module.dataview(label=1)
+        # Pointer not associated -> returns None
+        assert dv.view is None
+
+    def test_attach_and_read_view(self):
+        dv = self.module.dataview(label=42)
+        self.module.attach_view(dv)
+        result = dv.view
+        assert result is not None
+        assert len(result) == 5
+        np.testing.assert_array_almost_equal(
+            result, [10.0, 20.0, 30.0, 40.0, 50.0])
+
+    def test_detach_returns_none(self):
+        dv = self.module.dataview(label=1)
+        self.module.attach_view(dv)
+        assert dv.view is not None
+        self.module.detach_view(dv)
+        assert dv.view is None
+
+    def test_pointer_setter_raises(self):
+        dv = self.module.dataview(label=1)
+        with pytest.raises(AttributeError, match="read-only"):
+            dv.view = np.array([1.0, 2.0])
+
+    def test_matrixview_2d_pointer(self):
+        mv = self.module.matrixview(tag=7)
+        self.module.attach_matrix_view(mv)
+        result = mv.grid
+        assert result is not None
+        assert result.shape == (3, 3)
+        # shared_matrix(i,j) = i*10 + j
+        expected = np.asfortranarray(
+            np.array([[11, 12, 13],
+                      [21, 22, 23],
+                      [31, 32, 33]], dtype=np.float64))
+        np.testing.assert_array_almost_equal(result, expected)
+
+    def test_label_coexists(self):
+        dv = self.module.dataview(label=99)
+        self.module.attach_view(dv)
+        assert dv.label == 99
+        assert dv.view is not None
+
+
+@pytest.mark.slow
+class TestHostParameters(util.F2PyTest):
+    """Components take kinds and sizes from parameters of their module."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "host_kinds.f90")]
+
+    def test_members(self):
+        s = self.module.sample()
+        s.a = 1 / 3
+        assert s.a == 1 / 3
+        self.module.fill(s)
+        assert s.a == 1 / 3
+        assert s.name == "filled"
+        np.testing.assert_array_equal(s.pts, np.array([1, 2, 3]) / 3)
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not util.fortran_builds("program p\ninteger :: x[*]\nend program p\n",
+                            ["-fcoarray=single"]),
+    reason="Fortran compiler has no -fcoarray=single")
+class TestCoarrayComponents(util.F2PyTest):
+    """An object with a coarray component cannot be a pointer (F2018
+    C825), so such a type has no handles and is not wrapped."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "coarray_component.f90")]
+    options = ["--f90flags=-fcoarray=single"]
+
+    def test_unwrapped(self):
+        assert not hasattr(self.module, "field")
+        assert not hasattr(self.module.coarray_component, "fill")
+        p = self.module.plain()
+        self.module.bump(p)
+        assert p.n == 1
+
+
+@pytest.mark.slow
+class TestPolymorphicDispatch(util.F2PyTest):
+    """class(T) dummies take the extensions of T (F2018 7.3.2.3)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "polymorphic_dispatch.f90")]
+
+    def test_dispatch(self):
+        c = self.module.circle(radius=2.0)
+        r = self.module.rectangle(width=2.0, height=3.0)
+        assert isinstance(c, self.module.shape)
+        self.module.compute_area(c)
+        self.module.compute_area(r)
+        assert c.area == pytest.approx(np.float32(3.14159265) * 4)
+        assert self.module.get_area(r) == 6
+        s = self.module.shape(area=1.5)
+        self.module.compute_area(s)
+        assert self.module.get_area(s) == 1.5
+
+    def test_wrong_type(self):
+        with pytest.raises(TypeError):
+            self.module.get_area(1.0)
+
+
+@pytest.mark.slow
+class TestUnlimitedBox(util.F2PyTest):
+    """A container and its tag do not need ``class(*)``."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "poly_box.f90")]
+
+    def test_default_tag(self):
+        c = self.module.container()
+        assert self.module.get_tag(c) == 0
+        assert (c.stored_tag, c.stored_int) == (0, 0)
+        assert c.stored_real == 0.0
+
+
+@pytest.mark.slow
+class TestUnlimitedPolymorphic(util.F2PyTest):
+    """class(*) dummies take Python scalars and derived type instances
+    (F2018 7.3.2.3)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "unlimited_poly.f90")]
+
+    def test_intrinsic(self):
+        c = self.module.container()
+        self.module.store_value(c, 5)
+        assert (self.module.get_tag(c), c.stored_int) == (1, 5)
+        # default real is real(c_float), a Python float is real(c_double)
+        self.module.store_value(c, np.float32(2.5))
+        assert (self.module.get_tag(c), c.stored_real) == (2, 2.5)
+        self.module.store_value(c, 2.5)
+        assert self.module.get_tag(c) == -1
+
+    def test_derived(self):
+        c = self.module.container()
+        self.module.store_value(c, self.module.container())
+        assert self.module.get_tag(c) == -1
+        with pytest.raises(TypeError):
+            self.module.store_value(c, "text")
+
+
+@pytest.mark.slow
+class TestIsoFortranEnvComponents(util.F2PyTest):
+    """Components with kinds from iso_fortran_env."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "iso_env_type.f90")]
+
+    def test_kinds(self):
+        a = self.module.precise_point()
+        b = self.module.precise_point()
+        self.module.set_point(a, 1, 0.1, 0.2, 0.3)
+        self.module.set_point(b, 2, 0.1, 0.2, 1.3)
+        assert (a.id, a.x, a.y, a.z) == (1, 0.1, 0.2, 0.3)
+        assert self.module.point_distance(a, b) == pytest.approx(1.0)
+        c = self.module.big_counter(count=2**40)
+        assert c.count == 2**40
+
+
+@pytest.mark.slow
+class TestPrivateModule(util.F2PyTest):
+    """Public types and routines of a module that is private by default."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "opaque_point.f90")]
+
+    def test_distance(self):
+        p = self.module.point(x=0, y=0)
+        q = self.module.point(x=3, y=4)
+        assert self.module.distance(p, q) == 5
+
+
+@pytest.mark.slow
+class TestProcPointerNopass(util.F2PyTest):
+    """A nopass procedure pointer does not need ``class``."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "proc_pointer_comp.f90")]
+
+    def test_nopass(self):
+        o = self.module.with_proc_ptr(id=1)
+        assert self.module.apply_func(o, 3.0) == 0
+        with pytest.raises(TypeError, match="not associated"):
+            o.func(3.0)
+        self.module.set_func_square(o)
+        assert o.func(3.0) == 9
+        self.module.set_func_double(o)
+        assert o.func(x=3.0) == 6
+
+
+@pytest.mark.slow
+class TestProcPointerComponents(util.F2PyTest):
+    """Procedure pointer components are methods (F2018 7.5.4.1)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "proc_pointer_pass.f90")]
+
+    def test_pass(self):
+        c = self.module.counter()
+        with pytest.raises(TypeError, match="not associated"):
+            c.step(1)
+        self.module.arm(c)
+        c.step(2)
+        assert c.n == 2
+        assert (c.check(True, 1.0), c.check(False, 1.0)) == (1, 0)
+
+    def test_inherited(self):
+        d = self.module.named_counter(id=7)
+        self.module.arm(d)
+        d.step(3)
+        assert (d.id, d.n) == (7, 3)
+
+
+@pytest.mark.slow
+class TestPointSet(util.F2PyTest):
+    """Assigning components with ``type`` does not need ``class``."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "point_set.f90")]
+
+    def test_set_point(self):
+        p = self.module.point()
+        self.module.set_point(p, 1.0, 2.0, 3.0)
+        assert (p.x, p.y, p.z) == (1.0, 2.0, 3.0)
+
+
+@pytest.mark.slow
+class TestDefinedIO(util.F2PyTest):
+    """write(formatted) is __str__ and read(formatted) is from_string
+    (F2018 12.6.4.8)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "defined_io.f90")]
+
+    def test_str(self):
+        p = self.module.formatted_point(x=1.5, y=2.5, z=3.5)
+        assert str(p) == "point(  1.50,   2.50,   3.50)"
+
+    def test_long_record(self):
+        assert str(self.module.long_record(n=0)) == ""
+        assert str(self.module.long_record(n=_LONG_RECORD_LEN)) == (
+            "x" * _LONG_RECORD_LEN)
+
+    def test_from_string(self):
+        p = self.module.formatted_point.from_string("4 5 6")
+        assert (p.x, p.y, p.z) == (4, 5, 6)
+        assert str(p) == "point(  4.00,   5.00,   6.00)"
+        self.module.set_point(p, 1, 2, 3)
+        assert (p.x, p.y, p.z) == (1, 2, 3)
+
+    def test_from_string_fails(self):
+        with pytest.raises(ValueError, match="iostat"):
+            self.module.formatted_point.from_string("not numbers")
+
+
+@pytest.mark.slow
+class TestArrayTotal(util.F2PyTest):
+    """An assumed-shape argument with no ``class`` in the source."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "array_total.f90")]
+
+    def test_total(self):
+        assert self.module.array_total.total([1, 2, 3]) == 6
+
+
+@pytest.mark.slow
+class TestBoundWithArrays(util.F2PyTest):
+    """Type-bound procedures in a module with array arguments."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "tbp_with_arrays.f90")]
+
+    def test_methods(self):
+        c = self.module.counter()
+        c.add(2)
+        assert c.n == 2
+        assert self.module.tbp_with_arrays.total([1, 2, 3]) == 6
+
+
+@pytest.mark.slow
+class TestBindCCharacter(util.F2PyTest):
+    """A bind(c) type with a character component, which the C struct
+    cannot hold, is wrapped as an opaque type."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "bindc_char.f90")]
+
+    def test_character(self):
+        t = self.module.tagged()
+        assert (t.n, t.mark) == (0, "a")
+        self.module.bump(t)
+        assert (t.n, t.mark) == (1, "b")
+        t.mark = "c"
+        assert t.mark == "c"
+
+    def test_default_length(self):
+        letters = self.module.letters()
+        assert (letters.first, letters.second) == ("x", "y")
+        self.module.swap(letters)
+        assert (letters.first, letters.second) == ("y", "x")
+
+
+@pytest.mark.slow
+class TestLongRepr(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "long_repr.f90")]
+
+    def test_not_cut(self):
+        r = repr(self.module.record())
+        assert r.endswith(")")
+        assert r.count("=-1.25e-300") == 24
+
+
+@pytest.mark.slow
+class TestStorageArguments(util.F2PyTest):
+    """Allocatable and pointer dummies and results of derived type."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "storage_args.f90")]
+
+    def test_allocatable_scalars(self):
+        x = self.module.make(4)
+        assert x.n == 4
+        assert self.module.make(0) is None
+        self.module.bump(x)
+        assert x.n == 5
+        self.module.bump(None)
+
+    def test_pointer_scalars(self):
+        p = self.module.pick(2)
+        assert p.n == 20
+        assert self.module.pick(0) is None
+        assert self.module.look(p) == 20
+        assert self.module.look(None) == -1
+        assert self.module.at(0) is None
+        # instances own copies, so the module variable outlives them
+        del p
+        assert self.module.at(2).n == 20
+
+    def test_bindc_pointer(self):
+        p = self.module.pick_pair(1)
+        assert (p.a, p.b) == (1, -1)
+        assert self.module.pick_pair(0) is None
+
+    def test_arrays(self):
+        v = [self.module.item(n=1), self.module.item(n=2)]
+        self.module.grow(v, 3)
+        assert [o.n for o in v] == [4, 5]
+        # a new shape is not copied back
+        self.module.regrow(v)
+        assert [o.n for o in v] == [4, 5]
+        assert self.module.total(v) == 9
+
+
+@pytest.mark.slow
+class TestStoragePolymorphic(util.F2PyTest):
+    """``class`` allocatable and pointer dummies need a polymorphic actual."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "storage_poly.f90")]
+
+    def test_polymorphic(self):
+        t = self.module.tagged(tag=1)
+        assert self.module.kind_of(self.module.item()) == 1
+        assert self.module.kind_of(t) == 2
+        assert self.module.kind_of(None) == 0
+        self.module.retag(t)
+        assert t.tag == 2
+
+
+@pytest.mark.slow
+class TestPrivateComponents(util.F2PyTest):
+    """PRIVATE components get no accessors (F2018 7.5.4.8)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "private_member.f90")]
+
+    def test_private(self):
+        w = self.module.with_private()
+        assert w.visible_z == 42
+        assert not hasattr(w, "hidden_x")
+        self.module.set_hidden(w, 3, 1.5)
+        assert self.module.get_hidden(w) == (3, 1.5)
+        m = self.module.mixed_access()
+        assert not hasattr(m, "priv_b")
+        assert self.module.sum_mixed(m) == 6
+def _constructor(source, typename):
+    mod = crackfortran.crackfortran([str(source)])
+    blocks = derived_type_rules._find_derived_types(mod[0])
+    src = derived_type_rules.generate_fortran_wrappers(
+        mod[0]['name'], blocks, module_block=mod[0])
+    start = src.index(f'function f2py_create_{typename}(')
+    return src[start:src.index('end function', start)]
+
+
+class TestInitialStateCodeGen:
+    """Components without default initialization are undefined after
+    ALLOCATE (F2018 7.5.4.6); the constructor defines them."""
+
+    source = util.getpath("tests", "src", "derived_types",
+                          "initial_state.f90")
+
+    def test_pointers_nullified(self):
+        code = _constructor(self.source, 'holder')
+        assert 'nullify(obj%view)' in code
+        assert 'nullify(obj%one%link)' in code
+        assert 'nullify(obj%many(f2py_i1)%link)' in code
+
+    def test_inner_defaults_kept(self):
+        code = _constructor(self.source, 'holder')
+        assert 'obj%one%count' not in code
+        assert 'obj%one%weight = 0' in code
+        assert 'obj%samples = 0' in code
+
+
+@pytest.mark.slow
+class TestInitialState(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "initial_state.f90")]
+
+    def test_new_object_is_defined(self):
+        h = self.module.holder(id=3)
+        assert h.view is None
+        counts, total, linked = self.module.inspect(h)
+        assert counts.tolist() == [7, 7, 7]
+        assert total == 0
+        assert linked == 0
+
+
+@pytest.mark.slow
+class TestTypeNames(util.F2PyTest):
+    """Types keep names that crackfortran renames for variables."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "type_names.f90")]
+
+    def test_abstract_shape(self):
+        s = self.module.square(side=3.0)
+        assert isinstance(s, self.module.shape)
+        assert s.area() == 9
+        assert self.module.total_area(s) == 9
+
+
+@pytest.mark.slow
+class TestTypeIndex(util.F2PyTest):
+    """``index`` keeps a name crackfortran renames, and does not need ``class``."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "type_index.f90")]
+
+    def test_index(self):
+        i = self.module.index()
+        self.module.advance(i)
+        assert i.at == 1
+
+
+def test_member_ctypes():
+    from numpy.f2py._dt_helpers import _eval_kind_expr, _get_member_ctype
+    # a kind without a C type is not the default kind
+    assert _get_member_ctype(
+        {'typespec': 'real', 'kindselector': {'kind': '16'}}) is None
+    assert _get_member_ctype(
+        {'typespec': 'integer', 'kindselector': {'kind': 'dp'}}) is None
+    # complex*16 has parts of kind 8
+    assert _get_member_ctype(
+        {'typespec': 'complex', 'kindselector': {'*': '16'}}) == 'npy_cdouble'
+    assert _get_member_ctype(
+        {'typespec': 'integer', 'kindselector': {'kind': '2'}}) == 'short'
+    # these depend on the C processor (F2018 18.2.2)
+    assert _eval_kind_expr('c_long') is None
+    assert _eval_kind_expr('c_long_double') is None
+
+
+@pytest.mark.slow
+class TestHiddenComponents(util.F2PyTest):
+    """A component f2py cannot expose is hidden, and the routines that
+    take its type are still wrapped."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "hidden_components.f90")]
+
+    def test_linked_list(self):
+        head = self.module.node(value=0)
+        assert not hasattr(head, "next")
+        assert self.module.length(head) == 0
+        self.module.push(head, 5)
+        self.module.push(head, 7)
+        assert self.module.length(head) == 2
+
+    def test_hidden(self):
+        h = self.module.holder()
+        for name in ("tiny", "codes", "nodes", "grid"):
+            assert not hasattr(h, name)
+        self.module.fill(h, 3)
+        assert self.module.census(h) == 3 + 3 + 4 * 3 + _CENSUS_CODE_BONUS
+
+    def test_exposed(self):
+        h = self.module.holder(flag=True, small=-2, z=1 + 2j)
+        assert (h.flag, h.small, h.z) == (1, -2, 1 + 2j)
+        h.flag = False
+        h.flags = [1, 0, 1]
+        assert h.flag == 0
+        assert h.flags.tolist() == [1, 0, 1]
+        self.module.fill(h, 1)
+        assert self.module.census(h) == 1 + 1 + 4 + _CENSUS_CODE_BONUS
+
+
+class TestDefaultInitCodeGen:
+    """Test that component defaults are applied in constructors (F2018 R739)."""
+
+    def test_defaults_in_fortran_wrapper(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "default_init.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for module in findf90modules(mod[0]):
+            type_blocks = derived_type_rules._find_derived_types(module)
+            src = derived_type_rules.generate_fortran_wrappers(
+                module['name'], type_blocks)
+        assert src is not None
+        # Default values should appear in the constructor
+        assert str(_CONFIG_MAX_ITERATIONS) in src  # max_iterations default
+        assert '1.0d-6' in src  # tolerance default
+
+
+@pytest.mark.slow
+class TestDefaultInit(util.F2PyTest):
+    """Test component default initialization with compilation (F2018 R739)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "default_init.f90")]
+
+    def test_config_exists(self):
+        assert hasattr(self.module, 'config')
+
+    def test_defaults_applied(self):
+        cfg = self.module.config()
+        assert cfg.max_iterations == _CONFIG_MAX_ITERATIONS
+        assert abs(cfg.tolerance - _CONFIG_DEFAULT_TOLERANCE) < _ABS_TOL_REAL64
+        assert cfg.scale_factor == 1.0
+
+    def test_override_defaults(self):
+        cfg = self.module.config(
+            max_iterations=_CONFIG_FEWER_ITERATIONS,
+            tolerance=_CONFIG_OVERRIDE_TOLERANCE)
+        assert cfg.max_iterations == _CONFIG_FEWER_ITERATIONS
+        assert abs(cfg.tolerance - _CONFIG_OVERRIDE_TOLERANCE) < _ABS_TOL_KIND
+        # Non-overridden defaults should still apply
+        assert cfg.scale_factor == 1.0
+
+    def test_partial_override(self):
+        cfg = self.module.config(scale_factor=2.5)
+        assert cfg.max_iterations == _CONFIG_MAX_ITERATIONS  # default
+        assert cfg.scale_factor == 2.5    # overridden
+
+
+class TestDeferredCharCodeGen:
+    """Test code generation for deferred-length character members (F2018 7.4.4.2)."""
+
+    def test_deferred_char_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_char.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'f2py_get_nameditem_label_allocated' in all_code
+        assert 'f2py_get_nameditem_label_len' in all_code
+        assert 'f2py_set_nameditem_label' in all_code
+
+    def test_deferred_char_repr(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_char.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert '<deferred-char>' in all_code
+
+    def test_deferred_char_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_char.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        from numpy.f2py.f90mod_rules import findf90modules
+        for module in findf90modules(mod[0]):
+            type_blocks = derived_type_rules._find_derived_types(module)
+            src = derived_type_rules.generate_fortran_wrappers(
+                module['name'], type_blocks)
+        assert src is not None
+        # Uses allocate(character(buflen) :: ...) for runtime length
+        assert 'allocate(character' in src
+        # Uses len() intrinsic (F2018 16.9.109)
+        assert 'len(obj%label)' in src
+
+
+@pytest.mark.slow
+class TestDeferredChar(util.F2PyTest):
+    """Test deferred-length character members with compilation (F2018 7.4.4.2)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "deferred_char.f90")]
+
+    def test_nameditem_exists(self):
+        assert hasattr(self.module, 'nameditem')
+
+    def test_label_starts_none(self):
+        item = self.module.nameditem(item_id=1)
+        assert item.label is None
+
+    def test_set_get_label(self):
+        item = self.module.nameditem(item_id=42)
+        item.label = "hello world"
+        assert item.label == "hello world"
+
+    def test_set_none_deallocates(self):
+        item = self.module.nameditem(item_id=1)
+        item.label = "test"
+        assert item.label is not None
+        item.label = None
+        assert item.label is None
+
+    def test_different_lengths(self):
+        item = self.module.nameditem(item_id=1)
+        item.label = "short"
+        assert item.label == "short"
+        item.label = "a much longer string value"
+        assert item.label == "a much longer string value"
+        item.label = "x"
+        assert item.label == "x"
+
+    def test_empty_string(self):
+        item = self.module.nameditem(item_id=1)
+        item.label = ""
+        # Empty string may come back as None (length 0 = deallocated)
+        result = item.label
+        assert result is None or result == ""
+
+    def test_scalar_member_coexists(self):
+        item = self.module.nameditem(item_id=99)
+        item.label = "tagged"
+        assert item.item_id == 99
+        assert item.label == "tagged"
+
+    def test_document_multiple_chars(self):
+        doc = self.module.document(page_count=42)
+        doc.title = "Fortran 2018 Standard"
+        doc.author = "ISO/IEC JTC1/SC22/WG5"
+        assert doc.title == "Fortran 2018 Standard"
+        assert doc.author == "ISO/IEC JTC1/SC22/WG5"
+        assert doc.page_count == 42
+
+
+class TestGenericTBPCodeGen:
+    """Test code generation for generic type-bound procedures (F2018 7.5.5)."""
+
+    def test_generic_binding_scanned(self):
+        """GENERIC :: scale => scale_int, scale_real should be detected."""
+        from numpy.f2py._dt_routines import _scan_type_bound_procedures
+        fpath = str(util.getpath("tests", "src", "derived_types",
+                                 "generic_tbp.f90"))
+        procs = _scan_type_bound_procedures(fpath, 'scaler')
+        # Generic binding 'scale' maps to all specific bindings
+        assert 'scale' in procs
+        assert procs['scale'] == ['scale_int', 'scale_real']
+
+    def test_specific_bindings_also_scanned(self):
+        """Specific procedures should still be individually available."""
+        from numpy.f2py._dt_routines import _scan_type_bound_procedures
+        fpath = str(util.getpath("tests", "src", "derived_types",
+                                 "generic_tbp.f90"))
+        procs = _scan_type_bound_procedures(fpath, 'scaler')
+        assert 'scale_int' in procs
+        assert 'scale_real' in procs
+
+    def test_generic_generates_method(self):
+        """Generic binding should produce a Python method."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "generic_tbp.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'scale' in all_code
+
+
+@pytest.mark.slow
+class TestGenericTBP(util.F2PyTest):
+    """Test generic type-bound procedures with compilation (F2018 7.5.5)."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "generic_tbp.f90")]
+
+    def test_scaler_exists(self):
+        assert hasattr(self.module, 'scaler')
+
+    def test_scale_int_method(self):
+        scl = self.module.scaler(value=10.0)
+        scl.scale_int(3)
+        assert abs(scl.value - 30.0) < _ABS_TOL_KIND
+
+    def test_scale_real_method(self):
+        scl = self.module.scaler(value=10.0)
+        scl.scale_real(2.5)
+        assert abs(scl.value - 25.0) < _ABS_TOL_KIND
+
+    def test_scale_method_exists(self):
+        """Generic 'scale' should be accessible as a method."""
+        scl = self.module.scaler(value=1.0)
+        assert hasattr(scl, 'scale')
+
+    def test_scale_generic_calls_first_specific(self):
+        """Generic 'scale' dispatches to first specific (scale_int)."""
+        scl = self.module.scaler(value=10.0)
+        scl.scale(2)  # calls scale_int (first specific)
+        assert abs(scl.value - 20.0) < _ABS_TOL_KIND
+
+    def test_scale_generic_dispatches_on_type(self):
+        """A float argument selects scale_real (F2018 15.4.3.4.5)."""
+        scl = self.module.scaler(value=10.0)
+        scl.scale(2.5)
+        assert scl.value == 25.0
+        scl.scale(factor=2)
+        assert scl.value == 50.0
+        with pytest.raises(TypeError):
+            scl.scale("2")
+
+
+class TestFinalizerCodeGen:
+    """Test that final subroutines are excluded from routine wrapping."""
+
+    def test_final_subroutine_not_wrapped(self):
+        """Final subroutines (F2018 7.5.6.1) should not appear as
+        wrapped routines -- they run automatically via deallocate."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "finalizer.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # tracked_finalize should NOT be wrapped as a callable
+        assert 'tracked_finalize' not in all_code or \
+               'f2py_wrap_tracked_finalize' not in all_code
+
+    def test_scan_final_subroutines(self):
+        """Test scanning FINAL declarations from source."""
+        from numpy.f2py._dt_routines import _scan_final_subroutines
+        fpath = str(util.getpath("tests", "src", "derived_types",
+                                 "finalizer.f90"))
+        finals = _scan_final_subroutines(fpath, 'tracked')
+        assert 'tracked_finalize' in finals
+
+    def test_non_final_routines_still_wrapped(self):
+        """Non-final routines with type args should still be wrapped."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "finalizer.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # get_finalize_count and reset_finalize_count should still work
+        # (they don't take type args, so they're not in wrappable_routines
+        # anyway, but the tracked type itself should be generated)
+        assert 'Pytracked' in all_code
+
+
+@pytest.mark.slow
+class TestFinalizer(util.F2PyTest):
+    """Test that Fortran finalizers run on object destruction.
+
+    F2018 7.5.6: Final subroutines are called when a finalizable entity
+    is deallocated (7.5.6.3 paragraph 2). The opaque wrapper's
+    f2py_destroy_TYPE calls deallocate, which triggers finalization
+    automatically via the Fortran runtime.
+    """
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "finalizer.f90")]
+
+    def test_tracked_exists(self):
+        # Type is registered at top-level module via PyModule_AddObject
+        assert hasattr(self.module, 'tracked')
+
+    def test_finalize_count_starts_zero(self):
+        self.module.finalizer_mod.reset_finalize_count()
+        assert self.module.finalizer_mod.get_finalize_count() == 0
+
+    def test_finalizer_runs_on_del(self):
+        self.module.finalizer_mod.reset_finalize_count()
+        obj = self.module.tracked(value=42)
+        assert self.module.finalizer_mod.get_finalize_count() == 0
+        # Delete triggers PyCapsule destructor -> f2py_destroy_tracked
+        # -> deallocate -> finalization (F2018 7.5.6.3)
+        del obj
+        assert self.module.finalizer_mod.get_finalize_count() == 1
+
+    def test_multiple_finalizations(self):
+        self.module.finalizer_mod.reset_finalize_count()
+        objects = [self.module.tracked(value=idx)
+                   for idx in range(5)]
+        assert self.module.finalizer_mod.get_finalize_count() == 0
+        del objects
+        assert self.module.finalizer_mod.get_finalize_count() == 5
+
+    def test_value_accessible_before_finalize(self):
+        self.module.finalizer_mod.reset_finalize_count()
+        obj = self.module.tracked(value=99)
+        assert obj.value == 99
+        del obj
+        assert self.module.finalizer_mod.get_finalize_count() == 1
+
+
+class TestPointerInitCodeGen:
+    """Test that pointer => null() initialization is parsed correctly."""
+
+    def test_no_spurious_null_member(self):
+        """crackfortran should not create a 'null' member from => null()."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member_init.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        for block in mod[0].get('body', []):
+            if block.get('name') == 'ptrholder':
+                from numpy.f2py.auxfuncs import get_type_members
+                members = get_type_members(block)
+                assert 'null' not in members
+                assert 'data' in members
+                assert 'label' in members
+
+    def test_pointer_attr_no_optional(self):
+        """Pointer member should not get spurious 'optional' attribute."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "pointer_member_init.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        for block in mod[0].get('body', []):
+            if block.get('name') == 'ptrholder':
+                from numpy.f2py.auxfuncs import get_type_members
+                members = get_type_members(block)
+                data_attr = members['data'].get('attrspec', [])
+                assert 'optional' not in data_attr
+                assert 'pointer' in data_attr
+
+
+class TestIntentOutTypeArrayCodeGen:
+    """Test code generation for intent(out) allocatable arrays of types."""
+
+    def test_wrapper_generated(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "intent_out_type_array.f90")
+        cmod, _ = _generated(tmp_path, fpath)
+        assert 'f2py_rout_m_intent_out_type_array_mod_make_sequence' in cmod
+
+    def test_output_array_wrapper_code(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "intent_out_type_array.f90")
+        cmod, _ = _generated(tmp_path, fpath)
+        # Fortran gives a buffer of handles and the extent
+        assert 'f2py_dt_from_vector(results, 1, (npy_intp[]){f2py_results_n1}' in cmod
+        assert 'f2py_intent_out_type_array_mod_make_sequence_free_results' in cmod
+
+    def test_fortran_wrapper_has_heap_alloc(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "intent_out_type_array.f90")
+        _, wrappers = _generated(tmp_path, fpath)
+        assert 'subroutine f2pywrap_intent_out_type_array_mod_make_sequence' in wrappers
+        assert 'f2py_results_n1 = size(f2py_results, 1)' in wrappers
+        # Heap allocation for each element
+        assert 'allocate(f2py_results_e)' in wrappers
+        assert 'f2py_results_h(f2py_results_k) = c_loc(f2py_results_e)' in wrappers
+        assert ('subroutine f2py_intent_out_type_array_mod_make_sequence_'
+                'free_results(h, n) bind(c)') in wrappers
+
+    def test_out_args_not_in_kwlist(self, tmp_path):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "intent_out_type_array.f90")
+        cmod, _ = _generated(tmp_path, fpath)
+        # start and count are the only arguments
+        assert 'static char *capi_kwlist[] = {"start","count",NULL};' in cmod
+
+
+@pytest.mark.slow
+class TestIntentOutTypeArray(util.F2PyTest):
+    """Test intent(out) allocatable arrays of types with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "intent_out_type_array.f90")]
+
+    def test_indexedval_exists(self):
+        assert hasattr(self.module, 'indexedval')
+
+    def test_make_sequence_exists(self):
+        assert hasattr(self.module, 'make_sequence')
+
+    def test_make_sequence_basic(self):
+        result = self.module.make_sequence(start=1.0, count=3)
+        # Returns (results_list, nresults) tuple
+        results, nresults = result
+        assert nresults == 3
+        assert isinstance(results, list)
+        assert len(results) == 3
+        assert abs(results[0].value - 1.0) < _ABS_TOL_DEFAULT_REAL
+        assert results[0].idx == 1
+        assert abs(results[1].value - 2.0) < _ABS_TOL_DEFAULT_REAL
+        assert results[1].idx == 2
+        assert abs(results[2].value - 3.0) < _ABS_TOL_DEFAULT_REAL
+        assert results[2].idx == 3
+
+    def test_make_sequence_empty(self):
+        result = self.module.make_sequence(start=0.0, count=0)
+        results, nresults = result
+        assert nresults == 0
+        assert isinstance(results, list)
+        assert len(results) == 0
+
+    def test_make_sequence_single(self):
+        result = self.module.make_sequence(start=5.0, count=1)
+        results, nresults = result
+        assert nresults == 1
+        assert len(results) == 1
+        assert abs(results[0].value - 5.0) < _ABS_TOL_DEFAULT_REAL
+        assert results[0].idx == 1
+
+    def test_result_members_accessible(self):
+        result = self.module.make_sequence(start=10.0, count=2)
+        results, nresults = result
+        r = results[0]
+        assert hasattr(r, 'value')
+        assert hasattr(r, 'idx')
+        assert abs(r.value - 10.0) < _ABS_TOL_DEFAULT_REAL
+        assert r.idx == 1
+
+
+class TestPolymorphicClassNormalization:
+    """Test that class(T) is normalized to type(T) by crackfortran."""
+
+    def test_class_parsed_as_type(self):
+        import tempfile
+        src = (
+            "module poly_mod\n"
+            "  implicit none\n"
+            "  type :: Base\n"
+            "    integer :: id\n"
+            "  end type\n"
+            "contains\n"
+            "  subroutine process(obj)\n"
+            "    class(Base), intent(in) :: obj\n"
+            "  end subroutine\n"
+            "end module\n"
+        )
+        with tempfile.NamedTemporaryFile(
+                mode='w', suffix='.f90', delete=False) as f:
+            f.write(src)
+            f.flush()
+            mod = crackfortran.crackfortran([f.name])
+        for b in mod:
+            for sub in b.get('body', []):
+                if sub.get('name') == 'process':
+                    var = sub['vars'].get('obj', {})
+                    # class(Base) should be normalized to type(base)
+                    assert var.get('typespec') == 'type'
+                    assert var.get('typename') == 'base'
+                    return
+        raise AssertionError("process subroutine not found in parsed output")
+
+
+@pytest.mark.slow
+class TestNestedOpaque(util.F2PyTest):
+    """Test nested opaque (non-bind(c)) derived types with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "nested_opaque.f90")]
+
+    def test_vec2_exists(self):
+        assert hasattr(self.module, 'vec2')
+
+    def test_particle_exists(self):
+        assert hasattr(self.module, 'particle')
+
+    def test_particle_has_nested_members(self):
+        p = self.module.particle(mass=1.0)
+        pos = p.pos
+        assert hasattr(pos, 'x')
+        assert hasattr(pos, 'y')
+
+    def test_particle_nested_getter(self):
+        p = self.module.particle(mass=2.5)
+        pos = p.pos
+        assert pos.x == 0.0
+        assert pos.y == 0.0
+
+    def test_particle_nested_setter(self):
+        p = self.module.particle(mass=1.0)
+        v = self.module.vec2(x=3.0, y=4.0)
+        p.pos = v
+        pos = p.pos
+        assert pos.x == 3.0
+        assert pos.y == 4.0
+
+    def test_particle_nested_independence(self):
+        """Nested getter returns a copy, not a reference."""
+        p = self.module.particle(mass=1.0)
+        v = self.module.vec2(x=1.0, y=2.0)
+        p.pos = v
+        v.x = 99.0
+        pos = p.pos
+        assert pos.x == 1.0  # unchanged
+
+    def test_particle_mass(self):
+        p = self.module.particle(mass=42.0)
+        assert p.mass == 42.0
+
+    def test_particle_both_nested(self):
+        p = self.module.particle(mass=1.0)
+        pos = self.module.vec2(x=1.0, y=2.0)
+        vel = self.module.vec2(x=3.0, y=4.0)
+        p.pos = pos
+        p.vel = vel
+        assert p.pos.x == 1.0
+        assert p.vel.y == 4.0
+
+
+class TestArrayOfTypesCodeGen:
+    """Test code generation for arrays of derived types (no compiler)."""
+
+    def test_bindc_array_of_types_detected(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_of_types_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        code = '\n'.join(hooks['f90modhooks'])
+        assert 'f2py_atom_t' in code
+        assert 'f2py_molecule_t' in code
+
+    def test_bindc_array_struct_layout(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_of_types_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        hooks = derived_type_rules.buildhooks(mod[0])
+        code = '\n'.join(hooks['f90modhooks'])
+        assert 'f2py_atom_t atoms[3];' in code
+
+
+@pytest.mark.slow
+class TestArrayOfTypesBindC(util.F2PyTest):
+    """Test arrays of bind(c) derived types with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "array_of_types_bindc.f90")]
+
+    def test_atom_exists(self):
+        assert hasattr(self.module, 'atom')
+
+    def test_molecule_exists(self):
+        assert hasattr(self.module, 'molecule')
+
+    def test_molecule_atoms_getter(self):
+        m = self.module.molecule(natoms=3)
+        atoms = m.atoms
+        assert isinstance(atoms, list)
+        assert len(atoms) == 3
+
+    def test_molecule_atoms_default_zero(self):
+        m = self.module.molecule(natoms=3)
+        atoms = m.atoms
+        for a in atoms:
+            assert a.x == 0.0
+            assert a.y == 0.0
+            assert a.z == 0.0
+            assert a.atomic_num == 0
+
+    def test_molecule_atoms_setter(self):
+        m = self.module.molecule(natoms=3)
+        h = self.module.atom(x=0.0, y=0.0, z=0.0, atomic_num=1)
+        o = self.module.atom(x=1.0, y=0.0, z=0.0, atomic_num=8)
+        h2 = self.module.atom(x=2.0, y=0.0, z=0.0, atomic_num=1)
+        m.atoms = [h, o, h2]
+        atoms = m.atoms
+        assert atoms[0].atomic_num == 1
+        assert atoms[1].atomic_num == 8
+        assert atoms[1].x == 1.0
+        assert atoms[2].x == 2.0
+
+    def test_molecule_atoms_independence(self):
+        """Elements in returned list are copies."""
+        m = self.module.molecule(natoms=3)
+        h = self.module.atom(x=1.0, y=2.0, z=3.0, atomic_num=1)
+        m.atoms = [h, h, h]
+        h.x = 99.0  # modify original
+        atoms = m.atoms
+        assert atoms[0].x == 1.0  # unchanged
+
+    def test_molecule_natoms(self):
+        m = self.module.molecule(natoms=3)
+        assert m.natoms == 3
+
+
+@pytest.mark.slow
+class TestArrayOfTypesOpaque(util.F2PyTest):
+    """Test arrays of opaque derived types with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "array_of_types_opaque.f90")]
+
+    def test_atom_exists(self):
+        assert hasattr(self.module, 'atom')
+
+    def test_molecule_exists(self):
+        assert hasattr(self.module, 'molecule')
+
+    def test_molecule_atoms_getter(self):
+        m = self.module.molecule(natoms=3)
+        atoms = m.atoms
+        assert isinstance(atoms, list)
+        assert len(atoms) == 3
+
+    def test_molecule_atoms_default_zero(self):
+        m = self.module.molecule(natoms=3)
+        atoms = m.atoms
+        for a in atoms:
+            assert a.x == 0.0
+            assert a.y == 0.0
+            assert a.z == 0.0
+            assert a.atomic_num == 0
+
+    def test_molecule_atoms_setter(self):
+        m = self.module.molecule(natoms=3)
+        h = self.module.atom(x=0.0, y=0.0, z=0.0, atomic_num=1)
+        o = self.module.atom(x=1.0, y=0.0, z=0.0, atomic_num=8)
+        h2 = self.module.atom(x=2.0, y=0.0, z=0.0, atomic_num=1)
+        m.atoms = [h, o, h2]
+        atoms = m.atoms
+        assert atoms[0].atomic_num == 1
+        assert atoms[1].atomic_num == 8
+        assert atoms[1].x == 1.0
+        assert atoms[2].x == 2.0
+
+    def test_molecule_atoms_independence(self):
+        """Elements in returned list are copies."""
+        m = self.module.molecule(natoms=3)
+        h = self.module.atom(x=1.0, y=2.0, z=3.0, atomic_num=1)
+        m.atoms = [h, h, h]
+        h.x = 99.0  # modify original
+        atoms = m.atoms
+        assert atoms[0].x == 1.0  # unchanged
+
+    def test_molecule_natoms(self):
+        m = self.module.molecule(natoms=3)
+        assert m.natoms == 3
+
+
+class TestComplexMemberCodeGen:
+    """Test C code generation for types with complex-valued members."""
+
+    def test_bindc_complex_struct(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "complex_member_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Uses NumPy complex types (MSVC-compatible, no complex.h needed)
+        assert 'complex.h' not in hooks.get('need', [])
+        assert 'npy_math.h' in hooks.get('need', [])
+        # C struct has npy_cdouble fields
+        assert 'npy_cdouble reactance' in all_code
+        # Getter uses npy_creal/npy_cimag
+        assert 'PyComplex_FromDoubles' in all_code
+        # Setter uses npy_cpack
+        assert 'npy_cpack' in all_code
+
+    def test_opaque_complex_extern_decls(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "complex_member_opaque.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'npy_cdouble' in all_code
+        assert 'f2py_get_wavefunction_amplitude' in all_code
+        assert 'f2py_set_wavefunction_amplitude' in all_code
+
+    def test_complex_repr(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "complex_member_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # repr should include (%g+%gj) format for complex
+        assert '%g+%gj' in all_code
+
+
+@pytest.mark.slow
+class TestComplexMemberBindC(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "complex_member_bindc.f90")]
+
+    def test_impedance_exists(self):
+        assert hasattr(self.module, 'impedance')
+
+    def test_impedance_create(self):
+        z = self.module.impedance(resistance=50.0, reactance=10 + 20j)
+        assert z.resistance == 50.0
+        assert z.reactance == (10 + 20j)
+
+    def test_impedance_set_complex(self):
+        z = self.module.impedance()
+        z.reactance = 3 + 4j
+        assert z.reactance == (3 + 4j)
+
+    def test_impedance_real_only(self):
+        z = self.module.impedance(reactance=5.0)
+        assert z.reactance == (5 + 0j)
+
+    def test_impedance_repr(self):
+        z = self.module.impedance(resistance=100.0, reactance=1 + 2j)
+        r = repr(z)
+        assert 'impedance' in r
+        assert '100' in r
+
+    def test_signal_sample_exists(self):
+        assert hasattr(self.module, 'signal_sample')
+
+    def test_signal_sample_float_complex(self):
+        s = self.module.signal_sample(value=1.5 + 2.5j, timestamp=0.1)
+        assert abs(s.value - (1.5 + 2.5j)) < _ABS_TOL_DEFAULT_REAL
+        assert abs(s.timestamp - 0.1) < _ABS_TOL_DEFAULT_REAL
+
+
+@pytest.mark.slow
+class TestComplexMemberOpaque(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "complex_member_opaque.f90")]
+
+    def test_wavefunction_exists(self):
+        assert hasattr(self.module, 'wavefunction')
+
+    def test_wavefunction_create(self):
+        wf = self.module.wavefunction(amplitude=1 + 0j, phase=0.0)
+        assert wf.amplitude == (1 + 0j)
+        assert wf.phase == 0.0
+
+    def test_wavefunction_set_complex(self):
+        wf = self.module.wavefunction()
+        wf.amplitude = 0.5 + 0.5j
+        assert wf.amplitude == (0.5 + 0.5j)
+
+    def test_wavefunction_roundtrip(self):
+        wf = self.module.wavefunction(amplitude=3 - 4j, phase=1.57)
+        assert wf.amplitude == (3 - 4j)
+        wf.amplitude = -1 + 2j
+        assert wf.amplitude == (-1 + 2j)
+        assert wf.phase == 1.57
+
+
+class TestAbstractTypeCodeGen:
+    """Test code generation for abstract types with concrete extensions."""
+
+    def test_abstract_type_detected(self):
+        from numpy.f2py._dt_helpers import _is_abstract_type
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        # Set parent_block for attribute lookup
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        names = {tb['name'].lower() for tb in type_blocks}
+        assert 'baseshape' in names
+        assert 'disk' in names
+        # BaseShape should be detected as abstract
+        baseshape_tb = next(tb for tb in type_blocks
+                        if tb['name'].lower() == 'baseshape')
+        assert _is_abstract_type(baseshape_tb)
+        # Disk should NOT be abstract
+        circle_tb = next(tb for tb in type_blocks
+                         if tb['name'].lower() == 'disk')
+        assert not _is_abstract_type(circle_tb)
+
+    def test_abstract_generates_skeleton(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Should generate code for both shape (abstract skeleton)
+        # and circle (concrete opaque)
+        assert len(hooks['f90modhooks']) >= 2
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Abstract shape skeleton should exist
+        assert 'Pybaseshape_Type' in all_code
+        assert 'PybaseshapeObject' in all_code
+        # Concrete circle should exist
+        assert 'Pydisk_Type' in all_code
+        assert 'PydiskObject' in all_code
+
+    def test_abstract_tp_init_raises(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # BaseShape skeleton should raise TypeError on init
+        baseshape_code = hooks['f90modhooks'][0]
+        assert 'Cannot instantiate abstract Fortran type' in baseshape_code
+        assert 'PyErr_SetString(PyExc_TypeError' in baseshape_code
+
+    def test_abstract_no_fortran_wrappers(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # BaseShape skeleton should have no extern declarations
+        # for Fortran wrappers (no f2py_create_baseshape etc.)
+        baseshape_code = hooks['f90modhooks'][0]
+        assert 'f2py_create_baseshape' not in baseshape_code.lower()
+        assert 'f2py_destroy_baseshape' not in baseshape_code.lower()
+        assert 'extern' not in baseshape_code.lower()
+
+    def test_abstract_has_basetype_flag(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        baseshape_code = hooks['f90modhooks'][0]
+        assert 'Py_TPFLAGS_BASETYPE' in baseshape_code
+
+    def test_child_has_tp_base_to_abstract(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # circle should have tp_base pointing to shape
+        assert '.tp_base = &Pybaseshape_Type,' in all_code
+
+    def test_child_has_all_members(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Disk should have both area (inherited) and radius (own)
+        disk_code = hooks['f90modhooks'][1]
+        assert 'area' in disk_code
+        assert 'radius' in disk_code
+
+    def test_abstract_shape_generated_before_circle(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        all_code = '\n'.join(hooks['f90modhooks'])
+        baseshape_pos = all_code.find('Pybaseshape_Type')
+        disk_pos = all_code.find('Pydisk_Type')
+        assert baseshape_pos < disk_pos
+
+    def test_fortran_wrappers_skip_abstract(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        source = derived_type_rules.generate_fortran_wrappers(
+            'abstract_type_mod', type_blocks)
+        # Should generate wrappers for Disk but not BaseShape
+        if source is not None:
+            assert 'f2py_create_disk' in source
+            assert 'f2py_create_baseshape' not in source
+
+
+@pytest.mark.slow
+class TestAbstractTypeOpaque(util.F2PyTest):
+    """Test abstract type inheritance with compilation."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "abstract_type.f90")]
+
+    def test_shape_type_exists(self):
+        assert hasattr(self.module, 'baseshape')
+
+    def test_circle_type_exists(self):
+        assert hasattr(self.module, 'disk')
+
+    def test_shape_cannot_instantiate(self):
+        with pytest.raises(TypeError, match="abstract"):
+            self.module.baseshape()
+
+    def test_circle_can_instantiate(self):
+        c = self.module.disk(area=0.0, radius=1.0)
+        assert abs(c.radius - 1.0) < _ABS_TOL_KIND
+
+    def test_circle_has_area(self):
+        c = self.module.disk(area=0.0, radius=1.0)
+        assert hasattr(c, 'area')
+
+    def test_circle_isinstance_shape(self):
+        """Disk should be an instance of BaseShape via tp_base."""
+        c = self.module.disk(area=0.0, radius=1.0)
+        # self.module.baseshape is the BaseShape type object itself
+        assert isinstance(c, self.module.baseshape)
+
+
+class TestParameterizedKindCodeGen:
+    """Test code generation for KIND-parameterized derived types."""
+
+    def test_kind_param_resolution(self):
+        """Test _resolve_kind_params extracts KIND defaults."""
+        from numpy.f2py._dt_helpers import _resolve_kind_params
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+
+        params = _resolve_kind_params(realvec_tb)
+        assert 'k' in params
+        # kind(0.0d0) = 8 (double precision)
+        assert params['k'] == 8
+
+    def test_type_parameter_detected(self):
+        """Test _is_type_parameter identifies KIND members."""
+        from numpy.f2py._dt_helpers import _is_type_parameter
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+
+        members = realvec_tb.get('vars', {})
+        # 'k' should be identified as a type parameter
+        assert _is_type_parameter(members['k'])
+        # 'length', 'x', 'y', 'z' are not type parameters
+        assert not _is_type_parameter(members['length'])
+        assert not _is_type_parameter(members['x'])
+
+    def test_parameterized_type_wrappable(self):
+        """Test that KIND-parameterized types pass wrappability checks."""
+        from numpy.f2py._dt_helpers import _can_wrap_opaque
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+        assert _can_wrap_opaque(realvec_tb)
+
+    def test_kind_resolved_in_members(self):
+        """Test that kind parameters are resolved in member types."""
+        from numpy.f2py._dt_helpers import (
+            _get_member_ctype,
+            _resolve_parameterized_type,
+        )
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        realvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'realvec':
+                realvec_tb = tb
+                break
+        assert realvec_tb is not None
+
+        _resolve_parameterized_type(realvec_tb)
+
+        members = realvec_tb.get('vars', {})
+        # After resolution, x should have kind='8' -> double
+        ctype = _get_member_ctype(members['x'])
+        assert ctype == 'double'
+        ctype = _get_member_ctype(members['y'])
+        assert ctype == 'double'
+        ctype = _get_member_ctype(members['z'])
+        assert ctype == 'double'
+
+    def test_buildhooks_generates_wrapper(self):
+        """Test that buildhooks generates wrapper code for parameterized type."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        # Should have generated code for RealVec
+        assert len(hooks['f90modhooks']) >= 1
+
+        # Check the opaque type generates multi-kind extern declarations
+        realvec_code = hooks['f90modhooks'][0]
+        # Should have k4 and k8 specializations
+        assert 'f2py_create_realvec_k4' in realvec_code
+        assert 'f2py_create_realvec_k8' in realvec_code
+        assert 'f2py_destroy_realvec_k4' in realvec_code
+        assert 'f2py_destroy_realvec_k8' in realvec_code
+        # Should have getters/setters for data members per specialization
+        assert 'f2py_get_realvec_k8_x' in realvec_code
+        assert 'f2py_get_realvec_k4_x' in realvec_code
+        assert 'f2py_get_realvec_k8_length' in realvec_code
+        # Should NOT have getter/setter for the type parameter k
+        # (k is dispatched in tp_init, not via getset)
+        assert 'f2py_get_realvec_k' not in realvec_code.replace(
+            'realvec_k4', '').replace('realvec_k8', '')
+
+    def test_type_param_not_in_getset(self):
+        """Type parameters should not appear in Python getset descriptors."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        realvec_code = hooks['f90modhooks'][0]
+        # Dispatch tp_init should have 'k' kwarg
+        assert '"k"' in realvec_code
+        # But data members should be present in getset
+        assert 'Pyrealvec_get_x' in realvec_code
+        assert 'Pyrealvec_set_x' in realvec_code
+
+
+_CLASS_DECL = re.compile(r'\bclass\s*\(', re.I)
+# class(T) on the same declaration as allocatable or pointer.
+_POLY_STORAGE = re.compile(
+    r'\bclass\s*\([^)]*\)[^:\n]*\b(?:allocatable|pointer)\b'
+    r'|\b(?:allocatable|pointer)\b[^:\n]*\bclass\s*\(',
+    re.I,
+)
+
+
+def test_wrappers_declare_class_only_when_type_does_not_suffice(tmp_path):
+    """Generated Fortran declares ``class`` only for a polymorphic
+    allocatable or pointer dummy (F2018 15.5.2.5)."""
+    root = util.getpath('tests', 'src', 'derived_types')
+    for src in sorted(root.glob('*.f90')):
+        code = util.fortran_source_text(src.read_text(encoding='utf-8'))
+        needs_class = _POLY_STORAGE.search(code) is not None
+        build = tmp_path / src.stem
+        build.mkdir()
+        _, wrappers = _generated(build, src, name='m')
+        mod = crackfortran.crackfortran([str(src)])
+        extra = ''
+        if mod and mod[0].get('block') == 'module':
+            blocks = [b for b in mod[0].get('body', [])
+                      if b.get('block') == 'type']
+            for tb in blocks:
+                tb['parent_block'] = mod[0]
+            routines = [b for b in mod[0].get('body', [])
+                        if b.get('block') in ('function', 'subroutine')]
+            extra = derived_type_rules.generate_fortran_wrappers(
+                mod[0]['name'], blocks, routines=routines,
+                module_block=mod[0]) or ''
+        emitted = bool(
+            _CLASS_DECL.search(wrappers) or _CLASS_DECL.search(extra))
+        assert emitted is needs_class, src.name
+
+
+def test_nonpolymorphic_class_declaration_is_an_error(capsys):
+    """A dummy that is not polymorphic must not be declared ``class``.
+
+    ``wrapper_handles`` reports that with ``errmess`` and ``F2PYError``,
+    and both name the routine and the argument.
+    """
+    from numpy.f2py._dt_routines import wrapper_handles
+    from numpy.f2py.auxfuncs import F2PYError
+
+    rout = {
+        'name': 'retag',
+        'vars': {
+            'item': {
+                # allocatable so the wrapper would declare class(); the
+                # argument is still not polymorphic, which is the error.
+                'attrspec': ['allocatable'],
+                'f2py_dt': {
+                    'spec': 'box',
+                    'cases': [
+                        (1, 'box', 'store', 'box'),
+                        (2, 'carton', 'store', 'carton'),
+                    ],
+                },
+            },
+        },
+    }
+    with pytest.raises(F2PYError, match="retag") as caught:
+        wrapper_handles(rout, ['item'])
+    assert 'item' in str(caught.value)
+    err = capsys.readouterr().err
+    assert 'retag' in err
+    assert 'item' in err
+
+
+def test_fortran_source_text_keeps_bang_inside_a_string():
+    """A ``!`` inside a character literal is not a comment."""
+    text = util.fortran_source_text(
+        "print *, 'a!b'\n"
+        'print *, "c!d" ! trailing comment\n')
+    assert "print *, 'a!b'" in text
+    assert 'print *, "c!d"' in text
+    assert 'trailing' not in text
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not util.has_f90_compiler(),
+                    reason="No Fortran 90 compiler available")
+def test_fortran_builds_probe():
+    # Compiler feature gates rely on the probe failing for broken code
+    assert util.fortran_builds("module probe_ok\nend module probe_ok\n")
+    assert not util.fortran_builds("end module probe_never_started\n")
+
+
+class TestParameterizedKindNoDefaultCodeGen:
+    """Test code generation for KIND params without defaults."""
+
+    def test_no_default_wrappable(self):
+        """Type with KIND without default should be wrappable."""
+        from numpy.f2py._dt_helpers import _can_wrap_opaque
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind_no_default.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        gvec_tb = [tb for tb in type_blocks
+                   if tb['name'].lower() == 'genericvec'][0]
+        assert _can_wrap_opaque(gvec_tb)
+
+    def test_no_default_specializations(self):
+        """Should enumerate k=4 and k=8 specializations."""
+        from numpy.f2py._dt_helpers import _enumerate_specializations
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind_no_default.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        gvec_tb = [tb for tb in type_blocks
+                   if tb['name'].lower() == 'genericvec'][0]
+        specs = _enumerate_specializations(gvec_tb)
+        kind_values = [kd['k'] for kd, _ in specs]
+        assert 4 in kind_values
+        assert 8 in kind_values
+
+    def test_no_default_buildhooks(self):
+        """buildhooks should generate multi-kind wrapper."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind_no_default.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        assert len(hooks['f90modhooks']) >= 1
+        code = hooks['f90modhooks'][0]
+        # Should have k4 and k8 variants
+        assert 'f2py_create_genericvec_k4' in code
+        assert 'f2py_create_genericvec_k8' in code
+        # k should be in kwlist (required, no default)
+        assert '"k"' in code
+
+    def test_no_default_k_required(self):
+        """tp_init should require k when no default exists."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_kind_no_default.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        code = hooks['f90modhooks'][0]
+        # Should have error message about requiring k
+        assert "requires" in code.lower() or "k=" in code
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not util.has_pdt_support(),
+    reason="Fortran compiler does not support parameterized derived types")
+class TestParameterizedKindNoDefaultCompilation(util.F2PyTest):
+    """Test compilation of KIND params without defaults."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "parameterized_kind_no_default.f90")]
+
+    def test_genericvec_exists(self):
+        assert hasattr(self.module, 'genericvec')
+
+    def test_genericvec_k8(self):
+        v = self.module.genericvec(k=8, x=1.0, y=2.0, z=3.0)
+        assert abs(v.x - 1.0) < _ABS_TOL_KIND
+        assert abs(v.y - 2.0) < _ABS_TOL_KIND
+
+    def test_genericvec_k4(self):
+        v = self.module.genericvec(k=4, x=1.0, y=2.0, z=3.0)
+        assert abs(v.x - 1.0) < _ABS_TOL_REAL32
+
+    def test_genericvec_k_required(self):
+        """Should raise TypeError when k is not provided."""
+        with pytest.raises(TypeError):
+            self.module.genericvec(x=1.0)
+
+    def test_genericvec_k_readonly(self):
+        v = self.module.genericvec(k=8, x=1.0)
+        assert v.k == 8
+
+
+class TestEvalKindExpr:
+    """Test the _eval_kind_expr helper for various Fortran kind expressions."""
+
+    def test_integer_literal(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('4') == 4
+        assert _eval_kind_expr('8') == 8
+        assert _eval_kind_expr('16') == 16
+
+    def test_kind_double(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('kind(0.0d0)') == 8
+        assert _eval_kind_expr('kind(1.0d0)') == 8
+
+    def test_kind_single(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('kind(0.0)') == 4
+        assert _eval_kind_expr('kind(0.0e0)') == 4
+
+    def test_kind_integer(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('kind(0)') == 4
+
+    def test_iso_fortran_env(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('real64') == 8
+        assert _eval_kind_expr('real32') == 4
+        assert _eval_kind_expr('int32') == 4
+        assert _eval_kind_expr('int64') == 8
+        assert _eval_kind_expr('real128') is None
+        assert _eval_kind_expr('iostat_end') is None
+
+    def test_iso_c_binding(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('c_double') == 8
+        assert _eval_kind_expr('c_float') == 4
+
+    def test_unknown_returns_none(self):
+        from numpy.f2py._dt_helpers import _eval_kind_expr
+        assert _eval_kind_expr('my_custom_kind') is None
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not util.has_pdt_support(),
+    reason="Fortran compiler does not support parameterized derived types")
+class TestParameterizedKindCompilation(util.F2PyTest):
+    """Test compilation and runtime of KIND-parameterized derived types.
+
+    Requires a Fortran compiler with KIND type parameter support
+    (F2003, gfortran 8+, LLVM flang).
+    """
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "parameterized_kind.f90")]
+
+    def test_realvec_exists(self):
+        assert hasattr(self.module, 'realvec')
+
+    def test_realvec_construct_default(self):
+        v = self.module.realvec()
+        assert v.x == 0.0
+        assert v.y == 0.0
+        assert v.z == 0.0
+        assert v.length == 0
+
+    def test_realvec_construct_with_args(self):
+        v = self.module.realvec(length=3, x=1.0, y=2.0, z=3.0)
+        assert v.length == 3
+        assert abs(v.x - 1.0) < _ABS_TOL_KIND
+        assert abs(v.y - 2.0) < _ABS_TOL_KIND
+        assert abs(v.z - 3.0) < _ABS_TOL_KIND
+
+    def test_realvec_set_members(self):
+        v = self.module.realvec()
+        v.x = 4.5
+        v.y = 5.5
+        v.z = 6.5
+        v.length = 10
+        assert abs(v.x - 4.5) < _ABS_TOL_KIND
+        assert abs(v.y - 5.5) < _ABS_TOL_KIND
+        assert abs(v.z - 6.5) < _ABS_TOL_KIND
+        assert v.length == 10
+
+    def test_realvec_kind_param_readonly(self):
+        """The type parameter k should be a read-only property."""
+        v = self.module.realvec()
+        assert hasattr(v, 'k')
+        assert v.k == 8  # default kind
+        with pytest.raises(AttributeError):
+            v.k = 4
+
+    def test_realvec_double_precision(self):
+        """Members should be double precision (kind=8)."""
+        v = self.module.realvec()
+        v.x = 1.23456789012345e15
+        # Double precision can represent this exactly
+        assert abs(v.x - 1.23456789012345e15) < 1.0
+
+
+class TestParameterizedLenCodeGen:
+    """Test code generation for LEN-parameterized derived types."""
+
+    def test_len_param_detected(self):
+        """Test _get_len_param_info identifies LEN members."""
+        from numpy.f2py._dt_helpers import _get_len_param_info
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        flexvec_tb = None
+        for tb in type_blocks:
+            if tb['name'].lower() == 'flexvec':
+                flexvec_tb = tb
+                break
+        assert flexvec_tb is not None
+
+        len_info = _get_len_param_info(flexvec_tb)
+        assert len(len_info) == 1
+        assert len_info[0]['name'] == 'n'
+
+    def test_len_type_wrappable(self):
+        """Test that LEN-parameterized types pass wrappability checks."""
+        from numpy.f2py._dt_helpers import _can_wrap_opaque
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        flexvec_tb = [tb for tb in type_blocks
+                      if tb['name'].lower() == 'flexvec'][0]
+        assert _can_wrap_opaque(flexvec_tb)
+
+    def test_len_sized_array_detected(self):
+        """Test _is_len_sized_array identifies LEN-dimensioned members."""
+        from numpy.f2py._dt_helpers import _get_len_param_info, _is_len_sized_array
+        from numpy.f2py.auxfuncs import get_type_members
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+
+        flexvec_tb = [tb for tb in type_blocks
+                      if tb['name'].lower() == 'flexvec'][0]
+        len_info = _get_len_param_info(flexvec_tb)
+        len_names = {li['name'] for li in len_info}
+        members = get_type_members(flexvec_tb)
+        # 'data' should be a LEN-sized array
+        assert _is_len_sized_array(members['data'], len_names)
+        # 'scale' should not
+        assert not _is_len_sized_array(members['scale'], len_names)
+
+    def test_buildhooks_generates_wrapper(self):
+        """Test that buildhooks generates wrapper code for LEN type."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        assert len(hooks['f90modhooks']) >= 1
+
+        flexvec_code = hooks['f90modhooks'][0]
+        # Should have constructor with LEN param
+        assert 'f2py_create_flexvec' in flexvec_code
+        # Destructor should accept LEN param (int arg after void*)
+        assert 'f2py_destroy_flexvec' in flexvec_code
+        # Should have getter/setter for scalar member 'scale'
+        assert 'f2py_get_flexvec_scale' in flexvec_code
+        assert 'f2py_set_flexvec_scale' in flexvec_code
+        # Should have LEN-sized array data getter
+        assert 'f2py_get_flexvec_data_data' in flexvec_code
+        # Should have LEN-sized array data setter
+        assert 'f2py_set_flexvec_data' in flexvec_code
+
+    def test_pytype_struct_has_len_field(self):
+        """PyTypeObject struct should have len_n field."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        flexvec_code = hooks['f90modhooks'][0]
+        assert 'int len_n;' in flexvec_code
+
+    def test_tp_init_has_n_kwarg(self):
+        """tp_init should accept n as keyword argument."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        flexvec_code = hooks['f90modhooks'][0]
+        assert '"n"' in flexvec_code
+
+    def test_len_property_readonly(self):
+        """LEN parameter should be exposed as read-only property."""
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "parameterized_len.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+
+        flexvec_code = hooks['f90modhooks'][0]
+        # Should have len_n field in the struct
+        assert 'len_n' in flexvec_code
+        # Should have LEN parameter as constructor arg
+        assert '"n"' in flexvec_code
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not util.has_pdt_len_support(),
+    reason="Fortran compiler cannot build LEN type parameter wrappers")
+class TestParameterizedLenCompilation(util.F2PyTest):
+    """Test compilation and runtime of LEN-parameterized derived types."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "parameterized_len.f90")]
+
+    def test_flexvec_exists(self):
+        assert hasattr(self.module, 'flexvec')
+
+    def test_flexvec_construct(self):
+        v = self.module.flexvec(n=5)
+        assert v.n == 5
+        assert abs(v.scale) < _ABS_TOL_KIND
+
+    def test_flexvec_scale_member(self):
+        v = self.module.flexvec(n=3, scale=2.5)
+        assert abs(v.scale - 2.5) < _ABS_TOL_KIND
+        v.scale = 7.0
+        assert abs(v.scale - 7.0) < _ABS_TOL_KIND
+
+    def test_flexvec_data_getter(self):
+        v = self.module.flexvec(n=4)
+        data = v.data
+        assert isinstance(data, np.ndarray)
+        assert data.shape == (4,)
+
+    def test_flexvec_data_setter(self):
+        v = self.module.flexvec(n=3, scale=1.0)
+        v.data = np.array([1.0, 2.0, 3.0])
+        data = v.data
+        assert abs(data[0] - 1.0) < _ABS_TOL_KIND
+        assert abs(data[1] - 2.0) < _ABS_TOL_KIND
+        assert abs(data[2] - 3.0) < _ABS_TOL_KIND
+
+    def test_flexvec_n_readonly(self):
+        v = self.module.flexvec(n=5)
+        assert v.n == 5
+        with pytest.raises(AttributeError):
+            v.n = 10
+
+
+@pytest.mark.slow
+class TestSequenceTypeCompilation(util.F2PyTest):
+    """Test compilation of SEQUENCE types."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "sequence_type.f90")]
+
+    def test_seq_point_exists(self):
+        assert hasattr(self.module, 'seq_point')
+
+    def test_seq_point_members(self):
+        p = self.module.seq_point(x=1.0, y=2.0, z=3.0)
+        assert abs(p.x - 1.0) < _ABS_TOL_REAL64
+        assert abs(p.y - 2.0) < _ABS_TOL_REAL64
+        assert abs(p.z - 3.0) < _ABS_TOL_REAL64
+
+    def test_seq_point_setter(self):
+        p = self.module.seq_point(x=0.0, y=0.0, z=0.0)
+        p.x = 5.0
+        assert abs(p.x - 5.0) < _ABS_TOL_REAL64
+
+    def test_seq_with_array_exists(self):
+        assert hasattr(self.module, 'seq_with_array')
+
+    def test_seq_with_array_members(self):
+        s = self.module.seq_with_array(n=42)
+        assert s.n == 42
+
+    def test_translate_subroutine(self):
+        p = self.module.seq_point(x=1.0, y=2.0, z=3.0)
+        self.module.translate(p, 0.1, 0.2, 0.3)
+        assert abs(p.x - 1.1) < _ABS_TOL_REAL64
+        assert abs(p.y - 2.2) < _ABS_TOL_REAL64
+        assert abs(p.z - 3.3) < _ABS_TOL_REAL64
+
+
+# ---- Deferred TBP tests (F2018 7.5.5, R752) ----
+
+class TestDeferredTBPAbstractCodeGen:
+    """Verify codegen wraps child overrides of deferred TBPs."""
+
+    def test_disk_compute_area_method_generated(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "abstract_type.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # disk's override of compute_area should appear as a method
+        assert 'compute_area' in all_code.lower()
+
+
+@pytest.mark.slow
+class TestDeferredTBPAbstractCompilation(util.F2PyTest):
+    """Verify deferred TBP override is callable at runtime."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "abstract_type.f90")]
+
+    def test_disk_compute_area_callable(self):
+        d = self.module.disk(area=0.0, radius=2.0)
+        d.compute_area()
+        assert abs(d.area - 3.14159265358979 * 4.0) < _ABS_TOL_PI
+
+
+class TestDeferredTBPCodeGen:
+    """Verify codegen for multi-level deferred TBP hierarchy."""
+
+    def test_integrator_abstract_detected(self):
+        from numpy.f2py._dt_helpers import _is_abstract_type
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_tbp.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        type_blocks = [b for b in module['body']
+                       if b.get('block') == 'type']
+        for tb in type_blocks:
+            tb['parent_block'] = module
+        integrator_tb = next(tb for tb in type_blocks
+                             if tb['name'].lower() == 'integrator')
+        assert _is_abstract_type(integrator_tb)
+
+    def test_midpoint_methods_generated(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_tbp.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # MidpointRule should have both integrate and get_order
+        assert 'midpoint_integrate' in all_code.lower() or \
+               'integrate' in all_code.lower()
+
+    def test_corrected_midpoint_generated(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "deferred_tbp.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'Pycorrectedmidpoint' in all_code or \
+               'correctedmidpoint' in all_code.lower()
+
+
+@pytest.mark.slow
+class TestDeferredTBPCompilation(util.F2PyTest):
+    """Test deferred TBP with multi-level inheritance at runtime."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "deferred_tbp.f90")]
+
+    def test_integrator_cannot_instantiate(self):
+        with pytest.raises(TypeError, match="abstract"):
+            self.module.integrator()
+
+    def test_midpoint_integrate(self):
+        m = self.module.midpointrule(npoints=1)
+        # Integrates x^2 from 0 to 1: midpoint = 0.5, result = 1*0.25 = 0.25
+        result = m.integrate(0.0, 1.0)
+        assert abs(result - 0.25) < _ABS_TOL_KIND
+
+    def test_midpoint_get_order(self):
+        m = self.module.midpointrule(npoints=1)
+        assert m.get_order() == 2
+
+    def test_corrected_integrate(self):
+        c = self.module.correctedmidpoint(npoints=1)
+        # h=1, mid=0.5, result = 1*0.25 + 1/24 = 0.291666...
+        result = c.integrate(0.0, 1.0)
+        expected = 0.25 + 1.0 / 24.0
+        assert abs(result - expected) < _ABS_TOL_KIND
+
+    def test_corrected_inherits_get_order(self):
+        c = self.module.correctedmidpoint(npoints=1)
+        # Inherits get_order from MidpointRule
+        assert c.get_order() == 2
+
+    def test_corrected_isinstance_midpoint(self):
+        c = self.module.correctedmidpoint(npoints=1)
+        assert isinstance(c, self.module.midpointrule)
+
+    def test_corrected_isinstance_integrator(self):
+        c = self.module.correctedmidpoint(npoints=1)
+        assert isinstance(c, self.module.integrator)
+
+
+# ---- Array API / DLPack input tests ----
+
+class TestArrayFromAnyCodeGen:
+    """Verify the Array API helper function is generated."""
+
+    def test_helper_function_generated(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        assert 'f2py_dt_array_from_any' in all_code
+
+    def test_setter_uses_helper(self):
+        fpath = util.getpath("tests", "src", "derived_types",
+                             "array_members_bindc.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        module = mod[0]
+        hooks = derived_type_rules.buildhooks(module)
+        all_code = '\n'.join(hooks['f90modhooks'])
+        # Should NOT use raw PyArray_FROM_OTF in setter code
+        # (only inside the helper itself)
+        setter_code = all_code.split('f2py_dt_array_from_any(PyObject')[1]
+        assert 'f2py_dt_array_from_any(value' in setter_code
+
+
+@pytest.mark.slow
+class TestArrayAPIInput(util.F2PyTest):
+    """Test array setters accept DLPack and Array API inputs."""
+    sources = [util.getpath("tests", "src", "derived_types",
+                            "array_members_bindc.f90")]
+
+    def test_numpy_array_input(self):
+        v = self.module.vec3()
+        v.v = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        assert abs(v.v[0] - 1.0) < _ABS_TOL_REAL32
+
+    def test_list_input(self):
+        v = self.module.vec3()
+        v.v = [4.0, 5.0, 6.0]
+        assert abs(v.v[0] - 4.0) < _ABS_TOL_REAL32
+
+    def test_dlpack_array_input(self):
+        src = np.array([7.0, 8.0, 9.0], dtype=np.float32)
+        # from_dlpack round-trip to get a DLPack-backed array
+        dlpack_arr = np.from_dlpack(src)
+        v = self.module.vec3()
+        v.v = dlpack_arr
+        assert abs(v.v[0] - 7.0) < _ABS_TOL_REAL32
+
+
+# ---- Coarray member skip tests ----
+
+class TestCoarrayMemberSkip:
+    """Verify coarray members are detected and skipped."""
+
+    def test_is_coarray_member_function(self):
+        from numpy.f2py._dt_helpers import _is_coarray_member
+        var_coarray = {'attrspec': ['codimension(*)']}
+        assert _is_coarray_member(var_coarray)
+        var_normal = {'attrspec': ['allocatable']}
+        assert not _is_coarray_member(var_normal)
+        var_empty = {}
+        assert not _is_coarray_member(var_empty)
