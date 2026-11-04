@@ -126,8 +126,8 @@ Options:
 
 
 build backend options (only effective with -c)
-[NO_MESON] is used to indicate an option not meant to be used
-with the meson backend or above Python 3.12:
+[NO_MESON] marks options of the removed numpy.distutils backend,
+which are accepted and ignored:
 
   --fcompiler=         Specify Fortran compiler type by vendor [NO_MESON]
   --compiler=          Specify distutils C compiler type [NO_MESON]
@@ -162,10 +162,8 @@ with the meson backend or above Python 3.12:
 Extra options (only effective with -c):
 
   --link-<resource>    Link extension module with <resource> as defined
-                       by numpy.distutils/system_info.py. E.g. to link
-                       with optimized LAPACK libraries (vecLib on MacOSX,
-                       ATLAS elsewhere), use --link-lapack_opt.
-                       See also --help-link switch. [NO_MESON]
+                       by numpy.distutils/system_info.py. Use
+                       --dep <dependency> instead. [NO_MESON]
 
   -L/path/to/lib/ -l<libname>
   -D<define> -U<name>
@@ -266,7 +264,8 @@ def scaninputline(inputline):
             emptygen = False
         elif l[0] == '-':
             errmess(f'Unknown option {repr(l)}\n')
-            sys.exit()
+            # Same status as the argparse-handled options for usage errors
+            sys.exit(2)
         elif f2:
             f2 = 0
             signsfile = l
@@ -308,7 +307,7 @@ def scaninputline(inputline):
     if signsfile and os.path.isfile(signsfile) and 'h-overwrite' not in options:
         errmess(
             f'Signature file "{signsfile}" exists!!! Use --overwrite-signature to overwrite.\n')
-        sys.exit()
+        sys.exit(1)
 
     options['emptygen'] = emptygen
     options['debug'] = debug
@@ -547,14 +546,15 @@ def get_prefix(module):
 
 class CombineIncludePaths(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        include_paths_set = set(getattr(namespace, 'include_paths', []) or [])
+        include_paths = list(getattr(namespace, 'include_paths', []) or [])
         if option_string == "--include_paths":
             outmess("Use --include-paths or -I instead of --include_paths which will be removed")
         if option_string in {"--include-paths", "--include_paths"}:
-            include_paths_set.update(values.split(os.pathsep))
+            include_paths.extend(values.split(os.pathsep))
         else:
-            include_paths_set.add(values)
-        namespace.include_paths = list(include_paths_set)
+            include_paths.append(values)
+        # The first directory holding a file wins, so keep the given order
+        namespace.include_paths = list(dict.fromkeys(include_paths))
 
 def f2py_parser():
     parser = argparse.ArgumentParser(add_help=False)
@@ -576,7 +576,7 @@ def get_newer_options(iline):
 def make_f2py_compile_parser():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--dep", action="append", dest="dependencies")
-    parser.add_argument("--backend", choices=['meson', 'distutils'], default='distutils')
+    parser.add_argument("--backend", choices=['meson', 'distutils'], default='meson')
     parser.add_argument("-m", dest="module_name")
     return parser
 
@@ -590,8 +590,8 @@ def preparse_sysargv():
 
     backend_key = args.backend
     if backend_key == 'distutils':
-        outmess("Cannot use distutils backend with Python>=3.12,"
-                " using meson backend instead.\n")
+        outmess("The distutils backend has been removed,"
+                " using the meson backend instead.\n")
         backend_key = "meson"
 
     return {
@@ -659,8 +659,8 @@ def run_compile():
     flib_flags = [_m for _m in sys.argv[1:] if _reg3.match(_m)]
     sys.argv = [_m for _m in sys.argv if _m not in flib_flags]
     # TODO: Once distutils is dropped completely, i.e. min_ver >= 3.12, unify into --fflags
-    reg_f77_f90_flags = re.compile(r'--f(77|90)flags=')
-    reg_distutils_flags = re.compile(r'--((f(77|90)exec|opt|arch)=|(debug|noopt|noarch|help-fcompiler))')
+    reg_f77_f90_flags = re.compile(r'--(f(77|90)flags=|debug\Z)')
+    reg_distutils_flags = re.compile(r'--((f(77|90)exec|opt|arch)=|(noopt|noarch|help-fcompiler))')
     fc_flags = [_m for _m in sys.argv[1:] if reg_f77_f90_flags.match(_m)]
     distutils_flags = [_m for _m in sys.argv[1:] if reg_distutils_flags.match(_m)]
     sys.argv = [_m for _m in sys.argv if _m not in (fc_flags + distutils_flags)]
