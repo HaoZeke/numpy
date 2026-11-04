@@ -33,9 +33,9 @@ class MesonTemplate:
         object_files: list[str | Path],
         linker_args: list[str],
         fortran_args: list[str],
-        c_args: list[str],
         build_type: str,
         python_exe: str,
+        c_args: list[str] | None = None,
     ) -> None: ...
 
     #

@@ -11,7 +11,11 @@ from pathlib import Path
 import pytest
 
 from numpy.f2py._backends._meson import MesonBackend
-from numpy.f2py.f2py2e import get_newer_options, main as f2pycli, preparse_sysargv
+from numpy.f2py.f2py2e import (
+    get_newer_options,
+    main as f2pycli,
+    preparse_sysargv,
+)
 from numpy.testing._private.utils import NOGIL_BUILD
 
 from . import util
@@ -27,22 +31,6 @@ def compiler_check_f2pycli():
         pytest.skip("CLI command needs a Fortran compiler")
     else:
         f2pycli()
-
-
-def cli_meson_build(monkeypatch, tmp_path, fsrc, *flags):
-    """Run ``f2py -c`` with `flags` up to writing meson.build and return it
-
-    meson itself is not run, so no compilers are needed.
-    """
-    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
-    bdir = tmp_path / "bld"
-    monkeypatch.setattr(
-        sys, "argv",
-        ["f2py", "-c", str(fsrc), "-m", "blah", "--build-dir", str(bdir), *flags],
-    )
-    with util.switchdir(tmp_path):
-        f2pycli()
-    return (bdir / "meson.build").read_text()
 
 #########################
 # CLI utils and classes #
@@ -114,6 +102,15 @@ def gh22819_cli(tmpdir_factory):
     """F90 file for testing disallowed CLI arguments in ghff819"""
     fdat = util.getpath("tests", "src", "cli", "gh_22819.pyf").read_text()
     fn = tmpdir_factory.getbasetemp() / "gh_22819.pyf"
+    fn.write_text(fdat, encoding="ascii")
+    return fn
+
+
+@pytest.fixture(scope="session")
+def gh28648_cli(tmpdir_factory):
+    """Preprocessed F90 file for testing -D with -c in gh-28648"""
+    fdat = util.getpath("tests", "src", "cli", "gh_28648.F90").read_text()
+    fn = tmpdir_factory.getbasetemp() / "gh_28648.F90"
     fn.write_text(fdat, encoding="ascii")
     return fn
 
@@ -231,10 +228,12 @@ def test_gen_pyf_no_overwrite(capfd, hello_world_f90, monkeypatch):
 
     with util.switchdir(ipath.parent):
         Path("faker.pyf").write_text("Fake news", encoding="ascii")
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as excinfo:
             f2pycli()  # Refuse to overwrite
-            _, err = capfd.readouterr()
-            assert "Use --overwrite-signature to overwrite" in err
+        assert excinfo.value.code == 1
+        _, err = capfd.readouterr()
+        assert "Use --overwrite-signature to overwrite" in err
+        assert Path("faker.pyf").read_text(encoding="ascii") == "Fake news"
 
 
 @pytest.mark.skipif(sys.version_info <= (3, 12), reason="Python 3.12 required")
@@ -251,66 +250,31 @@ def test_untitled_cli(capfd, hello_world_f90, monkeypatch):
         out, _ = capfd.readouterr()
         assert "untitledmodule.c" in out
 
-
-def test_meson_backend_default(capfd, monkeypatch):
-    """Check that meson is the default backend and needs no warning
-
-    CLI :: -c without --backend
+@pytest.mark.slow
+def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
+    """Check that distutils-only options fail
+    CLI :: --fcompiler --help-link
     """
-    monkeypatch.setattr(sys, "argv", "f2py -c -m blah blah.f90".split())
-    assert preparse_sysargv()["backend"] == "meson"
-    out, err = capfd.readouterr()
-    assert "distutils" not in out + err
+    MNAME = "hi"
+    foutl = get_io_paths(hello_world_f90, mname=MNAME)
+    ipath = foutl.f90inp
+    monkeypatch.setattr(
+        sys, "argv", f"f2py {ipath} -c --fcompiler=gfortran -m {MNAME}".split()
+    )
+    with util.switchdir(ipath.parent):
+        compiler_check_f2pycli()
+        out, _ = capfd.readouterr()
+        assert "--fcompiler cannot be used with meson" in out
 
-
-@pytest.mark.parametrize("opts, shown, hint", [
-    (["-c", "--backend", "distutils"], "--backend distutils", "meson is the only"),
-    (["-c", "--backend=distutils"], "--backend distutils", "meson is the only"),
-    (["--backend", "distutils"], "--backend distutils", "meson is the only"),
-    (["-c", "--fcompiler=gnu95"], "--fcompiler=gnu95", "FC environment"),
-    (["-c", "--f77exec=/bin/f77"], "--f77exec=/bin/f77", "FC environment"),
-    (["-c", "--f90exec=/bin/f90"], "--f90exec=/bin/f90", "FC environment"),
-    (["-c", "--help-fcompiler"], "--help-fcompiler", "FC environment"),
-    (["-c", "--compiler=unix"], "--compiler=unix", "CC environment"),
-    (["-c", "--help-compiler"], "--help-compiler", "CC environment"),
-    (["-c", "--opt=-O3"], "--opt=-O3", "--f77flags or --f90flags"),
-    (["-c", "--arch=-mavx"], "--arch=-mavx", "--f77flags or --f90flags"),
-    (["-c", "--noopt"], "--noopt", "--f77flags or --f90flags"),
-    (["-c", "--noarch"], "--noarch", "--f77flags or --f90flags"),
-    (["-c", "--link-lapack_opt"], "--link-lapack_opt", "--dep <dependency>"),
-    (["--help-link"], "--help-link", "--dep <dependency>"),
-])
-def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch, opts, shown, hint):
-    """Check that options of the removed distutils backend fail with a hint
-
-    CLI :: --backend distutils, --help-link, -c --fcompiler --opt ...
-    """
-    monkeypatch.setattr(sys, "argv", ["f2py", str(hello_world_f90), *opts])
+    monkeypatch.setattr(
+        sys, "argv", ["f2py", "--help-link"]
+    )
     with pytest.raises(SystemExit) as excinfo:
         f2pycli()
     assert excinfo.value.code == 2
-    out, err = capfd.readouterr()
-    assert not out
-    assert f"  {shown}: " in err
-    assert hint in err
-
-
-def test_no_distutils_backend_all_options(capfd, hello_world_f90, monkeypatch):
-    """Check that every rejected option is reported at once
-
-    CLI :: -c --fcompiler --opt
-    """
-    monkeypatch.setattr(
-        sys, "argv",
-        ["f2py", "-c", str(hello_world_f90), "--fcompiler=gnu95", "--opt=-O3"],
-    )
-    with pytest.raises(SystemExit):
-        f2pycli()
     _, err = capfd.readouterr()
-    assert "  --fcompiler=gnu95: " in err
-    assert "  --opt=-O3: " in err
+    assert "Unknown option '--help-link'" in err
 
-@pytest.mark.xfail
 def test_f2py_skip(capfd, retreal_f77, monkeypatch):
     """Tests that functions can be skipped
     CLI :: skip:
@@ -328,7 +292,7 @@ def test_f2py_skip(capfd, retreal_f77, monkeypatch):
         out, err = capfd.readouterr()
         for skey in toskip.split():
             assert (
-                f'buildmodule: Could not found the body of interfaced routine "{skey}". Skipping.'
+                f'buildmodule: Could not find the body of interfaced routine "{skey}". Skipping.'
                 in err)
         for rkey in remaining.split():
             assert f'Constructing wrapper function "{rkey}"' in out
@@ -643,7 +607,8 @@ def test_debugcapi(capfd, hello_world_f90, monkeypatch):
             assert r"#define DEBUGCFUNCS" in ocmod.read()
 
 
-@pytest.mark.skip(reason="Consistently fails on CI; noisy so skip not xfail.")
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
 def test_debugcapi_bld(hello_world_f90, monkeypatch):
     """Ensures that debugging wrappers work
 
@@ -655,9 +620,10 @@ def test_debugcapi_bld(hello_world_f90, monkeypatch):
                         f'f2py -m {mname} {ipath} -c --debug-capi'.split())
 
     with util.switchdir(ipath.parent):
-        f2pycli()
+        compiler_check_f2pycli()
         cmd_run = shlex.split(f"{sys.executable} -c \"import blah; blah.hi()\"")
         rout = subprocess.run(cmd_run, capture_output=True, encoding='UTF-8')
+        assert rout.returncode == 0, rout.stderr
         eout = ' Hello World\n'
         eerr = textwrap.dedent("""\
 debug-capi:Python C/API function blah.hi()
@@ -776,7 +742,7 @@ def test_inclpath(monkeypatch):
         ["--include-paths", r"C:\inc1;D:\inc2"]
     )
 
-    assert set(include_paths) == {r"C:\inc1", r"D:\inc2"}
+    assert include_paths == [r"C:\inc1", r"D:\inc2"]
     assert ftcompat is None
     assert remain == []
 
@@ -784,7 +750,7 @@ def test_inclpath(monkeypatch):
         ["--include_paths", r"C:\inc1;D:\inc2"]
     )
 
-    assert set(include_paths) == {r"C:\inc1", r"D:\inc2"}
+    assert include_paths == [r"C:\inc1", r"D:\inc2"]
     assert ftcompat is None
     assert remain == []
 
@@ -795,6 +761,48 @@ def test_inclpath(monkeypatch):
     assert include_paths == [r"C:\inc1;D:\inc2"]
     assert ftcompat is None
     assert remain == []
+
+
+def test_inclpath_order():
+    """Include directories keep their command line order, without repeats
+
+    CLI :: -I --include-paths
+    """
+    dirs = [f"inc{i}" for i in range(6)]
+    include_paths, _, _ = get_newer_options(
+        ["-I", dirs[5], "--include-paths", os.pathsep.join(dirs[2:5]),
+         "-I", dirs[1], "-I", dirs[0], "-I", dirs[5]]
+    )
+    assert include_paths == [dirs[5], *dirs[2:5], dirs[1], dirs[0]]
+
+
+def test_hlink(capfd, monkeypatch):
+    """The numpy.distutils system_info listing is gone
+
+    CLI :: --help-link
+    """
+    monkeypatch.setattr(sys, "argv", ["f2py", "--help-link", "lapack_opt"])
+    with pytest.raises(SystemExit) as excinfo:
+        f2pycli()
+    assert excinfo.value.code == 2
+    _, err = capfd.readouterr()
+    assert "Unknown option '--help-link'" in err
+
+
+@pytest.mark.parametrize("compile_flag", [[], ["-c"]])
+def test_unknown_option_exit_status(hello_world_f90, tmp_path, compile_flag):
+    """Unknown options make f2py fail instead of exiting successfully
+    gh-31409
+
+    CLI :: -<unknown>
+    """
+    cmd = [sys.executable, "-m", "numpy.f2py", *compile_flag,
+           str(hello_world_f90), "-m", "blah", "--unknown-option"]
+    rout = subprocess.run(cmd, capture_output=True, encoding="UTF-8",
+                          cwd=tmp_path)
+    assert rout.returncode == 2
+    assert "Unknown option '--unknown-option'" in rout.stderr
+    assert not list(tmp_path.glob("blah*"))
 
 
 def test_f2cmap(capfd, f2cmap_f90, monkeypatch):
@@ -850,25 +858,29 @@ def test_version(capfd, monkeypatch):
     """
     monkeypatch.setattr(sys, "argv", ["f2py", "-v"])
     # TODO: f2py2e should not call sys.exit() after printing the version
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as excinfo:
         f2pycli()
-        out, _ = capfd.readouterr()
-        import numpy as np
-        assert np.__version__ == out.strip()
+    assert not excinfo.value.code
+    out, _ = capfd.readouterr()
+    import numpy as np
+    assert np.__version__ == out.strip()
 
 
-@pytest.mark.skip(reason="Consistently fails on CI; noisy so skip not xfail.")
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
 def test_npdistop(hello_world_f90, monkeypatch):
-    """
+    """Modules using the Fortran runtime (here for I/O) import and run
+
     CLI :: -c
     """
     ipath = Path(hello_world_f90)
     monkeypatch.setattr(sys, "argv", f'f2py -m blah {ipath} -c'.split())
 
     with util.switchdir(ipath.parent):
-        f2pycli()
+        compiler_check_f2pycli()
         cmd_run = shlex.split(f"{sys.executable} -c \"import blah; blah.hi()\"")
         rout = subprocess.run(cmd_run, capture_output=True, encoding='UTF-8')
+        assert rout.returncode == 0, rout.stderr
         eout = ' Hello World\n'
         assert rout.stdout == eout
 
@@ -924,23 +936,295 @@ def test_freethreading_compatible(hello_world_f90, monkeypatch):
         assert rout.returncode == 0
 
 
-# Build flags
-# TODO: These should be tested separately
+# Build (-c) options
+#
+# ``meson_build_of`` stops ``f2py -c`` just before meson runs, so the generated
+# meson.build shows how each option reaches the build without a compiler.
 
-def test_npd_f77flags():
-    """
-    CLI :: -c --f77flags
-    """
-    # TODO: populate
-    pass
+@pytest.fixture
+def meson_build_of(monkeypatch, tmp_path):
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
+    build_dir = tmp_path / "bld"
+
+    def generate(*args):
+        monkeypatch.setattr(
+            sys, "argv", ["f2py", "-c", "--build-dir", str(build_dir), *args])
+        with util.switchdir(tmp_path):
+            f2pycli()
+        mbld = (build_dir / "meson.build").read_text()
+        mparser.Parser(mbld, "meson.build").parse()
+        return mbld
+
+    return generate
 
 
-def test_npd_f90flags():
+def test_compile_backend(meson_build_of, hello_world_f90, capfd):
+    """meson is the default and only backend, distutils falls back to it
+
+    CLI :: -c --backend
     """
-    CLI :: -c --f90flags
+    meson_build_of("-m", "blah", str(hello_world_f90))
+    out, _ = capfd.readouterr()
+    assert "distutils" not in out
+
+    meson_build_of("-m", "blah", str(hello_world_f90), "--backend", "distutils")
+    out, _ = capfd.readouterr()
+    assert ("The distutils backend has been removed, "
+            "using the meson backend instead.") in out
+
+
+def test_compile_links_with_fortran(meson_build_of, hello_world_f90):
+    """The Fortran compiler links the module, adding its runtime library
+
+    CLI :: -c
     """
-    # TODO: populate
-    pass
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90))
+    assert "link_language: 'fortran'" in mbld
+
+
+@pytest.mark.parametrize("flag", [
+    "--fcompiler=gnu95",
+    "--compiler=unix",
+    "--help-fcompiler",
+    "--f77exec=/usr/bin/f77",
+    "--f90exec=/usr/bin/f90",
+    "--opt=-O1",
+    "--arch=-march=x86-64",
+    "--noopt",
+    "--noarch",
+    "--link-lapack_opt",
+])
+def test_compile_distutils_option(meson_build_of, hello_world_f90, flag):
+    """numpy.distutils-only options are accepted but not passed to meson
+
+    CLI :: -c --fcompiler= --compiler= --help-fcompiler --f77exec= --f90exec=
+           --opt= --arch= --noopt --noarch --link-<resource>
+    """
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90), flag)
+    assert "'''hello.f90'''" in mbld
+    assert flag.split("=", 1)[-1] not in mbld
+
+
+def test_compile_fortran_flags(meson_build_of, hello_world_f90):
+    """Fortran compiler flags become meson fortran_args
+
+    CLI :: -c --f77flags= --f90flags=
+    """
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          "--f77flags=-ffixed-line-length-none",
+                          "--f90flags=-fno-range-check -O1")
+    assert ("fortran_args: ['-ffixed-line-length-none', '-fno-range-check', "
+            "'-O1']") in mbld
+
+
+def test_compile_debug(meson_build_of, hello_world_f90):
+    """Only --debug selects a debug build
+
+    CLI :: -c --debug
+    """
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90), "--debug")
+    assert "'buildtype=debug'" in mbld
+    assert "--debug" not in mbld
+
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          "--f90flags=-fdebug-prefix-map=/src=.")
+    assert "'buildtype=release'" in mbld
+
+
+def test_compile_libraries(meson_build_of, hello_world_f90, tmp_path):
+    """
+    CLI :: -c -L/path/to/lib/ -l<libname>
+    """
+    libdir = tmp_path / "lib"
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          f"-L{libdir}", "-lfoo")
+    assert f"link_args : ['''-L{libdir}''']" in mbld
+    assert "link_args : ['-lfoo']" in mbld
+
+
+def test_compile_macros(meson_build_of, hello_world_f90):
+    """Macros reach both the C and the Fortran compiler
+
+    CLI :: -c -D<define> -U<name>
+    """
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          "-DFOO", "-DBAR=1", "-UBAZ")
+    assert "c_args: ['-DFOO', '-DBAR=1', '-UBAZ']" in mbld
+    assert "fortran_args: ['-DFOO', '-DBAR=1', '-UBAZ']" in mbld
+
+
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
+def test_compile_macros_gh28648(gh28648_cli, monkeypatch):
+    """Macros select preprocessed Fortran code and configure the C wrapper
+    gh-28648
+
+    CLI :: -c -D<define>
+    """
+    ipath = Path(gh28648_cli)
+    monkeypatch.setattr(sys, "argv", [
+        "f2py", "-c", "-m", "gh28648", str(ipath),
+        "-DNEW_MODEL_PARM", "-DF2PY_REPORT_ON_ARRAY_COPY=0",
+    ])
+    code = ("import gh28648; m = gh28648.model; "
+            "print(m.run_active_model(2.0)); m.run_passive_model([1.0, 2.0])")
+    with util.switchdir(ipath.parent):
+        compiler_check_f2pycli()
+        rout = subprocess.run([sys.executable, "-c", code],
+                              capture_output=True, encoding="UTF-8")
+    assert rout.returncode == 0, rout.stderr
+    assert rout.stdout.strip() == "20.0"
+    assert "created an array from object" in rout.stderr
+
+
+def test_compile_include_dirs(meson_build_of, hello_world_f90, tmp_path):
+    """
+    CLI :: -c -I/path/to/include/
+    """
+    incdirs = [tmp_path / name for name in ("inc_c", "inc_a", "inc_b")]
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          *(f"-I{incdir}" for incdir in incdirs))
+    positions = [mbld.index(f"'''{incdir}'''") for incdir in incdirs]
+    assert positions == sorted(positions)
+
+
+def test_compile_extra_objects(meson_build_of, hello_world_f90, tmp_path):
+    """
+    CLI :: -c <filename>.o <filename>.so <filename>.a
+    """
+    objs = ["extra.o", "libextra.a", "libextra.so", "libextra.dylib"]
+    for obj in objs:
+        (tmp_path / obj).touch()
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90), *objs)
+    objects = re.search(r"objects: \[(.*?)\]", mbld, re.DOTALL).group(1)
+    for obj in objs:
+        assert f"'''{obj}'''" in objects
+
+
+def test_compile_relative_paths(meson_build_of, hello_world_f90, tmp_path):
+    """Relative paths are taken from the working directory, not the build one
+
+    CLI :: -c -I<dir> -L<dir> <dir>/<filename>.o
+    """
+    (tmp_path / "objs").mkdir()
+    (tmp_path / "objs" / "extra.o").touch()
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          "-Iinc", "-Ibld/gen", "-Llib", "-lfoo", "objs/extra.o")
+    assert f"'''{tmp_path / 'inc'}'''" in mbld
+    # meson only accepts paths into its source tree, the build dir, relative
+    assert "'''gen'''" in mbld
+    assert f"'''-L{tmp_path / 'lib'}'''" in mbld
+    objects = re.search(r"objects: \[(.*?)\]", mbld, re.DOTALL).group(1)
+    assert objects.split() == ["'''extra.o''',"]
+
+
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
+def test_compile_relative_include_dir(tmp_path, monkeypatch):
+    """A relative -I serves both crackfortran and the Fortran compiler
+
+    CLI :: -c -I<dir>
+    """
+    (tmp_path / "inc").mkdir()
+    (tmp_path / "inc" / "vals.inc").write_text(
+        "  integer, parameter :: val = 42\n", encoding="ascii")
+    (tmp_path / "incl.f90").write_text(textwrap.dedent("""\
+        subroutine get_val(x)
+          integer, intent(out) :: x
+          include 'vals.inc'
+          x = val
+        end subroutine get_val
+        """), encoding="ascii")
+    monkeypatch.setattr(
+        sys, "argv", ["f2py", "-c", "-m", "relinc", "incl.f90", "-Iinc"])
+    with util.switchdir(tmp_path):
+        compiler_check_f2pycli()
+        rout = subprocess.run(
+            [sys.executable, "-c", "import relinc; print(relinc.get_val())"],
+            capture_output=True, encoding="UTF-8")
+    assert rout.returncode == 0, rout.stderr
+    assert rout.stdout.strip() == "42"
+
+
+
+def cli_meson_build(monkeypatch, tmp_path, fsrc, *flags):
+    """Run ``f2py -c`` with `flags` up to writing meson.build and return it
+
+    meson itself is not run, so no compilers are needed.
+    """
+    monkeypatch.setattr(MesonBackend, "run_meson", lambda self, build_dir: None)
+    bdir = tmp_path / "bld"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["f2py", "-c", str(fsrc), "-m", "blah", "--build-dir", str(bdir), *flags],
+    )
+    with util.switchdir(tmp_path):
+        f2pycli()
+    return (bdir / "meson.build").read_text()
+
+
+
+def test_meson_backend_default(capfd, monkeypatch):
+    """Check that meson is the default backend and needs no warning
+
+    CLI :: -c without --backend
+    """
+    monkeypatch.setattr(sys, "argv", "f2py -c -m blah blah.f90".split())
+    assert preparse_sysargv()["backend"] == "meson"
+    out, err = capfd.readouterr()
+    assert "distutils" not in out + err
+
+
+
+@pytest.mark.parametrize("opts, shown, hint", [
+    (["-c", "--backend", "distutils"], "--backend distutils", "meson is the only"),
+    (["-c", "--backend=distutils"], "--backend distutils", "meson is the only"),
+    (["--backend", "distutils"], "--backend distutils", "meson is the only"),
+    (["-c", "--fcompiler=gnu95"], "--fcompiler=gnu95", "FC environment"),
+    (["-c", "--f77exec=/bin/f77"], "--f77exec=/bin/f77", "FC environment"),
+    (["-c", "--f90exec=/bin/f90"], "--f90exec=/bin/f90", "FC environment"),
+    (["-c", "--help-fcompiler"], "--help-fcompiler", "FC environment"),
+    (["-c", "--compiler=unix"], "--compiler=unix", "CC environment"),
+    (["-c", "--help-compiler"], "--help-compiler", "CC environment"),
+    (["-c", "--opt=-O3"], "--opt=-O3", "--f77flags or --f90flags"),
+    (["-c", "--arch=-mavx"], "--arch=-mavx", "--f77flags or --f90flags"),
+    (["-c", "--noopt"], "--noopt", "--f77flags or --f90flags"),
+    (["-c", "--noarch"], "--noarch", "--f77flags or --f90flags"),
+    (["-c", "--link-lapack_opt"], "--link-lapack_opt", "--dep <dependency>"),
+    (["--help-link"], "--help-link", "--dep <dependency>"),
+])
+def test_reject_removed_distutils_options(capfd, hello_world_f90, monkeypatch, opts, shown, hint):
+    """Check that options of the removed distutils backend fail with a hint
+
+    CLI :: --backend distutils, --help-link, -c --fcompiler --opt ...
+    """
+    monkeypatch.setattr(sys, "argv", ["f2py", str(hello_world_f90), *opts])
+    with pytest.raises(SystemExit) as excinfo:
+        f2pycli()
+    assert excinfo.value.code == 2
+    out, err = capfd.readouterr()
+    assert not out
+    assert f"  {shown}: " in err
+    assert hint in err
+
+
+
+def test_no_distutils_backend_all_options(capfd, hello_world_f90, monkeypatch):
+    """Check that every rejected option is reported at once
+
+    CLI :: -c --fcompiler --opt
+    """
+    monkeypatch.setattr(
+        sys, "argv",
+        ["f2py", "-c", str(hello_world_f90), "--fcompiler=gnu95", "--opt=-O3"],
+    )
+    with pytest.raises(SystemExit):
+        f2pycli()
+    _, err = capfd.readouterr()
+    assert "  --fcompiler=gnu95: " in err
+    assert "  --opt=-O3: " in err
+
 
 
 def test_npd_debug(hello_world_f90, monkeypatch, tmp_path):
@@ -958,13 +1242,6 @@ def test_npd_debug(hello_world_f90, monkeypatch, tmp_path):
     assert "buildtype=release" in meson_build
 
 
-def test_npd_lib():
-    """
-    CLI :: -c -L/path/to/lib/ -l<libname>
-    """
-    # TODO: populate
-    pass
-
 
 def test_npd_define(hello_world_f90, monkeypatch, tmp_path):
     """
@@ -980,6 +1257,7 @@ def test_npd_define(hello_world_f90, monkeypatch, tmp_path):
     assert f"c_args: [{c_args}]" in meson_build
 
 
+
 def test_npd_undefine(hello_world_f90, monkeypatch, tmp_path):
     """
     CLI :: -U<name>
@@ -988,19 +1266,3 @@ def test_npd_undefine(hello_world_f90, monkeypatch, tmp_path):
         monkeypatch, tmp_path, hello_world_f90, "-UNDEBUG", "-DFOO"
     )
     assert "c_args: ['''-DFOO''', '''-UNDEBUG''']" in meson_build
-
-
-def test_npd_incl():
-    """
-    CLI :: -I/path/to/include/
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_linker():
-    """
-    CLI :: <filename>.o <filename>.so <filename>.a
-    """
-    # TODO: populate
-    pass
