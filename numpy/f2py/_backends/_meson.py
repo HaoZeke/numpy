@@ -20,6 +20,14 @@ def _meson_identifier(prefix: str, value: str, index: int) -> str:
     return f"{prefix}_{index}_{safe_value}"
 
 
+def _quote_args(args: list[str]) -> list[str]:
+    # Convert args to '' wrapped variant for meson
+    return [
+        f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
+        for x in args
+    ]
+
+
 class MesonTemplate:
     """Template meson build file generation class."""
 
@@ -36,6 +44,7 @@ class MesonTemplate:
         fortran_args: list[str],
         build_type: str,
         python_exe: str,
+        c_args: list[str] | None = None,
     ):
         self.modulename = modulename
         self.build_template_path = (
@@ -51,11 +60,8 @@ class MesonTemplate:
             self.include_dirs = []
         self.substitutions = {}
         self.objects = object_files
-        # Convert args to '' wrapped variant for meson
-        self.fortran_args = [
-            f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
-            for x in fortran_args
-        ]
+        self.fortran_args = _quote_args(fortran_args)
+        self.c_args = _quote_args(c_args or [])
         self.pipeline = [
             self.initialize_template,
             self.sources_substitution,
@@ -64,6 +70,7 @@ class MesonTemplate:
             self.include_substitution,
             self.libraries_substitution,
             self.fortran_args_substitution,
+            self.c_args_substitution,
         ]
         self.build_type = build_type
         self.python_exe = python_exe
@@ -141,6 +148,14 @@ class MesonTemplate:
         else:
             self.substitutions["fortran_args"] = ""
 
+    def c_args_substitution(self) -> None:
+        if self.c_args:
+            self.substitutions["c_args"] = (
+                f"{self.indent}c_args: [{', '.join(self.c_args)}],"
+            )
+        else:
+            self.substitutions["c_args"] = ""
+
     def generate_meson_build(self):
         for node in self.pipeline:
             node()
@@ -155,10 +170,14 @@ class MesonBackend(Backend):
         super().__init__(*args, **kwargs)
         self.dependencies = self.extra_dat.get("dependencies", [])
         self.meson_build_dir = "bbdir"
-        self.build_type = (
-            "debug" if any("debug" in flag for flag in self.fc_flags) else "release"
-        )
+        self.build_type = "debug" if "--debug" in self.fc_flags else "release"
         self.fc_flags = _get_flags(self.fc_flags)
+        # Command line paths are relative to the working directory, while
+        # meson resolves paths from build_dir, where meson.build is written
+        self.include_dirs = [
+            _meson_include_dir(d, self.build_dir) for d in self.include_dirs or []
+        ]
+        self.library_dirs = [Path(d).absolute() for d in self.library_dirs]
 
     def _move_exec_to_root(self, build_dir: Path):
         walk_dir = Path(build_dir) / self.meson_build_dir
@@ -178,6 +197,8 @@ class MesonBackend(Backend):
 
     def write_meson_build(self, build_dir: Path) -> None:
         """Writes the meson build file at specified location"""
+        # -D/-U configure both the C wrapper and preprocessed Fortran sources
+        macro_args = _get_macro_args(self.define_macros, self.undef_macros)
         meson_template = MesonTemplate(
             self.modulename,
             self.sources,
@@ -187,9 +208,10 @@ class MesonBackend(Backend):
             self.include_dirs,
             self.extra_objects,
             self.flib_flags,
-            self.fc_flags,
+            self.fc_flags + macro_args,
             self.build_type,
             sys.executable,
+            c_args=macro_args,
         )
         src = meson_template.generate_meson_build()
         Path(build_dir).mkdir(parents=True, exist_ok=True)
@@ -208,7 +230,9 @@ class MesonBackend(Backend):
 
     def compile(self) -> None:
         self.sources = _prepare_sources(self.modulename, self.sources, self.build_dir)
-        _prepare_objects(self.modulename, self.extra_objects, self.build_dir)
+        self.extra_objects = _prepare_objects(
+            self.modulename, self.extra_objects, self.build_dir
+        )
         self.write_meson_build(self.build_dir)
         self.run_meson(self.build_dir)
         self._move_exec_to_root(self.build_dir)
@@ -245,6 +269,25 @@ def _prepare_objects(mname, objects, bdir):
     for obj in objects:
         if Path(obj).exists() and Path(obj).is_file():
             shutil.copy(obj, bdir)
+    return [Path(obj).name for obj in objects]
+
+
+def _meson_include_dir(include_dir, build_dir):
+    # meson rejects absolute paths into its source tree, which is build_dir
+    path = Path(include_dir).absolute()
+    try:
+        return path.relative_to(Path(build_dir).absolute())
+    except ValueError:
+        return path
+
+def _get_macro_args(define_macros, undef_macros):
+    args = [
+        f"-D{name}" if value is None else f"-D{name}={value}"
+        for name, value in define_macros
+    ]
+    args += [f"-U{name}" for name in undef_macros]
+    return args
+
 
 def _get_flags(fc_flags):
     flag_values = []
