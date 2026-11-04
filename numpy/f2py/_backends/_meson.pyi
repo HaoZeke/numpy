@@ -16,6 +16,7 @@ class MesonTemplate:
     objects: Final[list[str | Path]]
     library_files: Final[list[str | Path]]
     fortran_args: Final[list[str]]
+    c_args: Final[list[str]]
     pipeline: Final[list[Callable[[], None]]]
     build_type: Final[str]
     python_exe: Final[str]
@@ -35,6 +36,7 @@ class MesonTemplate:
         fortran_args: list[str],
         build_type: str,
         python_exe: str,
+        c_args: list[str] | None = None,
     ) -> None: ...
 
     #
@@ -45,6 +47,7 @@ class MesonTemplate:
     def libraries_substitution(self) -> None: ...
     def include_substitution(self) -> None: ...
     def fortran_args_substitution(self) -> None: ...
+    def c_args_substitution(self) -> None: ...
 
     #
     def meson_build_template(self) -> str: ...
