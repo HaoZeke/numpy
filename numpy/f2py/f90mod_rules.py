@@ -25,11 +25,12 @@ from . import capi_maps, cfuncs, func2subr
 from .auxfuncs import *
 from .crackfortran import (
     _eval_scalar,
-    _get_typed_parameters,
     get_useparameters,
     undo_rmbadname,
     undo_rmbadname1,
 )
+
+from ._parameter_metadata import storage_parameters
 
 options = {}
 
@@ -91,7 +92,7 @@ fgetdims2_sa = """\
 def _parameter_variable(var, module):
     """Resolve constant storage dimensions without emitting a global VLA."""
     var = copy.deepcopy(var)
-    parameters = _get_typed_parameters(module['vars'], get_useparameters(module))
+    parameters = storage_parameters(module['vars'], get_useparameters(module))
 
     maximum_extent = int(np.iinfo(np.intp).max)
 
@@ -110,12 +111,12 @@ def _parameter_variable(var, module):
             raise ValueError('Module PARAMETER storage extent exceeds its C representation')
         return str(size)
 
-    if 'dimension' in var:
-        var['dimension'] = [extent(value) for value in var['dimension']]
     if isstring_or_stringarray(var):
         selector = var['charselector']
         length = selector.get('f2py_len', selector.get('len', selector.get('*', '1')))
         selector['f2py_len'] = extent(length, int(np.iinfo(np.intc).max))
+    if 'dimension' in var:
+        var['dimension'] = [extent(value) for value in var['dimension']]
     return var
 
 

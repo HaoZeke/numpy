@@ -3651,7 +3651,17 @@ def _fortran_eval(expr, g_params, params, c_literals=False):
     """
     names = _Names(params, g_params)
     source, literals = _translate(expr, names, c_literals)
-    tree = _FortranOperations().visit(ast.parse(source, mode='eval'))
+    tree = ast.parse(source, mode='eval')
+    pending = list(names.maps)
+    while pending:
+        mapping = pending.pop(0)
+        rewrite = getattr(mapping, '_f2py_storage_inquiries', None)
+        if rewrite is not None:
+            tree = rewrite(tree, literals, names)
+            break
+        if isinstance(mapping, (collections.ChainMap, _Names)):
+            pending[0:0] = mapping.maps
+    tree = _FortranOperations().visit(tree)
     code = compile(ast.fix_missing_locations(tree), '<fortran>', 'eval')
     # no builtins, as those of Python are not Fortran's
     return eval(code, {'__builtins__': {}, **_operations, **_intrinsics,
