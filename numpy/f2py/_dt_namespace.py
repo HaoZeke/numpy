@@ -41,6 +41,21 @@ def _prepare_type_namespaces(modules):
         module['f2py_dt_namespace'][name] = generated
 
 
+def _type_in_namespace(types, module, name):
+    """Resolve an exported name while retaining its declaring descriptor."""
+    module, name = module.lower(), name.lower()
+    direct = types.get((module, name), types.get(name))
+    if direct is not None and direct['module'].lower() == module:
+        return direct
+    candidates = []
+    for info in types.values():
+        if any(owner.lower() == module and alias.lower() == name
+               for owner, alias in info.get('public_aliases', ())):
+            if all(info is not previous for previous in candidates):
+                candidates.append(info)
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _find_type(types, name, module=None, uses=None, local_uses=None):
     """Resolve a native type through its declaring module or explicit USE."""
     if not name:
@@ -60,8 +75,8 @@ def _find_type(types, name, module=None, uses=None, local_uses=None):
                 continue
             else:
                 remote = name
-            info = types.get((used_module.lower(), remote), types.get(remote))
-            if info is not None and info['module'].lower() == used_module.lower():
+            info = _type_in_namespace(types, used_module, remote)
+            if info is not None:
                 if all(info is not item for item in candidates):
                     candidates.append(info)
         return candidates, explicit
@@ -71,8 +86,8 @@ def _find_type(types, name, module=None, uses=None, local_uses=None):
         return candidates[0] if len(candidates) == 1 else None
     if module:
         module = module.lower()
-        local = types.get((module, name), types.get(name))
-        if local is not None and local['module'].lower() == module:
+        local = _type_in_namespace(types, module, name)
+        if local is not None:
             return local
     candidates, explicit = imported(uses or {})
     if candidates or explicit or module:

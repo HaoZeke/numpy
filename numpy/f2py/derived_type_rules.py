@@ -150,6 +150,22 @@ def describe_types(pymod):
         for name, info in entries.items():
             key = (info['module'].lower(), name) if counts[name] > 1 else name
             types[key] = info
+    # Namespace aliases refer to the declaring descriptor rather than creating
+    # another generated class, type tag or routine-dispatch entry.
+    from ._dt_imports import _public_type
+    owners = {(info['module'].lower(), info['name'].lower()): info
+              for info in types.values()}
+    aliases = {key: set() for key in owners}
+    for module in modules:
+        for alias, block in module.get('f2py_imported_types', {}).items():
+            if not _public_type(module, alias, block, imported=True):
+                continue
+            origin = (block['f2py_origin_module'].lower(),
+                      block['f2py_origin_name'].lower())
+            if origin in aliases:
+                aliases[origin].add((module['name'].lower(), alias.lower()))
+    for origin, info in owners.items():
+        info['public_aliases'] = sorted(aliases[origin])
     return types
 
 
