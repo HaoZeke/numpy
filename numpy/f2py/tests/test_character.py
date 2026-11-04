@@ -428,7 +428,6 @@ class TestCharacter(util.F2PyTest):
 
         assert_equal(f('a'), b'a')
 
-    @pytest.mark.skip('fortran function returning array segfaults')
     def test_array_return(self):
         f = getattr(self.module, self.fprefix + '_array_return')
 
