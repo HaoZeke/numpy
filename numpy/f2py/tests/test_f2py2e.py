@@ -1092,10 +1092,21 @@ def test_compile_extra_objects(meson_build_of, hello_world_f90, tmp_path):
     objs = ["extra.o", "libextra.a", "libextra.so", "libextra.dylib"]
     for obj in objs:
         (tmp_path / obj).touch()
-    mbld = meson_build_of("-m", "blah", str(hello_world_f90), *objs)
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90), *objs, "-lfoo")
     objects = re.search(r"objects: \[(.*?)\]", mbld, re.DOTALL).group(1)
-    for obj in objs:
-        assert f"'''{obj}'''" in objects
+    assert objects.split() == [f"'''{tmp_path / 'extra.o'}''',"]
+    dependencies = mbld.split("dependencies : [", 1)[1].split("]", 1)[0]
+    library_ids = []
+    for index, library in enumerate(objs[1:]):
+        path = tmp_path / library
+        assert str(path) not in objects
+        assert f"declare_dependency(link_args : ['''{path}'''])" in mbld
+        identifier = f"lib_file_{index}_{library.replace('.', '_')}"
+        assert identifier in dependencies
+        library_ids.append(identifier)
+    positions = [dependencies.index(identifier) for identifier in library_ids]
+    assert positions == sorted(positions)
+    assert positions[-1] < dependencies.index("lib_0_foo")
 
 
 def test_compile_relative_paths(meson_build_of, hello_world_f90, tmp_path):
@@ -1112,7 +1123,7 @@ def test_compile_relative_paths(meson_build_of, hello_world_f90, tmp_path):
     assert "'''gen'''" in mbld
     assert f"'''-L{tmp_path / 'lib'}'''" in mbld
     objects = re.search(r"objects: \[(.*?)\]", mbld, re.DOTALL).group(1)
-    assert objects.split() == ["'''extra.o''',"]
+    assert objects.split() == [f"'''{tmp_path / 'objs' / 'extra.o'}''',"]
 
 
 @pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')

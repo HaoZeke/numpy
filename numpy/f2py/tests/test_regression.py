@@ -1,5 +1,7 @@
 import os
 import platform
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -274,6 +276,79 @@ class TestPrecompiledModuleData(util.F2PyTest):
         mod = self.module.gh19162_mod
         mod.x = [1, 2, 3]
         assert mod.total() == 6
+
+    def test_cli_relative_objects_and_library_files(self, tmp_path):
+        source_dir = tmp_path / "inputs"
+        source_dir.mkdir()
+        caller = source_dir / "caller.f90"
+        caller.write_text(
+            "module gh19162_link_object\n"
+            "contains\n"
+            "integer function object_value()\n"
+            "  object_value = 2\n"
+            "end function object_value\n"
+            "end module gh19162_link_object\n",
+            encoding="ascii",
+        )
+        answer = source_dir / "answer.f90"
+        answer.write_text(
+            "module gh19162_link_answer\n"
+            "contains\n"
+            "integer function library_value()\n"
+            "  library_value = 40\n"
+            "end function library_value\n"
+            "end module gh19162_link_answer\n",
+            encoding="ascii",
+        )
+        object_dir, object_mod_dir = util.build_fortran_library(
+            [caller], "gh19162_link_object"
+        )
+        library_dir, library_mod_dir = util.build_fortran_library(
+            [answer], "gh19162_link_answer"
+        )
+        compiled_objects = [path for path in object_dir.rglob("*")
+                            if path.suffix in (".o", ".obj")]
+        compiled_libraries = [path for path in library_dir.iterdir()
+                              if path.suffix in (".a", ".lib")]
+        assert len(compiled_objects) == 1
+        assert len(compiled_libraries) == 1
+        (tmp_path / "objects").mkdir()
+        (tmp_path / "libraries").mkdir()
+        object_file = tmp_path / "objects" / compiled_objects[0].name
+        library_file = tmp_path / "libraries" / compiled_libraries[0].name
+        shutil.copyfile(compiled_objects[0], object_file)
+        shutil.copyfile(compiled_libraries[0], library_file)
+        wrapper = source_dir / "linked.f90"
+        # The archive symbol is referenced by the extension's own source,
+        # so the archive must follow that source's object on the link line.
+        wrapper.write_text(
+            "subroutine read_linked(result)\n"
+            "use gh19162_link_object, only: object_value\n"
+            "use gh19162_link_answer, only: library_value\n"
+            "integer, intent(out) :: result\n"
+            "result = object_value() + library_value()\n"
+            "end subroutine read_linked\n",
+            encoding="ascii",
+        )
+        module_name = util.get_temp_module_name()
+        command = [sys.executable, "-m", "numpy.f2py", "-c", "-m", module_name,
+                   "--backend", "meson", "--build-dir", "f2py-build",
+                   "--freethreading-compatible", str(wrapper.relative_to(tmp_path)),
+                   "-I" + os.path.relpath(object_mod_dir, tmp_path),
+                   "-I" + os.path.relpath(library_mod_dir, tmp_path),
+                   str(object_file.relative_to(tmp_path)),
+                   str(library_file.relative_to(tmp_path))]
+        build = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
+        assert build.returncode == 0, build.stdout + build.stderr
+        probe = (
+            "import importlib, sys; from pathlib import Path; "
+            "module = importlib.import_module(sys.argv[1]); "
+            "assert Path(module.__file__).resolve().parent == Path(sys.argv[2]).resolve(); "
+            "assert module.read_linked() == 42"
+        )
+        loaded = subprocess.run([sys.executable, "-c", probe, module_name, str(tmp_path)],
+                                cwd=tmp_path, capture_output=True, text=True)
+        assert loaded.returncode == 0, loaded.stdout + loaded.stderr
 
 
 @pytest.mark.slow
