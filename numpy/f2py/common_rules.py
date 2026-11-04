@@ -122,8 +122,8 @@ def buildhooks(m):
         iadd(f'\ttmp = PyFortranObject_New(f2py_{name}_def,f2py_init_{name});')
         iadd('\tif (tmp == NULL) return -1;')
         iadd('\tif (PyFortranObject_SetDataKind(tmp, "COMMON block", '
-             f'"{name}") < 0) return -1;')
-        iadd(f'\tif (F2PyDict_SetItemString(d, "{name}", tmp) == -1) return -1;')
+             f'"{name}") < 0) {{ Py_DECREF(tmp); return -1; }}')
+        iadd(f'\tif (F2PyDict_SetItemString(d, "{name}", tmp) == -1) {{ Py_DECREF(tmp); return -1; }}')
         iadd('\tPy_DECREF(tmp);')
         tname = name.replace('_', '\\_')
         dadd(f'\\subsection{{Common block \\texttt{{{tname}}}}}\n')

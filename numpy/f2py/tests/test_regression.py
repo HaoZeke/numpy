@@ -372,3 +372,167 @@ class TestPickleFortranRoutine(util.F2PyTest):
                 pickle.dumps(obj)
             with pytest.raises(TypeError, match="copy the array data"):
                 pickle.dumps(obj)
+
+
+@pytest.mark.slow
+class TestPickleFortranRoutineReferences(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "regression", "gh21767.f90")]
+
+    def test_dotted_reference_identity(self, monkeypatch):
+        from types import SimpleNamespace
+
+        routine = self.module.m.t
+        monkeypatch.setattr(self.module, "m", SimpleNamespace(t=self.module.s))
+        with pytest.raises(TypeError, match="import path does not resolve to this object"):
+            pickle.dumps(routine)
+
+    def test_reentrant_reference_metadata(self, monkeypatch):
+        import numpy.f2py as f2py
+
+        routine = self.module.m.t
+        module_name = self.module.__name__
+        qualified_name = "m.t"
+        routine.__module__ = module_name.encode().decode()
+        routine.__qualname__ = qualified_name.encode().decode()
+        reconstructor = f2py._fortran_reconstruct
+
+        def lookup(name):
+            if name != "_fortran_reconstruct":
+                raise AttributeError(name)
+            routine.__module__ = "replaced_module"
+            routine.__qualname__ = "replaced_qualname"
+            return reconstructor
+
+        monkeypatch.delattr(f2py, "_fortran_reconstruct")
+        monkeypatch.setattr(f2py, "__getattr__", lookup)
+        try:
+            reduced = routine.__reduce__()
+            assert reduced == (reconstructor, (module_name, qualified_name))
+        finally:
+            routine.__module__ = module_name
+            routine.__qualname__ = qualified_name
+
+    def test_reconstructor_failure_keeps_metadata(self, monkeypatch):
+        import numpy.f2py as f2py
+
+        routine = self.module.m.t
+        module_name, qualified_name = routine.__module__, routine.__qualname__
+
+        def fail_lookup(name):
+            raise RuntimeError("reference helper lookup failed")
+
+        monkeypatch.delattr(f2py, "_fortran_reconstruct")
+        monkeypatch.setattr(f2py, "__getattr__", fail_lookup)
+        with pytest.raises(RuntimeError, match="reference helper lookup failed"):
+            routine.__reduce__()
+        assert (routine.__module__, routine.__qualname__) == (module_name, qualified_name)
+
+    def test_fresh_process_protocols(self, tmp_path):
+        import subprocess
+
+        module_name = self.module.__name__
+        module_directory = str(Path(self.module.__file__).parent)
+        script = """
+import importlib, json, pickle, sys
+sys.path.insert(0, sys.argv[1])
+with open(sys.argv[3], "rb") as source:
+    flat, dotted = pickle.load(source)
+module = importlib.import_module(sys.argv[2])
+assert flat is module.touch_common
+assert dotted is module.m.t
+value = 17.0
+flat(value)
+assert float(module.cblock.cval) == value
+dotted()
+print(json.dumps({"identities": True, "common_value": value}))
+"""
+        for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+            target = tmp_path / f"routines-{protocol}.pickle"
+            target.write_bytes(pickle.dumps((self.module.touch_common, self.module.m.t), protocol=protocol))
+            result = subprocess.run([sys.executable, "-c", script, module_directory, module_name, str(target)],
+                                    capture_output=True, text=True, timeout=60, check=False)
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert '"identities": true' in result.stdout
+
+    def test_data_refusal_protocols(self):
+        for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+            for data in (self.module.m, self.module.vmod, self.module.cblock):
+                with pytest.raises(TypeError, match="copy the array data"):
+                    pickle.dumps(data, protocol=protocol)
+
+    def test_package_reexport_fresh_process(self, tmp_path, monkeypatch):
+        import importlib
+        import shutil
+        import subprocess
+
+        package_name = "f2py_pickle_reference"
+        package = tmp_path / package_name
+        package.mkdir()
+        leaf_name = self.module.__name__
+        shutil.copyfile(self.module.__file__, package / Path(self.module.__file__).name)
+        (package / "__init__.py").write_text(
+            f"from . import {leaf_name} as implementation\n"
+            "routine = implementation.touch_common\n", encoding="utf-8")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        imported = importlib.import_module(package_name)
+        try:
+            assert imported.routine.__module__ == f"{package_name}.{leaf_name}"
+            blob = tmp_path / "package-routine.pickle"
+            blob.write_bytes(pickle.dumps(imported.routine))
+            script = """
+import importlib, pickle, sys
+sys.path.insert(0, sys.argv[1])
+with open(sys.argv[3], "rb") as source:
+    routine = pickle.load(source)
+package = importlib.import_module(sys.argv[2])
+assert routine is package.routine
+value = 19.0
+routine(value)
+assert float(package.implementation.cblock.cval) == value
+"""
+            result = subprocess.run([sys.executable, "-c", script, str(tmp_path), package_name, str(blob)],
+                                    capture_output=True, text=True, timeout=60, check=False)
+            assert result.returncode == 0, result.stdout + result.stderr
+        finally:
+            sys.modules.pop(f"{package_name}.{leaf_name}", None)
+            sys.modules.pop(package_name, None)
+
+    def test_metadata_lifetime_during_reentrant_lookup(self, monkeypatch):
+        import gc
+
+        import numpy.f2py as f2py
+
+        finalized = []
+
+        class ReferenceName(str):
+            def __del__(self):
+                finalized.append(str(self))
+
+        routine = self.module.m.t
+        module_name = self.module.__name__
+        qualified_name = "m.t"
+        routine.__module__ = ReferenceName(module_name)
+        routine.__qualname__ = ReferenceName(qualified_name)
+        reconstructor = f2py._fortran_reconstruct
+
+        def lookup(name):
+            if name != "_fortran_reconstruct":
+                raise AttributeError(name)
+            routine.__module__ = module_name
+            routine.__qualname__ = qualified_name
+            gc.collect()
+            assert finalized == []
+            return reconstructor
+
+        monkeypatch.delattr(f2py, "_fortran_reconstruct")
+        monkeypatch.setattr(f2py, "__getattr__", lookup)
+        try:
+            reduced = routine.__reduce__()
+            assert finalized == []
+            assert reduced[1] == (module_name, qualified_name)
+            del reduced
+            gc.collect()
+            assert sorted(finalized) == sorted([module_name, qualified_name])
+        finally:
+            routine.__module__ = module_name
+            routine.__qualname__ = qualified_name

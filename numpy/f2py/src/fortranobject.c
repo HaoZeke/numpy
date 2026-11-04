@@ -764,53 +764,82 @@ f2py_load_reconstructor(void)
     return fn;
 }
 
+static int
+f2py_dict_get_str_ref(PyObject *dict, const char *key, PyObject **value)
+{
+#if PY_VERSION_HEX >= 0x030D0000
+    return PyDict_GetItemStringRef(dict, key, value);
+#else
+    *value = _PyDict_GetItemStringWithError(dict, key);
+    if (*value == NULL) {
+        return PyErr_Occurred() ? F2PY_ERR : 0;
+    }
+    Py_INCREF(*value);
+    return 1;
+#endif
+}
+
 static PyObject *
 fortran_reduce(PyFortranObject *fp, PyObject *Py_UNUSED(ignored))
 {
-    PyObject *qualname;
-    PyObject *modname;
+    PyObject *qualname = NULL;
+    PyObject *modname = NULL;
+    PyObject *fn = NULL;
+    PyObject *args = NULL;
+    PyObject *resolved = NULL;
+    PyObject *ret = NULL;
     const char *qual_c;
 
     if (!fortran_is_tagged_routine(fp)) {
         fortran_set_unpickleable(fp);
         return NULL;
     }
-    qualname = PyDict_GetItemString(fp->dict, F2PY_KEY_QUALNAME);
-    modname = PyDict_GetItemString(fp->dict, F2PY_KEY_MODULE);
+    /* Dictionary lookup and import hooks can replace the reference metadata. */
+    if (f2py_dict_get_str_ref(fp->dict, F2PY_KEY_QUALNAME, &qualname) < 0 ||
+        f2py_dict_get_str_ref(fp->dict, F2PY_KEY_MODULE, &modname) < 0) {
+        goto cleanup;
+    }
     if (qualname == NULL || modname == NULL || !PyUnicode_Check(qualname) ||
         !PyUnicode_Check(modname)) {
         fortran_set_unpickleable(fp);
-        return NULL;
+        goto cleanup;
     }
     qual_c = PyUnicode_AsUTF8(qualname);
     if (qual_c == NULL) {
-        return NULL;
+        goto cleanup;
     }
-    /*
-     * A dot marks an F90 module routine ("m.t"). Low protocols
-     * do not resolve a dotted GLOBAL name, and the string form would
-     * try to pickle the parent module object. Hand back a reconstructor
-     * that imports the extension and walks the qualname.
-     */
     if (strchr(qual_c, '.') != NULL) {
-        PyObject *fn = f2py_load_reconstructor();
-        PyObject *args;
-        PyObject *ret;
-
+        fn = f2py_load_reconstructor();
         if (fn == NULL) {
-            return NULL;
+            goto cleanup;
         }
         args = PyTuple_Pack(F2PY_RECON_ARGS, modname, qualname);
         if (args == NULL) {
-            Py_DECREF(fn);
-            return NULL;
+            goto cleanup;
+        }
+        resolved = PyObject_CallObject(fn, args);
+        if (resolved == NULL) {
+            goto cleanup;
+        }
+        if (resolved != (PyObject *)fp) {
+            PyErr_SetString(PyExc_TypeError,
+                            "cannot pickle f2py routine: import path does not "
+                            "resolve to this object");
+            goto cleanup;
         }
         ret = PyTuple_Pack(F2PY_REDUCE_LEN, fn, args);
-        Py_DECREF(fn);
-        Py_DECREF(args);
-        return ret;
     }
-    return Py_NewRef(qualname);
+    else {
+        ret = Py_NewRef(qualname);
+    }
+
+cleanup:
+    Py_XDECREF(resolved);
+    Py_XDECREF(args);
+    Py_XDECREF(fn);
+    Py_XDECREF(modname);
+    Py_XDECREF(qualname);
+    return ret;
 }
 
 static PyMethodDef fortran_methods[] = {
