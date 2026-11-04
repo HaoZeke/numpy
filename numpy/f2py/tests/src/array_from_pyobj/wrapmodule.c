@@ -11,7 +11,6 @@ extern "C" {
 /*********************** See f2py2e/cfuncs.py: includes ***********************/
 
 #define PY_SSIZE_T_CLEAN
-#include <Python.h>
 #include "fortranobject.h"
 #include <math.h>
 #include <stdio.h>
@@ -157,25 +156,13 @@ static PyMethodDef f2py_module_methods[] = {
   {NULL,NULL}
 };
 
-static struct PyModuleDef moduledef = {
-    PyModuleDef_HEAD_INIT,
-    "test_array_from_pyobj_ext",
-    NULL,
-    -1,
-    f2py_module_methods,
-    NULL,
-    NULL,
-    NULL,
-    NULL
-};
-
-PyMODINIT_FUNC PyInit_test_array_from_pyobj_ext(void) {
-  PyObject *m,*d, *s;
-  m = wrap_module = PyModule_Create(&moduledef);
-  Py_SET_TYPE(&PyFortran_Type, &PyType_Type);
-  import_array();
-  if (PyErr_Occurred())
-    Py_FatalError("can't initialize module wrap (failed to import numpy)");
+static int
+wrap_exec(PyObject *m)
+{
+  PyObject *d, *s;
+  wrap_module = m;
+  import_array2("can't initialize array conversion tests", -1);
+  if (F2PyRuntime_Init(m) < 0) return -1;
   d = PyModule_GetDict(m);
   s = PyUnicode_FromString("This module 'wrap' is auto-generated with f2py (version:2_1330).\nFunctions:\n"
                            "  arr = call(type_num,dims,intent,obj)\n"
@@ -253,13 +240,53 @@ PyMODINIT_FUNC PyInit_test_array_from_pyobj_ext(void) {
   on_exit(f2py_report_on_exit,(void*)"array_from_pyobj.wrap.call");
 #endif
 
-#ifdef Py_GIL_DISABLED
-    // signal whether this module supports running with the GIL disabled
-    PyUnstable_Module_SetGIL(m, Py_MOD_GIL_NOT_USED);
-#endif
-
-  return m;
+  return 0;
 }
+
+#ifndef Py_TARGET_ABI3T
+static PyModuleDef_Slot wrap_slots[] = {
+  {Py_mod_exec, (void *)wrap_exec},
+  {Py_mod_multiple_interpreters, Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED},
+  {0, NULL}
+};
+
+static struct PyModuleDef moduledef = {
+  PyModuleDef_HEAD_INIT,
+  "test_array_from_pyobj_ext",
+  NULL,
+  sizeof(F2PyRuntimeState),
+  f2py_module_methods,
+  wrap_slots,
+  F2PyRuntime_Traverse,
+  F2PyRuntime_Clear,
+  F2PyRuntime_Free
+};
+
+PyMODINIT_FUNC PyInit_test_array_from_pyobj_ext(void)
+{
+  return PyModuleDef_Init(&moduledef);
+}
+#else
+PyABIInfo_VAR(wrap_abi_info);
+static PySlot wrap_pyslots[] = {
+  PySlot_STATIC_DATA(Py_mod_abi, &wrap_abi_info),
+  PySlot_STATIC_DATA(Py_mod_name, "test_array_from_pyobj_ext"),
+  PySlot_STATIC_DATA(Py_mod_methods, f2py_module_methods),
+  PySlot_SIZE(Py_mod_state_size, sizeof(F2PyRuntimeState)),
+  PySlot_FUNC(Py_mod_state_traverse, F2PyRuntime_Traverse),
+  PySlot_FUNC(Py_mod_state_clear, F2PyRuntime_Clear),
+  PySlot_FUNC(Py_mod_state_free, F2PyRuntime_Free),
+  PySlot_DATA(Py_mod_gil, Py_MOD_GIL_NOT_USED),
+  PySlot_DATA(Py_mod_multiple_interpreters, Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED),
+  PySlot_FUNC(Py_mod_exec, wrap_exec),
+  PySlot_END
+};
+
+PyMODEXPORT_FUNC PyModExport_test_array_from_pyobj_ext(void)
+{
+  return wrap_pyslots;
+}
+#endif
 #ifdef __cplusplus
 }
 #endif

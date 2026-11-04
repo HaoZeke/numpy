@@ -245,9 +245,11 @@ def buildhooks(pymod):
         ret['initf90modhooks'] = [
             '\t{',
             ('\t\tPyObject *tmp = '
-            f'PyFortranObject_New(f2py_{m_name}_def,f2py_init_{m_name});'),
-            f'\t\tPyDict_SetItemString(d, "{m_name}", tmp);',
-            '\t\tPy_XDECREF(tmp);',
+            f'PyFortranObject_New(m, f2py_{m_name}_def,f2py_init_{m_name});'),
+            '\t\tif (tmp == NULL) return -1;',
+            f'\t\tint status = PyDict_SetItemString(d, "{m_name}", tmp);',
+            '\t\tPy_DECREF(tmp);',
+            '\t\tif (status < 0) return -1;',
             '\t}',
         ] + ret["initf90modhooks"]
         fadd('')

@@ -178,7 +178,7 @@ extern \"C\" {
 #endif /* PY_SSIZE_T_CLEAN */
 
 /* Unconditionally included */
-#include <Python.h>
+#include "fortranobject.h"
 #include <numpy/npy_os.h>
 /* Python.h does not include these for the Limited API 3.11 and newer */
 #include <stdio.h>
@@ -190,8 +190,8 @@ extern \"C\" {
 #includes0#
 
 """ + gentitle("See f2py2e/rules.py: mod_rules['modulebody']") + """
-static PyObject *#modulename#_error;
-static PyObject *#modulename#_module;
+#define #modulename#_error (F2PyRuntime_GetError())
+#define #modulename#_module (F2PyRuntime_GetModule())
 
 """ + gentitle("See f2py2e/cfuncs.py: typedefs") + """
 #typedefs#
@@ -249,34 +249,41 @@ static PyObject *f2py_module_interface_usercode(PyObject *m, PyObject *d) {
     return m;
 }
 
-static int f2py_module_exec(PyObject *m) {
-    int i;
+static int f2py_module_exec_body(PyObject *m) {
+    int i, status;
+    F2PyRuntimeState *state = (F2PyRuntimeState *)PyModule_GetState(m);
     PyObject *d, *s, *tmp;
-    #modulename#_module = m;
-    Py_SET_TYPE((PyObject*)&PyFortran_Type, &PyType_Type);
     import_array2(\"can't initialize module #modulename# (failed to import numpy)\", -1);
+    if (F2PyRuntime_Init(m) < 0) {
+        return -1;
+    }
     d = PyModule_GetDict(m);
     s = PyUnicode_FromString(\"#f2py_version#\");
-    PyDict_SetItemString(d, \"__version__\", s);
+    if (s == NULL) return -1;
+    status = PyDict_SetItemString(d, \"__version__\", s);
     Py_DECREF(s);
+    if (status < 0) return -1;
     s = PyUnicode_FromString(
         \"This module '#modulename#' is auto-generated with f2py (version:#f2py_version#).\\nFunctions:\\n\"\n#docs#\".\");
-    PyDict_SetItemString(d, \"__doc__\", s);
+    if (s == NULL) return -1;
+    status = PyDict_SetItemString(d, \"__doc__\", s);
     Py_DECREF(s);
+    if (status < 0) return -1;
     s = PyUnicode_FromString(\"""" + numpy_version + """\");
-    PyDict_SetItemString(d, \"__f2py_numpy_version__\", s);
+    if (s == NULL) return -1;
+    status = PyDict_SetItemString(d, \"__f2py_numpy_version__\", s);
     Py_DECREF(s);
-    #modulename#_error = PyErr_NewException (\"#modulename#.error\", NULL, NULL);
-    /*
-     * Store the error object inside the dict, so that it could get deallocated.
-     * (in practice, this is a module, so it likely will not and cannot.)
-     */
-    PyDict_SetItemString(d, \"_#modulename#_error\", #modulename#_error);
-    Py_DECREF(#modulename#_error);
+    if (status < 0) return -1;
+    state->error = PyErr_NewException (\"#modulename#.error\", NULL, NULL);
+    if (state->error == NULL) return -1;
+    status = PyDict_SetItemString(d, \"_#modulename#_error\", #modulename#_error);
+    if (status < 0) return -1;
     for(i=0;f2py_routine_defs[i].name!=NULL;i++) {
-        tmp = PyFortranObject_NewAsAttr(&f2py_routine_defs[i]);
-        PyDict_SetItemString(d, f2py_routine_defs[i].name, tmp);
+        tmp = PyFortranObject_NewAsAttr(m, &f2py_routine_defs[i]);
+        if (tmp == NULL) return -1;
+        int status = PyDict_SetItemString(d, f2py_routine_defs[i].name, tmp);
         Py_DECREF(tmp);
+        if (status < 0) return -1;
     }
 
 #initf2pywraphooks#
@@ -289,11 +296,14 @@ static int f2py_module_exec(PyObject *m) {
         on_exit(f2py_report_on_exit,(void*)\"#modulename#\");
 #endif
 
-    if (PyType_Ready(&PyFortran_Type) < 0) {
-        return -1;
-    }
-
     return 0;
+}
+
+static int f2py_module_exec(PyObject *m) {
+    PyObject *previous = F2PyRuntime_SwapModule(m);
+    int status = f2py_module_exec_body(m);
+    F2PyRuntime_SwapModule(previous);
+    return status;
 }
 
 #ifndef Py_TARGET_ABI3T
@@ -312,12 +322,12 @@ static struct PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
     "#modulename#",
     NULL,
-    0,
+    sizeof(F2PyRuntimeState),
     f2py_module_methods,
     f2py_module_slots,
-    NULL,
-    NULL,
-    NULL
+    F2PyRuntime_Traverse,
+    F2PyRuntime_Clear,
+    F2PyRuntime_Free
 };
 
 PyMODINIT_FUNC PyInit_#modulename#(void) {
@@ -329,13 +339,18 @@ PyMODINIT_FUNC PyInit_#modulename#(void) {
 PyABIInfo_VAR(f2py_abi_info);
 
 static PySlot f2py_module_pyslots[] = {
-    PySlot_PTR_STATIC(Py_mod_abi, &f2py_abi_info),
-    PySlot_PTR_STATIC(Py_mod_name, "#modulename#"),
+    PySlot_STATIC_DATA(Py_mod_abi, &f2py_abi_info),
+    PySlot_STATIC_DATA(Py_mod_name, "#modulename#"),
 #if defined(Py_GIL_DISABLED) || defined(Py_TARGET_ABI3T)
-    PySlot_PTR(Py_mod_gil, #gil_used#),
+    PySlot_DATA(Py_mod_gil, #gil_used#),
 #endif
-    PySlot_PTR_STATIC(Py_mod_methods, f2py_module_methods),
-    PySlot_PTR(Py_mod_exec, f2py_module_exec),
+    PySlot_STATIC_DATA(Py_mod_methods, f2py_module_methods),
+    PySlot_SIZE(Py_mod_state_size, sizeof(F2PyRuntimeState)),
+    PySlot_FUNC(Py_mod_state_traverse, F2PyRuntime_Traverse),
+    PySlot_FUNC(Py_mod_state_clear, F2PyRuntime_Clear),
+    PySlot_FUNC(Py_mod_state_free, F2PyRuntime_Free),
+    PySlot_DATA(Py_mod_multiple_interpreters, Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED),
+    PySlot_FUNC(Py_mod_exec, f2py_module_exec),
     PySlot_END
 };
 

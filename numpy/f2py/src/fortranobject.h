@@ -4,7 +4,30 @@
 extern "C" {
 #endif
 
+/* The ABI floor matches NumPy's minimum supported Python version. */
+#if defined(Py_PYTHON_H) && !defined(Py_LIMITED_API)
+#error "Include fortranobject.h before Python.h or define Py_LIMITED_API"
+#endif
+#ifndef Py_LIMITED_API
+#define Py_LIMITED_API 0x030C0000
+#endif
 #include <Python.h>
+
+#ifdef Py_GIL_DISABLED
+#if PY_VERSION_HEX < 0x030F0000 || Py_LIMITED_API < 0x030F0000
+#error "Free-threaded F2PY extensions require Python's 3.15 stable ABI"
+#endif
+#else
+#if Py_LIMITED_API != 0x030C0000
+#error "F2PY extensions target the Python 3.12 Limited API"
+#endif
+#endif
+
+#include <limits.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #ifndef NPY_NO_DEPRECATED_API
 #define NPY_NO_DEPRECATED_API NPY_API_VERSION
@@ -74,23 +97,37 @@ typedef struct {
                             for routines. */
 } FortranDataDef;
 
+/* Instance data is independent of the interpreter's PyObject layout. */
 typedef struct {
-    PyObject_HEAD
-    int len;              /* Number of attributes */
-    FortranDataDef *defs; /* An array of FortranDataDef's */
-    PyObject *dict;       /* Fortran object attribute dictionary */
-} PyFortranObject;
+    int len;
+    FortranDataDef *defs;
+    PyObject *dict;
+} PyFortranObjectData;
 
-#define PyFortran_Check(op) (Py_TYPE(op) == &PyFortran_Type)
-#define PyFortran_Check1(op) (0 == strcmp(Py_TYPE(op)->tp_name, "fortran"))
+typedef struct {
+    PyObject *fortran_type;
+    PyObject *error;
+} F2PyRuntimeState;
 
-extern PyTypeObject PyFortran_Type;
+int PyFortran_Check(PyObject *op);
+int F2PyFunction_Check(PyObject *op);
+PyObject *F2PyRuntime_SwapModule(PyObject *module);
+PyObject *F2PyRuntime_GetModule(void);
+PyObject *F2PyRuntime_GetError(void);
+
+int PyFortran_Check1(PyObject *op);
+int F2PyRuntime_Init(PyObject *module);
+int F2PyRuntime_Traverse(PyObject *module, visitproc visit, void *arg);
+int F2PyRuntime_Clear(PyObject *module);
+void F2PyRuntime_Free(void *module);
+int F2PyObject_GetOptionalAttrString(PyObject *obj, const char *name,
+                                   PyObject **result);
 extern int
 F2PyDict_SetItemString(PyObject *dict, char *name, PyObject *obj);
 extern PyObject *
-PyFortranObject_New(FortranDataDef *defs, f2py_void_func init);
+PyFortranObject_New(PyObject *module, FortranDataDef *defs, f2py_void_func init);
 extern PyObject *
-PyFortranObject_NewAsAttr(FortranDataDef *defs);
+PyFortranObject_NewAsAttr(PyObject *module, FortranDataDef *defs);
 
 PyObject *
 F2PyCapsule_FromVoidPtr(void *ptr, void (*dtor)(PyObject *));
