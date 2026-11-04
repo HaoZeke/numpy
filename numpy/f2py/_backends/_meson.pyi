@@ -17,6 +17,7 @@ class MesonTemplate:
     define_macros: Final[list[tuple[str, str | None]]]
     undef_macros: Final[list[str]]
     fortran_args: Final[list[str]]
+    c_args: Final[list[str]]
     pipeline: Final[list[Callable[[], None]]]
     build_type: Final[str]
     python_exe: Final[str]
@@ -36,6 +37,7 @@ class MesonTemplate:
         fortran_args: list[str],
         build_type: str,
         python_exe: str,
+        c_args: list[str] | None = None,
         define_macros: list[tuple[str, str | None]] | None = None,
         undef_macros: list[str] | None = None,
     ) -> None: ...
@@ -49,6 +51,7 @@ class MesonTemplate:
     def include_substitution(self) -> None: ...
     def macros_substitution(self) -> None: ...
     def fortran_args_substitution(self) -> None: ...
+    def c_args_substitution(self) -> None: ...
 
     #
     def meson_build_template(self) -> str: ...
