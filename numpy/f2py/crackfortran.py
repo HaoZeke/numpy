@@ -1006,7 +1006,7 @@ nameargspattern = re.compile(
     r'\s*(?P<name>\b[\w$]+\b)\s*(@\(@\s*(?P<args>(?:(?!@\)@).)*)\s*@\)@|)\s*((result(\s*@\(@\s*(?P<result>\b[\w$]+\b)\s*@\)@|))|(bind\s*@\(@\s*(?P<bind>(?:(?!@\)@).)*)\s*@\)@))*\s*\Z', re.I)
 operatorpattern = re.compile(
     r'\s*(?P<scheme>(operator|assignment))'
-    r'@\(@\s*(?P<name>[^)]+)\s*@\)@\s*\Z', re.I)
+    r'\s*@\(@\s*(?P<name>[^)]+)\s*@\)@\s*\Z', re.I)
 callnameargspattern = re.compile(
     r'\s*(?P<name>\b[\w$]+\b)\s*@\(@\s*(?P<args>.*)\s*@\)@\s*\Z', re.I)
 real16pattern = re.compile(
@@ -1043,9 +1043,15 @@ def parse_name_for_bind(line):
         line = line[:match.start()] + line[match.end():]
     return line, bind_statement
 
-def _resolvenameargspattern(line):
+def _resolvenameargspattern(line, *, interface=False):
     line, bind_cname = parse_name_for_bind(line)
     line = markouterparen(line)
+    if interface:
+        m1 = operatorpattern.match(line)
+        if m1:
+            # A generic operator specification has no dummy arguments.
+            name = m1.group('scheme') + '(' + m1.group('name') + ')'
+            return ''.join(name.split()).lower(), [], None, None
     m1 = nameargspattern.match(line)
     if m1:
         return m1.group('name'), m1.group('args'), m1.group('result'), bind_cname
@@ -1108,7 +1114,8 @@ def analyzeline(m, case, line):
             args = []
             result = None
         else:
-            name, args, result, bindcline = _resolvenameargspattern(m.group('after'))
+            name, args, result, bindcline = _resolvenameargspattern(
+                m.group('after'), interface=block == 'interface')
         if name is None:
             if block == 'block data':
                 name = '_BLOCK_DATA_'
@@ -1321,8 +1328,13 @@ def analyzeline(m, case, line):
                     continue
             else:
                 k = rmbadname1(m1.group('name'))
-            if case in ['public', 'private'] and k in {'operator', 'assignment'}:
-                k += m1.group('after')
+            if (case in ['public', 'private']
+                    and k.lower() in {'operator', 'assignment'}):
+                generic, _, _, _ = _resolvenameargspattern(e, interface=True)
+                if generic is not None:
+                    k = generic
+                else:
+                    k += m1.group('after')
             if k not in edecl:
                 edecl[k] = {}
             if case == 'dimension':
