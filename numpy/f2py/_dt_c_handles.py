@@ -99,10 +99,16 @@ f2py_{typename}_require_writable(void *pointer)
 
 /* The handle is owned on entry; owner is retained only by its capsule. */
 static PyObject *
-f2py_{typename}_from_handle(void *pointer, const char *name,
-                           PyCapsule_Destructor destroy, PyObject *owner)
+f2py_{typename}_from_handle_as(void *pointer, const char *name,
+                              PyCapsule_Destructor destroy, PyObject *owner,
+                              PyTypeObject *type)
 {{
     if (pointer == NULL) return PyErr_NoMemory();
+    if (!PyType_Check((PyObject *)type) || !PyType_IsSubtype(type, &Py{typename}_Type)) {{
+        PyErr_SetString(PyExc_TypeError, "class is not a subtype of the native derived type");
+        f2py_{typename}_release_preserving_error(pointer);
+        return NULL;
+    }}
     const char *actual_name = f2py_{typename}_capsule_name(pointer);
     if (actual_name == NULL || (name != NULL && strcmp(name, actual_name) != 0)) {{
         if (actual_name != NULL)
@@ -112,7 +118,7 @@ f2py_{typename}_from_handle(void *pointer, const char *name,
     }}
     name = actual_name;
     Py{typename}Object *self = (Py{typename}Object *)Py{typename}_tp_new(
-        &Py{typename}_Type, NULL, NULL);
+        type, NULL, NULL);
     if (self == NULL) {{
         f2py_{typename}_release_preserving_error(pointer);
         return NULL;
@@ -136,6 +142,14 @@ f2py_{typename}_from_handle(void *pointer, const char *name,
         return NULL;
     }}
     return (PyObject *)self;
+}}
+
+static PyObject *
+f2py_{typename}_from_handle(void *pointer, const char *name,
+                           PyCapsule_Destructor destroy, PyObject *owner)
+{{
+    return f2py_{typename}_from_handle_as(pointer, name, destroy, owner,
+                                        &Py{typename}_Type);
 }}
 '''
     registration = [
