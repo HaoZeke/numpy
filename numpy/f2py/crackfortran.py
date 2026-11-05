@@ -431,7 +431,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             break
         if fin.isfirstline():
             filepositiontext = ''
-            currentfilename = fin.filename()
+            currentfilename = os.fsdecode(fin.filename())
             gotnextfile = 1
             l1 = l
             strictf77 = 0
@@ -983,7 +983,7 @@ def appenddecl(decl, decl2, force=1):
             decl = setkindselector(decl, decl2[k], force)
         elif k == 'charselector':
             decl = setcharselector(decl, decl2[k], force)
-        elif k in ['=', 'typename']:
+        elif k in ['=', 'typename', 'typeparams']:
             if force or k not in decl:
                 decl[k] = decl2[k]
         elif k == 'note':
