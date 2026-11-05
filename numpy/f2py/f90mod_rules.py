@@ -79,6 +79,98 @@ fgetdims2_sa = """\
       call f2pysetdata(d,allocated(d))"""
 
 
+def _parameter_storage_module_names(block):
+    """Reserve parsed and USE-associated program unit names."""
+    names = set()
+
+    def collect(node):
+        if node.get('name'):
+            names.add(node['name'].lower())
+        names.update(name.lower() for name in node.get('use', {}))
+        for child in node.get('body', []):
+            collect(child)
+
+    collect(block)
+    return names
+
+
+def _module_parameter_storage(module, names, occupied_modules):
+    """Give module constants persistent storage with their native types."""
+    parameters = [n for n in names if isparameter(module['vars'][n])]
+    if not parameters:
+        return '', {}, '', ''
+
+    module_index = 0
+    storage_module = 'f2py_parameter_storage_0'
+    while storage_module.lower() in occupied_modules:
+        module_index += 1
+        storage_module = f'f2py_parameter_storage_{module_index}'
+    occupied_modules.add(storage_module.lower())
+
+    occupied = {n.lower() for n in module['vars']}
+    occupied.update(b['name'].lower() for b in module.get('body', []))
+    occupied.add('f2pysetupfunc')
+
+    def local_name(stem):
+        name = stem
+        suffix = 0
+        while name.lower() in occupied:
+            suffix += 1
+            name = f'{stem}_{suffix}'
+        occupied.add(name.lower())
+        return name
+
+    init_name = local_name('f2py_initialize_parameters')
+    aliases = {n: local_name(f'f2py_parameter_{i}')
+               for i, n in enumerate(parameters)}
+    lines = [f'module {storage_module}']
+    declarations = []
+    assignments = []
+    for i, n in enumerate(parameters):
+        var = module['vars'][n]
+        original = f'f2py_original_{i}'
+        value = f'f2py_value_{i}'
+        lines.extend([f'use {module["name"]}, only: &',
+                      f'& {original} => {undo_rmbadname1(n)}'])
+        typespec = var['typespec'].lower()
+        if typespec in {'double precision', 'double complex', 'byte'}:
+            typespec = {'double precision': 'real',
+                        'double complex': 'complex',
+                        'byte': 'integer'}[typespec]
+        if typespec not in {'integer', 'real', 'complex', 'logical', 'character'}:
+            raise ValueError(f'Unsupported module PARAMETER type: {typespec}')
+        declaration = f'{typespec}(kind=kind({original})'
+        if typespec == 'character':
+            declaration += f',len=max(1,len({original}))'
+        declaration += '), target, save :: &'
+        if isarray(var):
+            declarations.extend([declaration,
+                                 f'& {value}(max(1,size({original})))'])
+            assignments.extend([
+                f'if (size({original}) > 0) then',
+                f'  {value}(1:size({original})) = &',
+                f'  & reshape({original}, [size({original})])',
+                'end if',
+            ])
+        else:
+            declarations.extend([declaration, f'& {value}'])
+            assignments.append(f'{value} = {original}')
+    lines.extend(['implicit none', 'private'])
+    lines.append('public :: f2py_initialize')
+    lines.extend(f'public :: f2py_value_{i}' for i in range(len(parameters)))
+    lines.extend(declarations)
+    lines.extend(['contains', 'subroutine f2py_initialize()'])
+    lines.extend(assignments)
+    lines.extend(['end subroutine f2py_initialize',
+                  f'end module {storage_module}', ''])
+    imports = [f'use {storage_module}, only: &',
+               f'& {init_name} => f2py_initialize']
+    for i, n in enumerate(parameters):
+        imports.extend([f'use {storage_module}, only: &',
+                        f'& {aliases[n]} => f2py_value_{i}'])
+    return '\n'.join(lines), aliases, '\n'.join(imports), init_name
+
+
 def buildhooks(pymod):
     from . import rules
     ret = {'f90modhooks': [], 'f90modtypes': [], 'initf90modhooks': [],
@@ -98,6 +190,7 @@ def buildhooks(pymod):
 
     usenames = getuseblocks(pymod)
     dt_types = derived_type_rules.describe_types(pymod)
+    occupied_modules = _parameter_storage_module_names(pymod)
     for m in findf90modules(pymod):
         sargs, fargs, efargs, modobjs, notvars, onlyvars = [], [], [], [], [
             m['name']], []
@@ -140,6 +233,10 @@ def buildhooks(pymod):
                 continue
         if onlyvars:
             outmess(f"\t\t  Variables: {' '.join(onlyvars)}\n")
+        storage, parameter_aliases, storage_use, storage_init = (
+            _module_parameter_storage(m, onlyvars, occupied_modules))
+        if storage:
+            fhooks[0] += '\n' + storage
         chooks = ['']
 
         def cadd(line, s=chooks):
@@ -198,7 +295,7 @@ def buildhooks(pymod):
                 fhooks[0] = fhooks[0] + use_fgetdims2
                 fadd(f'end subroutine {fargs[-1]}')
             else:
-                fargs.append(n)
+                fargs.append(parameter_aliases.get(n, n))
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
                 iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
@@ -305,6 +402,8 @@ def buildhooks(pymod):
         if mfargs:
             for a in undo_rmbadname(mfargs):
                 fadd(f"use {m_name}, only : {a}")
+        if storage_use:
+            fadd(storage_use)
         if ifargs:
             fadd(' '.join(['interface'] + ifargs))
             fadd('end interface')
@@ -312,6 +411,8 @@ def buildhooks(pymod):
         if efargs:
             for a in undo_rmbadname(efargs):
                 fadd(f'external {a}')
+        if storage_init:
+            fadd(f'call {storage_init}()')
         fadd(f"call f2pysetupfunc({','.join(undo_rmbadname(fargs))})")
         fadd(f"end subroutine f2pyinit{m_name}\n")
 

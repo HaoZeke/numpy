@@ -317,3 +317,161 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+class TestModuleParameterStorage(util.F2PyTest):
+    sources = [util.getpath('tests', 'src', 'regression',
+                            'module_parameter_storage.f90')]
+
+    def test_integer_constants_after_native_calls(self):
+        for value in range(8):
+            assert self.module.parameter_values.compute_sum(value) == 2080 + 64 * value
+            assert self.module.parameter_values.answer == 100
+            assert self.module.parameter_values.wide == 1234567890123
+
+    def test_native_real_and_complex_alignment(self):
+        assert self.module.parameter_values.real_value == 1.25
+        assert self.module.parameter_values.complex_value == 2.0 + 3.0j
+
+    def test_logical_constant(self):
+        assert self.module.parameter_values.truth == 1
+
+    def test_multidimensional_array_order(self):
+        npt.assert_array_equal(self.module.parameter_values.matrix,
+                               [[1, 3, 5], [2, 4, 6]])
+
+    def test_character_scalar_and_array_lengths(self):
+        assert self.module.parameter_values.word == b'abc'
+        npt.assert_array_equal(self.module.parameter_values.words,
+                               np.array([b'abc', b'def'], dtype='S3'))
+
+    def test_zero_extent_has_no_exposed_dummy_element(self):
+        assert self.module.parameter_values.empty.shape == (0,)
+        assert self.module.parameter_values.empty.size == 0
+
+    def test_zero_character_length_has_no_exposed_dummy_byte(self):
+        assert np.asarray(self.module.parameter_values.zero_word).dtype.itemsize == 0
+        empty = self.module.parameter_values.empty_words
+        assert empty.shape == (0,)
+        assert empty.dtype.itemsize == 0
+
+    def test_mutable_module_storage_is_shared(self):
+        values = self.module.parameter_values
+        values.mutable = 17
+        assert values.increment_mutable(5) == 22
+        assert values.mutable == 22
+        values.mutable = 31
+        assert values.increment_mutable(0) == 31
+
+    def test_parameter_names_do_not_shadow_inquiries(self):
+        values = self.module.intrinsic_name_parameters
+        assert values.kind == 7
+        assert values.len == 8
+        assert values.size == 9
+        assert values.reshape == 10
+        assert values.max == 11
+
+    def test_generated_local_names_do_not_replace_module_variables(self):
+        values = self.module.parameter_values
+        values.f2py_parameter_0 = 41
+        values.f2py_initialize_parameters = 43
+        assert values.read_reserved_names() == 84
+        assert values.answer == 100
+
+    def test_byte_scalar_retains_its_native_kind(self):
+        value = self.module.parameter_values.byte_value
+        assert value == -7
+        assert value.dtype == np.dtype('i1')
+
+    def test_byte_array_retains_values_and_layout(self):
+        value = self.module.parameter_values.byte_array
+        npt.assert_array_equal(value, [1, -2, 3])
+        assert value.dtype == np.dtype('i1')
+
+
+def test_module_parameter_storage_uses_native_inquiries():
+    from numpy.f2py.f90mod_rules import _module_parameter_storage
+
+    module = {'name': 'inquiry_parameters', 'vars': {
+        'matrix': {'typespec': 'integer', 'attrspec': ['parameter'],
+                   'dimension': ['2', '3'], '=': 'reshape([1,2,3,4,5,6],[2,3])'},
+        'word': {'typespec': 'character', 'charselector': {'len': '3'},
+                 'attrspec': ['parameter'], '=': "'abc'"},
+        'mutable': {'typespec': 'integer'},
+        'f2py_parameter_0': {'typespec': 'integer'},
+        'f2py_initialize_parameters': {'typespec': 'integer'},
+    }}
+    occupied = {'f2py_parameter_storage_0'}
+    source, aliases, imports, initialize = _module_parameter_storage(
+        module, list(module['vars']), occupied)
+    assert source.startswith('module f2py_parameter_storage_1\n')
+    assert 'integer(kind=kind(f2py_original_0)), target, save :: &' in source
+    assert 'f2py_value_0(max(1,size(f2py_original_0)))' in source
+    assert 'reshape(f2py_original_0, [size(f2py_original_0)])' in source
+    character_spec = ('character(kind=kind(f2py_original_1),'
+                      'len=max(1,len(f2py_original_1)))')
+    assert character_spec in source
+    assert set(aliases) == {'matrix', 'word'}
+    assert aliases['matrix'] == 'f2py_parameter_0_1'
+    assert initialize == 'f2py_initialize_parameters_1'
+    assert f'{initialize} => f2py_initialize' in imports
+    assert 'mutable' not in imports
+
+
+def test_module_without_parameters_has_no_storage_module():
+    from numpy.f2py.f90mod_rules import _module_parameter_storage
+
+    module = {'name': 'mutable_only',
+              'vars': {'value': {'typespec': 'integer'}}}
+    occupied = set()
+    assert _module_parameter_storage(module, ['value'], occupied) == ('', {}, '', '')
+    assert occupied == set()
+
+
+def test_module_byte_parameter_storage_uses_integer_kind():
+    from numpy.f2py.f90mod_rules import _module_parameter_storage
+
+    module = {'name': 'byte_parameters', 'vars': {
+        'value': {'typespec': 'byte', 'attrspec': ['parameter'], '=': '-7'},
+    }}
+    source, aliases, imports, initialize = _module_parameter_storage(
+        module, ['value'], set())
+    assert 'integer(kind=kind(f2py_original_0)), target, save :: &' in source
+    assert 'byte(kind=' not in source
+    assert aliases == {'value': 'f2py_parameter_0'}
+    assert initialize and imports
+
+
+class TestModuleParameterSignatureStorage(util.F2PyTest):
+    sources = [
+        util.getpath('tests', 'src', 'regression', 'module_parameter_signature.pyf'),
+        util.getpath('tests', 'src', 'regression', 'module_parameter_signature.f90'),
+    ]
+    module_name = '_module_parameter_signature_storage_test'
+
+    def test_use_dependency_outside_signature_has_distinct_storage(self):
+        assert self.module.parameter_signature_consumer.answer == 9
+        assert self.module.parameter_signature_consumer.read_answer() == 9
+
+
+def test_module_parameter_storage_reserves_nested_use_modules():
+    from numpy.f2py.f90mod_rules import (
+        _module_parameter_storage,
+        _parameter_storage_module_names,
+    )
+
+    module = {'block': 'module', 'name': 'consumer', 'vars': {
+        'value': {'typespec': 'integer', 'attrspec': ['parameter'], '=': '9'},
+    }, 'use': {'F2PY_PARAMETER_STORAGE_0': {}}, 'body': [
+        {'block': 'subroutine', 'name': 'operation',
+         'use': {'f2py_parameter_storage_1': {}}},
+    ]}
+    signature = {'block': 'python module', 'name': 'signature', 'body': [
+        {'block': 'interface', 'name': 'unknown', 'body': [module]},
+    ]}
+    names = _parameter_storage_module_names(signature)
+    assert {'f2py_parameter_storage_0', 'f2py_parameter_storage_1'} <= names
+    source, aliases, imports, initialize = _module_parameter_storage(
+        module, ['value'], names)
+    assert source.startswith('module f2py_parameter_storage_2\n')
+    assert aliases and imports and initialize

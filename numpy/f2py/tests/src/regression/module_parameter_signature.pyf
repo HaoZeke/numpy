@@ -1,0 +1,11 @@
+python module _module_parameter_signature_storage_test
+  interface
+    module parameter_signature_consumer
+      use f2py_parameter_storage_0, only: n
+      integer, parameter :: answer = n
+      function read_answer() result(value)
+        integer :: value
+      end function read_answer
+    end module parameter_signature_consumer
+  end interface
+end python module _module_parameter_signature_storage_test
