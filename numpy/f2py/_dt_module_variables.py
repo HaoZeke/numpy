@@ -23,7 +23,7 @@ def _plain(value):
 
 def _variable_exports(modules, types):
     from ._dt_imports import _import_items, _public_type
-    from .auxfuncs import ishide, isprivate
+    from .auxfuncs import isintent_hide, isprivate
 
     indexed = {module['name'].lower(): module for module in modules}
     exports, active = {}, set()
@@ -39,7 +39,8 @@ def _variable_exports(modules, types):
         for name, var in module.get('vars', {}).items():
             if var.get('typespec') not in {'type', 'class'}:
                 continue
-            if ishide(var) or isprivate(var) or not _public_type(module, name, var):
+            if (isintent_hide(var) or isprivate(var)
+                    or not _public_type(module, name, var)):
                 continue
             info = _find_type(types, var.get('typename'), key, module.get('use'))
             if info is not None and (info['kind_params'] or info['len_params']):
