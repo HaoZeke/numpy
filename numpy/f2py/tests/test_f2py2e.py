@@ -713,6 +713,31 @@ def test_cli_obj(capfd, hello_world_f90, monkeypatch):
             assert "objects:" in mbld
             assert f"'''{obj}'''" in mbld
 
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
+def test_build_dir_is_source_dir(hello_world_f90, monkeypatch, tmp_path):
+    """Ensures that the build directory can be the one holding the inputs
+    gh-29762
+
+    CLI :: --build-dir
+    """
+    ipath = tmp_path / "hello.f90"
+    ipath.write_text(Path(hello_world_f90).read_text(), encoding="ascii")
+    mname = "blah"
+    pyf = tmp_path / f"{mname}.pyf"
+    obj = tmp_path / "extra.o"
+
+    with util.switchdir(tmp_path):
+        monkeypatch.setattr(sys, "argv",
+                            f'f2py -h {pyf} -m {mname} {ipath.name}'.split())
+        f2pycli()
+        obj.touch()
+        monkeypatch.setattr(sys, "argv",
+                            f'f2py --backend meson --build-dir {tmp_path} -c '
+                            f'-m {mname} {obj} {ipath.name} {pyf}'.split())
+        compiler_check_f2pycli()
+    assert list(tmp_path.glob(f"{mname}*.so"))
+
 
 def test_inclpath(monkeypatch):
     """Add to the include directories
