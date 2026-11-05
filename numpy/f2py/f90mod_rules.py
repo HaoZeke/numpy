@@ -213,7 +213,8 @@ def buildhooks(pymod):
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
         from ._dt_imports import _has_imported_type_exports
         if (len(onlyvars) == 0 and len(notvars) == 1 and m['name'] in notvars
-                and not _has_imported_type_exports(m)):
+                and not _has_imported_type_exports(m)
+                and not m.get('f2py_pdt_bindings')):
             outmess(f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n")
             continue
 
@@ -428,6 +429,11 @@ def buildhooks(pymod):
     ret['f90modtypes'].extend(dt_hooks.get('f90modhooks', []))
     ret['initf90modhooks'].extend(dt_hooks.get('initf90modhooks', []))
     ret['need'].extend(dt_hooks.get('need', []))
+    from ._dt_module_variables import build_module_variable_hooks
+    module_variable_hooks = build_module_variable_hooks(
+        list(findf90modules(pymod)))
+    ret['f90modtypes'].extend(module_variable_hooks['f90modhooks'])
+    ret['initf90modhooks'].extend(module_variable_hooks['initf90modhooks'])
 
     # Generate Fortran wrappers for opaque pointer types
     for m in findf90modules(pymod):
@@ -444,9 +450,13 @@ def buildhooks(pymod):
                 fhooks[0] = fhooks[0] + '\n' + fwrap
 
     from ._dt_handles import _handle_modules
-    handle_modules = _handle_modules(list(findf90modules(pymod)))
+    from ._dt_module_variables import generate_module_variable_fortran
+    modules = list(findf90modules(pymod))
+    handle_modules = _handle_modules(modules)
+    module_variable_wrappers = generate_module_variable_fortran(modules)
     if handle_modules:
-        fhooks[0] = handle_modules + '\n' + fhooks[0]
+        fhooks[0] = (handle_modules + '\n' + module_variable_wrappers
+                     + '\n' + fhooks[0])
 
     ret['routine_defs'] = ''
     ret['doc'] = []

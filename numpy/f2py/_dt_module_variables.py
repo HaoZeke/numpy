@@ -6,7 +6,7 @@ import json
 from ._dt_handles import _handle_description, _handle_operation_parts, _type_arguments
 from ._dt_namespace import _find_type
 from ._dt_operators import _module_symbol_private
-from ._dt_routines import _dt_specialization
+from ._dt_routines import _dt_specialization, _routine_length_parameters
 
 
 def _plain(value):
@@ -137,6 +137,8 @@ def prepare_module_variable_bindings(modules, types):
                           pointer='pointer' in attrs, target='target' in attrs,
                           readonly=bool(attrs & {'parameter', 'protected'}),
                           deferred_lengths=deferred,
+                          length_parameters=_routine_length_parameters(
+                              info, var.get('typeparams'), params),
                           assignment_modules=sorted(assignments),
                           var=_plain(var))
             records.append(record)

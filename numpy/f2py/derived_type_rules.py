@@ -166,6 +166,8 @@ def describe_types(pymod):
                 aliases[origin].add((module['name'].lower(), alias.lower()))
     for origin, info in owners.items():
         info['public_aliases'] = sorted(aliases[origin])
+    from ._dt_module_variables import prepare_module_variable_bindings
+    prepare_module_variable_bindings(modules, types)
     return types
 
 
@@ -623,6 +625,12 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
                                               type_map=type_map))
         code_parts.append(_gen_opaque_tp_repr(typename, all_members,
                                                len_info=len_info))
+
+    if kind_info or len_info:
+        from ._dt_c_handles import _guard_boxed_repr
+        code_parts = [_guard_boxed_repr(code, typename)
+                      if f'Py{typename}_tp_repr(' in code else code
+                      for code in code_parts]
 
     # Type-bound procedures and procedure pointer components
     has_methods = False

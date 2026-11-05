@@ -159,6 +159,11 @@ def _gen_operator_fortran_wrappers(typename, ops, type_map):
     lines = []
     for pname, proc, result_kind in _operator_entries(ops):
         args, result = _operator_signature(proc, type_map)
+        handled = _gen_handle_operator(
+            typename, pname, proc, result_kind, type_map, args, result)
+        if handled is not None:
+            lines.extend(handled)
+            continue
         wrapper = f'f2py_op_{typename}_{pname}'
         reserved = {pname, *(v.get('typename', '').lower()
                              for v in [*args, result])}
@@ -259,7 +264,10 @@ def _operator_preferred(entries, proc, position):
     return next(ctype for ctype in order if ctype in ctypes)
 
 
-def _operator_match(typename, entries, proc, reverse=False):
+def _operator_match(typename, entries, proc, reverse=False, type_map=None):
+    if type_map is not None:
+        from ._dt_operator_c_handles import match_expression
+        return match_expression(typename, entries, proc, type_map, reverse, _operator_match)
     checks = []
     for i, arg in enumerate(_routine_args(proc)):
         var = proc['vars'][arg]
@@ -331,7 +339,12 @@ def _operator_convert(proc, reverse=False):
     return lines, args, cleanup
 
 
-def _operator_invoke(typename, entry, reverse=False):
+def _operator_invoke(typename, entry, reverse=False, type_map=None):
+    if type_map is not None:
+        from ._dt_operator_c_handles import invoke
+        from ._dt_operator_handles import _operator_handle_signature
+        if _operator_handle_signature(entry[1], type_map)['active']:
+            return invoke(typename, entry, type_map, reverse, _operator_convert)
     pname, proc, result_kind = entry
     wrapper = f'f2py_op_{_fortran_sym(typename)}_{pname}'
     lines, args, cleanup = _operator_convert(proc, reverse)
@@ -373,7 +386,8 @@ def _operator_invoke(typename, entry, reverse=False):
     return lines
 
 
-def _operator_dispatch(typename, name, entries, reversed_entries=(), assignment=False):
+def _operator_dispatch(typename, name, entries, reversed_entries=(), assignment=False,
+                       type_map=None):
     all_entries = [*entries, *reversed_entries]
     unary = len(_routine_args(all_entries[0][1])) == 1
     decl = ('PyObject *left' if unary else 'PyObject *left, PyObject *right')
@@ -382,11 +396,11 @@ def _operator_dispatch(typename, name, entries, reversed_entries=(), assignment=
     variants = [(entry, False) for entry in entries]
     variants += [(entry, True) for entry in reversed_entries]
     for entry, reverse in variants:
-        match = _operator_match(typename, all_entries, entry[1], reverse)
+        match = _operator_match(typename, all_entries, entry[1], reverse, type_map)
         lines += [f'    matches = {match};',
                   '    if (PyErr_Occurred()) return NULL;',
                   '    if (matches) {',
-                  *_operator_invoke(typename, entry, reverse), '    }']
+                  *_operator_invoke(typename, entry, reverse, type_map), '    }']
     if assignment:
         lines += ['    PyErr_SetString(PyExc_TypeError,',
                   '                    "no matching Fortran assignment interface");',
@@ -440,6 +454,12 @@ def _gen_assignment_method_entries(typename, method_entries):
 
 def _gen_operator_c_code(typename, ops, type_map):
     """Emit one Python slot per arity with all matching native overloads."""
+    from . import cfuncs
+    from ._dt_operator_c_handles import capsule_destructor, support
+    from ._dt_operator_handles import _operator_handle_signature
+
+    pdt_types = set()
+    parameterized = False
     code = []
     slots = {}
     comparisons = {}
@@ -447,6 +467,15 @@ def _gen_operator_c_code(typename, ops, type_map):
     scalar_args = False
     for pname, proc, result_kind in _operator_entries(ops):
         args, result = _operator_signature(proc, type_map)
+        signature = _operator_handle_signature(proc, type_map)
+        parameterized |= signature['active']
+        for var, info in zip([*args, result], [*signature['args'], signature['result']]):
+            if info:
+                pdt_types.add(var['typename'].lower())
+            if _operator_kind(var) != 't':
+                ctype = _get_member_ctype(var)
+                if ctype in cfuncs.typedefs:
+                    cfuncs.append_needs(ctype)
         types.update(v['typename'].lower() for v in [*args, result]
                      if _operator_kind(v) == 't')
         scalar_args |= any(_operator_kind(v) != 't' for v in args)
@@ -456,8 +485,14 @@ def _gen_operator_c_code(typename, ops, type_map):
         ret = ('int' if result_kind == 'assignment'
                else 'void *' if result_kind == 'type' else 'int'
                if result_kind == 'logical' else _get_member_ctype(result))
+        if signature['active']:
+            decl += ', int *'
         code += [f'extern {ret} {wrapper}({decl});']
-        if result_kind == 'type':
+        if result_kind == 'type' and signature['active']:
+            info = signature['result']
+            capsule = info['capsule'] if info else 'f2py.' + result['typename'].lower()
+            code += [f'extern void {wrapper}_free(void *);', capsule_destructor(wrapper, capsule)]
+        elif result_kind == 'type':
             code += [f'extern void {wrapper}_free(void *);', f"""\
 static void
 {wrapper}_capsule_destructor(PyObject *capsule)
@@ -472,13 +507,15 @@ static void
                     f'static PyObject *f2py_op_{name}_owner(PyObject *);',
                     (f'static PyObject *f2py_op_{name}_adopt('
                      'void *, PyCapsule_Destructor);')]
-    code = [*forward, *code]
+    forward += [f'static void *f2py_{name}_checked(PyObject *, const char *, int);'
+                for name in sorted(pdt_types)]
+    code = [*forward, *([support(typename)] if parameterized else []), *code]
     if scalar_args:
         code += [_operator_scalar_match(typename)]
     for op, entries in ops.items():
         if op == '=':
             code += [_operator_dispatch(
-                typename, f'f2py_op_{typename}_assignment', entries, assignment=True)]
+                typename, f'f2py_op_{typename}_assignment', entries, assignment=True, type_map=type_map)]
             continue
         for entry in entries:
             arity = len(_routine_args(entry[1]))
@@ -489,7 +526,7 @@ static void
                         if arity == 1 else _FORTRAN_ARITH_OPS[op])
                 slots.setdefault(slot, []).append(entry)
     for slot, entries in slots.items():
-        code += [_operator_dispatch(typename, f'Py{typename}_{slot}', entries)]
+        code += [_operator_dispatch(typename, f'Py{typename}_{slot}', entries, type_map=type_map)]
     if slots:
         code += ['\n'.join([f'static PyNumberMethods Py{typename}_as_number = {{',
                             *(f'    .{slot} = Py{typename}_{slot},' for slot in slots),
@@ -504,7 +541,7 @@ static void
         for cmp, entries in dispatches.items():
             reversed_entries = comparisons.get(inverse[cmp], [])
             code += [_operator_dispatch(typename, f'Py{typename}_{cmp}', entries,
-                                        reversed_entries)]
+                                        reversed_entries, type_map=type_map)]
         lines = ['static PyObject *', (f'Py{typename}_tp_richcompare('
                  'PyObject *left, PyObject *right, int op)'), '{',
                  '    switch (op) {']

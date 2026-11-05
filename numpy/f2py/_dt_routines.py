@@ -1219,6 +1219,38 @@ def _dt_cases(info, types):
     return sorted(cases)
 
 
+def _routine_length_parameters(info, typeparams, params):
+    """Preserve dummy LEN constraints independently from concrete KIND identity."""
+    from ._dt_handles import _type_arguments
+
+    lengths = {item['name'] for item in info['len_params']}
+    values = {name: info['block'].get('vars', {}).get(name, {}).get('=')
+              for name in lengths}
+    for position, argument in enumerate(_type_arguments(
+            'value(' + (typeparams or '') + ')')):
+        if not argument.strip():
+            continue
+        name, separator, value = argument.partition('=')
+        if not separator:
+            if position >= len(info['type_param_order']):
+                raise ValueError('too many routine type parameters')
+            name, value = info['type_param_order'][position], name
+        name, value = name.strip().lower(), value.strip()
+        if name in lengths:
+            values[name] = value
+    result = {}
+    for name, value in values.items():
+        if value is None:
+            continue
+        value = str(value)
+        if value not in {'*', ':'}:
+            resolved = _type_param_value(value, params)
+            if resolved is not None:
+                value = str(resolved)
+        result[name] = value
+    return result
+
+
 def prepare_routine(rout, types, params=None, uses=None):
     """Describe the derived type arguments of rout as handles.
 
@@ -1290,7 +1322,9 @@ def prepare_routine(rout, types, params=None, uses=None):
                               'tag': info['tag'], 'bindc': info['bindc'],
                               'cases': cases,
                               'pdt_handle': _handle_description(
-                                  info['block'], spec)}
+                                  info['block'], spec),
+                              'length_parameters': _routine_length_parameters(
+                                  info, var.get('typeparams'), params)}
             if vector:
                 # Fortran gives a buffer of handles of copies of the
                 # elements, and their extents in hidden arguments
@@ -1310,6 +1344,19 @@ def prepare_routine(rout, types, params=None, uses=None):
                                  '=': f'{a}_tag', 'depend': [a],
                                  'f2py_dt_hidden': a}
             rout['args'].append(tag)
+    if any(var.get('f2py_dt', {}).get('pdt_handle')
+           for var in rout['vars'].values()):
+        status = rout.get('f2py_pdt_status', 'f2py_pdt_status')
+        while status in rout['vars'] and not rout['vars'][status].get('f2py_pdt_status'):
+            status += 'x'
+        rout['f2py_pdt_status'] = status
+        rout['vars'][status] = {'typespec': 'integer',
+                                'kindselector': {'kind': 'c_int'},
+                                'intent': ['hide'], '=': '0',
+                                'f2py_dt_hidden': status,
+                                'f2py_pdt_status': True}
+        if status not in rout['args']:
+            rout['args'].append(status)
     return missing
 
 
@@ -1407,6 +1454,10 @@ def wrapper_handles(rout, args, result=None):
     which are copied back unless the dummy is intent(in), changed its
     dynamic type or its shape.
     """
+    if any(rout['vars'][name].get('f2py_dt', {}).get('pdt_handle')
+           for name in args):
+        from ._dt_routine_handles import pdt_wrapper_handles
+        return pdt_wrapper_handles(rout, args, result, wrapper_handles)
     vars = rout['vars']
     uses, decls, pre, post, helpers = {}, [], [], [], []
     names, selects = {}, []

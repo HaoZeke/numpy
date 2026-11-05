@@ -189,6 +189,15 @@ contains
     if (associated(header)) storage = header%storage
   end function f2py_pdt_storage
 
+  integer(c_int) function f2py_pdt_owned_empty(handle) result(empty) bind(c)
+    type(c_ptr), value :: handle
+    type(f2py_pdt_handle), pointer :: header
+    empty = 0
+    header => f2py_pdt_header(handle)
+    if (.not. associated(header)) return
+    if (header%storage == 0 .and. .not. c_associated(header%payload)) empty = 1
+  end function f2py_pdt_owned_empty
+
   integer(c_int) function f2py_pdt_writable(handle) result(writable) bind(c)
     type(c_ptr), value :: handle
     type(f2py_pdt_handle), pointer :: header
@@ -295,6 +304,8 @@ def _handle_module(description):
 
     same_left = same_pointer('a', 'left', 'ha')
     same_right = same_pointer('b', 'right', 'hb')
+    from ._dt_handle_clear import clear_source
+
     source = f'''module {module}
   use {description['owner']}, only: {description['local_type']} => {description['native']}
 {alias_uses}
@@ -305,7 +316,7 @@ def _handle_module(description):
   implicit none
   private
   public :: {prefix}_unwrap, {prefix}_adopt, {prefix}_copy
-  public :: {prefix}_free, {prefix}_same, {prefix}_bind
+  public :: {prefix}_free, {prefix}_same, {prefix}_bind, {prefix}_replace, {prefix}_clear
   public :: {description['local_type']}
   type :: {box}
     type({pointer}), pointer :: value => null()
@@ -361,6 +372,33 @@ contains
     handle = {prefix}_adopt(duplicate)
   end function {prefix}_copy
 
+  integer(c_int) function {prefix}_replace(handle, value) result(status)
+    type(c_ptr), value :: handle
+    type({dummy}), intent(in) :: value
+    type(f2py_pdt_handle), pointer :: current, replacement
+    type(c_ptr) :: fresh, saved
+    status = 4
+    current => f2py_pdt_header(handle)
+    if (.not. associated(current)) return
+    if (current%identity /= {description['identity_number']}_c_int64_t) return
+    if (current%storage /= 0 .or. current%writable == 0) return
+    if (f2py_pdt_validate(handle) /= 0) return
+    fresh = {prefix}_copy(value)
+    if (.not. c_associated(fresh)) then
+      status = 1
+      return
+    end if
+    replacement => f2py_pdt_header(fresh)
+    saved = current%payload
+    current%payload = replacement%payload
+    replacement%payload = saved
+    saved = current%lengths
+    current%lengths = replacement%lengths
+    replacement%lengths = saved
+    call {prefix}_free(fresh)
+    status = 0
+  end function {prefix}_replace
+
   function {prefix}_bind(binding, offsets, lengths, validate) result(handle)
     integer(c_int), value :: binding
     integer(c_size_t), intent(in) :: offsets(:)
@@ -397,6 +435,7 @@ contains
     call f2py_pdt_release_header(header)
   end subroutine {prefix}_free
 
+{clear_source(description)}
   logical function {prefix}_same(left, right) result(same)
     type(c_ptr), value :: left, right
     type({pointer}), pointer :: a, b
@@ -642,7 +681,9 @@ def _replace_fortran_name(lines, name, expression):
 
 def _handle_operation_parts(uses, declarations, body, pointers, *,
                             write_targets=(), pointer_targets=None,
-                            optional_targets=(), failure=('return',)):
+                            optional_targets=(), owned_bodies=None,
+                            allocatable_targets=(), deferred_targets=None,
+                            length_targets=None, failure=('return',)):
     """Dispatch a whole native operation to owned objects or module variables.
 
     ``pointers`` maps a generated local name to ``handle`` and a canonical
@@ -652,7 +693,12 @@ def _handle_operation_parts(uses, declarations, body, pointers, *,
     ``pointer_targets`` maps pointer-dummy locals to whether TARGET actuals
     are permitted by their INTENT(IN) interface.
     """
+    from ._dt_handle_modes import binding_compatible, operation_length_checks
+
     pointer_targets = pointer_targets or {}
+    owned_bodies = owned_bodies or {}
+    deferred_targets = deferred_targets or {}
+    length_targets = length_targets or {}
     uses = list(uses)
     declarations = list(declarations)
     body = list(body)
@@ -661,7 +707,7 @@ def _handle_operation_parts(uses, declarations, body, pointers, *,
     while prefix in reserved:
         prefix += 'x'
     entries = list(pointers.items())
-    headers = {}
+    headers, constraints = {}, {}
     modules = set()
     imports = {}
     for index, (local, pointer) in enumerate(entries):
@@ -669,6 +715,10 @@ def _handle_operation_parts(uses, declarations, body, pointers, *,
         modules.add(info['module'])
         header = f'{prefix}_{index}'
         headers[local] = header
+        more, constraints[local] = operation_length_checks(
+            info, pointer['handle'], length_targets.get(local, {}),
+            header + '_length', failure)
+        declarations.extend(more)
         declarations.append(f'type(f2py_pdt_handle), pointer :: {header}')
         for binding in info.get('bindings', []):
             imports.setdefault(binding['module'], set()).add(
@@ -691,8 +741,9 @@ def _handle_operation_parts(uses, declarations, body, pointers, *,
         result = [f'{header} => f2py_pdt_header({handle})',
                   f'if (.not. associated({header})) then']
         if local in optional_targets:
+            absent = owned_bodies.get(local, lambda value: value)(statements)
             result += ['  ' + line for line in [f'nullify({local})',
-                       *expand(index + 1, statements)]]
+                       *expand(index + 1, absent)]]
         else:
             result += ['  ' + line for line in failure]
         result += ['else',
@@ -700,14 +751,22 @@ def _handle_operation_parts(uses, declarations, body, pointers, *,
                    *['    ' + line for line in failure], '  end if',
                    f'  if (f2py_pdt_validate({handle}) /= 0) then',
                    *['    ' + line for line in failure], '  end if',
+                   *([f'  if ({header}%writable == 0) then',
+                      *['    ' + line for line in failure], '  end if']
+                     if local in write_targets else []),
+                   *['  ' + line for line in constraints[local]],
                    f'  select case ({header}%storage)', '  case (0)',
                    f"    {local} => {info['prefix']}_unwrap({handle})"]
-        result += ['    ' + line for line in expand(index + 1, statements)]
+        owned = owned_bodies.get(local, lambda value: value)(statements)
+        result += ['    ' + line for line in expand(index + 1, owned)]
         bindings = info.get('bindings', [])
         if bindings:
             result += ['  case (1)', f'    select case ({header}%binding)']
             for binding in bindings:
                 if local in write_targets and binding['readonly']:
+                    continue
+                if not binding_compatible(binding, local, allocatable_targets,
+                                          deferred_targets, length_targets):
                     continue
                 if local in pointer_targets and not (binding['pointer'] or (
                         pointer_targets[local] and binding['target'])):

@@ -20,6 +20,7 @@ def _handle_c_support(typename, len_info, identities):
     code = f'''extern void f2py_pdt_destroy(void *);
 extern int f2py_pdt_validate(void *);
 extern int f2py_pdt_storage(void *);
+extern int f2py_pdt_owned_empty(void *);
 extern int f2py_pdt_kind(void *);
 extern int f2py_pdt_length(void *, int);
 extern int f2py_pdt_length_value(void *, int, int *);
@@ -52,6 +53,10 @@ f2py_{typename}_hydrate(PyObject *object, void *pointer)
 {{
     Py{typename}Object *self = (Py{typename}Object *)object;
     if (f2py_{typename}_capsule_name(pointer) == NULL) return -1;
+    if (f2py_pdt_owned_empty(pointer)) {{
+        PyErr_SetString(PyExc_ReferenceError, "native derived object is unallocated");
+        return -1;
+    }}
     int status = f2py_pdt_validate(pointer);
     if (status != 0) {{
         PyErr_Format(PyExc_ReferenceError,
@@ -449,6 +454,7 @@ def _handle_getset_multi(typename, specializations, kind_info, len_info,
                  '    if (name == NULL) return NULL;',
                  '    void *pointer = PyCapsule_GetPointer(self->capsule, name);',
                  '    if (pointer == NULL) return NULL;',
+                 f'    if (f2py_{typename}_hydrate(selfobj, pointer) < 0) return NULL;',
                  '    switch (f2py_pdt_identity(pointer)) {']
         for variant in variants:
             lines += [f"    case {variant['description']['identity_number']}LL:",
@@ -539,3 +545,11 @@ def _handle_init_multi(typename, specializations, kind_info, len_info, one):
               '    return status;', '}']
     code.append('\n'.join(lines))
     return '\n'.join(code)
+
+
+def _guard_boxed_repr(source, typename):
+    """Validate owned and selected storage before native representation calls."""
+    owner = f'    Py{typename}Object *self = (Py{typename}Object *)selfobj;'
+    check = (f'    if (self->capsule != NULL && '
+             f'f2py_{typename}_checked_current(selfobj, 0) == NULL) return NULL;')
+    return source.replace(owner, owner + '\n' + check)

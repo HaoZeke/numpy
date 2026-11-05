@@ -261,6 +261,9 @@ def createfuncwrapper(rout, signature=0):
     if handles and not signature:
         for line in helpers:
             add(line)
+    if f90mode and rout.get('f2py_pdt_status'):
+        from ._dt_handles import _fortran_source
+        return _fortran_source(ret[0])
     return ret[0]
 
 
@@ -371,6 +374,9 @@ def createsubrwrapper(rout, signature=0):
     if handles and not signature:
         for line in helpers:
             add(line)
+    if f90mode and rout.get('f2py_pdt_status'):
+        from ._dt_handles import _fortran_source
+        return _fortran_source(ret[0])
     return ret[0]
 
 
