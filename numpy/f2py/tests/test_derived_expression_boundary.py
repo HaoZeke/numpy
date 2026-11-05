@@ -83,6 +83,7 @@ def test_type_component_inquiries_and_bounds_use_host_constants(tmp_path):
 
 @pytest.mark.slow
 class TestDerivedModuleVariableBoundary(util.F2PyTest):
+    suffix = ".f90"
     code = """
         module derived_variable_boundary
           use iso_c_binding, only: c_int

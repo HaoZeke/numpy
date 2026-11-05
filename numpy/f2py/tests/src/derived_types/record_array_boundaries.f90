@@ -31,7 +31,7 @@ module record_array_boundaries
     type(record_atom_o), pointer :: plane(:, :) => null()
   end type record_pointer
 
-  type, bind(c) :: record_zero
+  type :: record_zero
     type(record_atom_c) :: plane(0, 2)
     integer(c_int) :: tag
   end type record_zero

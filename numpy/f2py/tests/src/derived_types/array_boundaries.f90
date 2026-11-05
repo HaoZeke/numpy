@@ -27,7 +27,7 @@ module array_boundary_types
     real(c_double), pointer :: plane(:, :) => null()
   end type boundary_pointer
 
-  type, bind(c) :: boundary_zero
+  type :: boundary_zero
     real(c_double) :: plane(0, 3)
     integer(c_int) :: tag
   end type boundary_zero
