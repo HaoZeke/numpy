@@ -21,7 +21,7 @@ def test_private_generic_signatures_remain_metadata(module_index, name):
     assert name not in {child.get("name") for child in module["body"]}
     for variable in procedure["vars"].values():
         if variable.get("typespec") == "integer":
-            assert str(variable["kindselector"]["kind"]) == "4"
+            assert variable["kindselector"]["kind"] == "c_int"
 
 
 def test_private_generic_does_not_gain_a_public_operator():
