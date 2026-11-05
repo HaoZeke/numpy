@@ -4,6 +4,7 @@ import re
 import shlex
 import subprocess
 import sys
+import sysconfig
 import textwrap
 from collections import namedtuple
 from pathlib import Path
@@ -635,6 +636,8 @@ def test_debugcapi_bld(hello_world_f90, monkeypatch):
     with util.switchdir(ipath.parent):
         compiler_check_f2pycli()
         cmd_run = shlex.split(f"{sys.executable} -c \"import blah; blah.hi()\"")
+        if sysconfig.get_config_var("Py_GIL_DISABLED"):
+            cmd_run[1:1] = ["-X", "gil=1"]
         rout = subprocess.run(cmd_run, capture_output=True, encoding='UTF-8')
         assert rout.returncode == 0, rout.stderr
         eout = ' Hello World\n'
