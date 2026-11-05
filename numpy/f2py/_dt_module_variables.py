@@ -198,7 +198,8 @@ def _length_checks(record, expression, target, failure):
     lines = []
     for index, item in enumerate(record['description']['lengths'], 1):
         value = expression + '%' + item['name']
-        lines += [f'if ({value} < 0) {failure}',
+        lines += [f'if (int({value}, c_int64_t) < &',
+                  f'    -int(huge(0_c_int), c_int64_t)-1_c_int64_t) {failure}',
                   f'if (int({value}, c_int64_t) > &',
                   f'    int(huge(0_c_int), c_int64_t)) {failure}',
                   f'{target}({index}) = int({value}, c_int)']
@@ -296,7 +297,7 @@ def _setter(record):
              f'  type({desc["pointer_spec"]}), allocatable :: value',
              'end type f2py_snapshot',
              'type(f2py_snapshot), allocatable :: copies(:)',
-             f'integer(c_int) :: lengths({len(desc["lengths"])}), error',
+             f'integer(c_int) :: lengths({len(desc["lengths"])}), current_length, error',
              'integer(c_size_t) :: product, position',
              *(['integer(c_intptr_t) :: ' + ','.join(indices)] if rank else [])]
     body = ['status = 1', 'if (clear /= 0) then']
@@ -323,11 +324,10 @@ def _setter(record):
              '    if (f2py_pdt_identity(handles(position)) /= &',
              f'        {record["identity_number"]}_c_int64_t) return']
     for index in range(len(desc['lengths'])):
-        body += [f'    if (position == 1) lengths({index + 1}) = &',
-                 f'        f2py_pdt_length(handles(position), {index})',
-                 f'    if (lengths({index + 1}) < 0) return',
-                 f'    if (f2py_pdt_length(handles(position), {index}) /= &',
-                 f'        lengths({index + 1})) return']
+        body += [f'    if (f2py_pdt_length_value(handles(position), {index}, &',
+                 '        current_length) /= 0) return',
+                 f'    if (position == 1) lengths({index + 1}) = current_length',
+                 f'    if (current_length /= lengths({index + 1})) return']
     body += ['  end do', 'else']
     if desc['lengths']:
         if record['deferred_lengths']:
