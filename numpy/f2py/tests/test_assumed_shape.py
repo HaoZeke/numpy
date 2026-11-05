@@ -3,6 +3,9 @@ import tempfile
 
 import pytest
 
+import numpy as np
+from numpy.testing import assert_array_equal
+
 from . import util
 
 
@@ -50,3 +53,24 @@ class TestF2cmapOption(TestAssumedShapeSumExample):
 
     def teardown_method(self):
         os.unlink(self.f2cmap_file.name)
+
+
+@pytest.mark.slow
+class TestAssumedShapeLowerBound(util.F2PyTest):
+    # gh-25421: assumed-shape dummies keep their declared lower bounds
+    sources = [util.getpath("tests", "src", "assumed_shape", "gh25421.f90")]
+
+    def test_bounds(self):
+        lo, hi = self.module.gh25421.bounds(np.zeros(5, dtype=np.complex128))
+        assert (lo, hi) == (0, 4)
+        lo, hi = self.module.ext_bounds(np.zeros(3))
+        assert (lo, hi) == (0, 2)
+
+    def test_inout(self):
+        b = np.zeros((2, 3), order="F")
+        self.module.gh25421.fill(b)
+        i, j = np.meshgrid(np.arange(-1, 1), np.arange(2, 5), indexing="ij")
+        assert_array_equal(b, 10 * i + j)
+
+    def test_function(self):
+        assert self.module.gh25421.total(np.arange(4.0)) == 6.0
