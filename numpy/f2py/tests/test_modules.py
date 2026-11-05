@@ -2,6 +2,8 @@ import textwrap
 
 import pytest
 
+import numpy as np
+
 from . import util
 
 
@@ -86,6 +88,23 @@ class TestAllocatableCharacterArray(util.F2PyTest):
         names = mod.names
         assert names.shape == (3,)
         assert names.dtype.kind == 'U' or names.dtype.kind == 'S'
+
+
+@pytest.mark.slow
+class TestAllocatableOnlyModule(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "gh25777_alloc_only.f90")
+    ]
+
+    def test_allocatable_only_module(self):
+        # gh-25777: f2pyinit<mod> has no use statement for allocatables
+        mod = self.module.alloc_only_mod
+        assert mod.b is None
+        mod.b = [[1, 2, 3], [4, 5, 6]]
+        assert mod.b.flags.f_contiguous
+        assert np.array_equal(mod.b, [[1, 2, 3], [4, 5, 6]])
+        mod.b = None
+        assert mod.b is None
 
 
 @pytest.mark.slow
