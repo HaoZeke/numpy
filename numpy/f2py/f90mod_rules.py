@@ -44,7 +44,8 @@ fgetdims1 = f"""\
       logical ns
       integer r,i
       integer({np.intp().itemsize}) s(*)
-      ns = .FALSE.
+      ! Input mode -1 requests deallocation even for zero extents.
+      ns = (flag.eq.-1)
       if (allocated(d)) then
          do i=1,r
             if ((size(d,i).ne.s(i)).and.(s(i).ge.0)) then
@@ -55,7 +56,9 @@ fgetdims1 = f"""\
             deallocate(d)
          end if
       end if
-      if ((.not.allocated(d)).and.(s(1).ge.1)) then"""
+      ! Input mode 3 distinguishes zero-length assignment from deallocation.
+      if ((.not.allocated(d)).and.((s(1).ge.1).or. &
+     &    ((flag.eq.3).and.(s(1).eq.0)))) then"""
 
 fgetdims2 = """\
       end if

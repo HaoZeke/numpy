@@ -180,7 +180,6 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
                                      fp->defs[i].dims.d, NULL, fp->defs[i].data,
                                      NPY_ARRAY_FARRAY, NULL);
             if (v == NULL) {
-                Py_DECREF(descr);
                 goto fail;
             }
             PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
@@ -292,11 +291,19 @@ fortran_doc(FortranDataDef def)
 }
 
 static FortranDataDef *save_def; /* save pointer of an allocatable array */
+/* A zero-length CHARACTER view needs a non-NULL address even when
+   its allocated Fortran array has no addressable bytes. */
+static char zero_length_character_storage;
 static void
 set_data(char *d, npy_intp *f)
 {           /* callback from Fortran */
-    if (*f) /* In fortran f=allocated(d) */
+    if (*f) { /* In fortran f=allocated(d) */
         save_def->data = d;
+        if (d == NULL && save_def->type == NPY_STRING &&
+            save_def->elsize == 0) {
+            save_def->data = &zero_length_character_storage;
+        }
+    }
     else
         save_def->data = NULL;
     /* printf("set_data: d=%p,f=%d\n",d,*f); */
@@ -305,7 +312,7 @@ set_data(char *d, npy_intp *f)
 static PyObject *
 fortran_getattr(PyFortranObject *fp, char *name)
 {
-    int i, j, k, flag;
+    int i, j, k, flag = 0;
     if (fp->dict != NULL) {
         // python 3.13 added PyDict_GetItemRef
 #if PY_VERSION_HEX < 0x030D0000
@@ -403,7 +410,7 @@ fortran_getattr(PyFortranObject *fp, char *name)
 static int
 fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
 {
-    int i, j, flag;
+    int i, j, flag = 0;
     PyArrayObject *arr = NULL;
     for (i = 0, j = 1; i < fp->len && (j = strcmp(name, fp->defs[i].name));
          i++)
@@ -427,11 +434,16 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                                               fp->defs[i].rank, F2PY_INTENT_IN,
                                               v, NULL)) == NULL)
                     return -1;
+                /* Mode 3 requests zero-extent CHARACTER allocation;
+                   mode 0 queries and mode -1 deallocates. */
+                flag = (fp->defs[i].type == NPY_STRING &&
+                        fp->defs[i].elsize == 0) ? 3 : 0;
                 (*(fp->defs[i].func))(&fp->defs[i].rank, PyArray_DIMS(arr),
                                       set_data, &flag);
             }
             else { /* deallocate */
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = 0;
+                flag = -1;
                 (*(fp->defs[i].func))(&fp->defs[i].rank, dims, set_data,
                                       &flag);
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = -1;
@@ -444,6 +456,15 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                                           fp->defs[i].dims.d, fp->defs[i].rank,
                                           F2PY_INTENT_IN, v, NULL)) == NULL)
                 return -1;
+        }
+        /* A zero-length CHARACTER has no destination storage.  Conversion
+           still validates shape and updates allocatable dimensions. */
+        if (arr != NULL && fp->defs[i].type == NPY_STRING &&
+            fp->defs[i].elsize == 0) {
+            if ((PyObject *)arr != v) {
+                Py_DECREF(arr);
+            }
+            return 0;
         }
         if (fp->defs[i].data !=
             NULL) { /* copy Python object to Fortran array */
@@ -924,7 +945,6 @@ ndarray_from_pyobj(const int type_num,
           PyArray_NewFromDescr(&PyArray_Type, descr, rank, dims,
                                NULL, NULL, !(intent & F2PY_INTENT_C), NULL);
         if (arr == NULL) {
-          Py_DECREF(descr);
           return NULL;
         }
         if (PyArray_ITEMSIZE(arr) != elsize) {
@@ -1110,7 +1130,6 @@ ndarray_from_pyobj(const int type_num,
         // Warning: in the case of NPY_STRING, PyArray_FromAny may
         // reset descr->elsize, e.g. dtype('S0') becomes dtype('S1').
         if (arr == NULL) {
-          Py_DECREF(descr);
           return NULL;
         }
         if (type_num != NPY_STRING && PyArray_ITEMSIZE(arr) != elsize) {
