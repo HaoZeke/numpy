@@ -152,6 +152,9 @@ with the meson backend or above Python 3.12:
                        This will identify "lapack" and "scalapack" as dependencies
                        and remove them from argv, leaving a dependencies list
                        containing ["lapack", "scalapack"].
+                       Keyword arguments for meson's dependency() can be given
+                       in brackets, e.g. --dep "mpi[language: 'fortran']" for
+                       the Fortran MPI bindings.
 
   --backend            <backend_type>
                        Specify the build backend for the compilation process.
