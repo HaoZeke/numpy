@@ -700,14 +700,18 @@ def run_compile():
         else:
             print('Invalid use of -D:', name_value)
 
-    # Construct wrappers / signatures / things
-    if backend_key == 'meson':
-        if not pyf_files:
-            outmess('Using meson backend\nWill pass --lower to f2py\nSee https://numpy.org/doc/stable/f2py/buildtools/meson.html\n')
-            f2py_flags.append('--lower')
-            run_main(f" {' '.join(f2py_flags)} -m {modulename} {' '.join(sources)}".split())
-        else:
-            run_main(f" {' '.join(f2py_flags)} {' '.join(pyf_files)}".split())
+    from ._backends._meson import _get_flags
+    from ._compiler_context import generation_context
+
+    with generation_context(fortran_args=_get_flags(fc_flags)):
+        # Construct wrappers / signatures / things
+        if backend_key == 'meson':
+            if not pyf_files:
+                outmess('Using meson backend\nWill pass --lower to f2py\nSee https://numpy.org/doc/stable/f2py/buildtools/meson.html\n')
+                f2py_flags.append('--lower')
+                run_main(f" {' '.join(f2py_flags)} -m {modulename} {' '.join(sources)}".split())
+            else:
+                run_main(f" {' '.join(f2py_flags)} {' '.join(pyf_files)}".split())
 
     # Order matters here, includes are needed for run_main above
     include_dirs, _, sources = get_newer_options(sources)

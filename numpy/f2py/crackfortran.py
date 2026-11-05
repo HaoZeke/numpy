@@ -154,7 +154,7 @@ try:
 except ImportError:
     charset_normalizer = None
 
-from . import __version__, symbolic
+from . import __version__, _compiler_context, _compiler_inquiry, symbolic
 from ._derived_expr import _fortran_eval
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
@@ -2687,7 +2687,13 @@ def _selected_int_kind_func(r):
     return -1
 
 
-def _selected_real_kind_func(p, r=0, radix=0):
+def _selected_real_kind_func(p=None, r=None, radix=None):
+    if p is None and r is None and radix is None:
+        raise TypeError('selected_real_kind takes at least one argument')
+    selected = _compiler_inquiry.selected_real_kind(p, r, radix)
+    if selected is not None:
+        return selected
+    p = 0 if p is None else p
     # XXX: This should be processor dependent
     # This is only verified for 0 <= p <= 20, possibly good for p <= 33 and above
     if p < 7:
@@ -2807,6 +2813,8 @@ def get_parameters(vars, global_params={}):
                 v = 4
             try:
                 params[n] = param_eval(v, g_params, params, dimspec=dimspec)
+            except _compiler_context.CompilerExecutionError:
+                raise
             except Exception as msg:
                 params[n] = v
                 outmess(f'get_parameters: got "{msg}" on {n!r}\n')
@@ -2840,6 +2848,8 @@ def _eval_scalar(value, params):
         value = (repr if isinstance(value, str) else str)(value)
     except (NameError, SyntaxError, TypeError):
         return value
+    except _compiler_context.CompilerExecutionError:
+        raise
     except Exception as msg:
         errmess(f'"{msg}" in evaluating {value!r} '
                 f'(available names: {list(params)})\n')
@@ -3312,6 +3322,8 @@ def param_eval(v, g_params, params, dimspec=None):
     if dimspec is None:
         try:
             p = eval(v, g_params, params)
+        except _compiler_context.CompilerExecutionError:
+            raise
         except Exception as msg:
             p = v
             outmess(f'param_eval: got "{msg}" on {v!r}\n')
@@ -3343,6 +3355,8 @@ def param_eval(v, g_params, params, dimspec=None):
     for item in v:
         try:
             item = eval(item, g_params, params)
+        except _compiler_context.CompilerExecutionError:
+            raise
         except Exception as msg:
             outmess(f'param_eval: got "{msg}" on {item!r}\n')
         v_eval.append(item)
