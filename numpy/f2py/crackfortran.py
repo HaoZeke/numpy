@@ -155,6 +155,7 @@ except ImportError:
     charset_normalizer = None
 
 from . import __version__, _compiler_context, _compiler_inquiry, symbolic
+from ._callback_expr import literal_expression_type
 from ._derived_expr import _fortran_eval
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
@@ -3538,6 +3539,9 @@ def determineexprtype(expr, vars, rules={}):
     if expr in vars:
         return _ensure_exprdict(vars[expr])
     expr = expr.strip()
+    constant_type = literal_expression_type(expr)
+    if constant_type is not None:
+        return constant_type
     if determineexprtype_re_1.match(expr):
         return {'typespec': 'complex'}
     m = determineexprtype_re_2.match(expr)
