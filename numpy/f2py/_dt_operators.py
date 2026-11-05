@@ -156,6 +156,8 @@ def _operator_entries(ops):
 
 def _gen_operator_fortran_wrappers(typename, ops, type_map):
     """Emit one ABI wrapper and matching deallocator per implementation."""
+    from ._dt_operator_handles import _gen_handle_operator
+
     lines = []
     for pname, proc, result_kind in _operator_entries(ops):
         args, result = _operator_signature(proc, type_map)
