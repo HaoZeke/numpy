@@ -44,6 +44,7 @@ fgetdims1 = f"""\
       logical ns
       integer r,i
       integer({np.intp().itemsize}) s(*)
+      integer(c_size_t) f2py_allocated
       ! Input mode -1 requests deallocation even for zero extents.
       ns = (flag.eq.-1)
       if (allocated(d)) then
@@ -68,7 +69,9 @@ fgetdims2 = """\
          end do
       end if
       flag = 1
-      call f2pysetdata(d,allocated(d))"""
+      f2py_allocated = 0
+      if (allocated(d)) f2py_allocated = 1
+      call f2pysetdata(d,f2py_allocated)"""
 
 fgetdims2_sa = """\
       end if
@@ -79,7 +82,9 @@ fgetdims2_sa = """\
          !s(r) must be equal to len(d(1))
       end if
       flag = 2
-      call f2pysetdata(d,allocated(d))"""
+      f2py_allocated = 0
+      if (allocated(d)) f2py_allocated = 1
+      call f2pysetdata(d,f2py_allocated)"""
 
 
 def buildhooks(pymod):
@@ -178,6 +183,7 @@ def buildhooks(pymod):
                 sargsp.append('void (*)(int*,npy_intp*,void(*)(char*,npy_intp*),int*)')
                 iadd(f"\tf2py_{m['name']}_def[i_f2py++].func = {n};")
                 fadd(f'subroutine {fargs[-1]}(r,s,f2pysetdata,flag)')
+                fadd('use, intrinsic :: iso_c_binding, only: c_size_t')
                 fadd(f"use {m['name']}, only: d => {undo_rmbadname1(n)}\n")
                 fadd('integer flag\n')
                 fhooks[0] = fhooks[0] + fgetdims1

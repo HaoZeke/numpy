@@ -450,6 +450,10 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
             }
             memcpy(fp->defs[i].dims.d, dims,
                    fp->defs[i].rank * sizeof(npy_intp));
+            /* Deallocation supplies no ndarray for copying. */
+            if (v == Py_None) {
+                return 0;
+            }
         }
         else { /* not allocatable array */
             if ((arr = ndarray_from_pyobj(fp->defs[i].type, fp->defs[i].elsize,
