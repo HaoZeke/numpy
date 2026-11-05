@@ -1,0 +1,18 @@
+python module backslash_literal
+    interface
+        subroutine joinpath(path, name)
+            character*(*), intent(hide) :: path = 'C:\'//name//'x'
+            character*(*), intent(in) :: name
+        end subroutine joinpath
+        subroutine joinpath_dq(path, name)
+            character*(*), intent(hide) :: path = "C:\"//name//"x"
+            character*(*), intent(in) :: name
+        end subroutine joinpath_dq
+        subroutine sized(work, m, n, got)
+            integer intent(hide) :: m = len('C:\'//n//'x')
+            real intent(hide), dimension(m), depend(m) :: work
+            integer intent(in) :: n
+            integer intent(out) :: got
+        end subroutine sized
+    end interface
+end python module backslash_literal

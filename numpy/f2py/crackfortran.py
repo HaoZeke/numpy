@@ -661,11 +661,20 @@ multilinepattern = re.compile(
     r"\s*(?P<before>''')(?P<this>.*?)(?P<after>''')\s*\Z", re.S), 'multiline'
 ##
 
+# A Fortran quote is escaped by doubling it. A backslash is ordinary
+# text, so ``'C:\'//name`` still exposes ``name`` to a dependency scan.
+_fortran_single_quoted = r"('([^']|'')*')"
+_fortran_double_quoted = r'("([^"]|"")*")'
+
+
 def split_by_unquoted(line, characters):
     """
     Splits the line into (line[:i], line[i:]),
     where i is the index of first occurrence of one of the characters
-    not within quotes, or len(line) if no such index exists
+    not within quotes, or len(line) if no such index exists.
+
+    Quoted regions follow Fortran lexical rules, the same ones as
+    ``mask_string_literals``.
     """
     assert not (set('"\'') & set(characters)), "cannot split by unquoted quotes"
     r = re.compile(
@@ -673,8 +682,8 @@ def split_by_unquoted(line, characters):
         r"(?P<after>{char}.*)\Z".format(
             not_quoted=f"[^\"'{re.escape(characters)}]",
             char=f"[{re.escape(characters)}]",
-            single_quoted=r"('([^'\\]|(\\.))*')",
-            double_quoted=r'("([^"\\]|(\\.))*")'))
+            single_quoted=_fortran_single_quoted,
+            double_quoted=_fortran_double_quoted))
     m = r.match(line)
     if m:
         d = m.groupdict()
@@ -683,7 +692,7 @@ def split_by_unquoted(line, characters):
 
 
 _quoted_string_re = re.compile(
-    r"('([^'\\]|(\\.))*')|(\"([^\"\\]|(\\.))*\")")
+    _fortran_single_quoted + "|" + _fortran_double_quoted)
 
 
 def mask_string_literals(expr):
@@ -695,6 +704,10 @@ def mask_string_literals(expr):
     identifiers that happen to appear inside its own literal value, so
     the quoted text is collapsed to empty quotes before the scan while
     identifiers outside the quotes (e.g. in ``'x '//name``) are kept.
+
+    A quote inside a literal is written twice (``''`` or ``""``).
+    A backslash does not escape the closer, so ``'C:\\'//name`` keeps
+    ``name``.
     """
     return _quoted_string_re.sub("''", expr)
 

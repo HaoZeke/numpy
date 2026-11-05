@@ -1,0 +1,10 @@
+python module backslash_literal_depend
+    interface
+        subroutine probe(work, m, n, got)
+            integer intent(hide) :: m = /* 'C:\'// */ n /* //'x' */
+            real intent(hide), dimension(m), depend(m) :: work
+            integer intent(in) :: n
+            integer intent(out) :: got
+        end subroutine probe
+    end interface
+end python module backslash_literal_depend
