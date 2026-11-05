@@ -2106,10 +2106,19 @@ class TestHiddenComponents(util.F2PyTest):
 
     def test_hidden(self):
         h = self.module.holder()
-        for name in ("tiny", "codes", "nodes", "grid"):
+        for name in ("tiny", "codes"):
             assert not hasattr(h, name)
+        assert h.nodes is None
+        assert h.grid.shape == (2, 2)
+        assert all(isinstance(item, self.module.node) for item in h.grid.flat)
         self.module.fill(h, 3)
         assert self.module.census(h) == 3 + 3 + 4 * 3 + _CENSUS_CODE_BONUS
+        assert len(h.nodes) == 3
+        assert [item.value for item in h.nodes] == [1, 1, 1]
+        assert h.grid.shape == (2, 2)
+        assert [item.value for item in h.grid.flat] == [3, 3, 3, 3]
+        assert all(not hasattr(item, "next") for item in h.nodes)
+        assert all(not hasattr(item, "next") for item in h.grid.flat)
 
     def test_exposed(self):
         h = self.module.holder(flag=True, small=-2, z=1 + 2j)
