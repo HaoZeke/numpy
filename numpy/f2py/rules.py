@@ -1063,6 +1063,9 @@ arg_rules = [
         'decl': ['    #cbname#_t #varname#_cb = { Py_None, NULL, 0 };',
                  '    #cbname#_t *#varname#_cb_ptr = &#varname#_cb;',
                  '    PyTupleObject *#varname#_xa_capi = NULL;',
+                 {isintent_callback:
+                  '    PyObject *#varname#_cb_capi_owned = NULL;\n'
+                  '    PyObject *#varname#_xa_capi_owned = NULL;'},
                  {l_not(isintent_callback):
                   '    #cbname#_typedef #varname#_cptr;'}
                  ],
@@ -1088,6 +1091,7 @@ if(F2PyCapsule_Check(#varname#_cb.capi)) {
 """}, {isintent_callback: """\
 if (#varname#_cb.capi==Py_None) {
   #varname#_cb.capi = PyObject_GetAttrString(#modulename#_module,\"#varname#\");
+  #varname#_cb_capi_owned = #varname#_cb.capi;
   if (#varname#_cb.capi) {
     if (#varname#_xa_capi==NULL) {
       if (PyObject_HasAttrString(#modulename#_module,\"#varname#_extra_args\")) {
@@ -1099,7 +1103,9 @@ if (#varname#_cb.capi==Py_None) {
         else {
           #varname#_xa_capi = (PyTupleObject *)Py_BuildValue(\"()\");
         }
+        #varname#_xa_capi_owned = (PyObject *)#varname#_xa_capi;
         if (#varname#_xa_capi==NULL) {
+          Py_XDECREF(#varname#_cb_capi_owned);
           PyErr_SetString(#modulename#_error,\"Failed to convert #modulename#.#varname#_extra_args to tuple.\\n\");
           return NULL;
         }
@@ -1123,12 +1129,15 @@ if (#varname#_cb.capi==Py_None) {
         CFUNCSMESS(\"Saving callback variables for `#varname#`.\\n\");
         #varname#_cb_ptr = swap_active_#cbname#(#varname#_cb_ptr);""",
         ],
-        'cleanupfrompyobj':
+        'cleanupfrompyobj': [{isintent_callback: """\
+    Py_XDECREF(#varname#_xa_capi_owned);
+    Py_XDECREF(#varname#_cb_capi_owned);
+"""},
         """\
         CFUNCSMESS(\"Restoring callback variables for `#varname#`.\\n\");
         #varname#_cb_ptr = swap_active_#cbname#(#varname#_cb_ptr);
         Py_DECREF(#varname#_cb.args_capi);
-    }""",
+    }"""],
         'need': ['SWAP', 'create_cb_arglist'],
         '_check': isexternal,
         '_depend': ''
