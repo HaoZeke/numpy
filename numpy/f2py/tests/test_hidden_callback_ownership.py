@@ -59,9 +59,10 @@ class TestHiddenCallbackOwnership(util.F2PyTest):
         self.module.mypy_abort = callback
         self.module.mypy_abort_extra_args = InvalidArguments()
         expected = sys.getrefcount(callback)
+        error_type = getattr(self.module, f"_{self.module.__name__}_error")
         try:
             for _ in range(5):
-                with pytest.raises(self.module.error, match="Failed to convert"):
+                with pytest.raises(error_type, match="Failed to convert"):
                     self.module.utils.do_something("helpme")
             gc.collect()
             assert sys.getrefcount(callback) == expected
@@ -73,9 +74,10 @@ class TestHiddenCallbackOwnership(util.F2PyTest):
         callback = object()
         self.module.mypy_abort = callback
         expected = sys.getrefcount(callback)
+        error_type = getattr(self.module, f"_{self.module.__name__}_error")
         try:
             for _ in range(5):
-                with pytest.raises(self.module.error, match="processing argument list"):
+                with pytest.raises(error_type, match="processing argument list"):
                     self.module.utils.do_something("helpme")
             gc.collect()
             assert sys.getrefcount(callback) == expected
