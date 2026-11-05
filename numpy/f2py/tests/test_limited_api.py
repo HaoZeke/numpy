@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import weakref
+from importlib.machinery import EXTENSION_SUFFIXES
 from importlib.metadata import metadata
 from pathlib import Path
 
@@ -59,7 +60,10 @@ def test_private_type_layout_is_rejected(capfd):
 def test_stable_abi_filename(limited_api_probe):
     if sys.platform != "win32":
         filename = Path(limited_api_probe.__file__).name
-        assert ".abi3." in filename or ".abi3t." in filename
+        suffixes = [suffix for suffix in EXTENSION_SUFFIXES
+                    if suffix.startswith((".abi3.", ".abi3-", ".abi3t.", ".abi3t-"))]
+        assert any(filename == limited_api_probe.__name__ + suffix
+                   for suffix in suffixes)
 
 
 def test_type_behavior(limited_api_probe):
