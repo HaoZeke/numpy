@@ -1753,6 +1753,9 @@ def buildapi(rout):
     savevrd = {}
     for a in args:
         vrd = capi_maps.sign2map(a, var[a])
+        argument_ctype = vrd.get('ctype')
+        if argument_ctype in cfuncs.typedefs:
+            cfuncs.append_needs(argument_ctype)
         if isintent_aux(var[a]):
             _rules = aux_rules
         else:

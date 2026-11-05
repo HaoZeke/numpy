@@ -80,7 +80,7 @@ typedef unsigned long long unsigned_long_long;
 """
 typedefs['unsigned_long_long'] = """
 #if defined(NPY_OS_WIN32)
-typedef __uint64 long_long;
+typedef unsigned __int64 unsigned_long_long;
 #else
 typedef unsigned long long unsigned_long_long;
 #endif

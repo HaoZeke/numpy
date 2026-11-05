@@ -242,7 +242,7 @@ def buildhooks(pymod):
                     dt_routines.append(b_name)
                 modobjs.append(f"{b_name}()")
                 api, wrap = rules.buildapi(b)
-                if isfunction(b):
+                if isfunction(b) and wrap:
                     fhooks[0] = fhooks[0] + wrap
                     fargs.append(f"f2pywrap_{m_name}_{b_name}")
                     ifargs.append(func2subr.createfuncwrapper(b, signature=1))
