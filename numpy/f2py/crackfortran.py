@@ -154,7 +154,7 @@ try:
 except ImportError:
     charset_normalizer = None
 
-from . import __version__, symbolic
+from . import __version__, _compiler_context, _specification_expr, symbolic
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -182,6 +182,7 @@ currentfilename = ''
 current_source_location = None
 expectbegin = 1
 f90modulevars = {}
+_specification_scopes = None
 filepositiontext = ''
 gotnextfile = 1
 groupcache = None
@@ -201,6 +202,7 @@ usermodules = []
 def reset_global_f2py_vars():
     global groupcounter, grouplist, neededmodule, expectbegin
     global skipblocksuntil, usermodules, f90modulevars, gotnextfile
+    global _specification_scopes
     global filepositiontext, currentfilename, current_source_location
     global skipfunctions, skipfuncs
     global onlyfuncs, include_paths, previous_context
@@ -227,6 +229,7 @@ def reset_global_f2py_vars():
     skipblocksuntil = -1
     usermodules = []
     f90modulevars = {}
+    _specification_scopes = None
     gotnextfile = 1
     filepositiontext = ''
     currentfilename = ''
@@ -2030,16 +2033,29 @@ def get_useparameters(block, param_map=None):
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
         if usename not in f90modulevars:
-            outmess(f'get_useparameters: no module {usename} info used by '
-                    f'{block.get("name")}\n')
+            if usename not in _specification_expr._INTRINSIC_NAMES:
+                outmess(f'get_useparameters: no module {usename} info used by '
+                        f'{block.get("name")}\n')
             continue
         mvars = f90modulevars[usename]
-        params = get_parameters(mvars)
+        scope = (None if _specification_scopes is None else
+                 _specification_scopes.modules.get(usename))
+        params = get_parameters(mvars, _scope=scope)
         if not params:
             continue
-        # XXX: apply mapping
         if mapping:
-            errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
+            renames = mapping.get('map', {})
+            if mapping.get('only', 0):
+                params = {local.lower(): params[remote.lower()]
+                          for local, remote in renames.items()
+                          if remote.lower() in params}
+            elif renames:
+                mapped = dict(params)
+                for local, remote in renames.items():
+                    if remote.lower() in params:
+                        mapped.pop(remote.lower(), None)
+                        mapped[local.lower()] = params[remote.lower()]
+                params = mapped
         for k, v in list(params.items()):
             if k in param_map:
                 outmess(f'get_useparameters: overriding parameter {k!r} with'
@@ -2552,7 +2568,7 @@ def _selected_real_kind_func(p, r=0, radix=0):
     return -1
 
 
-def get_parameters(vars, global_params={}):
+def get_parameters(vars, global_params={}, *, _scope=None):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
     for name, func in [('kind', _kind_func),
@@ -2571,6 +2587,25 @@ def get_parameters(vars, global_params={}):
         r'\bselected_(int|real)_kind\s*\(\s*(?P<value>.*)\s*\)', re.I)
     for n in param_names:
         if '=' in vars[n]:
+            if (_scope is not None and n in _scope.variables
+                    and _scope.declaration(n).get('typespec') == 'integer'
+                    and _specification_expr.ConstantProgram.dimensions(
+                        vars[n]) is None):
+                value = _scope.evaluate(n)
+                if value is not None:
+                    params[n] = params[n.lower()] = value
+                    continue
+            if (_scope is not None and n in _scope.variables
+                    and (_specification_expr.requires_compiler(
+                        _scope, vars[n]['='])
+                        or _specification_expr.ConstantProgram.dimensions(
+                            vars[n]) is not None
+                        or any(token.group('name') is not None
+                               and vars[n]['='][token.end():].lstrip().startswith('(')
+                               for token in _specification_expr._TOKEN.finditer(
+                                   vars[n]['='])))):
+                params[n] = params[n.lower()] = vars[n]['=']
+                continue
             v = vars[n]['=']
             if islogical(vars[n]):
                 v = v.lower()
@@ -2714,7 +2749,9 @@ def analyzevars(block):
         if n not in args:
             svars.append(n)
 
-    params = get_parameters(vars, get_useparameters(block))
+    specification = (None if _specification_scopes is None else
+                     _specification_scopes.get(block))
+    params = get_parameters(vars, get_useparameters(block), _scope=specification)
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
     dep_matches = {}
@@ -2748,17 +2785,29 @@ def analyzevars(block):
         if 'charselector' in vars[n]:
             if 'len' in vars[n]['charselector']:
                 l = vars[n]['charselector']['len']
+                native_length = (l if specification is None else
+                                 specification.fortran_expression(l))
                 try:
-                    l = str(eval(l, {}, params))
+                    value = None if specification is None else specification.evaluate(l)
+                    l = str(eval(l, {}, params)) if value is None else str(value)
+                except _compiler_context.CompilerExecutionError:
+                    raise
                 except Exception:
                     pass
+                if specification is not None:
+                    l = _specification_expr.runtime_integer(specification, l)
+                if 'f2py_spec_' in l:
+                    vars[n].setdefault('_fortran_charselector', {})[l] = native_length
                 vars[n]['charselector']['len'] = l
 
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
                 l = vars[n]['kindselector']['kind']
                 try:
-                    l = str(eval(l, {}, params))
+                    value = None if specification is None else specification.evaluate(l)
+                    l = str(eval(l, {}, params)) if value is None else str(value)
+                except _compiler_context.CompilerExecutionError:
+                    raise
                 except Exception:
                     pass
                 vars[n]['kindselector']['kind'] = l
@@ -2818,12 +2867,15 @@ def analyzevars(block):
                 for d in rmbadname(
                         [x.strip() for x in markoutercomma(dim).split('@,@')]
                 ):
+                    native_extent = (None if specification is None else
+                                     specification.fortran_extent(d))
                     # d is the expression inside the dimension declaration
                     # Evaluate `d` with respect to params
                     try:
                         # the dimension for this variable depends on a
                         # previously defined parameter
-                        d = param_parse(d, params)
+                        d = param_parse(
+                            d, params if specification is None else specification)
                     except (ValueError, IndexError, KeyError):
                         outmess(
                             'analyzevars: could not parse dimension for '
@@ -2841,6 +2893,8 @@ def analyzevars(block):
                     elif len(dl) == 2 and not dl[1].strip():
                         # e.g. dimension(0:): assumed shape, the lower
                         # bound is applied by the Fortran callee
+                        vars[n].setdefault('_fortran_lower_bounds', {})[
+                            len(vars[n]['dimension'])] = dl[0] or '1'
                         dl = [':']
                         d = dim_char = ':'
                     if len(dl) == 1 and dl[0] != dim_char:
@@ -2883,6 +2937,8 @@ def analyzevars(block):
                         # means. We'll let the compiler validate the
                         # definiteness of such symbols.
                         dimension_exprs[d] = solver_and_deps
+                    if native_extent is not None and 'f2py_spec_' in d:
+                        vars[n].setdefault('_fortran_dimension', {})[d] = native_extent
                     vars[n]['dimension'].append(d)
 
         if 'check' not in vars[n] and 'args' in block and n in block['args']:
@@ -3035,8 +3091,14 @@ def analyzevars(block):
                         if kindselect:
                             if 'kind' in kindselect:
                                 try:
-                                    kindselect['kind'] = eval(
-                                        kindselect['kind'], {}, params)
+                                    expression = kindselect['kind']
+                                    value = (None if specification is None else
+                                             specification.evaluate(expression))
+                                    kindselect['kind'] = (
+                                        eval(expression, {}, params)
+                                        if value is None else value)
+                                except _compiler_context.CompilerExecutionError:
+                                    raise
                                 except Exception:
                                     pass
                             vars[n]['kindselector'] = kindselect
@@ -3079,6 +3141,13 @@ def analyzevars(block):
         for n in list(vars.keys()):
             if n not in neededvars:
                 del vars[n]
+    native = (None if specification is None else
+              getattr(specification, 'native_program', None))
+    if native is not None:
+        block['_fortran_specification'] = {
+            'uses': list(dict.fromkeys(native.uses)),
+            'declarations': native.declarations[:],
+        }
     return vars
 
 
@@ -3204,6 +3273,8 @@ def param_parse(d, params):
     >>> param_parse(d, params)
     3
     """
+    if isinstance(params, _specification_expr.Scope):
+        return params.dimension(d)
     dname = d[:d.find("(")] if "(" in d else ""
     if dname:
         # Text precedes the first "(", so this is array-parameter
@@ -3607,12 +3678,14 @@ post_processing_hooks = []
 
 
 def crackfortran(files):
-    global usermodules, post_processing_hooks
+    global usermodules, post_processing_hooks, _specification_scopes
 
     outmess('Reading fortran codes...\n', 0)
     readfortrancode(files, crackline)
     outmess('Post-processing...\n', 0)
     usermodules = []
+    _specification_scopes = _specification_expr.SpecificationScopes(
+        grouplist[0], buildimplicitrules)
     postlist = postcrack(grouplist[0])
     outmess('Applying post-processing hooks...\n', 0)
     for hook in post_processing_hooks:

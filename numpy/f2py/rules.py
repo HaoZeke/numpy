@@ -397,7 +397,11 @@ f2py_start_clock();
 #ifdef F2PY_REPORT_ATEXIT
 f2py_start_call_clock();
 #endif
+if (PyErr_Occurred())
+  f2py_success = 0;
+if (f2py_success) {
 #callfortranroutine#
+}
 if (PyErr_Occurred())
   f2py_success = 0;
 #ifdef F2PY_REPORT_ATEXIT
@@ -1198,11 +1202,13 @@ if (#varname#_cb.capi==Py_None) {
             ('    const char capi_errmess[] = "#modulename#.#pyname#:'
              ' failed to create array from the #nth# `#varname#`";'),
             {isintent_hide:
-             '    capi_#varname#_as_array = ndarray_from_pyobj('
+             '    capi_#varname#_as_array = PyErr_Occurred() ? NULL : '
+             'ndarray_from_pyobj('
              '  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,'
              '  capi_#varname#_intent,Py_None,capi_errmess);'},
             {isintent_nothide:
-             '    capi_#varname#_as_array = ndarray_from_pyobj('
+             '    capi_#varname#_as_array = PyErr_Occurred() ? NULL : '
+             'ndarray_from_pyobj('
              '  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,'
              '  capi_#varname#_intent,#varname#_capi,capi_errmess);'},
             """\

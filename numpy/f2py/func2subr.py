@@ -53,6 +53,9 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
     elif 'charselector' in vars[a]:
         selector = vars[a]['charselector']
         lk = 'len'
+    if lk == 'len' and '_fortran_charselector' in vars[a]:
+        native = vars[a]['_fortran_charselector']
+        selector = {key: native.get(value, value) for key, value in selector.items()}
     if '*' in selector:
         if f90mode:
             if selector['*'] in ['*', ':', '(*)']:
@@ -74,8 +77,17 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
 
     vardef = f'{vardef} {fa}'
     if 'dimension' in vars[a]:
-        vardef = f"{vardef}({','.join(vars[a]['dimension'])})"
+        native = vars[a].get('_fortran_dimension', {})
+        dimensions = [native.get(value, value) for value in vars[a]['dimension']]
+        for axis, lower in vars[a].get('_fortran_lower_bounds', {}).items():
+            if dimensions[axis] != ':' and lower != '1':
+                dimensions[axis] = f'{lower}:({lower})+({dimensions[axis]})-1'
+        vardef = f"{vardef}({','.join(dimensions)})"
     return vardef
+
+
+def _specification_prolog(rout, part):
+    return rout.get('_fortran_specification', {}).get(part, ())
 
 def useiso_c_binding(rout):
     useisoc = False
@@ -173,6 +185,11 @@ def createfuncwrapper(rout, signature=0):
         for line in rout['saved_interface'].split('\n'):
             if line.lstrip().startswith('use ') and '__user__' not in line:
                 add(line)
+
+    for line in _specification_prolog(rout, 'uses'):
+        add(line)
+    for line in _specification_prolog(rout, 'declarations'):
+        add(line)
 
     args = args[1:]
     dumped_args = []
@@ -276,6 +293,11 @@ def createsubrwrapper(rout, signature=0):
         for line in rout['saved_interface'].split('\n'):
             if line.lstrip().startswith('use ') and '__user__' not in line:
                 add(line)
+
+    for line in _specification_prolog(rout, 'uses'):
+        add(line)
+    for line in _specification_prolog(rout, 'declarations'):
+        add(line)
 
     dumped_args = []
     for a in args:

@@ -118,8 +118,11 @@ Array declarations
      - Notes
    * - Explicit shape
      - ``x(n)``, ``x(0:n)``, ``x(-n:n)``, ``x(2*n+1, m)``
-     - Bounds are integer expressions of literals, named constants and
-       scalar integer arguments. If an extent depends linearly on a single
+      - Bounds are integer expressions of literals, lexical named constants,
+        scalar integer arguments and integer array elements. Integer division
+        truncates towards zero, and exponentiation retains Fortran grouping.
+        A nonpositive extent produces a zero-length dimension. If an extent
+        depends linearly on a single
        argument, that argument becomes optional and F2PY computes it from the
        shape of the array; ``x(0:n)`` gives ``n = len(x) - 1``. Otherwise the
        argument is required and F2PY checks that the shapes agree.
@@ -132,8 +135,11 @@ Array declarations
      - ``x(*)``, ``x(0:*)``
      - The array is passed as given; pass its size in another argument.
    * - Bounds that use ``SIZE``
-     - ``y(size(x))``, ``y(size(x, 1))``
-     - ``x`` has to come before ``y`` in the argument list.
+      - ``y(size(x))``, ``y(size(x, dim=1))``
+      - The wrapper converts ``x`` before evaluating the dependent bound.
+        ``LBOUND`` and ``UBOUND`` accept a scalar ``DIM`` and retain the
+        declared lower bound, including lower bounds of assumed-shape dummies.
+        A zero extent has lower bound 1 and upper bound 0.
    * - Deferred shape
      - ``real, allocatable :: x(:)``
      - Allocatable module variables only, see :doc:`python-usage`. Module
@@ -156,31 +162,76 @@ F2PY translates a kind to a C type in these cases:
 * the kinds of the ``iso_c_binding`` and ``iso_fortran_env`` intrinsic
   modules.
 
-F2PY does not resolve a kind expression written in the declaration itself,
-such as ``real(kind=kind(0.0d0))``, nor a named constant declared in the module
-that contains the procedure. In these cases it warns (``getctype``) and uses
-the C type of the default kind, which does not match the data. Move the
-constant to a separate module, or map the kind to a C type in a
-``.f2py_f2cmap`` file, see "Dealing with KIND specifiers" in
-:doc:`advanced/use_cases`.
+The same expression resolver handles a selector written directly in a
+declaration, such as ``real(kind=kind(0.0d0))``, and constants declared in the
+containing module. It follows host association, ``USE``, ``ONLY`` lists and
+renamed imports through the supplied modules. A local declaration takes
+precedence over an imported name or an intrinsic with the same spelling.
+The original compiler's kind numbers still need a corresponding entry in
+the C type map; ``.f2py_f2cmap`` describes an explicit mapping, see "Dealing
+with KIND specifiers" in :doc:`advanced/use_cases`.
 
 Named constants and initialization expressions
 ==============================================
 
-F2PY evaluates a named constant only where it needs a number: in the bounds,
-kinds and lengths of the declarations that it wraps. It can evaluate integer
-and real literals, arithmetic, references to other named constants, and the
-intrinsics ``kind``, ``selected_int_kind`` and ``selected_real_kind``. Other
-intrinsic functions, for example ``tiny``, ``huge``, ``epsilon`` or
-``digits``, are not evaluated. Named constants that use them work everywhere
-else, including module constants read from Python, whose values the Fortran
-compiler computes. Do not use them in the bounds or the kind of a wrapped
-argument; write a literal there, if necessary in a signature file.
+F2PY needs scalar integer values for kinds, character lengths and constant
+array bounds. With a selected compiler it evaluates these expressions by
+compiling and running a small Fortran query. The query reconstructs only
+the required typed ``PARAMETER`` declarations and intrinsic-module imports;
+it does not compile or run the user's procedures. Consequently the compiler
+defines the result of ``TINY``, ``HUGE``, ``EPSILON``, ``DIGITS``,
+``SELECTED_REAL_KIND`` and other initialization-expression intrinsics, with
+the selected compiler flags. Real and complex parameters retain their
+declared types when they contribute to an integer expression. Inquiries into
+a declared character length or an explicit array shape use the declaration
+without allocating a character or array value of that size.
 
-As for kinds, a named constant declared in the module that contains a
-procedure is not known to F2PY when it wraps that procedure. Used in a bound
-or a length, it makes the generated C code fail to compile. Declare such
-constants in a separate module and import it with ``USE``.
+For a Meson build with ``-c``, F2PY uses ``FC`` when it is set and otherwise
+asks Meson which Fortran compiler it selects. Set ``FFLAGS`` and the existing
+``--f77flags``/``--f90flags`` options consistently with the source. Compiler
+selection, the working directory and ``PATH`` participate in query caching.
+A compiler, linker or target-execution error is an error; it does not select
+a different processor's answer. A configured cross target needs an
+executable wrapper. Generation without ``-c`` can use ``FC`` explicitly;
+without a selected compiler, processor-dependent expressions remain in the
+signature rather than receiving guessed kind numbers.
+
+For example, a native build can wrap this declaration directly::
+
+    module limits
+      implicit none
+      integer, parameter :: count = merge(7,0,tiny(1.0)>0.0)
+    contains
+      subroutine fill(values)
+        integer, intent(out) :: values(count)
+        values = 1
+      end subroutine fill
+    end module limits
+
+``python -m numpy.f2py -c limits.f90 -m limits_ext --backend meson`` produces
+``limits_ext.limits.fill()`` with shape ``(7,)``. Ordinary procedure bodies
+can allocate and deallocate local arrays; that allocation is performed by
+the original compiled procedure. It does not require translating executable
+Fortran statements into C.
+
+Bounds and character lengths that depend on call arguments are evaluated
+at the call. Supported integer operations are ``+``, ``-``, ``*``, ``/`` and
+``**``; integer ``ABS``, ``SIGN``, ``DIM``, ``MIN``, ``MAX``, ``MOD``,
+``MODULO`` and ``MERGE``; scalar integer conversion; and ``LEN``,
+``LEN_TRIM``, ``SIZE``, ``LBOUND`` and ``UBOUND`` inquiries on converted
+arguments. Constant integer subexpressions, including processor inquiries,
+are resolved through the compiler. The C calculation does not cancel
+integer division or reassociate powers. The native Fortran wrapper keeps
+the corresponding Fortran declaration instead of receiving C helper names.
+An invalid runtime divisor, subscript, inquiry dimension or pointer-sized
+integer result raises a Python exception before the native call.
+
+These rules do not translate an arbitrary user-written specification
+function into a C expression, or a runtime real expression into integer
+shape arithmetic. Such interfaces need an explicit integer size argument
+or a signature declaration whose size can be computed from the supported
+integer arguments. Intrinsic calls in the executable body are handled by
+the Fortran compiler without this interface restriction.
 
 Array constructors in declarations have to use the Fortran 95 form
 ``(/ ... /)``; the Fortran 2003 form ``[ ... ]`` is not understood there.
@@ -196,6 +247,13 @@ declaration that caused it:
   ``f2py_rout_<extension>_<module>_<procedure>`` for module procedures,
   between the banners ``/*** <procedure> ***/`` and
   ``/*** end of <procedure> ***/``. C compiler errors name this function.
+* A comment immediately preceding that wrapper records the original source
+  file and its inclusive procedure line range. For example,
+  ``/* Fortran source: 'limits.f90':5-8 */`` links the C wrapper to the
+  declaration and body above. Continuation lines, included files and
+  signature-file procedures retain their own source ranges. The C line
+  number remains a generated-code line; the comment supplies the Fortran
+  range without replacing the compiler's C location.
 * ``f2py -h <file>.pyf <sources>`` writes the signatures as F2PY understood
   them. Each procedure is annotated with the file and module it comes from,
   for example ``subroutine ortprj(...) ! in :aov:aov.f90:aov``. Compare it

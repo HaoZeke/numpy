@@ -320,14 +320,16 @@ def getarrdims(a, var, verbose=0):
         for d in dim:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
-                ret['setdims'] = f"{ret['setdims']}#varname#_Dims[{i}]={d},"
+                ret['setdims'] += (
+                    f"#varname#_Dims[{i}]=f2py_spec_max(0,({d})),")
         if ret['setdims']:
             ret['setdims'] = ret['setdims'][:-1]
         ret['cbsetdims'], i = '', -1
         for d in var['dimension']:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
-                ret['cbsetdims'] = f"{ret['cbsetdims']}#varname#_Dims[{i}]={d},"
+                ret['cbsetdims'] += (
+                    f"#varname#_Dims[{i}]=f2py_spec_max(0,({d})),")
             elif isintent_in(var):
                 outmess('getarrdims:warning: assumed shape array, using 0 '
                         f'instead of {d!r}\n')

@@ -5,6 +5,7 @@ extern "C" {
 #endif
 
 #include <Python.h>
+#include <stdarg.h>
 
 #ifndef NPY_NO_DEPRECATED_API
 #define NPY_NO_DEPRECATED_API NPY_API_VERSION
@@ -45,6 +46,201 @@ Fortran (module) routines, COMMON blocks, module data.
 
 Author: Pearu Peterson <pearu@cens.ioc.ee>
 */
+
+/* Declaration arithmetic preserves Fortran grouping at pointer-sized width. */
+static NPY_INLINE npy_intp
+f2py_spec_overflow(void)
+{
+    if (!PyErr_Occurred()) {
+        PyErr_SetString(PyExc_OverflowError, "Fortran declaration integer exceeds npy_intp");
+    }
+    return 0;
+}
+
+static NPY_INLINE npy_intp
+f2py_spec_add(npy_intp a, npy_intp b)
+{
+    if ((b > 0 && a > NPY_MAX_INTP - b) || (b < 0 && a < NPY_MIN_INTP - b)) {
+        return f2py_spec_overflow();
+    }
+    return a + b;
+}
+
+static NPY_INLINE npy_intp
+f2py_spec_sub(npy_intp a, npy_intp b)
+{
+    if ((b > 0 && a < NPY_MIN_INTP + b) || (b < 0 && a > NPY_MAX_INTP + b)) {
+        return f2py_spec_overflow();
+    }
+    return a - b;
+}
+
+static NPY_INLINE npy_intp
+f2py_spec_mul(npy_intp a, npy_intp b)
+{
+    if ((a > 0 && ((b > 0 && a > NPY_MAX_INTP / b) ||
+                   (b < 0 && b < NPY_MIN_INTP / a))) ||
+        (a < 0 && ((b > 0 && a < NPY_MIN_INTP / b) ||
+                   (b < 0 && a < NPY_MAX_INTP / b)))) {
+        return f2py_spec_overflow();
+    }
+    return a * b;
+}
+
+static NPY_INLINE npy_intp
+f2py_spec_div(npy_intp a, npy_intp b)
+{
+    if (b == 0) {
+        if (!PyErr_Occurred()) {
+            PyErr_SetString(PyExc_ZeroDivisionError, "zero divisor in Fortran declaration");
+        }
+        return 0;
+    }
+    if (a == NPY_MIN_INTP && b == -1) {
+        return f2py_spec_overflow();
+    }
+    return a / b;
+}
+
+static NPY_INLINE npy_intp
+f2py_spec_mod(npy_intp a, npy_intp b)
+{
+    if (b == 0) {
+        (void)f2py_spec_div(a, b);
+        return 0;
+    }
+    return a == NPY_MIN_INTP && b == -1 ? 0 : a % b;
+}
+
+static NPY_INLINE npy_intp
+f2py_spec_modulo(npy_intp a, npy_intp b)
+{
+    npy_intp remainder = f2py_spec_mod(a, b);
+    return remainder && ((remainder < 0) != (b < 0)) ? remainder + b : remainder;
+}
+
+static NPY_INLINE npy_intp
+f2py_spec_pow(npy_intp base, npy_intp exponent)
+{
+    npy_intp result = 1;
+    if (exponent < 0) {
+        return base == 1 ? 1 : base == -1 ? (exponent % 2 ? -1 : 1) : 0;
+    }
+    while (exponent && !PyErr_Occurred()) {
+        if (exponent & 1) {
+            result = f2py_spec_mul(result, base);
+        }
+        exponent /= 2;
+        if (exponent) {
+            base = f2py_spec_mul(base, base);
+        }
+    }
+    return result;
+}
+
+static NPY_INLINE npy_intp f2py_spec_cast(npy_intp a) { return a; }
+static NPY_INLINE npy_intp f2py_spec_min(npy_intp a, npy_intp b) { return a < b ? a : b; }
+static NPY_INLINE npy_intp f2py_spec_max(npy_intp a, npy_intp b) { return a > b ? a : b; }
+static NPY_INLINE npy_intp f2py_spec_abs(npy_intp a) { return a < 0 ? f2py_spec_sub(0, a) : a; }
+static NPY_INLINE npy_intp f2py_spec_sign(npy_intp a, npy_intp b) { return b < 0 ? (a > 0 ? -a : a) : f2py_spec_abs(a); }
+static NPY_INLINE npy_intp f2py_spec_dim(npy_intp a, npy_intp b) { return a > b ? f2py_spec_sub(a, b) : 0; }
+static NPY_INLINE npy_intp f2py_spec_merge(npy_intp a, npy_intp b, npy_intp mask) { return mask ? a : b; }
+static NPY_INLINE npy_intp f2py_spec_not(npy_intp a) { return !a; }
+static NPY_INLINE npy_intp f2py_spec_and(npy_intp a, npy_intp b) { return a && b; }
+static NPY_INLINE npy_intp f2py_spec_or(npy_intp a, npy_intp b) { return a || b; }
+static NPY_INLINE npy_intp f2py_spec_eq(npy_intp a, npy_intp b) { return a == b; }
+static NPY_INLINE npy_intp f2py_spec_ne(npy_intp a, npy_intp b) { return a != b; }
+static NPY_INLINE npy_intp f2py_spec_lt(npy_intp a, npy_intp b) { return a < b; }
+static NPY_INLINE npy_intp f2py_spec_le(npy_intp a, npy_intp b) { return a <= b; }
+static NPY_INLINE npy_intp f2py_spec_gt(npy_intp a, npy_intp b) { return a > b; }
+static NPY_INLINE npy_intp f2py_spec_ge(npy_intp a, npy_intp b) { return a >= b; }
+static NPY_INLINE npy_intp f2py_spec_lbound(npy_intp lower, npy_intp extent) { return extent == 0 ? 1 : lower; }
+static NPY_INLINE npy_intp f2py_spec_ubound(npy_intp lower, npy_intp extent) { return extent == 0 ? 0 : f2py_spec_add(lower, extent - 1); }
+
+static NPY_INLINE npy_intp
+f2py_spec_size_impl(PyArrayObject *array, npy_intp dim)
+{
+    if (array == NULL || dim < 0 || dim > PyArray_NDIM(array)) {
+        if (!PyErr_Occurred()) {
+            PyErr_SetString(PyExc_ValueError, "invalid DIM in Fortran declaration inquiry");
+        }
+        return 0;
+    }
+    return dim == 0 ? PyArray_SIZE(array) : PyArray_DIM(array, dim - 1);
+}
+
+static NPY_INLINE npy_intp
+f2py_spec_select(npy_intp dim, int rank, ...)
+{
+    va_list arguments;
+    npy_intp result = 0;
+    int axis;
+    if (dim < 1 || dim > rank) {
+        if (!PyErr_Occurred()) {
+            PyErr_SetString(PyExc_ValueError, "invalid DIM in Fortran bound inquiry");
+        }
+        return 0;
+    }
+    va_start(arguments, rank);
+    for (axis = 1; axis <= rank; axis++) {
+        npy_intp value = va_arg(arguments, npy_intp);
+        if (axis == dim) {
+            result = value;
+        }
+    }
+    va_end(arguments);
+    return result;
+}
+
+static NPY_INLINE npy_intp
+f2py_spec_item_impl(PyArrayObject *array, ...)
+{
+    npy_intp indexes[NPY_MAXDIMS], result;
+    PyObject *item, *integer;
+    va_list arguments;
+    int axis;
+    if (PyErr_Occurred()) {
+        return 0;
+    }
+    if (array == NULL || !PyArray_ISINTEGER(array)) {
+        PyErr_SetString(PyExc_TypeError, "Fortran declaration needs an INTEGER array");
+        return 0;
+    }
+    va_start(arguments, array);
+    for (axis = 0; axis < PyArray_NDIM(array); axis++) {
+        indexes[axis] = va_arg(arguments, npy_intp);
+        if (indexes[axis] < 0 || indexes[axis] >= PyArray_DIM(array, axis)) {
+            va_end(arguments);
+            PyErr_SetString(PyExc_IndexError, "Fortran declaration subscript is out of bounds");
+            return 0;
+        }
+    }
+    va_end(arguments);
+    item = PyArray_GETITEM(array, PyArray_GetPtr(array, indexes));
+    if (item == NULL) {
+        return 0;
+    }
+    integer = PyNumber_Index(item);
+    Py_DECREF(item);
+    if (integer == NULL) {
+        return 0;
+    }
+    result = PyLong_AsSsize_t(integer);
+    Py_DECREF(integer);
+    return result;
+}
+
+static NPY_INLINE npy_intp
+f2py_spec_len_trim(const char *string, npy_intp length)
+{
+    while (length > 0 && string[length - 1] == ' ') {
+        length--;
+    }
+    return length;
+}
+
+#define f2py_spec_size(var, dim) f2py_spec_size_impl((PyArrayObject *)capi_ ## var ## _as_array, dim)
+#define f2py_spec_item(var, ...) f2py_spec_item_impl((PyArrayObject *)capi_ ## var ## _as_array, __VA_ARGS__)
 
 #define F2PY_MAX_DIMS 40
 
