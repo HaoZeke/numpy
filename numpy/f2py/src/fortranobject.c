@@ -288,6 +288,141 @@ fortran_doc(FortranDataDef def)
     }
 }
 
+/* Static descriptors provide uncached access to native module state. */
+typedef struct {
+    PyGetSetDef *defs;
+    Py_ssize_t count;
+} F2PyModuleGetSet;
+
+#define F2PY_MODULE_GETSET_KEY "_f2py_module_getset_registry"
+#define F2PY_MODULE_GETSET_CAPSULE "f2py.module_getset_registry"
+
+static int
+f2py_module_has_name(PyObject *dict, const char *name)
+{
+    PyObject *key = PyUnicode_FromString(name);
+    if (key == NULL) return -1;
+    int present = PyDict_Contains(dict, key);
+    Py_DECREF(key);
+    return present;
+}
+
+static void
+f2py_module_getset_free(PyObject *capsule)
+{
+    PyObject *error = PyErr_GetRaisedException();
+    void *registry = PyCapsule_GetPointer(capsule,
+                                         F2PY_MODULE_GETSET_CAPSULE);
+    if (registry != NULL) PyMem_Free(registry);
+    if (PyErr_Occurred()) PyErr_WriteUnraisable(capsule);
+    PyErr_SetRaisedException(error);
+}
+
+static int
+f2py_module_getset_find(PyFortranObject *fp, const char *name,
+                      PyGetSetDef **definition)
+{
+    PyObject *capsule = NULL;
+    *definition = NULL;
+    if (fp->dict == NULL) return 0;
+#if PY_VERSION_HEX >= 0x030D0000 && \
+    (!defined(Py_LIMITED_API) || Py_LIMITED_API >= 0x030D0000)
+    int found = PyDict_GetItemStringRef(fp->dict, F2PY_MODULE_GETSET_KEY,
+                                      &capsule);
+    if (found <= 0) return found;
+#else
+    PyObject *key = PyUnicode_FromString(F2PY_MODULE_GETSET_KEY);
+    if (key == NULL) return -1;
+    capsule = PyDict_GetItemWithError(fp->dict, key);
+    Py_XINCREF(capsule);
+    Py_DECREF(key);
+    if (capsule == NULL) return PyErr_Occurred() ? -1 : 0;
+#endif
+    F2PyModuleGetSet *registry = PyCapsule_GetPointer(
+        capsule, F2PY_MODULE_GETSET_CAPSULE);
+    if (registry == NULL) {
+        Py_DECREF(capsule);
+        return -1;
+    }
+    for (Py_ssize_t i = 0; i < registry->count; ++i) {
+        if (strcmp(name, registry->defs[i].name) == 0) {
+            *definition = &registry->defs[i];
+            break;
+        }
+    }
+    Py_DECREF(capsule);
+    return *definition == NULL ? 0 : 1;
+}
+
+int
+F2Py_SetModuleGetSet(PyObject *object, PyGetSetDef *defs, Py_ssize_t count)
+{
+    PyObject *replacement = NULL, *capsule = NULL;
+    F2PyModuleGetSet *registry = NULL;
+    if (!PyFortran_Check(object) || count < 0 || (count && defs == NULL)) {
+        PyErr_SetString(PyExc_TypeError, "invalid native module descriptors");
+        return -1;
+    }
+    PyFortranObject *fp = (PyFortranObject *)object;
+    replacement = fp->dict == NULL ? PyDict_New() : PyDict_Copy(fp->dict);
+    if (replacement == NULL) return -1;
+    int present = f2py_module_has_name(replacement, F2PY_MODULE_GETSET_KEY);
+    if (present < 0) goto fail;
+    if (present) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "native module descriptors are already registered");
+        goto fail;
+    }
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        if (defs[i].name == NULL || defs[i].get == NULL ||
+            strcmp(defs[i].name, F2PY_MODULE_GETSET_KEY) == 0) {
+            PyErr_SetString(PyExc_ValueError, "invalid native module attribute");
+            goto fail;
+        }
+        present = f2py_module_has_name(replacement, defs[i].name);
+        if (present < 0) goto fail;
+        if (present) {
+            PyErr_Format(PyExc_ValueError,
+                         "duplicate native module attribute: %s", defs[i].name);
+            goto fail;
+        }
+        for (int j = 0; j < fp->len; ++j) {
+            if (strcmp(fp->defs[j].name, defs[i].name) == 0) {
+                PyErr_Format(PyExc_ValueError,
+                             "duplicate native module attribute: %s",
+                             defs[i].name);
+                goto fail;
+            }
+        }
+        PyObject *descriptor = PyDescr_NewGetSet(&PyFortran_Type, &defs[i]);
+        if (descriptor == NULL) goto fail;
+        int result = PyDict_SetItemString(replacement, defs[i].name, descriptor);
+        Py_DECREF(descriptor);
+        if (result < 0) goto fail;
+    }
+    registry = PyMem_Malloc(sizeof(*registry));
+    if (registry == NULL) {
+        PyErr_NoMemory();
+        goto fail;
+    }
+    registry->defs = defs;
+    registry->count = count;
+    capsule = PyCapsule_New(registry, F2PY_MODULE_GETSET_CAPSULE,
+                            f2py_module_getset_free);
+    if (capsule == NULL) goto fail;
+    registry = NULL;
+    if (PyDict_SetItemString(replacement, F2PY_MODULE_GETSET_KEY, capsule) < 0)
+        goto fail;
+    Py_DECREF(capsule);
+    Py_XSETREF(fp->dict, replacement);
+    return 0;
+fail:
+    Py_XDECREF(capsule);
+    PyMem_Free(registry);
+    Py_XDECREF(replacement);
+    return -1;
+}
+
 static FortranDataDef *save_def; /* save pointer of an allocatable array */
 static void
 set_data(char *d, npy_intp *f)
@@ -303,6 +438,11 @@ static PyObject *
 fortran_getattr(PyFortranObject *fp, char *name)
 {
     int i, j, k, flag;
+    PyGetSetDef *definition;
+    int registered = f2py_module_getset_find(fp, name, &definition);
+    if (registered < 0) return NULL;
+    if (registered > 0)
+        return definition->get((PyObject *)fp, definition->closure);
     if (fp->dict != NULL) {
         // python 3.13 added PyDict_GetItemRef
 #if PY_VERSION_HEX < 0x030D0000
@@ -401,6 +541,17 @@ static int
 fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
 {
     int i, j, flag;
+    PyGetSetDef *definition;
+    int registered = f2py_module_getset_find(fp, name, &definition);
+    if (registered < 0) return -1;
+    if (registered > 0) {
+        if (v == NULL || definition->set == NULL) {
+            PyErr_Format(PyExc_AttributeError,
+                         "native module attribute is read-only: %s", name);
+            return -1;
+        }
+        return definition->set((PyObject *)fp, v, definition->closure);
+    }
     PyArrayObject *arr = NULL;
     for (i = 0, j = 1; i < fp->len && (j = strcmp(name, fp->defs[i].name));
          i++)

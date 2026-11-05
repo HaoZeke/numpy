@@ -92,6 +92,10 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init);
 extern PyObject *
 PyFortranObject_NewAsAttr(FortranDataDef *defs);
 
+/* Definitions and their strings/closures have static storage duration. */
+extern int
+F2Py_SetModuleGetSet(PyObject *object, PyGetSetDef *defs, Py_ssize_t count);
+
 PyObject *
 F2PyCapsule_FromVoidPtr(void *ptr, void (*dtor)(PyObject *));
 void *
