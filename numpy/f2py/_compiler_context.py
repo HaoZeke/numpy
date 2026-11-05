@@ -151,7 +151,7 @@ def from_environment(compiler=None):
         command=_relative_program(command, directory), compile_args=flags,
         link_args=linker, runner=_relative_program(runner, directory),
         selected=bool(compiler), working_directory=directory,
-        search_path=os.environ.get('PATH', ''))
+        search_path=os.environ.get('PATH', os.defpath))
 
 
 def current(compiler=None):

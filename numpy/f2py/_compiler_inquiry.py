@@ -90,6 +90,7 @@ def _selected_real_kind_program(context, kinds):
         for phase, command in commands:
             completed = subprocess.run(
                 command, cwd=context.working_directory or None,
+                env=dict(os.environ, PATH=context.search_path),
                 capture_output=True, timeout=_PROBE_COMPILE_TIMEOUT, check=False)
             if completed.returncode:
                 raise _compiler_context.CompilerExecutionError(
@@ -137,6 +138,7 @@ def _execute_selected_real_kind(context, p, r, radix):
     try:
         completed = subprocess.run(
             command, input=query.encode('ascii'), cwd=owner.name,
+            env=dict(os.environ, PATH=context.search_path),
             capture_output=True, timeout=_PROBE_RUN_TIMEOUT, check=False)
     except (OSError, subprocess.SubprocessError) as error:
         raise _compiler_context.CompilerExecutionError(
