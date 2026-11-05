@@ -283,7 +283,7 @@ def _handle_module(description):
 
     same_left = same_pointer('a', 'left', 'ha')
     same_right = same_pointer('b', 'right', 'hb')
-    return f'''module {module}
+    source = f'''module {module}
   use {description['owner']}, only: {description['local_type']} => {description['native']}
 {alias_uses}
   use iso_c_binding, only: c_ptr, c_null_ptr, c_f_pointer, c_loc, c_associated, &
@@ -410,6 +410,60 @@ contains
   end function {prefix}_same
 end module {module}
 '''
+    return _kind_only_module(source, description) if not description['lengths'] else source
+
+
+def _kind_only_module(source, description):
+    """Store LEN-free native targets without a nested PDT pointer component."""
+    prefix = description['prefix']
+    box = description['box']
+    pointer = description['pointer_spec']
+    declaration = f'''  type :: {box}
+    type({pointer}), pointer :: value => null()
+    logical :: owns_value = .false.
+  end type {box}
+'''
+    if source.count(declaration) != 1:
+        raise ValueError('fixed holder declaration is not unique')
+    source = source.replace(declaration, '')
+    start = source.index(f'  function {prefix}_adopt(')
+    end = source.index(f'  end function {prefix}_adopt', start)
+    end = source.index('\n', end) + 1
+    adopt = f'''  function {prefix}_adopt(value) result(handle)
+    type({pointer}), pointer, intent(inout) :: value
+    type(c_ptr) :: handle
+    handle = c_null_ptr
+    if (.not. associated(value)) return
+    handle = f2py_pdt_enclose(c_loc(value), &
+      {description['identity_number']}_c_int64_t, {description['kind_value']}, &
+      [integer(c_int) :: ], c_funloc({prefix}_free))
+    if (.not. c_associated(handle)) deallocate(value)
+  end function {prefix}_adopt
+'''
+    source = source[:start] + adopt + source[end:]
+    start = source.index(f'  subroutine {prefix}_free(')
+    end = source.index(f'  end subroutine {prefix}_free', start)
+    end = source.index('\n', end) + 1
+    free = f'''  subroutine {prefix}_free(handle) bind(c)
+    type(c_ptr), value :: handle
+    type({pointer}), pointer :: value
+    type(f2py_pdt_handle), pointer :: header
+    header => f2py_pdt_header(handle)
+    if (.not. associated(header)) return
+    if (header%identity /= {description['identity_number']}_c_int64_t) return
+    if (header%storage == 0 .and. c_associated(header%payload)) then
+      call c_f_pointer(header%payload, value)
+      if (associated(value)) deallocate(value)
+    end if
+    call f2py_pdt_release_header(header)
+  end subroutine {prefix}_free
+'''
+    source = source[:start] + free + source[end:]
+    source = source.replace(f'    type({box}), pointer :: box\n', '')
+    cast = '    call c_f_pointer(header%payload, box)\n    value => box%value\n'
+    if source.count(cast) != 1:
+        raise ValueError('fixed holder reconstruction is not unique')
+    return source.replace(cast, '    call c_f_pointer(header%payload, value)\n')
 
 
 def _handle_uses(type_map):
