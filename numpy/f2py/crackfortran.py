@@ -1002,7 +1002,7 @@ typedefpattern = re.compile(
     r'(?:,(?P<attributes>[\w(),]+))?(::)?(?P<name>\b[a-z$_][\w$]*\b)'
     r'(?:\((?P<params>[\w,]*)\))?\Z', re.I)
 nameargspattern = re.compile(
-    r'\s*(?P<name>\b[\w$]+\b)\s*(@\(@\s*(?P<args>[\w\s,]*)\s*@\)@|)\s*((result(\s*@\(@\s*(?P<result>\b[\w$]+\b)\s*@\)@|))|(bind\s*@\(@\s*(?P<bind>(?:(?!@\)@).)*)\s*@\)@))*\s*\Z', re.I)
+    r'\s*(?P<name>\b[\w$]+\b)\s*(@\(@\s*(?P<args>(?:(?!@\)@).)*)\s*@\)@|)\s*((result(\s*@\(@\s*(?P<result>\b[\w$]+\b)\s*@\)@|))|(bind\s*@\(@\s*(?P<bind>(?:(?!@\)@).)*)\s*@\)@))*\s*\Z', re.I)
 operatorpattern = re.compile(
     r'\s*(?P<scheme>(operator|assignment))'
     r'@\(@\s*(?P<name>[^)]+)\s*@\)@\s*\Z', re.I)
@@ -3542,16 +3542,16 @@ def determineexprtype(expr, vars, rules={}):
         return {'typespec': 'complex'}
     m = determineexprtype_re_2.match(expr)
     if m:
-        if 'name' in m.groupdict() and m.group('name'):
-            outmess(
-                f'determineexprtype: selected kind types not supported ({repr(expr)})\n')
-        return {'typespec': 'integer'}
+        result = {'typespec': 'integer'}
+        if m.group('name'):
+            result['kindselector'] = {'kind': m.group('name')}
+        return result
     m = determineexprtype_re_3.match(expr)
     if m:
-        if 'name' in m.groupdict() and m.group('name'):
-            outmess(
-                f'determineexprtype: selected kind types not supported ({repr(expr)})\n')
-        return {'typespec': 'real'}
+        result = {'typespec': 'real'}
+        if m.group('name'):
+            result['kindselector'] = {'kind': m.group('name')}
+        return result
     for op in ['+', '-', '*', '/']:
         for e in [x.strip() for x in markoutercomma(expr, comma=op).split('@' + op + '@')]:
             if e in vars:
