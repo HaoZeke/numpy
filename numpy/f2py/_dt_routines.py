@@ -757,10 +757,11 @@ def generate_fortran_wrappers(modulename, type_blocks, routines=None,
                 lines.append(
                     f'    if (allocated(obj%{mname})) '
                     f'deallocate(obj%{mname})')
-                lines.append('    if (dim_1 > 0) then')
+                lines.append(f'    if (any([{alloc_shape}] < 0)) return')
                 lines.append(
-                    f'      allocate(obj%{mname}'
+                    f'    allocate(obj%{mname}'
                     f'({alloc_shape}))')
+                lines.append(f'    if (all([{alloc_shape}] > 0)) then')
                 lines.append(
                     f'      call c_f_pointer(src, src_arr, '
                     f'[{cf_shape}])')

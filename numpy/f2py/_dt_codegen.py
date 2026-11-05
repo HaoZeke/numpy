@@ -1828,7 +1828,7 @@ static PyObject *
             set_dim_args = ', '.join(
                 f'(int)PyArray_DIM((PyArrayObject *)arr, {i})'
                 for i in range(ndim))
-            dealloc_args = ', '.join(['0'] * ndim + ['NULL'])
+            dealloc_args = ', '.join(['-1'] * ndim + ['NULL'])
 
             setter_name = f'Py{typename}_set_{mname}'
             funcs.append(f"""\
