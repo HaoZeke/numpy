@@ -275,6 +275,33 @@ class TestStringLiteralDepend:
         assert mask("'mkdir '//badvar2") == "''//badvar2"
         assert mask("a + b") == "a + b"
 
+    def test_mask_backslash_and_doubled_quotes(self):
+        # Fortran escapes a quote by doubling it. A backslash is not an
+        # escape, so a Windows path literal must not swallow the name
+        # that follows it.
+        mask = crackfortran.mask_string_literals
+        assert mask(r"'C:\'//n//'x'") == "''//n//''"
+        assert mask(r'"C:\"//n//"x"') == "''//n//''"
+        assert mask(r"'it''s'//n") == "''//n"
+        assert mask(r"'a'//n") == "''//n"
+        assert mask(r'"it""s"//n') == "''//n"
+
+    def test_split_by_unquoted_backslash_literal(self):
+        # The same quote rule decides where a comma, semicolon, or
+        # comment sits. A backslash-quote ends the literal.
+        before, after = crackfortran.split_by_unquoted(
+            r"integer :: m = len('C:\') + n; integer :: k", ";")
+        assert before == r"integer :: m = len('C:\') + n"
+        assert after == "; integer :: k"
+        before, after = crackfortran.split_by_unquoted(
+            r"call foo('C:\', n)", ",")
+        assert before == r"call foo('C:\'"
+        assert after == ", n)"
+        before, after = crackfortran.split_by_unquoted(
+            r"integer :: m = len('C:\') + n ! tail", "!")
+        assert before == r"integer :: m = len('C:\') + n "
+        assert after == "! tail"
+
     def test_no_self_depend_from_literal(self):
         fpath = util.getpath("tests", "src", "crackfortran", "gh28700.f90")
         mod = crackfortran.crackfortran([str(fpath)])
@@ -354,6 +381,41 @@ class TestStringLiteralDepend:
         err = capsys.readouterr().err
         assert "cyclic dependencies" in err
 
+    def test_backslash_literal_depend(self):
+        # A later argument used after a backslash-quote must stay a
+        # dependency. ``len('C:\'//n//'x')`` also has to survive the
+        # comma and parenthesis splitter, or the declaration is lost.
+        fpath = util.getpath("tests", "src", "crackfortran",
+                             "backslash_literal.pyf")
+        mod = crackfortran.crackfortran([str(fpath)])
+        iface = next(b for b in mod
+                     if b.get("name") == "backslash_literal")["body"][0]
+
+        def routine(name):
+            return next(b for b in iface["body"] if b.get("name") == name)
+
+        joinpath = routine("joinpath")
+        assert joinpath["vars"]["path"]["depend"] == ["name"]
+        assert joinpath["vars"]["path"]["="] == r"'c:\'//name//'x'"
+        order = joinpath["sortvars"]
+        assert order.index("name") < order.index("path")
+
+        joinpath_dq = routine("joinpath_dq")
+        assert joinpath_dq["vars"]["path"]["depend"] == ["name"]
+        assert joinpath_dq["vars"]["path"]["="] == r'"c:\"//name//"x"'
+        order = joinpath_dq["sortvars"]
+        assert order.index("name") < order.index("path")
+
+        sized = routine("sized")
+        assert sized["vars"]["m"]["depend"] == ["n"]
+        assert sized["vars"]["m"]["="] == r"len('c:\'//n//'x')"
+        _, depargs = getargs2(sized)
+        assert depargs.index("n") < depargs.index("m")
+        assert depargs.index("m") < depargs.index("work")
+        capi_maps.depargs = depargs
+        work_dims = capi_maps.getarrdims("work", sized["vars"]["work"])
+        assert work_dims["setdims"] == "#varname#_Dims[0]=m"
+
 
 @pytest.mark.slow
 class TestLdaBeforeNRuntime(util.F2PyTest):
@@ -371,6 +433,26 @@ class TestLdaBeforeNRuntime(util.F2PyTest):
         gotn, gotlda = self.module.probe(a)
         assert gotn == 4
         assert gotlda == 4
+
+
+@pytest.mark.slow
+class TestBackslashLiteralDepend(util.F2PyTest):
+    # ``m`` is declared before ``n`` and its initializer must still
+    # read ``n``. The Fortran text ``'C:\'//`` ... ``//'x'`` is placed
+    # in C comments so the generated assignment is valid C and equals
+    # ``n``. The old quote matcher treated the backslash as an escape,
+    # swallowed ``n``, and left ``m`` at 0.
+    module_name = "backslash_literal_depend"
+    sources = [
+        util.getpath("tests", "src", "crackfortran",
+                     "backslash_literal_depend.pyf"),
+        util.getpath("tests", "src", "crackfortran",
+                     "backslash_literal_depend.f90"),
+    ]
+
+    def test_hidden_expr_uses_later_argument(self):
+        assert self.module.probe(4) == 4
+        assert self.module.probe(1) == 1
 
 
 @pytest.mark.slow
