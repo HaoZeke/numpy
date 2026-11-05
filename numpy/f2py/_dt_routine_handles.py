@@ -295,8 +295,21 @@ def pdt_wrapper_handles(rout, args, result, fallback):
         names[name] = local
         if hidden_output or name == result:
             actual_storage = storage or 'allocatable'
-            declarations.extend([_declaration(desc, actual_storage, local),
-                                 _declaration(desc, 'pointer', source)])
+            declarations.append(_declaration(desc, 'pointer', source))
+            if storage is None:
+                declarations.append(_declaration(desc, actual_storage, local))
+            else:
+                def output_scope(statements, dt=dt, desc=desc, local=local,
+                                 actual_storage=actual_storage):
+                    parameters = _translated_parameters(dt, names)
+                    values = [str(parameters.get(item['name'], ':'))
+                              for item in desc['lengths']]
+                    values = ['0' if value == '*' else value for value in values]
+                    specification = _type_spec(desc, values)
+                    return ['block',
+                            f'type({specification}), {actual_storage} :: {local}',
+                            *statements, 'end block']
+                universal.append(output_scope)
             if actual_storage == 'pointer':
                 pre.append(f'nullify({local})')
             if storage is None and name != result:
