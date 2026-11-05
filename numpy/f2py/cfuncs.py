@@ -816,7 +816,7 @@ character_from_pyobj(character* v, PyObject *obj, const char *errmess) {
             if (PyArray_SIZE(arr) > 0) {
                 npy_ucs4 c;
                 memcpy(&c, PyArray_BYTES(arr), sizeof(c));
-                if (!PyArray_ISNBO(PyArray_DESCR(arr)->byteorder)) {
+                if (!PyArray_ISNOTSWAPPED(arr)) {
                     c = ((c & 0x000000FFu) << 24) |
                         ((c & 0x0000FF00u) << 8) |
                         ((c & 0x00FF0000u) >> 8) |
