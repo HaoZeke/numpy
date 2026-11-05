@@ -448,10 +448,23 @@ def _resolve_type_for_kind(typeblock, kind_dict):
     using kind_dict values instead of defaults. Returns the copy.
     """
     import copy
+    import re
     tb = copy.deepcopy(typeblock)
     for mvar in get_type_members(tb).values():
         if _is_type_parameter(mvar):
             continue
+        if mvar.get('typeparams'):
+            from ._dt_handles import _type_arguments
+            from ._dt_routines import _type_param_value
+
+            arguments = []
+            for argument in _type_arguments('value(' + mvar['typeparams'] + ')'):
+                match = re.match(r'^(\w+\s*=)(?!=)(.*)$', argument)
+                keyword, expression = (match.groups() if match else ('', argument))
+                value = _type_param_value(expression.strip(), kind_dict)
+                arguments.append(keyword + (str(value) if value is not None
+                                             else expression))
+            mvar['typeparams'] = ', '.join(arguments)
         if 'kindselector' not in mvar:
             continue
         ks = mvar['kindselector']

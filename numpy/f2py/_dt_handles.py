@@ -231,15 +231,27 @@ contains
   integer(c_int) function f2py_pdt_length(handle, index) result(length) bind(c)
     type(c_ptr), value :: handle
     integer(c_int), value :: index
+    integer(c_int) :: status
+    status = f2py_pdt_length_value(handle, index, length)
+    if (status /= 0) length = -1
+  end function f2py_pdt_length
+
+  integer(c_int) function f2py_pdt_length_value(handle, index, length) result(status) bind(c)
+    type(c_ptr), value :: handle
+    integer(c_int), value :: index
+    integer(c_int), intent(out) :: length
     type(f2py_pdt_handle), pointer :: header
     integer(c_int), pointer :: values(:)
-    length = -1
+    status = 1
+    length = 0
     header => f2py_pdt_header(handle)
     if (.not. associated(header)) return
     if (index < 0 .or. index >= header%length_count) return
+    if (.not. c_associated(header%lengths)) return
     call c_f_pointer(header%lengths, values, [header%length_count])
     length = values(index + 1)
-  end function f2py_pdt_length
+    status = 0
+  end function f2py_pdt_length_value
 end module f2py_pdt_handle_runtime
 '''
 
@@ -470,6 +482,8 @@ def _handle_uses(type_map):
     """Import canonical helpers for local and imported parameterized types."""
     modules = set()
     for block in type_map.values():
+        if not _can_wrap_opaque(block, type_map):
+            continue
         for kinds, _ in _enumerate_specializations(block) or [(None, '')]:
             info = _handle_description(block, kind_override=kinds)
             if info is not None:

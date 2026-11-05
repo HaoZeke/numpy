@@ -7,8 +7,8 @@ import re
 def _handle_c_support(typename, len_info, identities):
     """Keep returned and module-bound objects in the native kind/LEN context."""
     lengths = '\n'.join(
-        f'''    int length_{index} = f2py_pdt_length(pointer, {index});
-    if (length_{index} < 0) {{
+        f'''    int length_{index};
+    if (f2py_pdt_length_value(pointer, {index}, &length_{index}) != 0) {{
         PyErr_SetString(PyExc_RuntimeError, "invalid native LEN metadata");
         return -1;
     }}
@@ -22,6 +22,7 @@ extern int f2py_pdt_validate(void *);
 extern int f2py_pdt_storage(void *);
 extern int f2py_pdt_kind(void *);
 extern int f2py_pdt_length(void *, int);
+extern int f2py_pdt_length_value(void *, int, int *);
 extern npy_int64 f2py_pdt_identity(void *);
 extern int f2py_pdt_writable(void *);
 
@@ -79,6 +80,19 @@ f2py_{typename}_checked(PyObject *object, const char *name, int write)
         return NULL;
     }}
     return pointer;
+}}
+
+static void *
+f2py_{typename}_checked_current(PyObject *object, int write)
+{{
+    Py{typename}Object *self = (Py{typename}Object *)object;
+    if (self->capsule == NULL) {{
+        PyErr_SetString(PyExc_RuntimeError, "object not initialized");
+        return NULL;
+    }}
+    const char *name = PyCapsule_GetName(self->capsule);
+    if (name == NULL) return NULL;
+    return f2py_{typename}_checked(object, name, write);
 }}
 
 static int
@@ -211,10 +225,26 @@ def _guard_boxed_accessors(functions, typename):
             chunk = text[begin:end]
             signature = chunk.partition('{')[0]
             write = int('PyObject *value' in signature)
+            owner = (f'    Py{typename}Object *self = '
+                     f'(Py{typename}Object *)selfobj;')
+            if owner in chunk:
+                error = '-1' if write else 'NULL'
+                chunk = chunk.replace(owner, owner + '\n' +
+                                      f'    if (f2py_{typename}_checked_current(selfobj, {write}) == NULL) return {error};')
             chunk = re.sub(
                 r'PyCapsule_GetPointer\(self->capsule, ("[^"\n]*")\)',
                 lambda match: (f'f2py_{typename}_checked(selfobj, '
                                f'{match[1]}, {write})'), chunk)
+            if write:
+                capture = re.search(
+                    r'f2py_' + re.escape(typename) +
+                    r'_checked\(selfobj, ("[^"\n]*"), 1\)', chunk)
+                if capture is not None:
+                    checked = f'f2py_{typename}_checked(selfobj, {capture[1]}, 1)'
+                    chunk = re.sub(
+                        r'(    if \(PyErr_Occurred\(\)\) return -1;\n)(?=    f2py_set_)',
+                        lambda match: (match[1] + f'    ptr = {checked};\n'
+                                       '    if (ptr == NULL) return -1;\n'), chunk)
             chunks.append(chunk)
         result.append(''.join(chunks))
     return result

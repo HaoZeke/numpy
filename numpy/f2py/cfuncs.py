@@ -13,6 +13,7 @@ import copy
 import sys
 
 from . import __version__
+from ._dt_c_handles import _hydrate_c_api
 
 f2py_version = __version__.version
 
@@ -1490,7 +1491,7 @@ typedef struct {
     int type_tag;       /* concrete type, for class(T) dispatch */
     int kind_value;     /* KIND parameter of a parameterized type */
 } f2py_dt_object;"""
-needs['f2py_dt_from_pyobj'] = ['f2py_dt_object']
+needs['f2py_dt_from_pyobj'] = ['f2py_dt_object', 'f2py_dt_hydrate']
 cfuncs['f2py_dt_from_pyobj'] = """
 /* Set *ptr to the Fortran object of an instance of type.  A negative
    want_tag accepts extensions of type, as class(T) does; otherwise the
@@ -1521,11 +1522,14 @@ f2py_dt_from_pyobj(void **ptr, int *tag, PyObject *obj, PyTypeObject *type,
     if (*ptr == NULL) {
         return 0;
     }
+    if (!f2py_dt_hydrate(obj, Py_TYPE(obj), *ptr)) return 0;
     *tag = dt->type_tag;
     return 1;
 }
 """
-needs['f2py_dt_to_pyobj'] = ['f2py_dt_object']
+needs['f2py_dt_hydrate'] = ['f2py_dt_object']
+cfuncs['f2py_dt_hydrate'] = _hydrate_c_api
+needs['f2py_dt_to_pyobj'] = ['f2py_dt_object', 'f2py_dt_hydrate']
 cfuncs['f2py_dt_to_pyobj'] = """
 /* Return a new instance of type that owns the Fortran object at ptr, or
    None for no object, which is an unallocated or disassociated dummy or
@@ -1552,6 +1556,10 @@ f2py_dt_to_pyobj(void *ptr, PyTypeObject *type, int type_tag, int kind_value,
     dt->capsule = capsule;
     dt->type_tag = type_tag;
     dt->kind_value = kind_value;
+    if (!f2py_dt_hydrate((PyObject *)dt, type, ptr)) {
+        Py_DECREF(dt);
+        return NULL;
+    }
     return (PyObject *)dt;
 }
 """

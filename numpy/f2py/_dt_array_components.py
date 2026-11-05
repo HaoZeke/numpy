@@ -238,10 +238,13 @@ Py{typename}_set_{name}(PyObject *selfobj, PyObject *value, void *closure)
 
 
 def record_array_fortran(typename, type_spec, name, var, type_map,
-                         len_prefix='', len_decl=''):
+                         len_prefix='', len_decl='', parent_block=None):
     """Return interoperable shape and element accessors for an opaque type."""
+    from ._dt_handles import _handle_address, _handle_description, _handle_from_c
     from ._dt_helpers import _can_wrap_bindc
 
+    if parent_block is None:
+        parent_block = type_map[typename.lower()]
     inner = var['typename'].lower()
     rank = len(var['dimension'])
     attrs = var.get('attrspec', [])
@@ -254,18 +257,26 @@ def record_array_fortran(typename, type_spec, name, var, type_map,
     inner_spec = _get_fortran_type_spec(inner_block)
     native_name = inner_block['name']
     inner_spec = inner + inner_spec[len(native_name):]
+    if var.get('typeparams'):
+        inner_spec = inner + '(' + var['typeparams'] + ')'
+    parent_description = _handle_description(parent_block, type_spec)
+    inner_description = _handle_description(inner_block, inner_spec)
+    parent_pointer = (parent_description['pointer_spec']
+                      if parent_description else type_spec)
+    inner_pointer = (inner_description['pointer_spec']
+                     if inner_description else inner_spec)
     common = ['    type(c_ptr), value :: cptr']
     if len_decl:
         common.extend(len_decl.splitlines())
-    obj_decl = f'    type({type_spec}), pointer :: obj'
+    obj_decl = f'    type({parent_pointer}), pointer :: obj'
     root = f'f2py_get_{typename}_{name}'
     lines = [f'  function {root}_available(cptr{len_prefix}) result(made) bind(c)',
              *common, '    logical(c_bool) :: made', obj_decl,
-             '    call c_f_pointer(cptr, obj)', f'    made = {made}',
+             '    ' + _handle_from_c('cptr', 'obj', parent_block, type_spec), f'    made = {made}',
              f'  end function {root}_available', '']
     lines += [f'  subroutine {root}_shape(cptr{len_prefix}, dims) bind(c)',
               *common, f'    integer(c_int) :: dims({rank})', obj_decl,
-              '    call c_f_pointer(cptr, obj)', '    dims = 0',
+              '    ' + _handle_from_c('cptr', 'obj', parent_block, type_spec), '    dims = 0',
               f'    if ({made}) then']
     lines += [f'      dims({d}) = size(obj%{name}, {d})' for d in range(1, rank + 1)]
     lines += ['    end if', f'  end subroutine {root}_shape', '']
@@ -279,13 +290,13 @@ def record_array_fortran(typename, type_spec, name, var, type_map,
               *common, '    integer(c_int), value :: idx',
               '    type(c_ptr) :: inner_cptr', obj_decl]
     if not inner_c:
-        lines.append(f'    type({inner_spec}), pointer :: inner_obj')
-    lines.append('    call c_f_pointer(cptr, obj)')
+        lines.append(f'    type({inner_pointer}), pointer :: inner_obj')
+    lines.append('    ' + _handle_from_c('cptr', 'obj', parent_block, type_spec))
     if inner_c:
         lines.append(f'    inner_cptr = c_loc({element})')
     else:
         lines += [f'    allocate(inner_obj, source={element})',
-                  '    inner_cptr = c_loc(inner_obj)']
+                  '    inner_cptr = ' + _handle_address('inner_obj', inner_block, inner_spec)]
     lines += [f'  end function {root}', '']
     if pointer:
         return lines
@@ -293,21 +304,21 @@ def record_array_fortran(typename, type_spec, name, var, type_map,
     lines += [f'  subroutine {set_root}(cptr{len_prefix}, idx, inner_cptr) bind(c)',
               *common, '    integer(c_int), value :: idx',
               '    type(c_ptr), value :: inner_cptr', obj_decl,
-              f'    type({inner_spec}), pointer :: inner_obj',
-              '    call c_f_pointer(cptr, obj)',
-              '    call c_f_pointer(inner_cptr, inner_obj)',
+              f'    type({inner_pointer}), pointer :: inner_obj',
+              '    ' + _handle_from_c('cptr', 'obj', parent_block, type_spec),
+              '    ' + _handle_from_c('inner_cptr', 'inner_obj', inner_block, inner_spec),
               f'    {element} = inner_obj', f'  end subroutine {set_root}', '']
     if alloc:
         clear = f'f2py_clear_{typename}_{name}'
         resize = f'f2py_resize_{typename}_{name}'
         args = ', '.join(f'n{d}' for d in range(1, rank + 1))
         lines += [f'  subroutine {clear}(cptr{len_prefix}) bind(c)', *common,
-                  obj_decl, '    call c_f_pointer(cptr, obj)',
+                  obj_decl, '    ' + _handle_from_c('cptr', 'obj', parent_block, type_spec),
                   f'    if (allocated(obj%{name})) deallocate(obj%{name})',
                   f'  end subroutine {clear}', '',
                   f'  subroutine {resize}(cptr{len_prefix}, {args}) bind(c)',
                   *common, f'    integer(c_int), value :: {args}', obj_decl,
-                  '    call c_f_pointer(cptr, obj)',
+                  '    ' + _handle_from_c('cptr', 'obj', parent_block, type_spec),
                   f'    if (allocated(obj%{name})) then',
                   f'      if (all(shape(obj%{name}) == [{args}])) return',
                   f'      deallocate(obj%{name})', '    end if',

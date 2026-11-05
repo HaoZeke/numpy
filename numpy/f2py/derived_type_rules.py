@@ -561,6 +561,18 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
     specializations = [(suffix, kind_dict, public(members))
                        for suffix, kind_dict, members in specializations]
 
+    handle_code, handle_registration = "", []
+    if kind_info or len_info:
+        from ._dt_c_handles import _handle_c_support
+        from ._dt_handles import _handle_description
+        identities = []
+        for suffix, kinds, _ in specializations or [('', None, {})]:
+            description = _handle_description(typeblock, kind_override=kinds)
+            identities.append((description['identity_number'],
+                               'f2py.' + typename + suffix))
+        handle_code, handle_registration = _handle_c_support(
+            typename, len_info, identities)
+        ret.setdefault("need", []).append("f2py_dt_hydrate")
     code_parts = []
     if specializations:
         # Multi-kind: generate dispatch-aware code, for the members with
@@ -569,13 +581,15 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
         all_members = specializations[0][2]
         code_parts.append(
             _gen_opaque_extern_decls(typename, all_members,
-                                     specializations=specializations))
+                                     specializations=specializations, len_info=len_info))
         code_parts.append(_gen_pytype_struct(
-            typename, has_kind=True))
+            typename, has_kind=True, len_info=len_info))
         code_parts.append(
             _gen_opaque_capsule_destructor(
                 typename, specializations=specializations))
-        code_parts.append(_gen_tp_new(typename, type_tag=type_tag))
+        code_parts.append(_gen_tp_new(typename, type_tag=type_tag, pdt=bool(kind_info or len_info)))
+        if handle_code:
+            code_parts.append(handle_code)
         code_parts.append(
             _gen_opaque_tp_init(typename, all_members,
                                 specializations=specializations,
@@ -585,7 +599,8 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
         code_parts.append(
             _gen_opaque_getset(typename, all_members,
                                specializations=specializations,
-                               kind_info=kind_info, type_map=type_map))
+                               kind_info=kind_info, len_info=len_info,
+                               type_map=type_map))
         code_parts.append(
             _gen_opaque_tp_repr(typename, all_members,
                                 specializations=specializations,
@@ -597,7 +612,9 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
                                               len_info=len_info))
         code_parts.append(_gen_opaque_capsule_destructor(
             typename, len_info=len_info))
-        code_parts.append(_gen_tp_new(typename, type_tag=type_tag))
+        code_parts.append(_gen_tp_new(typename, type_tag=type_tag, pdt=bool(kind_info or len_info)))
+        if handle_code:
+            code_parts.append(handle_code)
         code_parts.append(_gen_opaque_tp_init(typename, all_members,
                                               len_info=len_info))
         code_parts.append(_gen_tp_dealloc(typename))
@@ -623,7 +640,7 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
     # Procedure pointer components (F2018 7.5.4.4)
     if proc_ptrs and module_block:
         pp_funcs, pp_entries = _gen_proc_pointer_c_methods(
-            typename, proc_ptrs, module_block.get('body', []))
+            typename, proc_ptrs, module_block.get('body', []), type_block=typeblock)
         all_method_funcs.extend(pp_funcs)
         all_method_entries.extend(pp_entries)
 
@@ -632,10 +649,11 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
     has_tp_str = False
     if bound_procs:
         if '__write_formatted__' in bound_procs:
-            code_parts.append(_gen_defined_io_tp_str(typename))
+            code_parts.append(_gen_defined_io_tp_str(typename, type_block=typeblock))
             has_tp_str = True
         if '__read_formatted__' in bound_procs:
-            all_method_funcs.append(_gen_defined_io_from_string(typename))
+            all_method_funcs.append(_gen_defined_io_from_string(
+                typename, type_block=typeblock))
             all_method_entries.append(
                 f'    {{"from_string", (PyCFunction)'
                 f'Py{typename}_from_string, '
@@ -683,4 +701,6 @@ def _generate_opaque_hooks(ret, typename, typeblock, modulename,
         has_tp_str=has_tp_str))
 
     ret['f90modhooks'].append('\n'.join(code_parts))
-    ret['initf90modhooks'].extend(_gen_init_code(typename, modulename))
+    initializers = _gen_init_code(typename, modulename)
+    initializers[3:3] = handle_registration
+    ret['initf90modhooks'].extend(initializers)

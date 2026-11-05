@@ -443,6 +443,11 @@ def buildhooks(pymod):
             if fwrap and fwrap.strip():
                 fhooks[0] = fhooks[0] + '\n' + fwrap
 
+    from ._dt_handles import _handle_modules
+    handle_modules = _handle_modules(list(findf90modules(pymod)))
+    if handle_modules:
+        fhooks[0] = handle_modules + '\n' + fhooks[0]
+
     ret['routine_defs'] = ''
     ret['doc'] = []
     ret['docshort'] = []

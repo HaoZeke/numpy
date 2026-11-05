@@ -197,9 +197,9 @@ f2py_{typename}_capsule_destructor(PyObject *capsule)
 """
 
 
-def _gen_tp_new(typename, type_tag=0):
+def _gen_tp_new(typename, type_tag=0, *, pdt=False):
     """Generate tp_new for the Python type."""
-    return f"""\
+    code = f"""\
 static PyObject *
 Py{typename}_tp_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {{
@@ -225,6 +225,12 @@ f2py_op_{typename}_owner(PyObject *operand)
     return Py_NewRef(value->capsule);
 }}
 
+static int
+f2py_op_{typename}_writable(PyObject *operand)
+{{
+    return 1;
+}}
+
 static PyObject *
 f2py_op_{typename}_adopt(void *pointer, PyCapsule_Destructor destroy)
 {{
@@ -239,6 +245,29 @@ f2py_op_{typename}_adopt(void *pointer, PyCapsule_Destructor destroy)
     return result;
 }}
 """
+
+    if pdt:
+        from ._dt_c_handles import _handle_operator_adopt
+        marker = f'static PyObject *\nf2py_op_{typename}_adopt('
+        assert code.count(marker) == 1
+        code = code[:code.index(marker)]
+        code = code.replace('    return Py_NewRef(value->capsule);',
+                            '    const char *name = PyCapsule_GetName(value->capsule);\n'
+                            f'    if (name == NULL || f2py_{typename}_checked(operand, name, 0) == NULL) return NULL;\n'
+                            '    return Py_NewRef(value->capsule);')
+        code = code.replace('    return 1;',
+                            f'    Py{typename}Object *value = (Py{typename}Object *)operand;\n'
+                            '    if (value->capsule == NULL) {\n'
+                            '        PyErr_SetString(PyExc_RuntimeError, "operand not initialized");\n'
+                            '        return 0;\n    }\n'
+                            '    const char *name = PyCapsule_GetName(value->capsule);\n'
+                            f'    return name != NULL && f2py_{typename}_checked(operand, name, 1) != NULL;')
+        code += _handle_operator_adopt(typename)
+        code = (f'static const char *f2py_{typename}_capsule_name(void *);\n'
+                f'static int f2py_{typename}_hydrate(PyObject *, void *);\n'
+                f'static void *f2py_{typename}_checked(PyObject *, const char *, int);\n'
+                + code)
+    return code
 
 
 def _gen_tp_init(typename, members):
@@ -867,7 +896,7 @@ def _gen_opaque_extern_decls(typename, members, specializations=None,
             all_lines.append(
                 f'/* KIND specialization {suffix} */')
             all_lines.append(
-                _gen_opaque_extern_decls_one(sym, resolved_members))
+                _gen_opaque_extern_decls_one(sym, resolved_members, len_info))
         return '\n'.join(all_lines)
 
     sym = _fortran_sym(typename)
@@ -1038,14 +1067,17 @@ def _gen_opaque_extern_decls(typename, members, specializations=None,
     return '\n'.join(lines)
 
 
-def _gen_opaque_extern_decls_one(sym, members):
+def _gen_opaque_extern_decls_one(sym, members, len_info=None):
     """Generate the complete member interface for one specialization."""
-    return _gen_opaque_extern_decls(sym, members)
+    return _gen_opaque_extern_decls(sym, members, len_info=len_info)
 
 
 def _gen_opaque_capsule_destructor(typename, specializations=None,
                                     len_info=None):
     """Generate PyCapsule destructor that calls Fortran deallocator."""
+    if specializations or len_info:
+        from ._dt_c_handles import _handle_capsule_destructor
+        return _handle_capsule_destructor(typename)
     if specializations:
         # Multi-kind: dispatch based on capsule name
         sym = _fortran_sym(typename)
@@ -1094,22 +1126,31 @@ f2py_{typename}_capsule_destructor(PyObject *capsule)
 static void
 f2py_{typename}_capsule_destructor(PyObject *capsule)
 {{
+    PyObject *error_type, *error_value, *error_traceback;
+    PyErr_Fetch(&error_type, &error_value, &error_traceback);
     void *ptr = PyCapsule_GetPointer(capsule, "{capsule_name}");
     if (ptr != NULL) {{
         f2py_destroy_{sym}(ptr);
     }}
+    if (PyErr_Occurred()) PyErr_WriteUnraisable(capsule);
+    PyErr_Restore(error_type, error_value, error_traceback);
 }}
 """
 
 
 def _gen_opaque_tp_init(typename, members, specializations=None,
-                        kind_info=None, len_info=None):
+                        kind_info=None, len_info=None, *,
+                        symbol_override=None, capsule_override=None,
+                        boxed=False):
     """Generate tp_init that calls the Fortran constructor."""
     if specializations and kind_info:
-        return _gen_opaque_tp_init_multi(
-            typename, members, specializations, kind_info)
-    sym = _fortran_sym(typename)
-    capsule_name = f'f2py.{typename}'
+        from ._dt_c_handles import _handle_init_multi
+        return _handle_init_multi(
+            typename, specializations, kind_info, len_info,
+            _gen_opaque_tp_init)
+    boxed = boxed or bool(len_info)
+    sym = _fortran_sym(symbol_override or typename)
+    capsule_name = capsule_override or f'f2py.{typename}'
 
     # Collect LEN param names for skipping LEN-sized arrays
     len_param_names = set()
@@ -1214,8 +1255,8 @@ def _gen_opaque_tp_init(typename, members, specializations=None,
         parse_block = """\
     /* No scalar members; all members are arrays set via properties */"""
 
-    # Store LEN values and set capsule context
-    if len_info:
+    # Ordinary handles carry their destructor arguments in context.
+    if len_info and not boxed:
         nlen = len(len_info)
         store_len = '\n'.join(
             f'    self->len_{li["name"]} = {li["name"]};'
@@ -1241,6 +1282,13 @@ def _gen_opaque_tp_init(typename, members, specializations=None,
     else:
         post_capsule = ''
 
+    release = (f'f2py_{typename}_release_preserving_error(ptr);' if boxed else
+               f'f2py_destroy_{sym}(ptr' +
+               (', ' + ', '.join(li['name'] for li in len_info)
+                if len_info else '') + ');')
+    hydrate = (f'    if (f2py_{typename}_hydrate(selfobj, ptr) < 0) return -1;\n'
+               if boxed else '')
+
     return f"""\
 static int
 Py{typename}_tp_init(PyObject *selfobj, PyObject *args, PyObject *kwds)
@@ -1262,11 +1310,11 @@ Py{typename}_tp_init(PyObject *selfobj, PyObject *args, PyObject *kwds)
         ptr, "{capsule_name}",
         f2py_{typename}_capsule_destructor);
     if (self->capsule == NULL) {{
-        f2py_destroy_{sym}(ptr{', ' + ', '.join(li['name'] for li in len_info) if len_info else ''});
+        {release}
         return -1;
     }}{post_capsule}
 
-    return 0;
+    {hydrate}return 0;
 }}
 """
 
@@ -1422,13 +1470,18 @@ Py{typename}_tp_init(PyObject *selfobj, PyObject *args, PyObject *kwds)
 
 
 def _gen_opaque_getset(typename, members, specializations=None,
-                       kind_info=None, len_info=None, type_map=None):
+                       kind_info=None, len_info=None, type_map=None, *,
+                       symbol_override=None, capsule_override=None,
+                       return_parts=False, boxed=False):
     """Generate getters/setters that call Fortran accessor wrappers."""
     if specializations and kind_info:
-        return _gen_opaque_getset_multi(
-            typename, members, specializations, kind_info, type_map)
-    sym = _fortran_sym(typename)
-    capsule_name = f'f2py.{typename}'
+        from ._dt_c_handles import _handle_getset_multi
+        return _handle_getset_multi(
+            typename, specializations, kind_info, len_info,
+            type_map, _gen_opaque_getset)
+    boxed = boxed or bool(len_info)
+    sym = _fortran_sym(symbol_override or typename)
+    capsule_name = capsule_override or f'f2py.{typename}'
     funcs = []
     getset_entries = []
 
@@ -1477,6 +1530,10 @@ static PyObject *
             inner = mvar.get('typename', '').lower()
             inner_sym = _fortran_sym(inner)
             inner_capsule = f'f2py.{inner}'
+            from ._dt_handles import _handle_description
+            inner_spec = inner + ('(' + mvar['typeparams'] + ')'
+                                  if mvar.get('typeparams') else '')
+            inner_description = _handle_description(type_map[inner], inner_spec)
             from ._dt_helpers import _can_wrap_bindc
             if _can_wrap_bindc(type_map[inner], type_map):
                 make_owned = f"""\
@@ -1485,9 +1542,43 @@ static PyObject *
     memcpy(owned, inner_ptr, sizeof(f2py_{inner}_t));
     inner_ptr = owned;"""
                 release = 'PyMem_Free(inner_ptr);'
+                if boxed:
+                    free = f'f2py_freecopy_{sym}_{mname}'
+                    make_owned = f"""\
+    extern void {free}(void *);
+    void *owned = PyMem_Malloc(sizeof(f2py_{inner}_t));
+    if (owned == NULL) {{
+        {free}(inner_ptr);
+        return PyErr_NoMemory();
+    }}
+    memcpy(owned, inner_ptr, sizeof(f2py_{inner}_t));
+    {free}(inner_ptr);
+    inner_ptr = owned;"""
             else:
                 make_owned = ''
-                release = f'f2py_destroy_{inner_sym}(inner_ptr);'
+                release = ('f2py_pdt_destroy(inner_ptr);' if inner_description
+                           else f'f2py_destroy_{inner_sym}(inner_ptr);')
+
+            if inner_description is not None:
+                make_object = (f'    return f2py_{inner}_from_handle(\n'
+                               f'        inner_ptr, NULL, f2py_{inner}_capsule_destructor, NULL);')
+            else:
+                make_object = f"""\
+    PyObject *obj = Py{inner}_tp_new(&Py{inner}_Type, NULL, NULL);
+    if (obj == NULL) {{
+        {release}
+        return NULL;
+    }}
+    ((Py{inner}Object *)obj)->capsule = PyCapsule_New(
+        inner_ptr, "{inner_capsule}",
+        f2py_{inner}_capsule_destructor);
+    if (((Py{inner}Object *)obj)->capsule == NULL) {{
+        {release}
+        Py_DECREF(obj);
+        return NULL;
+    }}
+    return obj;
+"""
 
             getter_name = f'Py{typename}_get_{mname}'
             funcs.append(f"""\
@@ -1510,22 +1601,20 @@ static PyObject *
         return NULL;
     }}
 {make_owned}
-    PyObject *obj = Py{inner}_tp_new(&Py{inner}_Type, NULL, NULL);
-    if (obj == NULL) {{
-        {release}
-        return NULL;
-    }}
-    ((Py{inner}Object *)obj)->capsule = PyCapsule_New(
-        inner_ptr, "{inner_capsule}",
-        f2py_{inner}_capsule_destructor);
-    if (((Py{inner}Object *)obj)->capsule == NULL) {{
-        {release}
-        Py_DECREF(obj);
-        return NULL;
-    }}
-    return obj;
+{make_object}
 }}
 """)
+
+            if inner_description is not None:
+                source_pointer = (
+                    f'f2py_{inner}_checked(value, PyCapsule_GetName(inner_obj->capsule), 0)')
+                source_identity_check = f'''    if (f2py_pdt_identity(inner_ptr) != {inner_description['identity_number']}LL) {{
+        PyErr_SetString(PyExc_TypeError, "member needs the declared KIND specialization");
+        return -1;
+    }}'''
+            else:
+                source_pointer = f'PyCapsule_GetPointer(inner_obj->capsule, \"{inner_capsule}\")'
+                source_identity_check = ''
 
             setter_name = f'Py{typename}_set_{mname}'
             funcs.append(f"""\
@@ -1556,11 +1645,15 @@ static int
                         "{inner} object not initialized");
         return -1;
     }}
-    void *inner_ptr = PyCapsule_GetPointer(
-        inner_obj->capsule, "{inner_capsule}");
+    void *inner_ptr = {source_pointer};
     if (inner_ptr == NULL) return -1;
+{source_identity_check}
+    PyObject *parent_owner = Py_NewRef(self->capsule);
+    PyObject *inner_owner = Py_NewRef(inner_obj->capsule);
     f2py_set_{sym}_{mname}(ptr{len_call_extra}, inner_ptr);
-    return 0;
+    Py_DECREF(inner_owner);
+    Py_DECREF(parent_owner);
+    return PyErr_Occurred() ? -1 : 0;
 }}
 """)
 
@@ -2209,6 +2302,14 @@ static int
         + '};\n'
     )
 
+    if boxed:
+        from ._dt_c_handles import _guard_boxed_accessors
+        from ._dt_numeric_handles import _numeric_getters
+        funcs = _numeric_getters(
+            funcs, typename, sym, members, capsule_name, type_map)
+        funcs = _guard_boxed_accessors(funcs, typename)
+    if return_parts:
+        return funcs, getset_entries
     return '\n'.join(funcs) + '\n' + getset_array
 
 

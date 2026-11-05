@@ -182,7 +182,7 @@ def _qualify_fortran(source, module):
     ordered = sorted(names, key=lambda name: (-len(name), name))
     prefixes = ('f2py_create_', 'f2py_destroy_', 'f2py_get_', 'f2py_set_',
                 'f2py_resize_', 'f2py_clear_', 'f2py_call_', 'f2py_op_',
-                'f2py_str_free_', 'f2py_str_')
+                'f2py_str_free_', 'f2py_str_', 'f2py_from_str_', 'f2py_box_', 'f2py_freecopy_')
 
     def declaration(match):
         procedure = match['procedure']
