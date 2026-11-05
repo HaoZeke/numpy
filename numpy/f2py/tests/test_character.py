@@ -38,6 +38,11 @@ class TestCharacterString(util.F2PyTest):
           c = transfer(o, c)
         end subroutine {fprefix}_output_{fsuffix}
 
+        subroutine {fprefix}_inout_{fsuffix}(c)
+          character*{clength}, intent(inout) :: c
+          c(1:1) = 'A'
+        end subroutine {fprefix}_inout_{fsuffix}
+
         subroutine {fprefix}_array_input_{fsuffix}(c, o, m, n)
           integer m, i, n
           character*{clength}, intent(in), dimension(m) :: c
@@ -84,6 +89,26 @@ class TestCharacterString(util.F2PyTest):
         a = {'1': 'a', '3': 'abc', 'star': 'abcde' * 3}[length]
 
         assert_array_equal(f(a), np.array(list(map(ord, a)), dtype='u1'))
+
+    @pytest.mark.parametrize("order", ['<', '>'])
+    @pytest.mark.parametrize("length", length_list)
+    def test_input_str_array(self, length, order):
+        f = getattr(self.module, self.fprefix + '_input_' + length)
+
+        a = {'1': 'a', '3': 'abc', 'star': 'abcde' * 3}[length]
+
+        assert_array_equal(f(np.array(a, dtype=f'{order}U{len(a)}')),
+                           np.array(list(map(ord, a)), dtype='u1'))
+
+    @pytest.mark.parametrize("dtype", ['S', '<U', '>U'])
+    @pytest.mark.parametrize("length", length_list)
+    def test_inout(self, length, dtype):
+        f = getattr(self.module, self.fprefix + '_inout_' + length)
+
+        a = {'1': 'a', '3': 'abc', 'star': 'abcde' * 3}[length]
+        c = np.array(a, dtype=f'{dtype}{len(a)}')
+        f(c)
+        assert_array_equal(c, np.array('A' + a[1:], dtype=c.dtype))
 
     @pytest.mark.parametrize("length", length_list[:-1])
     def test_output(self, length):
