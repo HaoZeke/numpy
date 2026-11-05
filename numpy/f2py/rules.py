@@ -1854,13 +1854,16 @@ def buildapi(rout):
 
     rd['pdtstatus'] = ''
     if rout.get('f2py_pdt_status'):
+        from ._dt_output_cleanup import failed_pdt_outputs
+
         status = rout['f2py_pdt_status']
         rd['pdtstatus'] = (
             f'if ({status} != 0) {{\n'
             '  if (!PyErr_Occurred()) {\n'
             f'    PyErr_SetString({status} == 2 ? PyExc_MemoryError : PyExc_ValueError,\n'
             '      "invalid derived type argument or native allocation");\n'
-            '  }\n  f2py_success = 0;\n}\n')
+            '  }\n' + failed_pdt_outputs(rout, savevrd)
+            + '  f2py_success = 0;\n}\n')
     ar = applyrules(routine_rules, rd)
     if ismoduleroutine(rout):
         outmess(f"              {ar['docshort']}\n")
