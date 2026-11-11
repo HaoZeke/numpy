@@ -482,6 +482,10 @@ The following attributes can be used by F2PY.
       of the F2PY generated extension module where it can be set as a module
       attribute by a user.
 
+      Several routines of a module may declare the same external
+      ``intent(callback)``. They share one external function, so their
+      signatures of the call-back must agree.
+
   * ``aux``
       Defines an auxiliary C variable in the F2PY generated wrapper function.
       Useful to save parameter values so that they can be accessed in

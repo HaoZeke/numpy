@@ -252,6 +252,9 @@ as calls made through the wrapper, with ``fpy_extra_args`` taken from the
 module attribute of that name. For backward compatibility, a Python function
 that can be called with these extra arguments alone, for instance because all
 of its parameters have default values, receives only the extra arguments.
+Declaring ``fpy`` ``intent(callback)`` in every routine that calls it gives all
+of them the full argument list, and an error raised by the Python function then
+stops the Fortran routine at once instead of letting it run to completion.
 
 .. note::
 
