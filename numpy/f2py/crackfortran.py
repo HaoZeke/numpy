@@ -673,8 +673,10 @@ def split_by_unquoted(line, characters):
         r"(?P<after>{char}.*)\Z".format(
             not_quoted=f"[^\"'{re.escape(characters)}]",
             char=f"[{re.escape(characters)}]",
-            single_quoted=r"('([^'\\]|(\\.))*')",
-            double_quoted=r'("([^"\\]|(\\.))*")'))
+            # Fortran ends a literal at the next unpaired quote. A
+            # backslash is an ordinary character (gh-33220).
+            single_quoted=r"('[^']*')",
+            double_quoted=r'("[^"]*")'))
     m = r.match(line)
     if m:
         d = m.groupdict()
@@ -682,8 +684,10 @@ def split_by_unquoted(line, characters):
     return (line, "")
 
 
-_quoted_string_re = re.compile(
-    r"('([^'\\]|(\\.))*')|(\"([^\"\\]|(\\.))*\")")
+# Fortran character literals end at the next unpaired quote. A
+# backslash is not an escape (gh-33220); treating it as one swallows
+# the closing quote and the following expression.
+_quoted_string_re = re.compile(r"('[^']*')|(\"[^\"]*\")")
 
 
 def mask_string_literals(expr):
@@ -695,6 +699,8 @@ def mask_string_literals(expr):
     identifiers that happen to appear inside its own literal value, so
     the quoted text is collapsed to empty quotes before the scan while
     identifiers outside the quotes (e.g. in ``'x '//name``) are kept.
+    A backslash does not escape the closer, so ``'c:\\'//n`` keeps
+    ``n``.
     """
     return _quoted_string_re.sub("''", expr)
 

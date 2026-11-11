@@ -1,0 +1,6 @@
+``f2py`` keeps names that follow a backslash in a character literal
+-------------------------------------------------------------------
+Fortran character literals end at the next unpaired quote. A backslash
+is an ordinary character, not an escape. ``f2py`` used to treat it as
+one, so an expression such as ``len('c:\\'//n//'x')`` lost ``n`` and
+the generated wrapper used a length of zero.
