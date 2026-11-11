@@ -2031,7 +2031,7 @@ def get_useparameters(block, param_map=None):
             # A kind imported under a local name (dp => real64) stands
             # for the intrinsic name
             for local, name in mapping.get('map', {}).items():
-                name = name.lower()
+                local, name = local.lower(), name.lower()
                 if local != name and name in _intrinsic_kinds[usename]:
                     param_map[local] = name
             continue
@@ -2757,9 +2757,10 @@ def analyzevars(block):
 
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
-                l = vars[n]['kindselector']['kind']
+                # Kind names are case insensitive, the kind maps are lower case
+                l = vars[n]['kindselector']['kind'].lower()
                 try:
-                    l = str(eval(l, {}, params))
+                    l = str(eval(l, {}, params)).lower()
                 except Exception:
                     pass
                 vars[n]['kindselector']['kind'] = l
@@ -3030,6 +3031,7 @@ def analyzevars(block):
                             pass
                         if kindselect:
                             if 'kind' in kindselect:
+                                kindselect['kind'] = kindselect['kind'].lower()
                                 try:
                                     kindselect['kind'] = eval(
                                         kindselect['kind'], {}, params)
