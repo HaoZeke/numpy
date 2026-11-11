@@ -1252,7 +1252,8 @@ if (#varname#_cb.capi==Py_None) {
         f2py_success = (PyArray_ResolveWritebackIfCopy(capi_#varname#_as_array) >= 0);
         if (f2py_success) { /* return written-back-to inplace array #varname# */
         Py_INCREF(#varname#_capi);
-        Py_SETREF(capi_#varname#_as_array, (PyArrayObject*)#varname#_capi);"""},
+        Py_DECREF(capi_#varname#_as_array);
+        capi_#varname#_as_array = (PyArrayObject*)#varname#_capi;"""},
             ],
         'closepyobjfrom': {isintent_inplace: '    } /*if (f2py_success) of #varname# pyobjfrom*/'},
         'cleanupfrompyobj': [  # note that this list will be reversed
@@ -1260,9 +1261,9 @@ if (#varname#_cb.capi==Py_None) {
              '/* if (capi_#varname#_as_array == NULL) ... else of #varname# */'),
             {l_not(l_or(isintent_out, isintent_hide)): """\
     if((PyObject *)capi_#varname#_as_array!=#varname#_capi) {
-        Py_XDECREF(capi_#varname#_as_array); }"""},
+        Py_XDECREF((PyObject *)capi_#varname#_as_array); }"""},
             {l_and(isintent_hide, l_not(isintent_out))
-                   : """        Py_XDECREF(capi_#varname#_as_array);"""},
+                   : """        Py_XDECREF((PyObject *)capi_#varname#_as_array);"""},
             {hasinitvalue: '    }  /*if (f2py_success) of #varname# init*/'},
         ],
         '_check': isarray,

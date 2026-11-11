@@ -1,9 +1,10 @@
+import sys
 
 import pytest
 
 import numpy as np
 from numpy.f2py.tests import util
-from numpy.testing import assert_array_equal
+from numpy.testing import HAS_REFCOUNT, assert_array_equal
 
 
 @pytest.mark.slow
@@ -41,6 +42,18 @@ class TestInplace(util.F2PyTest):
         assert k is ref_k
         assert np.allclose(k, exp_k)
         assert np.allclose(a, exp_a)
+
+    @pytest.mark.skipif(not HAS_REFCOUNT, reason="Python lacks refcounts")
+    @pytest.mark.parametrize("order, view", [
+        ("F", None), ("C", None), ("C", (slice(None), slice(None, None, 2)))])
+    def test_inplace_out_refcount(self, order, view):
+        a = np.arange(12.0, dtype="f4").reshape((3, 4), order=order)
+        k = a if view is None else a[view]
+        refcount = sys.getrefcount(k)
+        kout, copy = self.module.inplace_out(k)
+        assert kout is k
+        del kout, copy
+        assert sys.getrefcount(k) == refcount
 
     @pytest.mark.parametrize("func", ["inplace", "inplace_out"])
     def test_inplace_error(self, func):
