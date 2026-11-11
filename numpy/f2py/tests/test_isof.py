@@ -135,3 +135,22 @@ def test_complex_real_kind_ctype(kind, ctype):
     from numpy.f2py.capi_maps import getctype
 
     assert getctype({"typespec": "complex", "kindselector": {"kind": kind}}) == ctype
+
+
+@pytest.mark.slow
+class TestGH30352Module(util.F2PyTest):
+    # gh-30352: the posted complex(kind=dp) routine, plus an iso_c_binding
+    # rename and scalar functions of a renamed integer and real kind.
+    sources = [util.getpath("tests", "src", "crackfortran", "gh30352.f90")]
+
+    @pytest.mark.parametrize("name", ["test_function", "set_cdp"])
+    def test_complex_inout(self, name):
+        arr = np.zeros(10, dtype=np.complex128)
+        getattr(self.module.gh30352, name)(arr)
+        assert_array_equal(arr, np.full(10, 1 - 1j))
+
+    def test_real_function(self):
+        assert self.module.gh30352.add_dp(1.0, 2.0**-40) == 1 + 2.0**-40
+
+    def test_integer_function(self):
+        assert self.module.gh30352.add_ik(2**32, 2**32) == 2**33
