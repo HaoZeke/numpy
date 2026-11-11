@@ -1358,9 +1358,27 @@ PyObject *f2py_describe_obj(PyObject *obj) {
     void *tp_name = GET_TP_NAME(obj);
     if (!tp_name) return NULL;
     if (PyArray_CheckScalar(obj)) {
-        PyArrayObject* arr = (PyArrayObject*)obj;
-        result = PyUnicode_FromFormat("%c%" NPY_INTP_FMT "-" TP_NAME_FMT "-scalar",
-                                    PyArray_DESCR(arr)->kind, PyArray_ITEMSIZE(arr), tp_name);
+        /* 0-d arrays are PyArrayObjects. NumPy scalars are not, and
+         * PyArray_DESCR on them faults. Scalars have a descriptor of
+         * their own. */
+        PyArray_Descr *descr;
+        int own_descr = 0;
+        if (PyArray_Check(obj)) {
+            descr = PyArray_DESCR((PyArrayObject *)obj);
+        }
+        else {
+            descr = PyArray_DescrFromScalar(obj);
+            if (descr == NULL) {
+                goto end;
+            }
+            own_descr = 1;
+        }
+        result = PyUnicode_FromFormat(
+            "%c%" NPY_INTP_FMT "-" TP_NAME_FMT "-scalar",
+            PyDataType_KIND(descr), PyDataType_ELSIZE(descr), tp_name);
+        if (own_descr) {
+            Py_DECREF(descr);
+        }
     } else if (PyArray_Check(obj)) {
         int i;
         PyArrayObject* arr = (PyArrayObject*)obj;
