@@ -1067,3 +1067,72 @@ def test_gh29762_generated_wrapper_already_in_build_dir(tmp_path, monkeypatch):
     names = _prepare_sources("mod", [], tmp_path)
     assert "mod-f2pywrappers.f" in names
     assert wrap.read_text() == "c wrapper\n"
+
+
+def test_gh28648_preprocessor_macros_reach_meson(tmp_path):
+    # -D/-U were parsed and then dropped by the meson backend.
+    from numpy.f2py._backends._meson import MesonBackend
+
+    backend = MesonBackend(
+        modulename="model",
+        sources=["model.F90"],
+        extra_objects=[],
+        build_dir=tmp_path,
+        include_dirs=[],
+        library_dirs=[],
+        libraries=[],
+        define_macros=[("NEW_MODEL_PARM", None), ("VAL", "1")],
+        undef_macros=["OLD"],
+        f2py_flags=[],
+        sysinfo_flags=[],
+        fc_flags=["--f90flags=-O2"],
+        flib_flags=[],
+        setup_flags=[],
+        remove_build_dir=False,
+        extra_dat={},
+    )
+    text = backend.write_meson_build(tmp_path).read_text()
+    assert "c_args: ['-DNEW_MODEL_PARM', '-DVAL=1', '-UOLD']" in text
+    fortran = "fortran_args: ['-O2', '-DNEW_MODEL_PARM', '-DVAL=1', '-UOLD']"
+    assert fortran in text
+
+
+@pytest.mark.slow
+def test_gh28648_define_selects_fortran_branch(tmp_path, monkeypatch):
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    src = tmp_path / "model.F90"
+    src.write_text(textwrap.dedent("""\
+        module model
+        contains
+          subroutine run_passive(x, y)
+            implicit none
+            real(kind=8), intent(in) :: x
+            real(kind=8), intent(out) :: y
+            y = 2.0d0 * x
+          end subroutine run_passive
+#ifdef NEW_MODEL_PARM
+          subroutine run_active(x, y)
+            implicit none
+            real(kind=8), intent(in) :: x
+            real(kind=8), intent(out) :: y
+            y = 3.0d0 * x
+          end subroutine run_active
+#endif
+        end module model
+        """))
+    monkeypatch.chdir(tmp_path)
+    argv = [
+        "f2py", "-c", "-m", "gh28648", "-DNEW_MODEL_PARM",
+        str(src), "--backend", "meson", "--freethreading-compatible",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    try:
+        f2pycli()
+    except Exception as exc:
+        pytest.fail(
+            f"-DNEW_MODEL_PARM did not reach the Fortran build:\n{exc}")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mod = __import__("gh28648")
+    assert mod.model.run_passive(2.0) == 4.0
+    assert mod.model.run_active(2.0) == 6.0
