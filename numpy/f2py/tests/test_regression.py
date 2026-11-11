@@ -1,5 +1,6 @@
 import os
 import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -317,3 +318,72 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+def _assert_fortran_interface(text):
+    assert text
+    assert "required" not in text
+    assert "check(" not in text
+    assert "depend(" not in text
+    assert "real*8, dimension" in text
+
+
+def test_gh13553_interface_omits_f2py_attrs():
+    from numpy.f2py.crackfortran import crack2fortrangen, crackfortran
+
+    src = util.getpath("tests", "src", "regression", "gh13553.f90")
+    block = crackfortran([str(src)])[0]
+    _assert_fortran_interface(
+        crack2fortrangen(block, "\n      ", as_interface=True))
+
+
+def test_gh13553_pyf_saved_interface(tmp_path, monkeypatch):
+    from numpy.f2py.crackfortran import crackfortran
+    from numpy.f2py.f2py2e import main as f2pycli
+
+    src = util.getpath("tests", "src", "regression", "gh13553.f90")
+    (tmp_path / "gh13553.f90").write_text(src.read_text())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["f2py", "-m", "gh13553", "-h", "gh13553.pyf", "gh13553.f90",
+         "--overwrite-signature"])
+    f2pycli()
+    blocks = crackfortran([str(tmp_path / "gh13553.pyf")])
+    routine = blocks[0]["body"][0]["body"][0]
+    assert routine["name"] == "trapz"
+    _assert_fortran_interface(routine["saved_interface"])
+
+
+@pytest.mark.slow
+def test_gh13553_pyf_then_compile(tmp_path):
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    src = util.getpath("tests", "src", "regression", "gh13553.f90")
+    (tmp_path / "gh13553.f90").write_text(src.read_text())
+    code = """
+import sys
+sys.path.insert(0, ".")
+sys.argv = ["f2py", "-m", "gh13553", "-h", "gh13553.pyf",
+            "gh13553.f90", "--overwrite-signature"]
+from numpy.f2py.f2py2e import main
+main()
+sys.argv = ["f2py", "-c", "-m", "gh13553", "gh13553.pyf", "gh13553.f90",
+            "--backend", "meson", "--freethreading-compatible"]
+main()
+import numpy as np
+import gh13553
+x = np.array([0.0, 1.0, 2.0])
+y = np.array([0.0, 1.0, 0.0])
+got = gh13553.trapz(x, y)
+if abs(got - 1.0) > 1e-12:
+    raise SystemExit(f"trapz={got!r}")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-P", "-c", code],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
