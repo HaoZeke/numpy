@@ -3543,9 +3543,20 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         elif 'kind' in selector:
             vardef = f"{vardef}(kind={selector['kind']})"
         c = ' '
+        # f2py-only attributes are not Fortran. They belong in the .pyf
+        # signature, not in the interface block compiled by gfortran.
+        # saved_interface is rendered before analyzevars moves check/depend
+        # out of attrspec, so match both the bare name and name(...) form
+        # (gh-13553).
+        def _fortran_attr(item):
+            head = item.split('(', 1)[0].strip().lower()
+            if head == 'external':
+                return False
+            if as_interface and head in {'required', 'check', 'depend', 'note'}:
+                return False
+            return True
         if 'attrspec' in vars[a]:
-            attr = [l for l in vars[a]['attrspec']
-                    if l not in ['external']]
+            attr = [l for l in vars[a]['attrspec'] if _fortran_attr(l)]
             if as_interface and 'intent(in)' in attr and 'intent(out)' in attr:
                 # In Fortran, intent(in, out) are conflicting while
                 # intent(in, out) can be specified only via
@@ -3557,17 +3568,18 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
                 vardef = f"{vardef}, {','.join(attr)}"
                 c = ','
         if 'dimension' in vars[a]:
-            vardef = f"{vardef}{c}dimension({','.join(vars[a]['dimension'])})"
+            # `real*8 dimension(n)` is not Fortran; the comma is required.
+            vardef = f"{vardef}, dimension({','.join(vars[a]['dimension'])})"
             c = ','
         if 'intent' in vars[a]:
             lst = true_intent_list(vars[a])
             if lst:
                 vardef = f"{vardef}{c}intent({','.join(lst)})"
             c = ','
-        if 'check' in vars[a]:
+        if 'check' in vars[a] and not as_interface:
             vardef = f"{vardef}{c}check({','.join(vars[a]['check'])})"
             c = ','
-        if 'depend' in vars[a]:
+        if 'depend' in vars[a] and not as_interface:
             vardef = f"{vardef}{c}depend({','.join(vars[a]['depend'])})"
             c = ','
         if '=' in vars[a]:
