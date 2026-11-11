@@ -1,5 +1,6 @@
 import os
 import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -317,3 +318,32 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+@pytest.mark.slow
+def test_gh30804_opt_openmp_flag(tmp_path):
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    src = util.getpath("tests", "src", "regression", "gh30804.f90")
+    (tmp_path / "gh30804.f90").write_text(src.read_text())
+    code = """
+import sys
+sys.path.insert(0, ".")
+sys.argv = ["f2py", "-c", "-m", "gh30804", "--opt=-fopenmp",
+            "gh30804.f90", "--backend", "meson",
+            "--freethreading-compatible"]
+from numpy.f2py.f2py2e import main
+main()
+import gh30804
+flag = gh30804.uses_openmp()
+if flag != 1:
+    raise SystemExit(f"flag={flag!r}")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-P", "-c", code],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
