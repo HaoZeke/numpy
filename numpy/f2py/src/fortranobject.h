@@ -91,6 +91,18 @@ extern PyObject *
 PyFortranObject_New(FortranDataDef *defs, f2py_void_func init);
 extern PyObject *
 PyFortranObject_NewAsAttr(FortranDataDef *defs);
+/* Record the extension import name and qualname on a routine object. */
+extern int
+PyFortranObject_SetRoutineRef(PyObject *obj, PyObject *module,
+                              const char *qualname);
+/* Set qualnames on routines stored inside an F90 module object. */
+extern int
+PyFortranObject_TagModuleRoutines(PyObject *modobj, PyObject *module,
+                                  const char *prefix);
+/* Remember a kind and name so pickle can refuse a data object clearly. */
+extern int
+PyFortranObject_SetDataKind(PyObject *obj, const char *kind,
+                            const char *name);
 
 PyObject *
 F2PyCapsule_FromVoidPtr(void *ptr, void (*dtor)(PyObject *));
