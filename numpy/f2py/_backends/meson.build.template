@@ -66,6 +66,9 @@ py.extension_module('${modulename}',
 ${source_list},
                      fortranobject_c
                      ],
+                     # gh-30804: only the Fortran compiler driver knows its
+                     # runtime libraries and their run paths
+                     link_language: 'fortran',
                      include_directories: [
                      inc_np,
 ${inc_list}
