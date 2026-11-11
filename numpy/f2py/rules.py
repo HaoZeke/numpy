@@ -74,6 +74,7 @@ from .auxfuncs import (
     hasinitvalue,
     hasnote,
     hasresultnote,
+    isabsent,
     isarray,
     isarrayofstrings,
     isattr_value,
@@ -970,7 +971,13 @@ if (#varname#_cb.capi==Py_None) {
     {  # Common
         'decl': '    #ctype# #varname# = 0;',
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#);'},
-        'callfortran': {l_or(isintent_c, isattr_value): '#varname#,', l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
+        'callfortran': {
+            l_or(isintent_c, isattr_value): '#varname#,',
+            l_and(l_not(l_or(isintent_c, isattr_value)), isabsent):
+                '(#varname#_capi == Py_None ? NULL : &#varname#),',
+            l_and(l_not(l_or(isintent_c, isattr_value)), l_not(isabsent)):
+                '&#varname#,',
+        },
         'return': {isintent_out: ',#varname#'},
         '_check': l_and(isscalar, l_not(iscomplex))
     }, {
@@ -982,9 +989,16 @@ if (#varname#_cb.capi==Py_None) {
         'keyformat': {isoptional: 'O'},
         'args_capi': {isrequired: ',&#varname#_capi'},
         'keys_capi': {isoptional: ',&#varname#_capi'},
-        'pyobjfrom': {isintent_inout: """\
+        'pyobjfrom': {
+            l_and(isintent_inout, l_not(isabsent)): """\
     f2py_success = try_pyarr_from_#ctype#(#varname#_capi,&#varname#);
-    if (f2py_success) {"""},
+    if (f2py_success) {""",
+            l_and(isintent_inout, isabsent): """\
+    if (#varname#_capi != Py_None) {
+        f2py_success = try_pyarr_from_#ctype#(#varname#_capi,&#varname#);
+    }
+    if (f2py_success) {""",
+        },
         'closepyobjfrom': {isintent_inout: "    } /*if (f2py_success) of #varname# pyobjfrom*/"},
         'need': {isintent_inout: 'try_pyarr_from_#ctype#'},
         '_check': l_and(isscalar, l_not(iscomplex), l_not(isstring),
@@ -1035,7 +1049,12 @@ if (#varname#_cb.capi==Py_None) {
     # Complex scalars
     {  # Common
         'decl': '    #ctype# #varname#;',
-        'callfortran': {isintent_c: '#varname#,', l_not(isintent_c): '&#varname#,'},
+        'callfortran': {
+            isintent_c: '#varname#,',
+            l_and(l_not(isintent_c), isabsent):
+                '(#varname#_capi == Py_None ? NULL : &#varname#),',
+            l_and(l_not(isintent_c), l_not(isabsent)): '&#varname#,',
+        },
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#.r,#varname#.i);'},
         'return': {isintent_out: ',#varname#_capi'},
         '_check': iscomplex
@@ -1046,9 +1065,16 @@ if (#varname#_cb.capi==Py_None) {
         'args_capi': {isrequired: ',&#varname#_capi'},
         'keys_capi': {isoptional: ',&#varname#_capi'},
         'need': {isintent_inout: 'try_pyarr_from_#ctype#'},
-        'pyobjfrom': {isintent_inout: """\
+        'pyobjfrom': {
+            l_and(isintent_inout, l_not(isabsent)): """\
         f2py_success = try_pyarr_from_#ctype#(#varname#_capi,&#varname#);
-        if (f2py_success) {"""},
+        if (f2py_success) {""",
+            l_and(isintent_inout, isabsent): """\
+        if (#varname#_capi != Py_None) {
+            f2py_success = try_pyarr_from_#ctype#(#varname#_capi,&#varname#);
+        }
+        if (f2py_success) {""",
+        },
         'closepyobjfrom': {isintent_inout: "        } /*if (f2py_success) of #varname# pyobjfrom*/"},
         '_check': l_and(iscomplex, isintent_nothide)
     }, {
@@ -1082,8 +1108,14 @@ if (#varname#_cb.capi==Py_None) {
         'decl': ['    #ctype# #varname# = NULL;',
                  '    int slen(#varname#);',
                  '    PyObject *#varname#_capi = Py_None;'],
-        'callfortran': '#varname#,',
-        'callfortranappend': 'slen(#varname#),',
+        'callfortran': {
+            isabsent: '(#varname#_capi == Py_None ? NULL : #varname#),',
+            l_not(isabsent): '#varname#,',
+        },
+        'callfortranappend': {
+            isabsent: '(#varname#_capi == Py_None ? 0 : slen(#varname#)),',
+            l_not(isabsent): 'slen(#varname#),',
+        },
         'pyobjfrom': [
             {debugcapi:
              '    fprintf(stderr,'
@@ -1121,12 +1153,24 @@ if (#varname#_cb.capi==Py_None) {
         'args_capi': {isrequired: ',&#varname#_capi'},
         'keys_capi': {isoptional: ',&#varname#_capi'},
         'pyobjfrom': [
-            {l_and(isintent_inout, l_not(isintent_c)):
+            {l_and(isintent_inout, l_not(isintent_c), l_not(isabsent)):
              "        STRINGPADN(#varname#, slen(#varname#), ' ', '\\0');"},
-            {isintent_inout: '''\
+            {l_and(isintent_inout, l_not(isintent_c), isabsent): """\
+    if (#varname#_capi != Py_None) {
+        STRINGPADN(#varname#, slen(#varname#), ' ', '\\0');
+    }
+"""},
+            {l_and(isintent_inout, l_not(isabsent)): '''\
     f2py_success = try_pyarr_from_#ctype#(#varname#_capi, #varname#,
                                           slen(#varname#));
-    if (f2py_success) {'''}],
+    if (f2py_success) {'''},
+            {l_and(isintent_inout, isabsent): '''\
+    if (#varname#_capi != Py_None) {
+        f2py_success = try_pyarr_from_#ctype#(#varname#_capi, #varname#,
+                                              slen(#varname#));
+    }
+    if (f2py_success) {'''},
+        ],
         'closepyobjfrom': {isintent_inout: '    } /*if (f2py_success) of #varname# pyobjfrom*/'},
         'need': {isintent_inout: 'try_pyarr_from_#ctype#',
                  l_and(isintent_inout, l_not(isintent_c)): 'STRINGPADN'},
@@ -1200,11 +1244,27 @@ if (#varname#_cb.capi==Py_None) {
              '    capi_#varname#_as_array = ndarray_from_pyobj('
              '  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,'
              '  capi_#varname#_intent,Py_None,capi_errmess);'},
-            {isintent_nothide:
+            {l_and(isintent_nothide, l_not(isabsent)):
              '    capi_#varname#_as_array = ndarray_from_pyobj('
              '  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,'
              '  capi_#varname#_intent,#varname#_capi,capi_errmess);'},
-            """\
+            {l_and(isintent_nothide, isabsent): """\
+    if (#varname#_capi == Py_None) {
+        #varname# = NULL;
+        capi_#varname#_as_array = NULL;
+        {
+            int f2py_absent_dim;
+            /* A positive bound keeps the wrapper declaration valid. */
+            for (f2py_absent_dim = 0; f2py_absent_dim < #varname#_Rank; ++f2py_absent_dim)
+                #varname#_Dims[f2py_absent_dim] = 1;
+        }
+    } else {
+        capi_#varname#_as_array = ndarray_from_pyobj(
+          #atype#,#elsize#,#varname#_Dims,#varname#_Rank,
+          capi_#varname#_intent,#varname#_capi,capi_errmess);
+    }
+"""},
+            {l_not(isabsent): """\
     if (capi_#varname#_as_array == NULL) {
         PyObject* capi_err = PyErr_Occurred();
         if (capi_err == NULL) {
@@ -1213,10 +1273,22 @@ if (#varname#_cb.capi==Py_None) {
         }
     } else {
         #varname# = (#ctype# *)(PyArray_DATA(capi_#varname#_as_array));
-""",
+"""},
+            {isabsent: """\
+    if (capi_#varname#_as_array == NULL && #varname#_capi != Py_None) {
+        PyObject* capi_err = PyErr_Occurred();
+        if (capi_err == NULL) {
+            capi_err = #modulename#_error;
+            PyErr_SetString(capi_err, capi_errmess);
+        }
+    } else {
+        if (#varname#_capi != Py_None) {
+            #varname# = (#ctype# *)(PyArray_DATA(capi_#varname#_as_array));
+        }
+"""},
             {isstringarray:
              '    slen(#varname#) = f2py_itemsize(#varname#);'},
-            {hasinitvalue: [
+            {l_and(hasinitvalue, l_not(isabsent)): [
                 {isintent_nothide:
                  '    if (#varname#_capi == Py_None) {'},
                 {isintent_hide: '    {'},
@@ -1259,7 +1331,8 @@ if (#varname#_cb.capi==Py_None) {
         Py_XDECREF(capi_#varname#_as_array); }"""},
             {l_and(isintent_hide, l_not(isintent_out))
                    : """        Py_XDECREF(capi_#varname#_as_array);"""},
-            {hasinitvalue: '    }  /*if (f2py_success) of #varname# init*/'},
+            {l_and(hasinitvalue, l_not(isabsent)):
+             '    }  /*if (f2py_success) of #varname# init*/'},
         ],
         '_check': isarray,
         '_depend': ''

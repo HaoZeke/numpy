@@ -34,7 +34,9 @@ __all__ = [
     'isintent_nothide', 'isintent_out', 'isintent_overwrite', 'islogical',
     'islogicalfunction', 'islong_complex', 'islong_double',
     'islong_doublefunction', 'islong_long', 'islong_longfunction',
-    'ismodule', 'ismoduleroutine', 'isoptional', 'isprivate', 'isvariable',
+    'ismodule', 'ismoduleroutine', 'isoptional', 'isabsent', 'isprivate',
+    'isvariable', 'has_absent_attr', 'routine_has_absent', 'validate_absent',
+    'resolve_absent',
     'isrequired', 'isroutine', 'isscalar', 'issigned_long_longarray',
     'isstring', 'isstringarray', 'isstring_or_stringarray', 'isstringfunction',
     'issubroutine', 'get_f2py_modulename', 'issubroutine_wrap', 'isthreadsafe',
@@ -312,7 +314,9 @@ def issubroutine(rout):
 def issubroutine_wrap(rout):
     if isintent_c(rout):
         return 0
-    return issubroutine(rout) and hasassumedshape(rout)
+    # An absent actual needs a Fortran wrapper with an explicit interface.
+    return issubroutine(rout) and (
+        hasassumedshape(rout) or routine_has_absent(rout))
 
 def isattr_value(var):
     return 'value' in var.get('attrspec', [])
@@ -330,7 +334,8 @@ def hasassumedshape(rout):
 
 
 def requiresf90wrapper(rout):
-    return ismoduleroutine(rout) or hasassumedshape(rout)
+    return (ismoduleroutine(rout) or hasassumedshape(rout)
+            or routine_has_absent(rout))
 
 
 def isroutine(rout):
@@ -427,6 +432,115 @@ def hasvariables(rout):
 def isoptional(var):
     return ('attrspec' in var and 'optional' in var['attrspec'] and
             'required' not in var['attrspec']) and isintent_nothide(var)
+
+
+def has_absent_attr(var):
+    # Set from a Fortran OPTIONAL, or written by hand in a signature file.
+    return 'absent' in var.get('attrspec', [])
+
+
+def isabsent(var):
+    """True when an omitted value must be an absent Fortran actual.
+
+    A pure intent(out) argument is a return slot that f2py always
+    supplies, so present() stays true for it. resolve_absent drops or
+    rejects an unsupported kind before this is used.
+    """
+    if not has_absent_attr(var) or not isintent_nothide(var):
+        return False
+    if isexternal(var) or isintent_callback(var):
+        return False
+    if isintent_c(var) or isattr_value(var):
+        return False
+    return True
+
+
+def routine_has_absent(rout):
+    variables = rout.get('vars', {})
+    return any(isabsent(variables.get(arg, {})) for arg in rout.get('args', []))
+
+
+def _absent_interface_ok(rout):
+    if ismoduleroutine(rout) or rout.get('in_user_interface'):
+        return True
+    # Fixed-form F77 has no explicit interface unless the source
+    # wrapped the procedure in one. Free-form code and signature
+    # files get a wrapper that declares the interface.
+    return not rout.get('from_fixed_f77')
+
+
+def _drop_absent(var):
+    var['attrspec'] = [item for item in var.get('attrspec', []) if item != 'absent']
+    var.pop('absent_origin', None)
+
+
+def _unsupported_absent_reason(var, rout):
+    """Why this absent argument cannot be omitted, or None when it can."""
+    if isexternal(var) or isintent_callback(var):
+        return 'a callback'
+    if isallocatable(var):
+        return 'allocatable'
+    if 'pointer' in var.get('attrspec', []):
+        return 'a pointer'
+    if isarray(var) and var.get('typespec') == 'character':
+        return 'a character array'
+    if isattr_value(var):
+        return 'value'
+    if isintent_c(var):
+        return 'intent(c)'
+    if not isintent_nothide(var):
+        return None
+    if not _absent_interface_ok(rout):
+        return 'an F77 external with no explicit interface'
+    return None
+
+
+def resolve_absent(rout, variables=None):
+    """Apply the build rule for each absent argument.
+
+    Fortran source that cannot omit the argument drops ``absent`` and
+    keeps the previous call. A hand-written ``absent`` token on such an
+    argument is an error. An explicit init expression always drops
+    ``absent`` and keeps that default.
+    """
+    if rout.get('block') not in ('subroutine', 'function'):
+        return
+    if variables is None:
+        variables = rout.get('vars', {})
+    name = rout.get('name', '')
+    for arg in rout.get('args', []):
+        var = variables.get(arg, {})
+        if not has_absent_attr(var):
+            continue
+        origin = var.get('absent_origin', 'explicit')
+        if '=' in var:
+            outmess(
+                f'f2py: routine "{name}" argument "{arg}" has an explicit '
+                f'init expression. Dropping absent and keeping the default '
+                f'value.\n'
+            )
+            _drop_absent(var)
+            continue
+        reason = _unsupported_absent_reason(var, rout)
+        if reason is None:
+            continue
+        if origin == 'fortran':
+            outmess(
+                f'f2py: routine "{name}" argument "{arg}" is {reason}. '
+                f'Dropping absent and keeping the previous call.\n'
+            )
+            _drop_absent(var)
+            continue
+        raise F2PYError(
+            f'f2py: argument "{arg}" of routine "{name}" is {reason}. '
+            f'The absent attribute written by hand is not supported for '
+            f'this argument.'
+        )
+
+
+def validate_absent(rout):
+    """Apply resolve_absent again at wrapper generation."""
+    resolve_absent(rout)
 
 
 def isexternal(var):

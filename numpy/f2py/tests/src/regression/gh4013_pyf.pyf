@@ -1,0 +1,10 @@
+python module gh4013pyf
+    interface
+        real function pyf_absent_s(x)
+            real, optional, absent, intent(in) :: x
+        end function pyf_absent_s
+        real function pyf_optional_s(x)
+            real, optional, intent(in) :: x
+        end function pyf_optional_s
+    end interface
+end python module gh4013pyf
