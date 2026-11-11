@@ -101,3 +101,49 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+class TestStrictSetattr(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "modules", "gh3751.f90")]
+    options = ["--strict-setattr"]
+
+    def test_wrapped_names_are_assignable(self):
+        mod = self.module.gh3751_mod
+        mod.counter = 3
+        assert mod.counter == 3
+        mod.values = [1.0, 2.0]
+        assert mod.values_size() == 2
+        mod.values = None
+        assert mod.values_size() == -1
+        self.module.gh3751_cb.n = 4
+        assert self.module.gh3751_cb.n == 4
+
+    @pytest.mark.parametrize("name", ["hidden", "value"])
+    def test_module_rejects_unwrapped_name(self, name):
+        mod = self.module.gh3751_mod
+        with pytest.raises(AttributeError, match=f"no attribute '{name}'"):
+            setattr(mod, name, [1.0, 2.0])
+        with pytest.raises(AttributeError, match=f"no attribute '{name}'"):
+            delattr(mod, name)
+        assert name not in dir(mod)
+
+    def test_common_block_rejects_unwrapped_name(self):
+        with pytest.raises(AttributeError, match="no attribute 'm'"):
+            self.module.gh3751_cb.m = 1
+
+    def test_routine_accepts_attributes(self):
+        func = self.module.gh3751_mod.values_size
+        func.tag = "kept"
+        assert func.tag == "kept"
+
+
+@pytest.mark.slow
+class TestDefaultSetattr(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "modules", "gh3751.f90")]
+
+    def test_module_stores_unwrapped_name(self):
+        mod = self.module.gh3751_mod
+        mod.hidden = [1.0, 2.0]
+        assert mod.hidden == [1.0, 2.0]
+        assert mod.hidden_size() == -1
