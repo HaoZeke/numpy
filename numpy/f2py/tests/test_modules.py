@@ -101,3 +101,16 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+class TestUsedParameters(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "modules", "gh3562.f90")]
+
+    def test_gh3562(self):
+        assert self.module.test.a == 1
+        assert self.module.test.not_param == 5
+        assert self.module.test2.b == 2
+        assert self.module.test2.c == 1
+        assert not hasattr(self.module.test2, "a")
+        assert not hasattr(self.module.test2, "not_param")

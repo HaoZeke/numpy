@@ -79,6 +79,44 @@ fgetdims2_sa = """\
       call f2pysetdata(d,allocated(d))"""
 
 
+def _parameter_imports(m, pymod):
+    """Public parameters brought in by USE.
+
+    Each item is ``(local_name, used_module, remote_name, var)``.
+    A bare ``use other`` imports every public parameter; ``only`` and
+    ``local => remote`` follow the Fortran statement (gh-3562).
+    """
+    use = m.get('use') or {}
+    if not use:
+        return []
+    available = {mod['name']: mod for mod in findf90modules(pymod)}
+    found = []
+    seen = set(m.get('vars') or {})
+    for uname, spec in use.items():
+        src = available.get(uname)
+        if not src:
+            continue
+        spec = spec or {}
+        mapping = spec.get('map') or {}
+        if spec.get('only'):
+            pairs = list(mapping.items())
+        else:
+            pairs = [(name, name) for name in (src.get('vars') or {})]
+        for local, remote in pairs:
+            if not local or local in seen:
+                continue
+            var = (src.get('vars') or {}).get(remote)
+            if not var:
+                continue
+            if 'parameter' not in (var.get('attrspec') or []):
+                continue
+            if isprivate(var):
+                continue
+            found.append((local, uname, remote, var))
+            seen.add(local)
+    return found
+
+
 def buildhooks(pymod):
     from . import rules
     ret = {'f90modhooks': [], 'initf90modhooks': [], 'body': [],
@@ -111,6 +149,11 @@ def buildhooks(pymod):
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
                 onlyvars.append(n)
                 mfargs.append(n)
+        imported = _parameter_imports(m, pymod)
+        imported_vars = {}
+        for local, uname, remote, var in imported:
+            imported_vars[local] = var
+            onlyvars.append(local)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
         if len(onlyvars) == 0 and len(notvars) == 1 and m['name'] in notvars:
             outmess(f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n")
@@ -146,7 +189,7 @@ def buildhooks(pymod):
         if onlyvars:
             dadd('\\begin{description}')
         for n in onlyvars:
-            var = m['vars'][n]
+            var = m['vars'][n] if n in m['vars'] else imported_vars[n]
             modobjs.append(n)
             ct = capi_maps.getctype(var)
             at = capi_maps.c2capi_map[ct]
@@ -255,6 +298,13 @@ def buildhooks(pymod):
         if mfargs:
             for a in undo_rmbadname(mfargs):
                 fadd(f"use {m_name}, only : {a}")
+        for local, uname, remote, _var in imported:
+            local_f = undo_rmbadname1(local)
+            remote_f = undo_rmbadname1(remote)
+            if local_f == remote_f:
+                fadd(f"use {uname}, only : {remote_f}")
+            else:
+                fadd(f"use {uname}, only : {local_f} => {remote_f}")
         if ifargs:
             fadd(' '.join(['interface'] + ifargs))
             fadd('end interface')
