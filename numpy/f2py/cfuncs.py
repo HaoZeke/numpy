@@ -94,6 +94,17 @@ typedefs['complex_float'] = 'typedef union { struct {float r,i;}; npy_cfloat _np
 typedefs['complex_double'] = 'typedef union { struct {double r,i;}; npy_cdouble _npy; } complex_double;'
 typedefs['string'] = """typedef char * string;"""
 typedefs['character'] = """typedef char character;"""
+# Selects the signature of call-back functions that return a complex value.
+# The default returns it by value, as gfortran (without -ff2c) and LLVM Flang
+# expect.  Compilers that pass a pointer to the result as a hidden first
+# argument (Intel, NVIDIA and AOCC Fortran, gfortran -ff2c) need
+# -DF2PY_CB_RETURNCOMPLEX=0.  It is a typedefs entry so that it precedes the
+# call-back typedefs, which depend on it.
+typedefs['F2PY_CB_RETURNCOMPLEX'] = """
+#ifndef F2PY_CB_RETURNCOMPLEX
+#define F2PY_CB_RETURNCOMPLEX 1
+#endif
+"""
 
 
 ############### CPP macros ####################
