@@ -195,6 +195,8 @@ skipblocksuntil = -1
 skipfuncs = []
 skipfunctions = []
 usermodules = []
+# True while the statement passed to crackline came from an f2py directive.
+line_from_f2py_directive = False
 
 
 def reset_global_f2py_vars():
@@ -204,6 +206,7 @@ def reset_global_f2py_vars():
     global onlyfuncs, include_paths, previous_context
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
     global f77modulename, skipemptyends, ignorecontains, dolowercase, debug
+    global line_from_f2py_directive
 
     # flags
     strictf77 = 1
@@ -233,6 +236,7 @@ def reset_global_f2py_vars():
     onlyfuncs = []
     include_paths = []
     previous_context = None
+    line_from_f2py_directive = False
 
 
 def outmess(line, flag=1):
@@ -364,6 +368,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     """
     global gotnextfile, filepositiontext, currentfilename, sourcecodeform, strictf77
     global beginpattern, quiet, verbose, dolowercase, include_paths
+    global line_from_f2py_directive
 
     if not istop:
         saveglobals = gotnextfile, filepositiontext, currentfilename, sourcecodeform, strictf77,\
@@ -376,6 +381,10 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     cont = False
     finalline = ''
     ll = ''
+    # Flag of the statement currently being accumulated, and of the
+    # statement about to be handed to dowithline.
+    open_stmt_is_f2py = False
+    emit_is_f2py = False
     includeline = re.compile(
         r'\s*include\s*(\'|")(?P<name>[^\'"]*)(\'|")', re.I)
     cont1 = re.compile(r'(?P<line>.*)&\s*\Z')
@@ -481,6 +490,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     # clean up line beginning from possible digits.
                     l = '     ' + l[5:]
                     # f2py directives are already stripped by this point
+                    emit_is_f2py = open_stmt_is_f2py
+                    open_stmt_is_f2py = is_f2py_directive
                     if localdolowercase:
                         finalline = ll.lower()
                     else:
@@ -509,6 +520,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 finalline = ''
                 origfinalline = ''
             else:
+                emit_is_f2py = open_stmt_is_f2py
+                open_stmt_is_f2py = is_f2py_directive
                 if localdolowercase:
                     # only skip lowering for C style constructs
                     # gh-2547, gh-27697, gh-26681, gh-28014
@@ -542,6 +555,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     outmess(f'readfortrancode: could not find include file {fn!r} '
                             f'in {os.pathsep.join(include_dirs)}. Ignoring.\n')
         else:
+            line_from_f2py_directive = emit_is_f2py
             dowithline(finalline)
         l1 = ll
     # Last line should never have an f2py directive anyway
@@ -569,6 +583,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 outmess(f'readfortrancode: could not find include file {fn!r} '
                         f'in {os.pathsep.join(include_dirs)}. Ignoring.\n')
     else:
+        line_from_f2py_directive = open_stmt_is_f2py
         dowithline(finalline)
     filepositiontext = ''
     fin.close()
@@ -1106,6 +1121,8 @@ def analyzeline(m, case, line):
             groupcache[groupcounter]['block'] = 'python module'
             groupcache[groupcounter]['name'] = f77modulename
             groupcache[groupcounter]['from'] = ''
+            # Created because -m was set, not because the file is a signature.
+            groupcache[groupcounter]['synthetic_module'] = 1
             groupcache[groupcounter]['body'] = []
             groupcache[groupcounter]['externals'] = []
             groupcache[groupcounter]['interfaced'] = []
@@ -1120,6 +1137,7 @@ def analyzeline(m, case, line):
             groupname[groupcounter] = 'interface'
             groupcache[groupcounter]['block'] = 'interface'
             groupcache[groupcounter]['name'] = 'unknown_interface'
+            groupcache[groupcounter]['synthetic_interface'] = 1
             prev_group = groupcache[groupcounter - 1]
             groupcache[groupcounter]['from'] = f"{prev_group['from']}:{prev_group['name']}"
             groupcache[groupcounter]['body'] = []
@@ -1153,6 +1171,13 @@ def analyzeline(m, case, line):
         groupcache[groupcounter]['interfaced'] = []
         groupcache[groupcounter]['vars'] = {}
         groupcache[groupcounter]['entry'] = {}
+        if block in ('function', 'subroutine'):
+            groupcache[groupcounter]['from_fixed_f77'] = int(bool(strictf77))
+            parent = groupcache.get(groupcounter - 1, {})
+            in_iface = parent.get('block') in (
+                'interface', 'abstract interface')
+            groupcache[groupcounter]['in_user_interface'] = int(
+                in_iface and not parent.get('synthetic_interface'))
         # end of creation
         if block == 'type':
             groupcache[groupcounter]['varnames'] = []
@@ -1294,6 +1319,8 @@ def analyzeline(m, case, line):
                 edecl[k]['attrspec'].append(ap)
             else:
                 edecl[k]['attrspec'] = [ap]
+            if case == 'optional':
+                _maybe_mark_absent(edecl[k])
             if case == 'external':
                 if groupcache[groupcounter]['block'] == 'program':
                     outmess('analyzeline: ignoring program arguments\n')
@@ -1673,6 +1700,45 @@ def markinnerspaces(line):
     return fragment
 
 
+def _inside_python_module():
+    """True when the statement sits inside a signature ``python module``."""
+    level = groupcounter
+    while level >= 0:
+        block = groupcache.get(level) or {}
+        kind = (block.get('block') or '').replace(' ', '')
+        if kind == 'pythonmodule' and not block.get('synthetic_module'):
+            return True
+        level -= 1
+    return False
+
+
+def _real_fortran_optional():
+    """True when this statement's OPTIONAL is Fortran's, not f2py's.
+
+    A ``python module`` block and an f2py directive use ``optional`` to
+    mean that the Python argument has a default. The file extension is
+    only a backstop when that block is missing.
+    """
+    if line_from_f2py_directive or _inside_python_module():
+        return False
+    ext = os.path.splitext(currentfilename)[1].lower()
+    return ext != '.pyf'
+
+
+def _maybe_mark_absent(edecl):
+    if not _real_fortran_optional():
+        return
+    attr = list(edecl.get('attrspec') or [])
+    if 'optional' not in attr:
+        return
+    if 'absent' not in attr:
+        attr.append('absent')
+        edecl['attrspec'] = attr
+    # A hand-written absent token keeps the explicit origin.
+    if edecl.get('absent_origin') != 'explicit':
+        edecl['absent_origin'] = 'fortran'
+
+
 def updatevars(typespec, selector, attrspec, entitydecl):
     """
     Returns last_name, the variable name without special chars, parenthesis
@@ -1843,6 +1909,12 @@ def updatevars(typespec, selector, attrspec, entitydecl):
         for k in list(edecl.keys()):
             if not edecl[k]:
                 del edecl[k]
+        # A token written on this statement is hand-written absent.
+        # A previous f2py directive must not be promoted later.
+        if attrspec and 'absent' in attrspec:
+            edecl['absent_origin'] = 'explicit'
+        if attrspec and 'optional' in attrspec:
+            _maybe_mark_absent(edecl)
         groupcache[groupcounter]['vars'][ename] = edecl
         if 'varnames' in groupcache[groupcounter]:
             groupcache[groupcounter]['varnames'].append(ename)
@@ -3040,6 +3112,7 @@ def analyzevars(block):
         for n in list(vars.keys()):
             if n not in neededvars:
                 del vars[n]
+    resolve_absent(block, vars)
     return vars
 
 
@@ -3522,6 +3595,10 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         if 'attrspec' in vars[a]:
             attr = [l for l in vars[a]['attrspec']
                     if l not in ['external']]
+            # ``absent`` is an f2py attribute. A Fortran interface must
+            # not repeat it. Signature output keeps it.
+            if as_interface:
+                attr = [l for l in attr if l != 'absent']
             if as_interface and 'intent(in)' in attr and 'intent(out)' in attr:
                 # In Fortran, intent(in, out) are conflicting while
                 # intent(in, out) can be specified only via

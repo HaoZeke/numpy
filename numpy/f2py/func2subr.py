@@ -15,6 +15,7 @@ from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
     getfortranname,
+    isabsent,
     isexternal,
     isfunction,
     isfunction_wrap,
@@ -26,7 +27,9 @@ from .auxfuncs import (
     issubroutine,
     issubroutine_wrap,
     outmess,
+    routine_has_absent,
     show,
+    validate_absent,
 )
 
 
@@ -76,6 +79,26 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
         vardef = f"{vardef}({','.join(vars[a]['dimension'])})"
     return vardef
 
+
+def _decl_line(vars, a, f90mode):
+    """Fortran declaration, with optional when the actual may be absent."""
+    var = vars.get(a, {})
+    absent = isabsent(var)
+    decl = var2fixfortran(vars, a, f90mode=f90mode or absent)
+    if not absent or not decl:
+        return decl
+    marker = f' {a}'
+    idx = decl.rfind(marker)
+    if idx < 0:
+        return decl
+    return f'{decl[:idx]}, optional :: {decl[idx + 1:]}'
+
+
+def _needs_explicit_interface(rout, f90mode, extra_args):
+    # Module procedures already have an explicit interface via USE.
+    # An external absent actual needs the saved signature instead.
+    return bool(extra_args) or (not f90mode and routine_has_absent(rout))
+
 def useiso_c_binding(rout):
     useisoc = False
     for value in rout['vars'].values():
@@ -108,7 +131,6 @@ def createfuncwrapper(rout, signature=0):
                 vars[dn] = dv
                 v['dimension'][i] = dn
     rout['args'].extend(extra_args)
-    need_interface = bool(extra_args)
 
     ret = ['']
 
@@ -117,6 +139,7 @@ def createfuncwrapper(rout, signature=0):
     name = rout['name']
     fortranname = getfortranname(rout)
     f90mode = ismoduleroutine(rout)
+    need_interface = _needs_explicit_interface(rout, f90mode, extra_args)
     newname = f'{name}f2pywrap'
 
     if newname not in vars:
@@ -180,18 +203,18 @@ def createfuncwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(_decl_line(vars, a, f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
         if isintent_in(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(_decl_line(vars, a, f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
-        add(var2fixfortran(vars, a, f90mode=f90mode))
+        add(_decl_line(vars, a, f90mode))
 
     add(l1)
     if rl is not None:
@@ -236,7 +259,6 @@ def createsubrwrapper(rout, signature=0):
                 vars[dn] = dv
                 v['dimension'][i] = dn
     rout['args'].extend(extra_args)
-    need_interface = bool(extra_args)
 
     ret = ['']
 
@@ -245,6 +267,7 @@ def createsubrwrapper(rout, signature=0):
     name = rout['name']
     fortranname = getfortranname(rout)
     f90mode = ismoduleroutine(rout)
+    need_interface = _needs_explicit_interface(rout, f90mode, extra_args)
 
     args = rout['args']
 
@@ -282,12 +305,12 @@ def createsubrwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(_decl_line(vars, a, f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
-        add(var2fixfortran(vars, a, f90mode=f90mode))
+        add(_decl_line(vars, a, f90mode))
 
     if need_interface:
         if f90mode:
@@ -313,6 +336,7 @@ def createsubrwrapper(rout, signature=0):
 
 
 def assubr(rout):
+    validate_absent(rout)
     if isfunction_wrap(rout):
         fortranname = getfortranname(rout)
         name = rout['name']
