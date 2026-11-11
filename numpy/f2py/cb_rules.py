@@ -53,7 +53,7 @@ cb_routine_rules = {
 #begintitle#
 typedef struct {
     PyObject *capi;
-    PyTupleObject *args_capi;
+    PyObject *args_capi;
     int nofargs;
     jmp_buf jmpbuf;
 } #name#_t;
@@ -90,7 +90,7 @@ static #name#_t *get_active_#name#(void) {
 #static# #rctype# #callbackname# (#optargs##args##strarglens##noargs#) {
     #name#_t cb_local = { NULL, NULL, 0 };
     #name#_t *cb = NULL;
-    PyTupleObject *capi_arglist = NULL;
+    PyObject *capi_arglist = NULL;
     PyObject *capi_return = NULL;
     PyObject *capi_tmp = NULL;
     PyObject *capi_arglist_list = NULL;
@@ -127,7 +127,7 @@ f2py_cb_start_clock();
         capi_longjmp_ok = 0;
         capi_tmp = PyObject_GetAttrString(#modulename#_module,\"#argname#_extra_args\");
         if (capi_tmp) {
-            capi_arglist = (PyTupleObject *)PySequence_Tuple(capi_tmp);
+            capi_arglist = PySequence_Tuple(capi_tmp);
             Py_DECREF(capi_tmp);
             if (capi_arglist==NULL) {
                 PyErr_SetString(#modulename#_error,\"Failed to convert #modulename#.#argname#_extra_args to tuple.\\n\");
@@ -135,7 +135,7 @@ f2py_cb_start_clock();
             }
         } else {
             PyErr_Clear();
-            capi_arglist = (PyTupleObject *)Py_BuildValue(\"()\");
+            capi_arglist = Py_BuildValue(\"()\");
         }
     }
     if (capi_arglist == NULL) {
