@@ -53,7 +53,7 @@ cb_routine_rules = {
 #begintitle#
 typedef struct {
     PyObject *capi;
-    PyObject *args_capi;
+    PyTupleObject *args_capi;
     int nofargs;
     jmp_buf jmpbuf;
 } #name#_t;
@@ -90,7 +90,7 @@ static #name#_t *get_active_#name#(void) {
 #static# #rctype# #callbackname# (#optargs##args##strarglens##noargs#) {
     #name#_t cb_local = { NULL, NULL, 0 };
     #name#_t *cb = NULL;
-    PyObject *capi_arglist = NULL;
+    PyTupleObject *capi_arglist = NULL;
     PyObject *capi_return = NULL;
     PyObject *capi_tmp = NULL;
     PyObject *capi_arglist_list = NULL;
@@ -121,22 +121,23 @@ f2py_cb_start_clock();
     #name#_typedef #name#_cptr;
     #name#_cptr = F2PyCapsule_AsVoidPtr(cb->capi);
     #returncptr#(*#name#_cptr)(#optargs_nm##args_nm##strarglens_nm#);
-    #return#
+    goto capi_return_pt;
     }
     if (capi_arglist==NULL) {
         capi_longjmp_ok = 0;
         capi_tmp = PyObject_GetAttrString(#modulename#_module,\"#argname#_extra_args\");
         if (capi_tmp) {
-            capi_arglist = PySequence_Tuple(capi_tmp);
+            cb->args_capi = (PyTupleObject *)PySequence_Tuple(capi_tmp);
             Py_DECREF(capi_tmp);
-            if (capi_arglist==NULL) {
+            if (cb->args_capi==NULL) {
                 PyErr_SetString(#modulename#_error,\"Failed to convert #modulename#.#argname#_extra_args to tuple.\\n\");
                 goto capi_fail;
             }
         } else {
             PyErr_Clear();
-            capi_arglist = Py_BuildValue(\"()\");
+            cb->args_capi = (PyTupleObject *)Py_BuildValue(\"()\");
         }
+        capi_arglist = cb->args_capi;
     }
     if (capi_arglist == NULL) {
         PyErr_SetString(#modulename#_error,\"Callback #argname# argument list is not set.\\n\");
@@ -184,7 +185,8 @@ capi_fail:
         longjmp(cb->jmpbuf,-1);
     }
 capi_return_pt:
-    ;
+    Py_XDECREF(cb_local.capi);
+    Py_XDECREF(cb_local.args_capi);
 #return#
 }
 #endtitle#

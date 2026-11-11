@@ -9,6 +9,7 @@ import traceback
 import pytest
 
 import numpy as np
+from numpy.testing import HAS_REFCOUNT
 
 from . import util
 
@@ -204,6 +205,27 @@ class TestF77Callback(util.F2PyTest):
         # reproducer of gh18341
         r = self.module.hidden_callback2(2)
         assert r == 3
+
+    @pytest.mark.skipif(not HAS_REFCOUNT, reason="Python lacks refcounts")
+    def test_hidden_callback_refcount(self):
+        # The call-back and its extra arguments are module attributes; each
+        # call must release what it took, with or without a declaration
+        def global_f(*args):
+            return 0
+
+        extra_args = (object(),)
+        self.module.global_f = global_f
+        self.module.global_f_extra_args = extra_args
+        try:
+            for routine in (self.module.hidden_callback,
+                            self.module.hidden_callback2):
+                before = sys.getrefcount(global_f), sys.getrefcount(extra_args)
+                assert routine(2) == 0
+                after = sys.getrefcount(global_f), sys.getrefcount(extra_args)
+                assert after == before
+        finally:
+            del self.module.global_f
+            del self.module.global_f_extra_args
 
 
 @pytest.mark.slow
