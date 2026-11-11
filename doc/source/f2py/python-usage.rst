@@ -290,6 +290,13 @@ evaluates the call-back argument ``gun``:
 * If ``n + p`` is less than the number of required arguments to ``gun`` then an
   exception is raised.
 
+If ``gun`` also takes ``*args``, then ``m`` is unbounded and
+``gun(a_1, ..., a_n, e_1, ..., e_p)`` is called.
+
+``gun`` can be any Python callable. For a bound method, or an instance of a
+class that defines ``__call__``, ``m`` does not count ``self``. If ``m`` cannot
+be determined, as for built-in functions, all ``n + p`` arguments are passed.
+
 If the function ``gun`` may return any number of objects as a tuple; then the
 following rules are applied:
 
