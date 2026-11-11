@@ -1516,8 +1516,10 @@ def analyzeline(m, case, line):
         groupcache[groupcounter]['common'] = commonkey
         previous_context = ('common', bn, groupcounter)
     elif case == 'use':
+        # F2018 R1409: USE [[, module-nature] ::] module-name ...
         m1 = re.match(
-            r'\A\s*(?P<name>\b\w+\b)\s*((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z', m.group('after'), re.I)
+            r'\A\s*((,\s*(intrinsic|non_intrinsic)\s*)?::)?'
+            r'\s*(?P<name>\b\w+\b)\s*((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z', m.group('after'), re.I)
         if m1:
             mm = m1.groupdict()
             if 'use' not in groupcache[groupcounter]:
