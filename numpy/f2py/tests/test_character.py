@@ -243,7 +243,7 @@ class TestCharacter(util.F2PyTest):
        end function {fprefix}_optional
     """)
 
-    @pytest.mark.parametrize("dtype", ['c', 'S1'])
+    @pytest.mark.parametrize("dtype", ['c', 'S1', '<U1', '>U1'])
     def test_input(self, dtype):
         f = getattr(self.module, self.fprefix + '_input')
 
