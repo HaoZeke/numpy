@@ -249,6 +249,33 @@ class TestGH25211(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestGH2981(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh2981.f")]
+
+    @pytest.mark.parametrize("wrap", [
+        list,
+        np.asarray,
+        lambda y: (y,),
+        lambda y: (y, "ignored"),
+    ], ids=["list", "ndarray", "1-tuple", "extra-item"])
+    def test_return_single_array(self, wrap):
+        x = np.array([1.0, 2.0, 3.0])
+        y = self.module.compute(lambda x: wrap(x + 1), x)
+        np.testing.assert_array_equal(y, x + 1)
+
+    def test_return_tuple_as_array(self):
+        # The tuple is unpacked into the return values, so 2.0 is taken as y.
+        x = np.array([1.0, 2.0, 3.0])
+        with pytest.raises(ValueError, match=(
+                r"call-back function fun returned a tuple of 3 items, which"
+                r" f2py unpacks into the return values of"
+                r" 'def fun\(x,\[n\]\): return y'")) as excinfo:
+            self.module.compute(lambda x: tuple(x + 1), x)
+        assert isinstance(excinfo.value.__cause__, ValueError)
+        assert "0-th dimension must be 3" in str(excinfo.value.__cause__)
+
+
+@pytest.mark.slow
 @pytest.mark.xfail(condition=(platform.system().lower() == 'darwin'),
                    run=False,
                    reason="Callback aborts cause CI failures on macOS")
