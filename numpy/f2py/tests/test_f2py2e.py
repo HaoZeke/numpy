@@ -1085,3 +1085,48 @@ flangrt.hi()
     )
     assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
     assert "hello" in (proc.stdout + proc.stderr).lower()
+
+
+def test_compile_relative_paths(meson_build_of, hello_world_f90, tmp_path):
+    """Relative paths are taken from the working directory, not the build one
+
+    CLI :: -c -I<dir> -L<dir> <dir>/<filename>.o
+    """
+    (tmp_path / "objs").mkdir()
+    (tmp_path / "objs" / "extra.o").touch()
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          "-Iinc", "-Ibld/gen", "-Llib", "-lfoo", "objs/extra.o")
+    assert f"'''{tmp_path / 'inc'}'''" in mbld
+    # meson only accepts paths into its source tree, the build dir, relative
+    assert "'''gen'''" in mbld
+    assert f"'''-L{tmp_path / 'lib'}'''" in mbld
+    objects = re.search(r"objects: \[(.*?)\]", mbld, re.DOTALL).group(1)
+    assert objects.split() == ["'''extra.o''',"]
+
+
+@pytest.mark.skipif((platform.system() != 'Linux'), reason='Compiler required')
+@pytest.mark.slow
+def test_compile_relative_include_dir(tmp_path, monkeypatch):
+    """A relative -I serves both crackfortran and the Fortran compiler
+
+    CLI :: -c -I<dir>
+    """
+    (tmp_path / "inc").mkdir()
+    (tmp_path / "inc" / "vals.inc").write_text(
+        "  integer, parameter :: val = 42\n", encoding="ascii")
+    (tmp_path / "incl.f90").write_text(textwrap.dedent("""\
+        subroutine get_val(x)
+          integer, intent(out) :: x
+          include 'vals.inc'
+          x = val
+        end subroutine get_val
+        """), encoding="ascii")
+    monkeypatch.setattr(
+        sys, "argv", ["f2py", "-c", "-m", "relinc", "incl.f90", "-Iinc"])
+    with util.switchdir(tmp_path):
+        compiler_check_f2pycli()
+        rout = subprocess.run(
+            [sys.executable, "-c", "import relinc; print(relinc.get_val())"],
+            capture_output=True, encoding="UTF-8")
+    assert rout.returncode == 0, rout.stderr
+    assert rout.stdout.strip() == "42"
