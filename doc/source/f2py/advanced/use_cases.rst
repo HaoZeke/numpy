@@ -173,3 +173,64 @@ argument ``n``, after wrapping with F2PY, in Python:
 
 .. include:: ./../code/results/asterisk2_session.dat
   :literal:
+
+.. _f2py-interrupting:
+
+Interrupting long-running Fortran code
+======================================
+
+When a signal such as ``SIGINT`` (sent by Ctrl-C) arrives, Python only records
+it; the Python-level handler, which for ``SIGINT`` raises `KeyboardInterrupt`
+by default, runs once the main thread executes Python code again (see
+:mod:`signal`). While an F2PY wrapped routine runs, control stays in compiled
+code, so Ctrl-C takes effect only after the routine returns, and a routine
+that never returns cannot be interrupted at all.
+
+Interrupting the routine from a signal handler is not an option: replacing
+handlers temporarily is not thread safe, and the Fortran standard does not
+allow transfers of control, such as C's ``longjmp``, that bypass the normal
+return of a Fortran procedure (Fortran 2018, 15.6.3). Instead, F2PY generated
+extension modules provide the C function::
+
+    int f2py_check_signals(void);
+
+which long-running Fortran code can call through a ``bind(c)`` interface at
+points where it can stop cleanly. It runs the pending Python signal handlers
+and returns a nonzero value if one of them raised an exception, or if a Python
+exception is already pending. The Fortran code should then return, and the
+wrapper raises the exception instead of returning the output arguments. For
+example, consider the Fortran file ``interrupt.f90``:
+
+.. literalinclude:: ./../code/interrupt.f90
+  :language: fortran
+
+Compile it with ``f2py -c interrupt.f90 -m interrupt`` and then in Python:
+
+.. code-block:: python
+
+    >>> import numpy as np
+    >>> import interrupt
+    >>> x = np.zeros(1000)
+    >>> x[-1] = 1
+    >>> interrupt.relax(x, 10**9)  # press Ctrl-C while this runs
+    Traceback (most recent call last):
+      ...
+    KeyboardInterrupt
+
+Since ``x`` is ``intent(inout)``, it keeps the sweeps completed before the
+interruption.
+
+``f2py_check_signals`` can also be called from routines declared
+``threadsafe``; it then reacquires the GIL for the duration of the call, so
+call it at a coarse granularity, for example once per outer iteration. Python
+runs signal handlers only in its main thread, so calls from other threads do
+not run them, and in threads that Python does not know about, such as OpenMP
+worker threads, the call returns zero without taking the GIL.
+
+.. note::
+
+   Fortran code that cannot be changed to call ``f2py_check_signals`` can only
+   be stopped by ending the process that runs it, for example by running it in
+   a child process, or by calling ``signal.signal(signal.SIGINT,
+   signal.SIG_DFL)`` beforehand so that Ctrl-C terminates Python immediately,
+   without any cleanup.
