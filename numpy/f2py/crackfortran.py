@@ -145,8 +145,12 @@ import fileinput
 import os
 import platform
 import re
+import shlex
+import shutil
 import string
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -2562,10 +2566,64 @@ def _selected_int_kind_func(r):
     return -1
 
 
+_smallest_real_kind_cache = {}
+
+
+def _fortran_compiler_cmd():
+    """Compiler f2py will use, matching Meson's search order."""
+    fc = os.environ.get("FC") or os.environ.get("F77")
+    if fc:
+        return shlex.split(fc)
+    for name in ("gfortran", "flang-new", "flang"):
+        path = shutil.which(name)
+        if path:
+            return [path]
+    return None
+
+
+def _smallest_real_kind():
+    """Kind from ``selected_real_kind(0)`` for the active compiler.
+
+    Fortran 2018 picks the smallest real kind. LLVM flang has
+    binary16 (kind 2); compilers without it return 4 (gh-30260).
+    """
+    cmd = _fortran_compiler_cmd()
+    key = tuple(cmd) if cmd else None
+    if key in _smallest_real_kind_cache:
+        return _smallest_real_kind_cache[key]
+    kind = 4
+    if cmd:
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                src = os.path.join(tmp, "k.f90")
+                exe = os.path.join(tmp, "k")
+                with open(src, "w") as fh:
+                    fh.write(
+                        "program p\n"
+                        "  write(*,*) selected_real_kind(0)\n"
+                        "end program\n"
+                    )
+                subprocess.run(
+                    cmd + [src, "-o", exe],
+                    check=True, capture_output=True, timeout=60,
+                )
+                out = subprocess.run(
+                    [exe], check=True, capture_output=True,
+                    text=True, timeout=30,
+                )
+                kind = int(out.stdout.split()[0])
+        except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+            kind = 4
+    _smallest_real_kind_cache[key] = kind
+    return kind
+
+
 def _selected_real_kind_func(p, r=0, radix=0):
     # XXX: This should be processor dependent
     # This is only verified for 0 <= p <= 20, possibly good for p <= 33 and above
     if p < 7:
+        if p < 4 and _smallest_real_kind() == 2:
+            return 2
         return 4
     if p < 16:
         return 8
