@@ -1,11 +1,12 @@
 project('${modulename}',
-        ['c', 'fortran'],
         version : '0.1',
         meson_version: '>= 1.1.0',
         default_options : [
                             'warning_level=1',
                             'buildtype=${buildtype}'
                           ])
+# Host only: languages passed to project() are also set up for the build machine
+add_languages('c', 'fortran', native: false)
 fc = meson.get_compiler('fortran')
 cc = meson.get_compiler('c')
 

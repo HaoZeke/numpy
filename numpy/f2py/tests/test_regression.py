@@ -1,3 +1,4 @@
+import json
 import os
 import platform
 import sys
@@ -207,6 +208,30 @@ def test_gh25415_meson_include_dirs_from_running_numpy():
     assert "run_command" not in meson_build
     assert f"incdir_numpy = '''{np.get_include()}'''" in meson_build
     assert f"incdir_f2py = '''{np.f2py.get_include()}'''" in meson_build
+
+
+@pytest.mark.slow
+def test_gh25415_meson_configures_host_compilers_only(tmp_path):
+    # Native builds never use the build machine compilers, so meson setup
+    # should not detect and sanity check them a second time
+    mod = util.build_code(
+        """
+        subroutine gh25415(x)
+          real(8), intent(inout) :: x
+          x = x + 1
+        end subroutine
+        """,
+        options=["--build-dir", str(tmp_path)],
+        suffix=".f90",
+    )
+    x = np.array(1.0)
+    mod.gh25415(x)
+    assert x == 2.0
+
+    intro, = tmp_path.glob("*/meson-info/intro-compilers.json")
+    compilers = json.loads(intro.read_text())
+    assert set(compilers["host"]) == {"c", "fortran"}
+    assert not compilers.get("build")
 
 
 @pytest.mark.slow
