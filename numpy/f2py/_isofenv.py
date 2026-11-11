@@ -11,6 +11,11 @@ iso_fortran_env_map: dict[str, dict[str, str]] = {
     'real': {
         'real32': 'float',
         'real64': 'double',
+    },
+    # complex(kind=k) has real(kind=k) parts (Fortran 2018, 7.4.3.3)
+    'complex': {
+        'real32': 'complex_float',
+        'real64': 'complex_double',
     }
 }
 

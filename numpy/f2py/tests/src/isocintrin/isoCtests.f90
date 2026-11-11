@@ -20,6 +20,24 @@
         complex(c_long_double_complex), intent(out), dimension(3) :: C
         C = A + B
       end subroutine add_clong_double_arr
+      ! gh-30352
+      subroutine add_cfloat_rkind_arr(A, B, C)
+        use iso_c_binding, only: c_float
+        complex(c_float), intent(in), dimension(3) :: A, B
+        complex(c_float), intent(out), dimension(3) :: C
+        C = A + B
+      end subroutine add_cfloat_rkind_arr
+      subroutine add_cdouble_rkind_arr(A, B, C)
+        complex(c_double), intent(in), dimension(3) :: A, B
+        complex(c_double), intent(out), dimension(3) :: C
+        C = A + B
+      end subroutine add_cdouble_rkind_arr
+      subroutine add_clong_double_rkind_arr(A, B, C)
+        use iso_c_binding, only: c_long_double
+        complex(c_long_double), intent(in), dimension(3) :: A, B
+        complex(c_long_double), intent(out), dimension(3) :: C
+        C = A + B
+      end subroutine add_clong_double_rkind_arr
       subroutine c_add(a, b, c) bind(c, name="c_add")
         real(c_double), intent(in) :: a, b
         real(c_double), intent(out) :: c
