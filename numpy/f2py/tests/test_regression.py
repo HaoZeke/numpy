@@ -99,8 +99,11 @@ def test_include_path():
 @pytest.mark.slow
 class TestIncludeFiles(util.F2PyTest):
     sources = [util.getpath("tests", "src", "regression", "incfile.f90")]
+    # Separate argv tokens. One string would keep spaces in the path
+    # inside that token (gh-31958).
     options = [f"-I{util.getpath('tests', 'src', 'regression')}",
-               f"--include-paths {util.getpath('tests', 'src', 'regression')}"]
+               "--include-paths",
+               f"{util.getpath('tests', 'src', 'regression')}"]
 
     def test_gh25344(self):
         exp = 7.0

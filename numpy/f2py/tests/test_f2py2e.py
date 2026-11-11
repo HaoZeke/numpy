@@ -754,6 +754,106 @@ def test_inclpath(monkeypatch):
     assert remain == []
 
 
+def test_get_newer_options_keeps_spaced_tokens(monkeypatch):
+    """Already-tokenized argv entries that contain spaces stay intact.
+
+    gh-31958
+    """
+    monkeypatch.setattr(os, "pathsep", ";")
+
+    include_paths, ftcompat, remain = get_newer_options(
+        ["-I", r"C:\Users\First Last\include", r"C:\src\fib.f90"]
+    )
+    assert include_paths == [r"C:\Users\First Last\include"]
+    assert ftcompat is None
+    assert remain == [r"C:\src\fib.f90"]
+
+    include_paths, ftcompat, remain = get_newer_options(
+        [
+            "--build-dir",
+            r"C:\Users\First Last\f2py build",
+            "-m",
+            "fib",
+            r"C:\src\fib.f90",
+        ]
+    )
+    assert include_paths == []
+    assert ftcompat is None
+    assert remain == [
+        "--build-dir",
+        r"C:\Users\First Last\f2py build",
+        "-m",
+        "fib",
+        r"C:\src\fib.f90",
+    ]
+
+    include_paths, ftcompat, remain = get_newer_options(
+        ["--freethreading-compatible", r"C:\Users\First Last\src\fib.f90"]
+    )
+    assert include_paths == []
+    assert ftcompat is True
+    assert remain == [r"C:\Users\First Last\src\fib.f90"]
+
+    include_paths, ftcompat, remain = get_newer_options(
+        [
+            "--include-paths",
+            r"C:\Users\First Last\include;D:\vendor headers",
+            r"C:\src\fib.f90",
+        ]
+    )
+    assert set(include_paths) == {
+        r"C:\Users\First Last\include",
+        r"D:\vendor headers",
+    }
+    assert ftcompat is None
+    assert remain == [r"C:\src\fib.f90"]
+
+
+def test_cli_spaced_path_parsing(tmp_path, monkeypatch):
+    """CLI parsing keeps include and build paths that contain spaces.
+
+    gh-31958. Checks the parsed options only; nothing is compiled.
+    """
+    include_dir = tmp_path / "include dir"
+    include_dir.mkdir()
+    build_dir = tmp_path / "build dir"
+    source = tmp_path / "src dir" / "fib.f90"
+    source.parent.mkdir()
+    source.write_text("subroutine fib\nend\n")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "f2py",
+            "-I",
+            os.fspath(include_dir),
+            "--build-dir",
+            os.fspath(build_dir),
+            "-m",
+            "fib",
+            os.fspath(source),
+        ],
+    )
+
+    parsed = {}
+
+    def capture_crackfortran(files, options):
+        parsed["files"] = files
+        parsed["include_paths"] = options["include_paths"]
+        parsed["buildpath"] = options["buildpath"]
+        return []
+
+    monkeypatch.setattr(
+        "numpy.f2py.f2py2e.callcrackfortran", capture_crackfortran
+    )
+    f2pycli()
+
+    assert parsed["include_paths"] == [os.fspath(include_dir)]
+    assert parsed["buildpath"] == os.fspath(build_dir)
+    assert parsed["files"] == [os.fspath(source)]
+
+
 def test_hlink():
     """Add to the include directories
 
