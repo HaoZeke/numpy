@@ -1,5 +1,6 @@
 import pytest
 
+import numpy as np
 from numpy.testing import assert_array_equal
 
 from . import util
@@ -27,6 +28,10 @@ class TestF77Features(util.F2PyTest):
 
     def test_equivalence(self):
         assert self.module.eqv(4.0) == 4.0
+
+    def test_save(self):
+        first = self.module.countr()
+        assert self.module.countr() == first + 1
 
 
 @pytest.mark.slow
@@ -56,6 +61,29 @@ class TestF90Features(util.F2PyTest):
     def test_array_valued_function(self):
         assert_array_equal(self.module.f90_features.twice([1.0, 2.0, 3.0]),
                            [2.0, 4.0, 6.0])
+
+    def test_module_variables(self):
+        mod = self.module.f90_features
+        mod.counter = 5
+        assert mod.counter == 5
+        mod.table = np.arange(6.0).reshape(2, 3)
+        assert_array_equal(mod.table, np.arange(6.0).reshape(2, 3))
+        assert mod.table.flags.f_contiguous
+
+
+@pytest.mark.slow
+class TestF90Allocatable(util.F2PyTest):
+    sources = [_source("f90_allocatable.f90")]
+
+    def test_allocate_from_python(self):
+        mod = self.module.f90_allocatable
+        mod.buffer = [1.0, 2.0]
+        assert mod.buffer_size() == 2
+        assert_array_equal(mod.buffer, [1.0, 2.0])
+        mod.buffer = [1.0, 2.0, 3.0]
+        assert mod.buffer_size() == 3
+        mod.buffer = None
+        assert mod.buffer_size() == -1
 
 
 @pytest.mark.slow

@@ -33,3 +33,12 @@ Cf2py intent(out) y
       A(1) = X
       Y = B
       END
+
+      SUBROUTINE COUNTR(K)
+      INTEGER K, N
+      SAVE N
+      DATA N /0/
+Cf2py intent(out) k
+      N = N + 1
+      K = N
+      END
