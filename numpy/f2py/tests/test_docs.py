@@ -36,7 +36,7 @@ def _path(*args):
 class TestDocAdvanced(util.F2PyTest):
     # options = ['--debug-capi', '--build-dir', '/tmp/build-f2py']
     sources = [_path('asterisk1.f90'), _path('asterisk2.f90'),
-               _path('ftype.f')]
+               _path('ftype.f'), _path('interrupt.f90')]
 
     def test_asterisk1(self):
         foo = self.module.foo1
@@ -62,5 +62,11 @@ class TestDocAdvanced(util.F2PyTest):
                            np.array([1, 45, 3], dtype=np.float32))
         # gh-26718 Cleanup for repeated test runs
         ftype.data.a = 0
+
+    def test_interrupt(self):
+        x = np.zeros(5)
+        x[-1] = 1
+        self.module.relax(x, 1)
+        assert_array_equal(x, [0, 0, 0, 0.5, 1])
 
     # TODO: implement test methods for other example Fortran codes
