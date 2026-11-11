@@ -10,6 +10,7 @@ import traceback
 import pytest
 
 import numpy as np
+from numpy.f2py.f2py2e import main as f2pycli
 
 from . import util
 
@@ -216,6 +217,31 @@ class TestF90Callback(util.F2PyTest):
         y = np.array([1, 2, 3], dtype=np.int64)
         r = self.module.gh17797(incr, y)
         assert r == 123 + 1 + 2 + 3
+
+
+def test_gh20157_external_dummy_interface(tmp_path, monkeypatch):
+    # The interface body for gh17797 gives its EXTERNAL dummy `f` the
+    # EXTERNAL attribute once, not again through an interface body.
+    src = util.getpath("tests", "src", "callback", "gh17797.f90")
+    monkeypatch.setattr(sys, "argv", ["f2py", str(src), "-m", "gh20157"])
+    with util.switchdir(tmp_path):
+        f2pycli()
+    wrapper = (tmp_path / "gh20157-f2pywrappers2.f90").read_text()
+    stmts = [line.strip() for line in wrapper.splitlines()]
+    assert stmts.count("external f") == 2
+    assert not [s for s in stmts if s.startswith("function f(")]
+
+
+@pytest.mark.slow
+class TestGH20157(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh20157.f90")]
+
+    def test_gh20157(self):
+        def incr(x):
+            return x + 123
+
+        y = np.array([1, 2, 3], dtype=np.int64)
+        assert self.module.gh20157(incr, y) == 123 + 1 + 2 + 3
 
 
 @pytest.mark.slow
