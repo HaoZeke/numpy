@@ -79,6 +79,7 @@ typedef struct {
     int len;              /* Number of attributes */
     FortranDataDef *defs; /* An array of FortranDataDef's */
     PyObject *dict;       /* Fortran object attribute dictionary */
+    int strict_setattr;   /* Reject setting names that are not in defs */
 } PyFortranObject;
 
 #define PyFortran_Check(op) (Py_TYPE(op) == &PyFortran_Type)
@@ -89,6 +90,8 @@ extern int
 F2PyDict_SetItemString(PyObject *dict, char *name, PyObject *obj);
 extern PyObject *
 PyFortranObject_New(FortranDataDef *defs, f2py_void_func init);
+extern PyObject *
+PyFortranObject_NewStrict(FortranDataDef *defs, f2py_void_func init);
 extern PyObject *
 PyFortranObject_NewAsAttr(FortranDataDef *defs);
 

@@ -56,6 +56,9 @@ def buildhooks(m):
 
     def dadd(line, s=doc):
         s[0] = f'{s[0]}\n{line}'
+    new_fortran_object = ('PyFortranObject_NewStrict'
+                          if m.get('strict_setattr')
+                          else 'PyFortranObject_New')
     for (name, vnames, vars) in findcommonblocks(m):
         lower_name = name.lower()
         hnames, inames = [], []
@@ -119,7 +122,7 @@ def buildhooks(m):
         cadd(f'\t{F_FUNC}(f2pyinit{lower_name},F2PYINIT{name.upper()})'
              f'(f2py_setup_{name});')
         cadd('}\n')
-        iadd(f'\ttmp = PyFortranObject_New(f2py_{name}_def,f2py_init_{name});')
+        iadd(f'\ttmp = {new_fortran_object}(f2py_{name}_def,f2py_init_{name});')
         iadd('\tif (tmp == NULL) return -1;')
         iadd(f'\tif (F2PyDict_SetItemString(d, "{name}", tmp) == -1) return -1;')
         iadd('\tPy_DECREF(tmp);')
