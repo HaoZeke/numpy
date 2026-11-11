@@ -1035,3 +1035,42 @@ def test_npd_linker():
     """
     # TODO: populate
     pass
+
+
+def test_unknown_option_nonzero_exit(tmp_path):
+    """Unknown CLI options must not report success.
+
+    CLI :: --definitely-not-an-f2py-flag
+    gh-31409
+    """
+    rout = subprocess.run(
+        [sys.executable, "-m", "numpy.f2py", "--definitely-not-an-f2py-flag"],
+        capture_output=True,
+        encoding="UTF-8",
+        cwd=tmp_path,
+    )
+    assert rout.returncode != 0
+    assert "Unknown option" in (rout.stdout + rout.stderr)
+
+
+def test_unknown_option_with_compile_nonzero_exit(tmp_path):
+    """Compile mode must not report success on an unknown option.
+
+    CLI :: -c lost-file.f90 --unknown-option
+    gh-31409
+    """
+    rout = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "numpy.f2py",
+            "-c",
+            "lost-file.f90",
+            "--unknown-option",
+        ],
+        capture_output=True,
+        encoding="UTF-8",
+        cwd=tmp_path,
+    )
+    assert rout.returncode != 0
+    assert "Unknown option" in (rout.stdout + rout.stderr)
