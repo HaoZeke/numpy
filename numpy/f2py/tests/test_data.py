@@ -72,3 +72,22 @@ class TestDataWithCommentsF77(util.F2PyTest):
         assert self.module.mycom.mytab[0] == 0
         assert self.module.mycom.mytab[1] == 4
         assert self.module.mycom.mytab[2] == 0
+
+
+def test_element_data_does_not_invent_names():
+    # gh-7189: ``data d(1)`` is an element of ``d``, not a new variable.
+    fpath = util.getpath("tests", "src", "crackfortran", "gh7189.f90")
+    mod = crackfortran([str(fpath)])
+    vs = mod[0]["vars"]
+    assert set(vs) == {"d"}
+    assert vs["d"]["typespec"] == "integer"
+    assert vs["d"]["dimension"] == ["2"]
+    assert "optional" not in vs["d"].get("attrspec", [])
+
+
+@pytest.mark.slow
+class TestElementData(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "crackfortran", "gh7189.f90")]
+
+    def test_element_values(self):
+        assert list(self.module.elemdata.d) == [1, 2]
