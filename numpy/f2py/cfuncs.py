@@ -100,9 +100,9 @@ typedefs['character'] = """typedef char character;"""
 cppmacros['CFUNCSMESS'] = """
 #ifdef DEBUGCFUNCS
 #define CFUNCSMESS(mess) fprintf(stderr,\"debug-capi:\"mess);
-#define CFUNCSMESSPY(mess,obj) CFUNCSMESS(mess) \\
-    PyObject_Print((PyObject *)obj,stderr,Py_PRINT_RAW);\\
-    fprintf(stderr,\"\\n\");
+#define CFUNCSMESSPY(mess,obj) \\
+    if ((obj) == NULL) fprintf(stderr,\"debug-capi:\"mess\"<nil>\\n\");\\
+    else PySys_FormatStderr(\"debug-capi:\"mess\"%S\\n\",(PyObject *)(obj));
 #else
 #define CFUNCSMESS(mess)
 #define CFUNCSMESSPY(mess,obj)
@@ -230,9 +230,8 @@ cppmacros['SWAP'] = """
 # NPY_ARRAY_C_CONTIGUOUS)'
 cppmacros['PRINTPYOBJERR'] = """
 #define PRINTPYOBJERR(obj)\\
-    fprintf(stderr,\"#modulename#.error is related to \");\\
-    PyObject_Print((PyObject *)obj,stderr,Py_PRINT_RAW);\\
-    fprintf(stderr,\"\\n\");
+    if ((obj) == NULL) fprintf(stderr,\"#modulename#.error is related to <nil>\\n\");\\
+    else PySys_FormatStderr(\"#modulename#.error is related to %S\\n\",(PyObject *)(obj));
 """
 cppmacros['MINMAX'] = """
 #ifndef max
