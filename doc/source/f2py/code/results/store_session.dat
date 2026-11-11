@@ -1,0 +1,7 @@
+>>> import pystore
+>>> pystore.store.fill(3)            # the library allocates and sets x
+>>> pystore.store.x
+array([1., 2., 3.])
+>>> pystore.store.x = [10, 20]       # reallocate x from Python
+>>> pystore.store.total()            # the library sees the new values
+30.0
