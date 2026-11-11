@@ -270,10 +270,12 @@ class TestStringOutCallback(util.F2PyTest):
         assert self.module.string_out(lambda: b"hello") == b"hello"
         assert self.module.string_out(lambda: b"hi") == b"hi"
 
-    def test_string_out_not_bytes(self):
+    def test_string_out_not_bytes(self, capfd):
         err = getattr(self.module, f"_{self.module_name}_error")
         with pytest.raises(err, match="string object expected"):
             self.module.string_out(lambda: "hello")
+        assert (f"{self.module_name}.error is related to hello\n"
+                in capfd.readouterr().err)
 
 
 @pytest.mark.slow
