@@ -47,6 +47,21 @@
         integer(int8), dimension(3), intent(out) :: c
         c = a + b
       end subroutine f_add_int8_arr
+      ! gh-30352: complex declared with the real kinds
+      subroutine f_add_complex64_arr(a, b, c)
+        use iso_fortran_env, only: real32
+        implicit none
+        complex(real32), dimension(3), intent(in) :: a, b
+        complex(real32), dimension(3), intent(out) :: c
+        c = a + b
+      end subroutine f_add_complex64_arr
+      subroutine f_add_complex128_arr(a, b, c)
+        use iso_fortran_env, only: real64
+        implicit none
+        complex(kind=real64), dimension(3), intent(in) :: a, b
+        complex(kind=real64), dimension(3), intent(out) :: c
+        c = a + b
+      end subroutine f_add_complex128_arr
       ! gh-25207
       subroutine add_arr(A, B, C)
          use iso_fortran_env, only: int64
