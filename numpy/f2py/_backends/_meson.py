@@ -174,14 +174,16 @@ class MesonBackend(Backend):
 
     def write_meson_build(self, build_dir: Path) -> None:
         """Writes the meson build file at specified location"""
+        # Paths from the command line are relative to the current directory,
+        # but meson resolves them from build_dir.
         meson_template = MesonTemplate(
             self.modulename,
             self.sources,
             self.dependencies,
             self.libraries,
-            self.library_dirs,
-            self.include_dirs,
-            self.extra_objects,
+            [Path(lib_dir).absolute() for lib_dir in self.library_dirs],
+            [_include_dir(inc_dir, build_dir) for inc_dir in self.include_dirs],
+            [Path(obj).absolute() for obj in self.extra_objects],
             self.flib_flags,
             self.fc_flags,
             self.build_type,
@@ -204,7 +206,6 @@ class MesonBackend(Backend):
 
     def compile(self) -> None:
         self.sources = _prepare_sources(self.modulename, self.sources, self.build_dir)
-        _prepare_objects(self.modulename, self.extra_objects, self.build_dir)
         self.write_meson_build(self.build_dir)
         self.run_meson(self.build_dir)
         self._move_exec_to_root(self.build_dir)
@@ -235,12 +236,13 @@ def _prepare_sources(mname, sources, bdir):
     ]
     return extended_sources
 
-def _prepare_objects(mname, objects, bdir):
-    Path(bdir).mkdir(parents=True, exist_ok=True)
-    # Copy objects
-    for obj in objects:
-        if Path(obj).exists() and Path(obj).is_file():
-            shutil.copy(obj, bdir)
+def _include_dir(inc_dir, bdir):
+    # meson rejects absolute include paths into its source tree, which is bdir
+    inc_dir = Path(inc_dir).resolve()
+    bdir = Path(bdir).resolve()
+    if inc_dir.is_relative_to(bdir):
+        return inc_dir.relative_to(bdir)
+    return inc_dir
 
 def _get_flags(fc_flags):
     flag_values = []
