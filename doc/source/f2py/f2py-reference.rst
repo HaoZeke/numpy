@@ -6,6 +6,7 @@ F2PY reference manual
 .. toctree::
    :maxdepth: 2
 
+   fortran-support
    signature-file
    python-usage
    buildtools/index
