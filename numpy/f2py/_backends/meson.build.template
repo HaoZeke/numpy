@@ -34,6 +34,15 @@ inc_f2py = include_directories(incdir_f2py)
 fortranobject_c = incdir_f2py / 'fortranobject.c'
 
 inc_np = include_directories(incdir_numpy, incdir_f2py)
+# gh-30804: build fortranobject.c as its own static library so its
+# helpers stay hidden. The extension keeps default visibility, which
+# ifx needs in order to bind omp_lib. Link it with link_with.
+fortranobject_lib = static_library('_fortranobject',
+                     fortranobject_c,
+                     include_directories: [inc_np],
+                     dependencies: py_dep,
+                     gnu_symbol_visibility: 'hidden',
+                     )
 # gh-25000
 quadmath_dep = fc.find_library('quadmath', required: false)
 
@@ -63,8 +72,7 @@ ${lib_dir_declarations}
 
 py.extension_module('${modulename}',
                      [
-${source_list},
-                     fortranobject_c
+${source_list}
                      ],
                      # gh-30804: only the Fortran compiler driver knows its
                      # runtime libraries and their run paths
@@ -72,6 +80,7 @@ ${source_list},
                      # gh-30804: ifx also applies -fvisibility=hidden to
                      # references, which then cannot bind to shared libraries
                      gnu_symbol_visibility: 'default',
+                     link_with: fortranobject_lib,
                      include_directories: [
                      inc_np,
 ${inc_list}
