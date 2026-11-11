@@ -115,7 +115,14 @@ sample is included below.
 
 This maps to ``dependency("lapack")`` and so can be used for a wide variety
 of dependencies. They can be `customized further <https://mesonbuild.com/Dependencies.html>`_
-to use CMake or other systems to resolve dependencies.
+by appending keyword arguments for ``dependency()`` in brackets, e.g.
+``[method: 'cmake']`` to use CMake to resolve the dependency. Meson resolves
+dependencies which exist for several languages, like MPI, for C unless told
+otherwise, so Fortran code calling MPI needs:
+
+.. code-block:: bash
+
+  python -m numpy.f2py -c hello_mpi.f90 -m hello_mpi --dep "mpi[language: 'fortran']"
 
 1.2.5 Libraries
 ^^^^^^^^^^^^^^^
