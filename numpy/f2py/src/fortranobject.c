@@ -35,10 +35,10 @@ int
 F2PyDict_SetItemString(PyObject *dict, char *name, PyObject *obj)
 {
     if (obj == NULL) {
-        fprintf(stderr, "Error loading %s\n", name);
-        if (PyErr_Occurred()) {
-            PyErr_Print();
-            PyErr_Clear();
+        /* Keep a pending exception. A NULL value with none set is SystemError. */
+        if (!PyErr_Occurred()) {
+            PyErr_Format(PyExc_SystemError,
+                         "F2PyDict_SetItemString: NULL value for %s", name);
         }
         return -1;
     }
@@ -180,7 +180,6 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
                                      fp->defs[i].dims.d, NULL, fp->defs[i].data,
                                      NPY_ARRAY_FARRAY, NULL);
             if (v == NULL) {
-                Py_DECREF(descr);
                 goto fail;
             }
             PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
@@ -412,6 +411,11 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
         if (fp->defs[i].rank == -1) {
             PyErr_SetString(PyExc_AttributeError,
                             "over-writing fortran routine");
+            return -1;
+        }
+        if (v == NULL) {
+            PyErr_Format(PyExc_AttributeError,
+                         "cannot delete fortran data '%s'", name);
             return -1;
         }
         if (fp->defs[i].func != NULL) { /* is allocatable array */
@@ -923,7 +927,6 @@ ndarray_from_pyobj(const int type_num,
           PyArray_NewFromDescr(&PyArray_Type, descr, rank, dims,
                                NULL, NULL, !(intent & F2PY_INTENT_C), NULL);
         if (arr == NULL) {
-          Py_DECREF(descr);
           return NULL;
         }
         if (PyArray_ITEMSIZE(arr) != elsize) {
@@ -1109,7 +1112,6 @@ ndarray_from_pyobj(const int type_num,
         // Warning: in the case of NPY_STRING, PyArray_FromAny may
         // reset descr->elsize, e.g. dtype('S0') becomes dtype('S1').
         if (arr == NULL) {
-          Py_DECREF(descr);
           return NULL;
         }
         if (type_num != NPY_STRING && PyArray_ITEMSIZE(arr) != elsize) {
@@ -1425,11 +1427,8 @@ f2py_size_impl(PyArrayObject* var, ...)
 PyObject *
 F2PyCapsule_FromVoidPtr(void *ptr, void (*dtor)(PyObject *))
 {
-    PyObject *ret = PyCapsule_New(ptr, NULL, dtor);
-    if (ret == NULL) {
-        PyErr_Clear();
-    }
-    return ret;
+    /* PyCapsule_New sets the error, including ValueError for a null pointer. */
+    return PyCapsule_New(ptr, NULL, dtor);
 }
 
 void *
