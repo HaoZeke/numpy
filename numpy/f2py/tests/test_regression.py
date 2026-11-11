@@ -1,6 +1,10 @@
+import json
 import os
 import platform
+import shutil
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -184,6 +188,82 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\nscalapack-openmpi =" not in meson_build
     assert "\nfoo-bar =" not in meson_build
     assert "\n1foo =" not in meson_build
+
+
+def _gh31249_host_library(target, tmp_path):
+    # Build the host-side code on its own, before f2py sees it
+    shutil.copy(util.getpath("tests", "src", "regression", "gh31249.f90"), tmp_path)
+    if target == "shared_module":
+        # Record the library by its path. glibc reads LD_LIBRARY_PATH
+        # at process start, so a SONAME that is the file itself is used.
+        so = (tmp_path / "build" / "libgh31249_host.so").as_posix()
+        meson_src = (
+            "project('gh31249_host', 'fortran')\n"
+            "shared_module('gh31249_host', 'gh31249.f90',\n"
+            "    name_prefix: 'lib',\n"
+            f"    link_args: ['-Wl,-soname,{so}'])\n"
+        )
+    else:
+        meson_src = (
+            "project('gh31249_host', 'fortran')\n"
+            f"{target}('gh31249_host', 'gh31249.f90')\n"
+        )
+    (tmp_path / "meson.build").write_text(meson_src)
+    for cmd in (["setup", "build"], ["compile", "-C", "build"]):
+        subprocess.run(
+            ["meson", *cmd], cwd=tmp_path, check=True, capture_output=True,
+        )
+    targets = subprocess.run(
+        ["meson", "introspect", "--targets", "build"],
+        cwd=tmp_path, check=True, capture_output=True, text=True,
+    ).stdout
+    return json.loads(targets)[0]["filename"][0]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("target", [
+    "static_library",
+    # The host module's SONAME is its path, so load-time binding is ELF-specific.
+    pytest.param("shared_module", marks=pytest.mark.skipif(
+        sys.platform != "linux",
+        reason="relies on ELF load-time binding of the library's callback")),
+])
+def test_gh31249(target, tmp_path):
+    # A prebuilt library passed on the command line calls back into Python
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    lib = Path(_gh31249_host_library(target, tmp_path))
+    name = f"_gh31249_{target}"
+    pyf = tmp_path / f"{name}.pyf"
+    pyf.write_text(textwrap.dedent(f"""\
+        python module {name}__user__routines
+            interface
+                subroutine gh31249_cb(n)
+                    intent(callback, hide) gh31249_cb
+                    integer intent(in) :: n
+                end subroutine gh31249_cb
+            end interface
+        end python module {name}__user__routines
+        python module {name}
+            interface
+                subroutine gh31249_apply(n)
+                    use {name}__user__routines
+                    intent(callback, hide) gh31249_cb
+                    external gh31249_cb
+                    integer intent(in) :: n
+                end subroutine gh31249_apply
+            end interface
+        end python module {name}
+        """))
+    # Positional .a/.so inputs are linked from objects, ahead of this
+    # module, and --as-needed drops them. -L/-l is placed after them.
+    options = [f"-L{lib.parent}", "-lgh31249_host"]
+    module = util.build_module([pyf], options=options, module_name=name)
+
+    seen = []
+    module.gh31249_cb = seen.append
+    module.gh31249_apply(42)
+    assert seen == [42]
 
 
 @pytest.mark.slow
