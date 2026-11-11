@@ -15,6 +15,9 @@ from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
     getfortranname,
+    isallocatablearray,
+    isallocatablearray_hide,
+    isallocatablearray_out,
     isexternal,
     isfunction,
     isfunction_wrap,
@@ -76,6 +79,51 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
         vardef = f"{vardef}({','.join(vars[a]['dimension'])})"
     return vardef
 
+
+def _wrapper_dummies(vars, args):
+    # The actual argument of an allocatable dummy must itself be allocatable
+    # (F2018 15.5.2.6), so the wrapper calls with a local allocatable and
+    # hands its final allocation to the C setter f2py_allocatable_set.
+    dummies = []
+    for a in args:
+        if not isallocatablearray_hide(vars[a]):
+            dummies.append(a)
+        if isallocatablearray_out(vars[a]):
+            dummies.extend([f'f2py_{a}_set', f'f2py_{a}_ctx'])
+    return dummies
+
+
+def _allocatable_decls(vars, a, f90mode, signature):
+    v = vars[a]
+    lines = []
+    if isallocatablearray_out(v):
+        lines += [f'external f2py_{a}_set', f'integer f2py_{a}_ctx']
+    if not signature:
+        rank = len(v['dimension'])
+        local = dict(v, dimension=[':'] * rank)
+        lines += [var2fixfortran({a: local}, a, f'f2py_{a}_alloc', f90mode),
+                  f'allocatable f2py_{a}_alloc']
+        if isallocatablearray_out(v):
+            lines.append(f'integer(kind=c_size_t) f2py_{a}_shape({rank})')
+    return lines
+
+
+def _allocatable_copyin(vars, a):
+    if isallocatablearray_hide(vars[a]):
+        return []
+    dims = ','.join(vars[a]['dimension'])
+    return [f'allocate(f2py_{a}_alloc({dims}))', f'f2py_{a}_alloc = {a}']
+
+
+def _allocatable_copyout(vars, a):
+    if not isallocatablearray_out(vars[a]):
+        return []
+    return [f'if (allocated(f2py_{a}_alloc)) then',
+            f'  f2py_{a}_shape = shape(f2py_{a}_alloc, kind=c_size_t)',
+            f'  call f2py_{a}_set(f2py_{a}_ctx, f2py_{a}_alloc, f2py_{a}_shape)',
+            'end if']
+
+
 def useiso_c_binding(rout):
     useisoc = False
     for value in rout['vars'].values():
@@ -99,6 +147,8 @@ def createfuncwrapper(rout, signature=0):
     vars = rout['vars']
     for a in rout['args']:
         v = rout['vars'][a]
+        if isallocatablearray_hide(v):
+            continue
         for i, d in enumerate(v.get('dimension', [])):
             if d == ':':
                 dn = f'f2py_{a}_d{i}'
@@ -108,7 +158,6 @@ def createfuncwrapper(rout, signature=0):
                 vars[dn] = dv
                 v['dimension'][i] = dn
     rout['args'].extend(extra_args)
-    need_interface = bool(extra_args)
 
     ret = ['']
 
@@ -124,6 +173,9 @@ def createfuncwrapper(rout, signature=0):
         args = [newname] + rout['args'][1:]
     else:
         args = [newname] + rout['args']
+    allocatables = [a for a in args
+                    if a != name and isallocatablearray(vars[a])]
+    need_interface = bool(extra_args or allocatables)
 
     l_tmpl = var2fixfortran(vars, name, '@@@NAME@@@', f90mode)
     if l_tmpl[:13] == 'character*(*)':
@@ -140,14 +192,14 @@ def createfuncwrapper(rout, signature=0):
 
     useisoc = useiso_c_binding(rout)
     useisof = useiso_fortran_env(rout)
-    sargs = ', '.join(args)
     if f90mode:
         # gh-23598 fix warning
         # Essentially, this gets called again with modules where the name of the
         # function is added to the arguments, which is not required, and removed
-        sargs = sargs.replace(f"{name}, ", '')
         args = [arg for arg in args if arg != name]
         rout['args'] = args
+    sargs = ', '.join(_wrapper_dummies(vars, args))
+    if f90mode:
         add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
         if not signature:
             add(f"use {rout['modulename']}, only : {fortranname}")
@@ -169,6 +221,9 @@ def createfuncwrapper(rout, signature=0):
         for line in rout['saved_interface'].split('\n'):
             if line.lstrip().startswith('use ') and '__user__' not in line:
                 add(line)
+    if not signature and any(isallocatablearray_out(vars[a])
+                             for a in allocatables):
+        add('use iso_c_binding, only: c_size_t')
 
     args = args[1:]
     dumped_args = []
@@ -189,13 +244,17 @@ def createfuncwrapper(rout, signature=0):
             add(var2fixfortran(vars, a, f90mode=f90mode))
             dumped_args.append(a)
     for a in args:
-        if a in dumped_args:
+        if a in dumped_args or isallocatablearray_hide(vars[a]):
             continue
         add(var2fixfortran(vars, a, f90mode=f90mode))
 
-    add(l1)
+    if newname not in allocatables:
+        add(l1)
     if rl is not None:
         add(rl)
+    for a in allocatables:
+        for line in _allocatable_decls(vars, a, f90mode, signature):
+            add(line)
 
     if need_interface:
         if f90mode:
@@ -206,13 +265,21 @@ def createfuncwrapper(rout, signature=0):
             add(rout['saved_interface'].lstrip())
             add('end interface')
 
-    sargs = ', '.join([a for a in args if a not in extra_args])
+    sargs = ', '.join([f'f2py_{a}_alloc' if a in allocatables else a
+                       for a in args if a not in extra_args])
 
     if not signature:
+        for a in allocatables:
+            for line in _allocatable_copyin(vars, a):
+                add(line)
+        result = f'f2py_{newname}_alloc' if newname in allocatables else newname
         if islogicalfunction(rout):
-            add(f'{newname} = .not.(.not.{fortranname}({sargs}))')
+            add(f'{result} = .not.(.not.{fortranname}({sargs}))')
         else:
-            add(f'{newname} = {fortranname}({sargs})')
+            add(f'{result} = {fortranname}({sargs})')
+        for a in allocatables:
+            for line in _allocatable_copyout(vars, a):
+                add(line)
     if f90mode:
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:
@@ -227,6 +294,8 @@ def createsubrwrapper(rout, signature=0):
     vars = rout['vars']
     for a in rout['args']:
         v = rout['vars'][a]
+        if isallocatablearray_hide(v):
+            continue
         for i, d in enumerate(v.get('dimension', [])):
             if d == ':':
                 dn = f'f2py_{a}_d{i}'
@@ -236,7 +305,8 @@ def createsubrwrapper(rout, signature=0):
                 vars[dn] = dv
                 v['dimension'][i] = dn
     rout['args'].extend(extra_args)
-    need_interface = bool(extra_args)
+    allocatables = [a for a in rout['args'] if isallocatablearray(vars[a])]
+    need_interface = bool(extra_args or allocatables)
 
     ret = ['']
 
@@ -250,7 +320,7 @@ def createsubrwrapper(rout, signature=0):
 
     useisoc = useiso_c_binding(rout)
     useisof = useiso_fortran_env(rout)
-    sargs = ', '.join(args)
+    sargs = ', '.join(_wrapper_dummies(vars, args))
     if f90mode:
         add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
         if useisoc:
@@ -272,6 +342,9 @@ def createsubrwrapper(rout, signature=0):
         for line in rout['saved_interface'].split('\n'):
             if line.lstrip().startswith('use ') and '__user__' not in line:
                 add(line)
+    if not signature and any(isallocatablearray_out(vars[a])
+                             for a in allocatables):
+        add('use iso_c_binding, only: c_size_t')
 
     dumped_args = []
     for a in args:
@@ -285,9 +358,12 @@ def createsubrwrapper(rout, signature=0):
             add(var2fixfortran(vars, a, f90mode=f90mode))
             dumped_args.append(a)
     for a in args:
-        if a in dumped_args:
+        if a in dumped_args or isallocatablearray_hide(vars[a]):
             continue
         add(var2fixfortran(vars, a, f90mode=f90mode))
+    for a in allocatables:
+        for line in _allocatable_decls(vars, a, f90mode, signature):
+            add(line)
 
     if need_interface:
         if f90mode:
@@ -301,10 +377,17 @@ def createsubrwrapper(rout, signature=0):
                 add(line)
             add('end interface')
 
-    sargs = ', '.join([a for a in args if a not in extra_args])
+    sargs = ', '.join([f'f2py_{a}_alloc' if a in allocatables else a
+                       for a in args if a not in extra_args])
 
     if not signature:
+        for a in allocatables:
+            for line in _allocatable_copyin(vars, a):
+                add(line)
         add(f'call {fortranname}({sargs})')
+        for a in allocatables:
+            for line in _allocatable_copyout(vars, a):
+                add(line)
     if f90mode:
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:
