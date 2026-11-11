@@ -10,6 +10,8 @@ from string import Template
 
 from ._backend import Backend
 
+_LIB_SUFFIXES = (".a", ".so", ".dylib")
+
 
 def _meson_identifier(prefix: str, value: str, index: int) -> str:
     safe_value = re.sub(r"[^a-zA-Z0-9_]", "_", value)
@@ -48,7 +50,14 @@ class MesonTemplate:
         else:
             self.include_dirs = []
         self.substitutions = {}
-        self.objects = object_files
+        # meson puts `objects` before the extension's own objects on the link
+        # line, too early for the linker to take anything from a static library
+        self.objects = [
+            obj for obj in object_files if Path(obj).suffix not in _LIB_SUFFIXES
+        ]
+        self.library_files = [
+            obj for obj in object_files if Path(obj).suffix in _LIB_SUFFIXES
+        ]
         # Convert args to '' wrapped variant for meson
         self.fortran_args = [
             f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
@@ -98,8 +107,12 @@ class MesonTemplate:
         )
 
     def libraries_substitution(self) -> None:
+        # Library files come first, as they may depend on the -l libraries
         lib_names = [
-            (_meson_identifier("lib", lib, i), lib)
+            (_meson_identifier("lib_file", Path(lib).name, i), f"'''{lib}'''")
+            for i, lib in enumerate(self.library_files)
+        ] + [
+            (_meson_identifier("lib", lib, i), f"'-l{lib}'")
             for i, lib in enumerate(self.libraries)
         ]
 
@@ -112,8 +125,8 @@ class MesonTemplate:
 
         self.substitutions["lib_declarations"] = "\n".join(
             [
-                f"{name} = declare_dependency(link_args : ['-l{lib}'])"
-                for name, lib in lib_names
+                f"{name} = declare_dependency(link_args : [{link_arg}])"
+                for name, link_arg in lib_names
             ]
         )
 
