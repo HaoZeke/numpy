@@ -34,6 +34,7 @@ class MesonTemplate:
         fortran_args: list[str],
         build_type: str,
         python_exe: str,
+        c_args: list[str] | None = None,
     ):
         self.modulename = modulename
         self.build_template_path = (
@@ -54,6 +55,10 @@ class MesonTemplate:
             f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
             for x in fortran_args
         ]
+        self.c_args = [
+            f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
+            for x in (c_args or [])
+        ]
         self.pipeline = [
             self.initialize_template,
             self.sources_substitution,
@@ -61,6 +66,7 @@ class MesonTemplate:
             self.deps_substitution,
             self.include_substitution,
             self.libraries_substitution,
+            self.c_args_substitution,
             self.fortran_args_substitution,
         ]
         self.build_type = build_type
@@ -129,6 +135,14 @@ class MesonTemplate:
             [f"{self.indent}'''{inc}'''," for inc in self.include_dirs]
         )
 
+    def c_args_substitution(self) -> None:
+        if self.c_args:
+            self.substitutions["c_args"] = (
+                f"{self.indent}c_args: [{', '.join(self.c_args)}],"
+            )
+        else:
+            self.substitutions["c_args"] = ""
+
     def fortran_args_substitution(self) -> None:
         if self.fortran_args:
             self.substitutions["fortran_args"] = (
@@ -155,6 +169,9 @@ class MesonBackend(Backend):
             "debug" if any("debug" in flag for flag in self.fc_flags) else "release"
         )
         self.fc_flags = _get_flags(self.fc_flags)
+        # -D/-U used to be parsed and then discarded (gh-28648).
+        self.pp_flags = _preprocessor_flags(
+            self.define_macros, self.undef_macros)
 
     def _move_exec_to_root(self, build_dir: Path):
         walk_dir = Path(build_dir) / self.meson_build_dir
@@ -183,9 +200,10 @@ class MesonBackend(Backend):
             self.include_dirs,
             self.extra_objects,
             self.flib_flags,
-            self.fc_flags,
+            self.fc_flags + self.pp_flags,
             self.build_type,
             sys.executable,
+            c_args=self.pp_flags,
         )
         src = meson_template.generate_meson_build()
         Path(build_dir).mkdir(parents=True, exist_ok=True)
@@ -241,6 +259,29 @@ def _prepare_objects(mname, objects, bdir):
     for obj in objects:
         if Path(obj).exists() and Path(obj).is_file():
             shutil.copy(obj, bdir)
+
+def _preprocessor_flags(define_macros, undef_macros):
+    """Return -D/-U flags for the C and Fortran compilers.
+
+    numpy.distutils forwarded these macros to both compilers. -D is how
+    f2py users select Fortran preprocessor branches (gh-28648) and how
+    documented switches such as -DF2PY_REPORT_ATEXIT reach the wrapper.
+    """
+    flags = []
+    for item in define_macros or []:
+        if isinstance(item, (tuple, list)):
+            name = item[0]
+            value = item[1] if len(item) > 1 else None
+        else:
+            name, value = str(item), None
+        if value is None:
+            flags.append(f"-D{name}")
+        else:
+            flags.append(f"-D{name}={value}")
+    for name in undef_macros or []:
+        flags.append(f"-U{name}")
+    return flags
+
 
 def _get_flags(fc_flags):
     flag_values = []
