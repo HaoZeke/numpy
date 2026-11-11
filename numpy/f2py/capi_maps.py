@@ -505,6 +505,10 @@ def sign2map(a, var):
         ret['intent'] = 'F2PY_INTENT_IN'
     if isarray(var):
         ret['varrformat'] = 'N'
+    elif ret['ctype'] == 'long_double':
+        # Py_BuildValue has no long-double unit. Hand it a new float
+        # (gh-9727). 'N' steals the reference from pyobj_from_long_double1.
+        ret['varrformat'] = 'N'
     elif ret['ctype'] in c2buildvalue_map:
         ret['varrformat'] = c2buildvalue_map[ret['ctype']]
     else:
@@ -640,7 +644,10 @@ def routsign2map(rout):
         if hasresultnote(rout):
             ret['resultnote'] = rout['vars'][a]['note']
             rout['vars'][a]['note'] = ['See elsewhere.']
-        if ret['ctype'] in c2buildvalue_map:
+        if ret['ctype'] == 'long_double':
+            # Same as sign2map: build a Python float and steal it (gh-9727).
+            ret['rformat'] = 'N'
+        elif ret['ctype'] in c2buildvalue_map:
             ret['rformat'] = c2buildvalue_map[ret['ctype']]
         else:
             ret['rformat'] = 'O'

@@ -280,9 +280,25 @@ cppmacros['pyobj_from_long_long1'] = """
 #define pyobj_from_long_long1(v) (PyLong_FromLong(v))
 #endif
 """
-needs['pyobj_from_long_double1'] = ['long_double']
+needs['pyobj_from_long_double1'] = ['long_double', 'pyobj_from_real16']
 cppmacros['pyobj_from_long_double1'] = """
-#define pyobj_from_long_double1(v) (PyFloat_FromDouble(v))"""
+#define pyobj_from_long_double1(v) (f2py_pyobj_from_real16((void *)&(v)))"""
+# gfortran real(kind=16) is IEEE binary128. On x86_64 that is not C long
+# double (80-bit), so reading the bytes as long double and casting yields
+# garbage and, with Py_BuildValue("O"), a SystemError (gh-9727).
+needs['pyobj_from_real16'] = ['string.h']
+cfuncs['pyobj_from_real16'] = r"""
+static PyObject *f2py_pyobj_from_real16(void *p) {
+#if defined(__SIZEOF_FLOAT128__) && (__SIZEOF_FLOAT128__ == 16)
+    if (sizeof(long double) == sizeof(__float128)) {
+        __float128 q;
+        memcpy(&q, p, sizeof(q));
+        return PyFloat_FromDouble((double)q);
+    }
+#endif
+    return PyFloat_FromDouble((double)(*(long double *)p));
+}
+"""
 cppmacros['pyobj_from_double1'] = """
 #define pyobj_from_double1(v) (PyFloat_FromDouble(v))"""
 cppmacros['pyobj_from_float1'] = """
