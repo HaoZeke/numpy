@@ -1,0 +1,18 @@
+! The call-back signature given here must not be replaced
+python module gh28605__user__routines
+    interface
+        function f(x)
+            real*8 :: f
+            real*8 :: x
+        end function f
+    end interface
+end python module gh28605__user__routines
+python module gh28605
+    interface
+        function forward(g)
+            use gh28605__user__routines, g=>f
+            real*8 :: forward
+            external g
+        end function forward
+    end interface
+end python module gh28605

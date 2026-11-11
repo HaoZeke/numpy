@@ -9,6 +9,7 @@ import traceback
 import pytest
 
 import numpy as np
+from numpy.f2py import crackfortran
 
 from . import util
 
@@ -246,6 +247,43 @@ class TestGH25211(util.F2PyTest):
 
         res = self.module.foo(bar)
         assert res == 110
+
+
+@pytest.mark.slow
+class TestGH28605(util.F2PyTest):
+    # EXTERNAL dummies that the routine never calls must still be wrapped
+    sources = [util.getpath("tests", "src", "callback", "gh28605.f90")]
+
+    def test_typed(self):
+        assert self.module.tcb(lambda: 0.0) == 1.0
+
+    def test_untyped(self):
+        assert self.module.scb(lambda: None) == 2
+
+    def test_passed_on(self):
+        assert self.module.forward(lambda: 2.5) == 2.5
+
+
+class TestGH28605Signature:
+    def test_no_arguments(self):
+        fpath = util.getpath("tests", "src", "callback", "gh28605.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        cbs = {m["name"]: m["body"][0]["body"][0]
+               for m in mod if "__user__" in m["name"]}
+        for module, block, name in [("tcb", "function", "p"),
+                                    ("scb", "subroutine", "s"),
+                                    ("forward", "function", "g")]:
+            cb = cbs[f"{module}__user__routines"]
+            assert (cb["block"], cb["name"], cb["args"]) == (block, name, [])
+        p = cbs["tcb__user__routines"]["vars"]["p"]
+        assert (p["typespec"], p["kindselector"]) == ("real", {"*": "8"})
+        assert "use tcb__user__routines" in crackfortran.crack2fortran(mod)
+
+    def test_signature_file_kept(self):
+        fpath = util.getpath("tests", "src", "callback", "gh28605.pyf")
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert [m["name"] for m in mod] == ["gh28605__user__routines",
+                                           "gh28605"]
 
 
 @pytest.mark.slow
