@@ -10,3 +10,7 @@ end subroutine io_char
 subroutine dim_vec(a)
   real a(4)
 end subroutine dim_vec
+
+module m
+  real, allocatable :: a(:)
+end module m

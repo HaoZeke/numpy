@@ -51,3 +51,39 @@ class TestRestoredStrings(util.F2PyTest):
             "unexpected array size: size=4, arr_size=0, rank=1, "
             "effrank=1, arr.nd=2, dims=[ 4 ], arr.dims=[ 0 4 ]\n"
         )
+
+
+@pytest.mark.slow
+class TestNullCapsule(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "regression", "gh31584_errors.f90"),
+    ]
+
+    def test_unallocated_allocatable_cpointer(self):
+        # Reaching this assertion means the read did not segfault.
+        with pytest.raises(ValueError) as caught:
+            self.module.m._cpointer
+        assert type(caught.value) is ValueError
+        assert str(caught.value) == "array 'a' is not allocated"
+
+
+@pytest.mark.slow
+class TestDummyRoutineCPointer(util.F2PyTest):
+    suffix = ".pyf"
+    module_name = "gh31584_dummy"
+
+    code = """
+python module gh31584_dummy
+    interface
+        subroutine dummy()
+            fortranname
+            callstatement {}
+        end subroutine dummy
+    end interface
+end python module gh31584_dummy
+"""
+
+    def test_empty_fortranname_cpointer(self):
+        self.module.dummy()
+        with pytest.raises(ValueError, match="array 'dummy' is not allocated"):
+            self.module.dummy._cpointer
