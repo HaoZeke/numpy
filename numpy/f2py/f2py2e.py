@@ -653,6 +653,13 @@ def run_compile():
     fc_flags = [_m for _m in sys.argv[1:] if reg_f77_f90_flags.match(_m)]
     distutils_flags = [_m for _m in sys.argv[1:] if reg_distutils_flags.match(_m)]
     sys.argv = [_m for _m in sys.argv if _m not in (fc_flags + distutils_flags)]
+    # distutils forwarded --opt= to the Fortran compilers. The meson
+    # backend was dropping it, so -fopenmp never reached gfortran (gh-30804).
+    for flag in distutils_flags:
+        if flag.startswith('--opt='):
+            value = flag.split('=', 1)[1]
+            fc_flags.append('--f90flags=' + value)
+            fc_flags.append('--f77flags=' + value)
 
     del_list = []
     for s in flib_flags:
