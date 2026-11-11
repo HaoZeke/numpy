@@ -57,6 +57,9 @@ class Op(Enum):
     INDEXING = 210
     CONCAT = 220
     RELATIONAL = 300
+    LAND = 310
+    LOR = 311
+    CAST = 320
     TERMS = 1000
     FACTORS = 2000
     REF = 3000
@@ -225,6 +228,15 @@ class Expr:
         elif op is Op.RELATIONAL:
             # data is (<relop>, <left>, <right>)
             assert isinstance(data, tuple) and len(data) == 3
+        elif op in (Op.LAND, Op.LOR):
+            # data is (<left>, <right>)
+            assert isinstance(data, tuple) and len(data) == 2
+            assert all(isinstance(item, Expr) for item in data)
+        elif op is Op.CAST:
+            # data is (<type name>, <operand>)
+            assert isinstance(data, tuple) and len(data) == 2
+            assert isinstance(data[0], str)
+            assert isinstance(data[1], Expr)
         else:
             raise NotImplementedError(
                 f'unknown op or missing sanity check: {op}')
@@ -410,6 +422,30 @@ class Expr:
             right = right.tostring(precedence, language=language)
             rop = rop.tostring(language=language)
             r = f'{left} {rop} {right}'
+        elif self.op is Op.LAND:
+            left = self.data[0].tostring(Precedence.LAND, language=language)
+            right = self.data[1].tostring(Precedence.LAND, language=language)
+            if language is Language.Fortran:
+                r = f'{left} .and. {right}'
+            else:
+                r = f'{left} && {right}'
+            precedence = Precedence.LAND
+        elif self.op is Op.LOR:
+            left = self.data[0].tostring(Precedence.LOR, language=language)
+            right = self.data[1].tostring(Precedence.LOR, language=language)
+            if language is Language.Fortran:
+                r = f'{left} .or. {right}'
+            else:
+                r = f'{left} || {right}'
+            precedence = Precedence.LOR
+        elif self.op is Op.CAST:
+            typ, operand = self.data
+            inner = operand.tostring(Precedence.UNARY, language=language)
+            if language is Language.C:
+                r = f'({typ}){inner}'
+            else:
+                r = f'{typ}({inner})'
+            precedence = Precedence.UNARY
         else:
             raise NotImplementedError(f'tostring for op {self.op}')
         if parent_precedence.value < precedence.value:
@@ -654,6 +690,14 @@ class Expr:
             left = left.substitute(symbols_map)
             right = right.substitute(symbols_map)
             return normalize(Expr(self.op, (rop, left, right)))
+        if self.op in (Op.LAND, Op.LOR):
+            left = self.data[0].substitute(symbols_map)
+            right = self.data[1].substitute(symbols_map)
+            return normalize(Expr(self.op, (left, right)))
+        if self.op is Op.CAST:
+            return normalize(Expr(
+                self.op,
+                (self.data[0], self.data[1].substitute(symbols_map))))
         raise NotImplementedError(f'substitute method for {self.op}: {self!r}')
 
     def traverse(self, visit, *args, **kwargs):
@@ -710,6 +754,13 @@ class Expr:
             left = left.traverse(visit, *args, **kwargs)
             right = right.traverse(visit, *args, **kwargs)
             return normalize(Expr(self.op, (rop, left, right)))
+        elif self.op in (Op.LAND, Op.LOR):
+            left = self.data[0].traverse(visit, *args, **kwargs)
+            right = self.data[1].traverse(visit, *args, **kwargs)
+            return normalize(Expr(self.op, (left, right)))
+        elif self.op is Op.CAST:
+            operand = self.data[1].traverse(visit, *args, **kwargs)
+            return normalize(Expr(self.op, (self.data[0], operand)))
         raise NotImplementedError(f'traverse method for {self.op}')
 
     def contains(self, other):
@@ -1362,6 +1413,19 @@ class _FromStringWorker:
             expr2 = self.process(expr2)
             return as_ternary(oper, expr1, expr2)
 
+        # C logical or/and. Peel '||' before '&&' so && binds tighter.
+        if self.language is Language.C:
+            for token, op in (('||', Op.LOR), ('&&', Op.LAND)):
+                if token not in r:
+                    continue
+                parts = r.split(token)
+                if len(parts) > 1 and all(part.strip() for part in parts):
+                    operands = [self.process(restore(part)) for part in parts]
+                    expr = operands[0]
+                    for operand in operands[1:]:
+                        expr = Expr(op, (expr, operand))
+                    return expr
+
         # relational expression
         if self.language is Language.Fortran:
             m = re.match(
@@ -1505,6 +1569,19 @@ class _FromStringWorker:
                 # (e.g. used in .pyf files)
                 assert paren == 'SQUARE'
                 return target[args]
+
+        # C cast, e.g. (int)v in .pyf dimension expressions (gh-20771).
+        # Only a known type name is a cast; (a)+b stays a grouping.
+        if self.language is Language.C:
+            cast = re.match(
+                r'\A(@__f2py_PARENTHESIS_ROUND_\d+@)\s*(.+)\Z', r)
+            if cast and cast.group(1) in raw_symbols_map:
+                type_name = raw_symbols_map[cast.group(1)].strip()
+                if type_name.lower() in {
+                        'int', 'long', 'short', 'float', 'double',
+                        'size_t', 'signed', 'unsigned', 'char'}:
+                    operand = self.process(restore(cast.group(2)))
+                    return Expr(Op.CAST, (type_name, operand))
 
         # Fortran standard conforming identifier
         m = re.match(r'\A\w[\w\d_]*\Z', r)
