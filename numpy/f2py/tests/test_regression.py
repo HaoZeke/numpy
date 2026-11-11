@@ -317,3 +317,16 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+@pytest.mark.slow
+class TestGH19767(util.F2PyTest):
+    # Prefix kind and length must follow `result` (gh-19767).
+    sources = [util.getpath("tests", "src", "regression", "gh19767.f90")]
+
+    def test_real_kind_on_result(self):
+        got = self.module.mysqrt(3.5)
+        assert abs(got - 12.25) < 1e-12
+
+    def test_character_len_on_result(self):
+        assert self.module.greet() == b"hello"

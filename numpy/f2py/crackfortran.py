@@ -2660,6 +2660,14 @@ def analyzevars(block):
     vars = copy.copy(block['vars'])
     if block['block'] == 'function' and block['name'] not in vars:
         vars[block['name']] = {}
+    # An explicit declaration of the result wins over the prefix.
+    # Implicit rules have not been applied yet.
+    result_explicit = False
+    if block.get('block') == 'function' and block.get('result'):
+        rv0 = vars.get(block['result']) or {}
+        result_explicit = any(
+            key in rv0 for key in (
+                'typespec', 'kindselector', 'charselector', 'typename'))
     if '' in block['vars']:
         del vars['']
         if 'attrspec' in block['vars']['']:
@@ -3005,6 +3013,19 @@ def analyzevars(block):
                             vars[n]['charselector'] = charselect
                         if typename:
                             vars[n]['typename'] = typename
+                        # The function name is dropped when `result` names
+                        # something else, so a kind or length that lived
+                        # only on the prefix would be lost (gh-19767).
+                        rname = block.get('result')
+                        if (rname and rname in vars and rname != n
+                                and not result_explicit):
+                            rvar = vars[rname]
+                            if kindselect:
+                                rvar['kindselector'] = copy.copy(kindselect)
+                            if charselect:
+                                rvar['charselector'] = copy.copy(charselect)
+                            if typename and not rvar.get('typename'):
+                                rvar['typename'] = typename
                         if ispure:
                             vars[n] = setattrspec(vars[n], 'pure')
                         if isrec:
