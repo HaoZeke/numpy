@@ -1327,7 +1327,7 @@ static int try_pyarr_from_character(PyObject* obj, character* v) {
             if (describe_obj) {
                 PyErr_Format(
                     err,
-                    "try_pyarr_from_character failed  -- expected bytes array-scalar|array, got %U",
+                    "try_pyarr_from_character failed -- expected bytes array-scalar|array, got %U",
                     describe_obj
                 );
                 Py_DECREF(describe_obj);
