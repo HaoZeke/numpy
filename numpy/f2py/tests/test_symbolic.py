@@ -499,3 +499,20 @@ class TestSymbolic(util.F2PyTest):
         #gh - 30268
         with pytest.raises(ValueError, match=r"Mismatch of \(\) parenthesis"):
             Expr.parse("DATA (A, I=1, N", language=Language.Fortran)
+
+    def test_concat_string_kinds(self):
+        ab, cd = as_string('"AB"'), as_string('"CD"')
+        ab4, cd4 = as_string('"AB"', 4), as_string('"CD"', 4)
+        assert ab // cd == as_string('"ABCD"')
+        assert ab4 // cd4 == as_string('"ABCD"', 4)
+        assert ab // cd4 == Expr(Op.CONCAT, (ab, cd4))
+
+        e = fromstring('"AB" // 1_"CD"', language=Language.Fortran)
+        assert normalize(e) == e
+        e = fromstring('1_"AB" // 1_"CD"', language=Language.Fortran)
+        assert normalize(e) == as_string('"ABCD"', '1')
+        e = fromstring('4_"AB" // 1_"CD"', language=Language.Fortran)
+        assert normalize(e) == e
+        e = fromstring('"AB" // MYSTRKIND_"CD"', language=Language.Fortran)
+        assert normalize(e) == e
+        assert e.substitute({}) == e
