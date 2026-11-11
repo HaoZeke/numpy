@@ -232,6 +232,19 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.j_max == 72)
 
 
+@pytest.mark.slow
+class TestInOutInt1(util.F2PyTest):
+    # gh-25229: intent(inout) signed_char scalars need pyobj_from_signed_char1
+    sources = [util.getpath("tests", "src", "regression", "inout_int1.f90")]
+
+    @pytest.mark.parametrize("name", ["inc_int1", "inc_c_int8"])
+    @pytest.mark.parametrize("dtype", [np.int8, object])
+    def test_inout(self, name, dtype):
+        x = np.array(41, dtype=dtype)
+        getattr(self.module, name)(x)
+        assert x == 42
+
+
 def _wrap_f90(funcwrappers2):
     """Reproduce the F90 line-wrapping logic from rules.py buildmodule."""
     lines = []
