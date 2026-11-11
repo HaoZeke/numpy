@@ -180,6 +180,10 @@ extern \"C\" {
 /* Unconditionally included */
 #include <Python.h>
 #include <numpy/npy_os.h>
+/* Python.h does not include these for the Limited API 3.11 and newer */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 """ + gentitle("See f2py2e/cfuncs.py: includes") + """
 #includes#

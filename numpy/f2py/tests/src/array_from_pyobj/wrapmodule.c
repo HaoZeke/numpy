@@ -14,6 +14,9 @@ extern "C" {
 #include <Python.h>
 #include "fortranobject.h"
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 static PyObject *wrap_error;
 static PyObject *wrap_module;

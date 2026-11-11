@@ -361,6 +361,23 @@ def test_mod_gen_f77(capfd, hello_world_f90, monkeypatch):
     assert Path.exists(foutl.wrap77)
 
 
+def test_mod_gen_std_headers(hello_world_f90, monkeypatch):
+    """Checks that the C module includes the C standard headers it uses,
+    Python.h does not include them for the Limited API 3.11 and newer
+    CLI :: -m
+    """
+    MNAME = "hi"
+    foutl = get_io_paths(hello_world_f90, mname=MNAME)
+    ipath = foutl.f90inp
+    monkeypatch.setattr(sys, "argv", f'f2py {ipath} -m {MNAME}'.split())
+    with util.switchdir(ipath.parent):
+        f2pycli()
+
+    cmod = foutl.cmodf.read_text()
+    for header in ("stdio.h", "stdlib.h", "string.h"):
+        assert f"#include <{header}>" in cmod
+
+
 def test_mod_gen_gh25263(capfd, hello_world_f77, monkeypatch):
     """Check that pyf files are correctly generated with module structure
     CLI :: -m <name> -h pyf_file
