@@ -64,3 +64,31 @@ class TestDocAdvanced(util.F2PyTest):
         ftype.data.a = 0
 
     # TODO: implement test methods for other example Fortran codes
+
+
+@pytest.mark.slow
+class TestDocGlue(util.F2PyTest):
+    # The F2PY examples of doc/source/user/c-info.python-as-glue.rst
+    sources = [_path('add-improved.f'), _path('filter.f')]
+
+    def test_zadd(self):
+        c = self.module.zadd([1, 2, 3], [4j, 5j, 6j])
+        assert_array_equal(c, np.array([1 + 4j, 2 + 5j, 3 + 6j]))
+        assert_equal(c.dtype, np.complex128)
+        with pytest.raises(ValueError, match="dimension must be fixed"):
+            self.module.zadd([1, 2, 3], [1, 2])
+
+    @pytest.mark.parametrize("order", ["C", "F"])
+    def test_dfilter2d(self, order):
+        # Integer-valued input keeps every intermediate value exact, so the
+        # comparison does not depend on FMA contraction or summation order.
+        a = np.arange(30.0).reshape(5, 6)
+        expected = np.zeros_like(a)
+        expected[1:-1, 1:-1] = (
+            a[1:-1, 1:-1]
+            + 0.5 * (a[:-2, 1:-1] + a[2:, 1:-1] + a[1:-1, :-2] + a[1:-1, 2:])
+            + 0.25 * (a[:-2, :-2] + a[:-2, 2:] + a[2:, :-2] + a[2:, 2:])
+        )
+        out = self.module.dfilter2d(np.asarray(a, order=order))
+        assert_array_equal(out, expected)
+        assert out.flags.f_contiguous
