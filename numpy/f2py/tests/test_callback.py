@@ -12,7 +12,7 @@ import pytest
 
 import numpy as np
 from numpy.f2py.f2py2e import run_main
-from numpy.testing import HAS_REFCOUNT
+from numpy.testing import HAS_REFCOUNT, assert_array_equal
 
 from . import util
 
@@ -353,6 +353,58 @@ class TestGH18385SignatureFile(TestGH18385):
     def sources(self):
         return _signature_file(
             self, util.getpath("tests", "src", "callback", "gh18385.f90"))
+
+
+@pytest.mark.slow
+class TestGH18385ArrayCallback(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback",
+                           "matching_callback_shapes.f90")]
+
+    def test_matching_array_shapes(self, monkeypatch):
+        observed = []
+
+        def callback(values):
+            observed.append(values.copy())
+
+        monkeypatch.setattr(self.module, "callback", callback, raising=False)
+        self.module.primary()
+        self.module.secondary()
+
+        assert len(observed) == 2
+        expected = np.arange(1, 7, dtype=np.float64).reshape((2, 3), order="F")
+        assert_array_equal(observed[0], expected)
+        assert_array_equal(observed[1], expected + 10)
+
+
+@pytest.mark.parametrize("second_dimensions", ["3, 2", "6"])
+def test_gh18385_array_signature_mismatch(tmp_path, second_dimensions):
+    fpath = tmp_path / "gh18385_array_mismatch.f90"
+    fpath.write_text(textwrap.dedent(f"""\
+        subroutine primary()
+          implicit none
+          double precision values(2, 3)
+          external callback
+          !f2py intent(callback, hide) :: callback
+          !f2py intent(in) :: values
+          call callback(values)
+        end subroutine primary
+
+        subroutine secondary()
+          implicit none
+          double precision values({second_dimensions})
+          external callback
+          !f2py intent(callback, hide) :: callback
+          !f2py intent(in) :: values
+          call callback(values)
+        end subroutine secondary
+        """))
+    code = f"import sys; sys.path = {sys.path!r}; import numpy.f2py; numpy.f2py.main()"
+    res = subprocess.run([sys.executable, "-c", code, "-m", "mismatch", str(fpath)],
+                         cwd=tmp_path, capture_output=True, text=True)
+    assert res.returncode != 0
+    assert "F2PYError" in res.stderr
+    assert "intent(callback) external 'callback'" in res.stderr
+    assert "different signatures" in res.stderr
 
 
 def test_gh18385_signature_mismatch(tmp_path):

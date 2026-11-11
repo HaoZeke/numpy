@@ -643,8 +643,10 @@ def buildcallback(rout, um):
 
     ar = applyrules(cb_routine_rules, rd)
     if isintent_callback(rout):
+        # A shared C argument list must also produce identical array views.
         signature = (replace(cb_routine_rules['cbtypedefs'], dict(rd, name='')),
-                     ar['maxnofargs'], ar['nofoptargs'])
+                     ar['maxnofargs'], ar['nofoptargs'],
+                     tuple(tuple(var[a].get('dimension', ())) for a in args))
         name, user_module, shared_signature = _extern_cb_map.setdefault(
             rd['callbackname'], (rd['name'], um, signature))
         if name != rd['name']:
