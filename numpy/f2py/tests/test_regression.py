@@ -1,5 +1,6 @@
 import os
 import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -317,3 +318,35 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+@pytest.mark.slow
+def test_gh13356_entry_return(tmp_path):
+    # ENTRY inside a function used to raise KeyError while wrapping.
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    src = util.getpath("tests", "src", "regression", "gh13356.f")
+    (tmp_path / "gh13356.f").write_text(src.read_text())
+    code = """
+import sys
+sys.path.insert(0, ".")
+sys.argv = ["f2py", "-c", "-m", "gh13356", "gh13356.f",
+            "--backend", "meson", "--freethreading-compatible"]
+from numpy.f2py.f2py2e import main
+main()
+import gh13356
+if abs(gh13356.eta0(2.0) - 2.0) > 1e-12:
+    raise SystemExit("eta0")
+if abs(gh13356.eta1(2.0, 3.0) - 5.0) > 1e-12:
+    raise SystemExit("eta1")
+if gh13356.iadd(1.0) != 3:
+    raise SystemExit("iadd")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-P", "-c", code],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
