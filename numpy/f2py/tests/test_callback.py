@@ -9,6 +9,7 @@ import traceback
 import pytest
 
 import numpy as np
+from numpy.f2py import crackfortran
 from numpy.f2py.f2py2e import main as f2pycli
 
 from . import util
@@ -223,12 +224,16 @@ def test_gh20157_external_dummy_interface(tmp_path, monkeypatch):
     # EXTERNAL attribute once, not again through an interface body.
     src = util.getpath("tests", "src", "callback", "gh17797.f90")
     monkeypatch.setattr(sys, "argv", ["f2py", str(src), "-m", "gh20157"])
-    with util.switchdir(tmp_path):
-        f2pycli()
-    wrapper = (tmp_path / "gh20157-f2pywrappers2.f90").read_text()
-    stmts = [line.strip() for line in wrapper.splitlines()]
-    assert stmts.count("external f") == 2
-    assert not [s for s in stmts if s.startswith("function f(")]
+    try:
+        with util.switchdir(tmp_path):
+            f2pycli()
+        wrapper = (tmp_path / "gh20157-f2pywrappers2.f90").read_text()
+        stmts = [line.strip() for line in wrapper.splitlines()]
+        assert stmts.count("external f") == 2
+        assert not [s for s in stmts if s.startswith("function f(")]
+    finally:
+        # f2pycli leaves the parser's lowercase flag unset.
+        crackfortran.reset_global_f2py_vars()
 
 
 @pytest.mark.slow
