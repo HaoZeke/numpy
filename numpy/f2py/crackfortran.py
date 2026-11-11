@@ -3351,8 +3351,6 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
             f2pyenhancements = (f"{f2pyenhancements}{tab + tabchar}{k} "
                                 f"{block['f2pyenhancements'][k]}")
     intent_lst = block.get('intent', [])[:]
-    if blocktype == 'function' and 'callback' in intent_lst:
-        intent_lst.remove('callback')
     if intent_lst:
         f2pyenhancements = (f"{f2pyenhancements}{tab + tabchar}"
                             f"intent({','.join(intent_lst)}) {name}")
@@ -3465,7 +3463,8 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
                         f'vars2fortran: Warning: cross-dependence between variables "{a}" and "{d}\"\n')
         if 'externals' in block and a in block['externals']:
             if isintent_callback(vars[a]):
-                ret = f'{ret}{tab}intent(callback) {a}'
+                lst = true_intent_list(vars[a])
+                ret = f"{ret}{tab}intent({','.join(lst)}) {a}"
             ret = f'{ret}{tab}external {a}'
             if isoptional(vars[a]):
                 ret = f'{ret}{tab}optional {a}'
