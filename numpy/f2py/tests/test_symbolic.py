@@ -1,8 +1,11 @@
+import warnings
+
 import pytest
 
 from numpy.f2py.symbolic import (
     ArithOp,
     Expr,
+    ExprWarning,
     Language,
     Op,
     as_apply,
@@ -499,3 +502,27 @@ class TestSymbolic(util.F2PyTest):
         #gh - 30268
         with pytest.raises(ValueError, match=r"Mismatch of \(\) parenthesis"):
             Expr.parse("DATA (A, I=1, N", language=Language.Fortran)
+
+    def test_gh20771_logical_and_c_cast(self):
+        # .pyf dimension expressions use C &&, ||, and casts. They used
+        # to be glued into symbols and warned.
+        samples = [
+            "(compute_v?(2*(*range=='A'||(*range=='I' && iu-il+1==n)?n:0)):0)",
+            "((jobt == 0)&&(jobu == 3)?0:m)",
+            "((jobt == 0)&&(jobu == 3)?0:(jobu == 1?m:n))",
+            "(int)v+1",
+            "abs((int)v)+2",
+        ]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ExprWarning)
+            parsed = [fromstring(sample) for sample in samples]
+        assert caught == []
+        logical = parsed[1].tostring(language=Language.C)
+        assert "&&" in logical
+        assert "jobt" in logical and "jobu" in logical
+        assert "(int)v" in parsed[3].tostring(language=Language.C).replace(" ", "")
+        assert "(int)" in parsed[4].tostring(language=Language.C)
+        both = parsed[0].tostring(language=Language.C)
+        assert "||" in both and "&&" in both
+        assert fromstring("a && b").tostring(language=Language.C) == "a && b"
+        assert fromstring("a || b && c").tostring(language=Language.C) == "a || b && c"
