@@ -1459,6 +1459,16 @@ def analyzeline(m, case, line):
                     # Ignoring since data statements are irrelevant for
                     # wrapping.
                     continue
+                # ``data d(1) / 1 /`` names an element of ``d``, not a
+                # variable ``d(1)``. That name is not a legal identifier
+                # and the wrapper emits ``char *d(1)`` (gh-7189).
+                sub = re.match(r'\A([A-Za-z]\w*)\s*\(.*\)\s*\Z', v)
+                if sub:
+                    base = sub.group(1)
+                    if base not in vars:
+                        vars[base] = {}
+                    last_name = base
+                    continue
                 if '!' in l[1]:
                     # Fixes gh-24746 pyf generation
                     # XXX: This essentially ignores the value for generating the pyf which is fine:
