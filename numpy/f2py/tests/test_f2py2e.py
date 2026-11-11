@@ -1035,3 +1035,35 @@ def test_npd_linker():
     """
     # TODO: populate
     pass
+
+
+def test_gh29762_prepare_sources_same_directory(tmp_path):
+    # --build-dir equal to the directory that already holds the sources
+    # used to raise shutil.SameFileError.
+    from numpy.f2py._backends._meson import _prepare_sources
+
+    src = tmp_path / "mod.f90"
+    src.write_text("subroutine s\nend subroutine\n")
+    names = _prepare_sources("mod", [str(src)], tmp_path)
+    assert "mod.f90" in names
+    assert src.read_text().startswith("subroutine s")
+
+
+def test_gh29762_prepare_objects_same_directory(tmp_path):
+    from numpy.f2py._backends._meson import _prepare_objects
+
+    obj = tmp_path / "extra.o"
+    obj.write_bytes(b"obj")
+    _prepare_objects("mod", [str(obj)], tmp_path)
+    assert obj.read_bytes() == b"obj"
+
+
+def test_gh29762_generated_wrapper_already_in_build_dir(tmp_path, monkeypatch):
+    from numpy.f2py._backends._meson import _prepare_sources
+
+    wrap = tmp_path / "mod-f2pywrappers.f"
+    wrap.write_text("c wrapper\n")
+    monkeypatch.chdir(tmp_path)
+    names = _prepare_sources("mod", [], tmp_path)
+    assert "mod-f2pywrappers.f" in names
+    assert wrap.read_text() == "c wrapper\n"
