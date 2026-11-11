@@ -1,5 +1,3 @@
-import platform
-
 import pytest
 
 from numpy.testing import IS_64BIT
@@ -7,11 +5,6 @@ from numpy.testing import IS_64BIT
 from . import util
 
 
-@pytest.mark.skipif(
-    platform.system() == "Darwin",
-    reason="Prone to error when run with numpy/f2py/tests on mac os, "
-    "but not when run in isolation",
-)
 @pytest.mark.skipif(
     not IS_64BIT, reason="32-bit builds are buggy"
 )
@@ -40,11 +33,6 @@ end python module {module_name}
         assert self.module.foo() == 42
 
 
-@pytest.mark.skipif(
-    platform.system() == "Darwin",
-    reason="Prone to error when run with numpy/f2py/tests on mac os, "
-    "but not when run in isolation",
-)
 @pytest.mark.skipif(
     not IS_64BIT, reason="32-bit builds are buggy"
 )
