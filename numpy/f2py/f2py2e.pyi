@@ -21,6 +21,8 @@ class _PreparseResult(TypedDict):
     dependencies: list[str]
     backend: str
     modulename: str
+    cross_files: list[str]
+    native_files: list[str]
 
 ###
 
