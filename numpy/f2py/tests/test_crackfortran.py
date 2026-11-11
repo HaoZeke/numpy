@@ -354,6 +354,28 @@ class TestStringLiteralDepend:
         err = capsys.readouterr().err
         assert "cyclic dependencies" in err
 
+    def test_backslash_is_not_an_escape(self):
+        # gh-33220: a backslash does not escape the closing quote, so
+        # the name after the literal stays visible and the line parses.
+        mask = crackfortran.mask_string_literals
+        expr = "len('c:\\'//n)"
+        assert mask(expr) == "len(''//n)"
+        assert crackfortran.markoutercomma(expr) == expr
+        fpath = util.getpath("tests", "src", "crackfortran", "gh33220.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        probe = next(b for b in mod if b.get("name") == "probe")
+        assert set(probe["vars"]) == {"n", "got"}
+
+
+@pytest.mark.slow
+class TestBackslashCharLiteral(util.F2PyTest):
+    # gh-33220. len('c:\') is 3; len(n) follows the Python string.
+    sources = [util.getpath("tests", "src", "crackfortran", "gh33220.f90")]
+
+    def test_length_keeps_name_after_backslash(self):
+        assert self.module.probe("ABCD") == 7
+        assert self.module.probe("Z") == 4
+
 
 @pytest.mark.slow
 class TestLdaBeforeNRuntime(util.F2PyTest):
