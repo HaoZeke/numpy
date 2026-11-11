@@ -79,6 +79,10 @@ typedef struct {
     int len;              /* Number of attributes */
     FortranDataDef *defs; /* An array of FortranDataDef's */
     PyObject *dict;       /* Fortran object attribute dictionary */
+    /* Owned unicode, or NULL. Names a data object in the pickle error.
+     * Kept off dict so __dict__ and dir() do not show it. */
+    PyObject *pickle_kind;
+    PyObject *pickle_name;
 } PyFortranObject;
 
 #define PyFortran_Check(op) (Py_TYPE(op) == &PyFortran_Type)

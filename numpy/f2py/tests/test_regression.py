@@ -358,17 +358,44 @@ class TestPickleFortranRoutine(util.F2PyTest):
             blob = cloudpickle.dumps(routine)
             assert cloudpickle.loads(blob) is routine
 
-    def test_data_objects_refuse(self):
-        why = "f2py data objects wrap Fortran memory and cannot be pickled"
-        cases = (
-            (self.module.m, r"F90 module 'm'"),
-            (self.module.vmod, r"module variable container 'vmod'"),
-            (self.module.cblock, r"COMMON block 'cblock'"),
-        )
-        for obj, label in cases:
-            with pytest.raises(TypeError, match=why):
-                pickle.dumps(obj)
-            with pytest.raises(TypeError, match=label):
-                pickle.dumps(obj)
-            with pytest.raises(TypeError, match="copy the array data"):
-                pickle.dumps(obj)
+    def _assert_pickle_label_hidden(self, obj):
+        assert "_f2py_pickle_kind" not in obj.__dict__
+        assert "_f2py_pickle_name" not in dir(obj)
+
+    def test_f90_module_refuses_pickle(self):
+        obj = self.module.m
+        self._assert_pickle_label_hidden(obj)
+        with pytest.raises(
+            TypeError,
+            match=(
+                "F90 module 'm': f2py data objects wrap Fortran memory"
+                " and cannot be pickled; copy the array data instead"
+            ),
+        ):
+            pickle.dumps(obj)
+
+    def test_variable_container_refuses_pickle(self):
+        obj = self.module.vmod
+        self._assert_pickle_label_hidden(obj)
+        with pytest.raises(
+            TypeError,
+            match=(
+                "module variable container 'vmod': f2py data objects wrap"
+                " Fortran memory and cannot be pickled; copy the array"
+                " data instead"
+            ),
+        ):
+            pickle.dumps(obj)
+
+    def test_common_refuses_pickle(self):
+        obj = self.module.cblock
+        self._assert_pickle_label_hidden(obj)
+        with pytest.raises(
+            TypeError,
+            match=(
+                "COMMON block 'cblock': f2py data objects wrap Fortran"
+                " memory and cannot be pickled; copy the array data"
+                " instead"
+            ),
+        ):
+            pickle.dumps(obj)
