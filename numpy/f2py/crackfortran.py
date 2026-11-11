@@ -2725,6 +2725,12 @@ def analyzevars(block):
         result_explicit = any(
             key in rv0 for key in (
                 'typespec', 'kindselector', 'charselector', 'typename'))
+    if block.get('block') == 'function':
+        for ename in block.get('entry') or {}:
+            # The ENTRY name is its return variable. Leaving it out of
+            # vars makes the wrapper look up a missing name (gh-13356).
+            if ename not in vars:
+                vars[ename] = {}
     if '' in block['vars']:
         del vars['']
         if 'attrspec' in block['vars']['']:
