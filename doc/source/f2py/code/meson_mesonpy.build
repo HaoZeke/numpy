@@ -18,10 +18,11 @@ incdir_f2py = run_command(py,
 ).stdout().strip()
 
 # f2py include dir (for fortranobject.h) is not in dependency('numpy'),
-# so add it separately, relative to this directory since Meson rejects
-# absolute paths into the project (e.g. into a virtual environment there)
+# so add it separately. Pass it as a flag like dependency('numpy') does:
+# include_directories() rejects absolute paths into the source tree, which
+# is where it points when the virtual environment lives in the project.
 f2py_dep = declare_dependency(
-  include_directories : fs.relative_to(incdir_f2py, meson.current_source_dir()),
+  compile_args : '-I' + incdir_f2py,
 )
 
 # Generate the f2py wrappers
