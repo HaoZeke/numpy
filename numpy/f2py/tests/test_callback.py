@@ -206,6 +206,18 @@ class TestF77Callback(util.F2PyTest):
         r = self.module.hidden_callback2(2)
         assert r == 3
 
+    def test_hidden_callback_undeclared(self, monkeypatch):
+        # gh-18385: hidden_callback2 calls global_f without declaring it
+        monkeypatch.setattr(self.module, "global_f", lambda x: x + 1,
+                            raising=False)
+        assert self.module.hidden_callback2(2) == 3
+
+        monkeypatch.setattr(self.module, "global_f", lambda x, y: x * y)
+        monkeypatch.setattr(self.module, "global_f_extra_args", (10,),
+                            raising=False)
+        assert self.module.hidden_callback(2) == 20
+        assert self.module.hidden_callback2(2) == 20
+
     @pytest.mark.skipif(not HAS_REFCOUNT, reason="Python lacks refcounts")
     def test_hidden_callback_refcount(self):
         # The call-back and its extra arguments are module attributes; each
@@ -266,6 +278,25 @@ class TestGH18335(util.F2PyTest):
 
         r = self.module.gh18335(foo)
         assert r == 123 + 1
+
+
+@pytest.mark.slow
+class TestGH18385(util.F2PyTest):
+    # secondary calls the hidden call-back of primary without declaring it
+    sources = [util.getpath("tests", "src", "callback", "gh18385.f90")]
+
+    def test_gh18385(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(self.module, "callback",
+                            lambda a, b: calls.append((a, b)), raising=False)
+        self.module.primary()
+        self.module.secondary()
+        assert calls == [(1, 2), (3, 4)]
+
+
+@pytest.mark.slow
+class TestGH18385PythonTLS(TestGH18385):
+    options = ["-DF2PY_USE_PYTHON_TLS"]
 
 
 @pytest.mark.slow

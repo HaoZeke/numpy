@@ -1338,12 +1338,14 @@ cfuncs[
 
 
 needs['create_cb_arglist'] = ['CFUNCSMESS', 'PRINTPYOBJERR', 'MINMAX']
-# create the list of arguments to be used when calling back to python
+# create the list of arguments to be used when calling back to python;
+# with keepdefaults, a fun that can be called with the extra arguments alone
+# gets only those and its remaining parameters keep their default values
 cfuncs['create_cb_arglist'] = """
 static int
 create_cb_arglist(PyObject* fun, PyObject* xa , const int maxnofargs,
-                  const int nofoptargs, int *nofargs, PyObject **args,
-                  const char *errmess)
+                  const int nofoptargs, const int keepdefaults, int *nofargs,
+                  PyObject **args, const char *errmess)
 {
     PyObject *tmp = NULL;
     PyObject *tmp_fun = NULL;
@@ -1447,6 +1449,10 @@ create_cb_arglist(PyObject* fun, PyObject* xa , const int maxnofargs,
     /* Calculate the size of call-backs argument list */
     siz = MIN(maxnofargs+ext,tot);
     *nofargs = MAX(0,siz-ext);
+    if (keepdefaults && tot-opt <= ext) {
+        siz = ext;
+        *nofargs = 0;
+    }
 
 #ifdef DEBUGCFUNCS
     fprintf(stderr,
