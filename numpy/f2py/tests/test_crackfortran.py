@@ -475,6 +475,50 @@ class TestF77CommonBlockReader:
             mod = crackfortran.crackfortran([str(fpath)])
         assert "Mismatch" not in stdout_f2py.getvalue()
 
+    @pytest.mark.parametrize(
+        "end", ["end block data", "end blockdata", "endblockdata", "end"])
+    def test_end_block_data(self, tmp_path, end):
+        fpath = tmp_path / "blkdata.f90"
+        fpath.write_text(textwrap.dedent(f"""\
+            block data init
+              integer n
+              common /cblk/ n
+              data n /3/
+            {end}
+            subroutine after(k)
+              integer k
+            end subroutine after
+            """))
+        with contextlib.redirect_stdout(io.StringIO()) as stdout_f2py:
+            mod = crackfortran.crackfortran([str(fpath)])
+        assert "Mismatch" not in stdout_f2py.getvalue()
+        assert [(b["block"], b["name"]) for b in mod] == [
+            ("block data", "init"), ("subroutine", "after")]
+
+
+@pytest.mark.slow
+class TestBlockConstruct(util.F2PyTest):
+    # END BLOCK of a Fortran 2008 BLOCK construct must not end the
+    # enclosing procedure
+    sources = [util.getpath("tests", "src", "crackfortran", "block_construct.f90")]
+
+    def test_crackfortran(self):
+        with contextlib.redirect_stdout(io.StringIO()) as stdout_f2py:
+            mod = crackfortran.crackfortran([str(self.sources[0])])
+        assert "Mismatch" not in stdout_f2py.getvalue()
+        assert [b["name"] for b in mod] == [
+            "block_construct", "external_with_block", "external_after_block"]
+        assert [b["name"] for b in mod[0]["body"]] == [
+            "with_block", "with_named_block", "after_blocks"]
+
+    def test_wrappers(self):
+        mod = self.module.block_construct
+        assert mod.with_block(1.0) == 3.0
+        assert mod.with_named_block(1.0) == 3.0
+        assert mod.after_blocks(1.0) == 0.0
+        assert self.module.external_with_block(1.0) == 11.0
+        assert self.module.external_after_block(1.0) == 21.0
+
 class TestParamEval:
     # issue gh-11612, array parameter parsing
     def test_param_eval_nested(self):
