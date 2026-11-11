@@ -12,3 +12,8 @@ with ``numpy.distutils``. Under the hidden visibility that meson applies to
 Python extension modules, Intel ``ifx`` hides calls to procedures with
 explicit interfaces, such as the OpenMP routines in ``omp_lib``, and linking
 failed with ``hidden symbol `omp_get_num_threads' isn't defined``.
+
+``--debug`` selects the meson ``debug`` build type again. The
+``numpy.distutils`` options ``--opt``, ``--arch``, ``--noopt``, ``--noarch``,
+``--f77exec``, ``--f90exec`` and ``--help-fcompiler`` have no effect with
+meson, and ``f2py -c`` now reports them instead of dropping them with no message.
