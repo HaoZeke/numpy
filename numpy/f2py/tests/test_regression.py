@@ -1,5 +1,6 @@
 import os
 import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -317,3 +318,34 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+@pytest.mark.slow
+def test_gh9727_kind16_return(tmp_path):
+    # Calling the routine in-process segfaults before the fix, so build and
+    # call it in a child interpreter.
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    src = util.getpath("tests", "src", "regression", "gh9727.f90")
+    (tmp_path / "gh9727.f90").write_text(src.read_text())
+    code = """
+import math, sys
+sys.path.insert(0, ".")
+sys.argv = ["f2py", "-c", "-m", "gh9727", "gh9727.f90",
+            "--backend", "meson", "--freethreading-compatible"]
+from numpy.f2py.f2py2e import main
+main()
+import gh9727
+pi = gh9727.get_pi()
+e = gh9727.get_e()
+if abs(pi - math.pi) > 1e-12 or abs(e - 1.0) > 1e-12:
+    raise SystemExit(f"bad values pi={pi!r} e={e!r}")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-P", "-c", code],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr

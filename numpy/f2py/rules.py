@@ -661,7 +661,7 @@ rout_rules = [
         },
         'decl': [{iscomplexfunction_warn: '    #ctype# #name#_return_value={0,0};',
                   l_not(iscomplexfunction): '    #ctype# #name#_return_value=0;'},
-                 {iscomplexfunction:
+                 {l_or(iscomplexfunction, islong_doublefunction):
                   '    PyObject *#name#_return_value_capi = Py_None;'}
                  ],
         'callfortranroutine': [
@@ -680,14 +680,18 @@ rout_rules = [
             {l_and(debugcapi, iscomplexfunction)
                    : '    fprintf(stderr,"#routdebugshowvalue#\\n",#name#_return_value.r,#name#_return_value.i);'},
             {l_and(debugcapi, l_not(iscomplexfunction)): '    fprintf(stderr,"#routdebugshowvalue#\\n",#name#_return_value);'}],
-        'pyobjfrom': {iscomplexfunction: '    #name#_return_value_capi = pyobj_from_#ctype#1(#name#_return_value);'},
+        'pyobjfrom': {l_or(iscomplexfunction, islong_doublefunction):
+                      '    #name#_return_value_capi = pyobj_from_#ctype#1(#name#_return_value);'},
         'need': [{l_not(isdummyroutine): 'F_FUNC'},
-                 {iscomplexfunction: 'pyobj_from_#ctype#1'},
+                 {l_or(iscomplexfunction, islong_doublefunction):
+                  'pyobj_from_#ctype#1'},
                  {islong_longfunction: 'long_long'},
                  {islong_doublefunction: 'long_double'}],
         'returnformat': {l_not(isintent_hide): '#rformat#'},
-        'return': {iscomplexfunction: ',#name#_return_value_capi',
-                   l_not(l_or(iscomplexfunction, isintent_hide)): ',#name#_return_value'},
+        'return': {l_or(iscomplexfunction, islong_doublefunction):
+                   ',#name#_return_value_capi',
+                   l_not(l_or(iscomplexfunction, islong_doublefunction,
+                              isintent_hide)): ',#name#_return_value'},
         '_check': l_and(isfunction, l_not(isstringfunction), l_not(isfunction_wrap))
     }, {  # String function # in use for --no-wrap
         'declfortranroutine': 'extern void #F_FUNC#(#fortranname#,#FORTRANNAME#)(#callprotoargument#);',
@@ -971,7 +975,12 @@ if (#varname#_cb.capi==Py_None) {
         'decl': '    #ctype# #varname# = 0;',
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#);'},
         'callfortran': {l_or(isintent_c, isattr_value): '#varname#,', l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
-        'return': {isintent_out: ',#varname#'},
+        # gh-9727: long double is not a PyObject. Build one and let
+        # Py_BuildValue("N", ...) steal it.
+        'return': {l_and(isintent_out, islong_double):
+                   ',pyobj_from_long_double1(#varname#)',
+                   l_and(isintent_out, l_not(islong_double)): ',#varname#'},
+        'need': {l_and(isintent_out, islong_double): 'pyobj_from_long_double1'},
         '_check': l_and(isscalar, l_not(iscomplex))
     }, {
         'need': {hasinitvalue: 'math.h'},
