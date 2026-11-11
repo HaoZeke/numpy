@@ -2692,10 +2692,13 @@ def analyzevars(block):
                 dep_matches[n]
             except KeyError:
                 dep_matches[n] = re.compile(rf'.*\b{v}\b', re.I).match
+    # vars also records the attributes of derived types defined in this
+    # block; type names are not data entities and are never implicitly typed
+    typenames = {b['name'] for b in block['body'] if b['block'] == 'type'}
     for n in svars:
         if n[0] in list(attrrules.keys()):
             vars[n] = setattrspec(vars[n], attrrules[n[0]])
-        if 'typespec' not in vars[n]:
+        if 'typespec' not in vars[n] and n not in typenames:
             if not ('attrspec' in vars[n] and 'external' in vars[n]['attrspec']):
                 if implicitrules:
                     ln0 = n[0].lower()
@@ -3438,6 +3441,7 @@ def true_intent_list(var):
 def vars2fortran(block, vars, args, tab='', as_interface=False):
     setmesstext(block)
     ret = ''
+    typenames = {b['name'] for b in block['body'] if b['block'] == 'type'}
     nout = []
     for a in args:
         if a in block['vars']:
@@ -3492,6 +3496,8 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             if 'attrspec' in vars[a] and 'external' in vars[a]['attrspec']:
                 if a in args:
                     ret = f'{ret}{tab}external {a}'
+                continue
+            if a in typenames:
                 continue
             show(vars[a])
             outmess(f'vars2fortran: No typespec for argument "{a}".\n')
