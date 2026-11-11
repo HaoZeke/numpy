@@ -745,7 +745,7 @@ def test_inclpath(monkeypatch):
         ["--include-paths", r"C:\inc1;D:\inc2"]
     )
 
-    assert set(include_paths) == {r"C:\inc1", r"D:\inc2"}
+    assert include_paths == [r"C:\inc1", r"D:\inc2"]
     assert ftcompat is None
     assert remain == []
 
@@ -753,7 +753,7 @@ def test_inclpath(monkeypatch):
         ["--include_paths", r"C:\inc1;D:\inc2"]
     )
 
-    assert set(include_paths) == {r"C:\inc1", r"D:\inc2"}
+    assert include_paths == [r"C:\inc1", r"D:\inc2"]
     assert ftcompat is None
     assert remain == []
 
@@ -764,6 +764,19 @@ def test_inclpath(monkeypatch):
     assert include_paths == [r"C:\inc1;D:\inc2"]
     assert ftcompat is None
     assert remain == []
+
+
+def test_inclpath_order():
+    """Include directories keep their command line order, without repeats
+
+    CLI :: -I --include-paths
+    """
+    dirs = [f"inc{i}" for i in range(6)]
+    include_paths, _, _ = get_newer_options(
+        ["-I", dirs[5], "--include-paths", os.pathsep.join(dirs[2:5]),
+         "-I", dirs[1], "-I", dirs[0], "-I", dirs[5]]
+    )
+    assert include_paths == [dirs[5], *dirs[2:5], dirs[1], dirs[0]]
 
 
 def test_hlink(capfd, monkeypatch):
@@ -1039,9 +1052,11 @@ def test_compile_include_dirs(meson_build_of, hello_world_f90, tmp_path):
     """
     CLI :: -c -I/path/to/include/
     """
-    incdir = tmp_path / "inc"
-    mbld = meson_build_of("-m", "blah", str(hello_world_f90), f"-I{incdir}")
-    assert f"'''{incdir}'''" in mbld
+    incdirs = [tmp_path / name for name in ("inc_c", "inc_a", "inc_b")]
+    mbld = meson_build_of("-m", "blah", str(hello_world_f90),
+                          *(f"-I{incdir}" for incdir in incdirs))
+    positions = [mbld.index(f"'''{incdir}'''") for incdir in incdirs]
+    assert positions == sorted(positions)
 
 
 def test_compile_extra_objects(meson_build_of, hello_world_f90, tmp_path):
