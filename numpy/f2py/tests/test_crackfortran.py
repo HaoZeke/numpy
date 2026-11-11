@@ -264,6 +264,25 @@ class TestModuleDeclaration:
         assert mod[0]["vars"]["abar"]["="] == "bar('abar')"
 
 
+class TestUseStatement:
+    # gh-17563: USE statements with a module-nature (F2018 R1409)
+    def test_module_nature(self, tmp_path):
+        src = tmp_path / "use_nature.f90"
+        src.write_text(textwrap.dedent("""\
+            module use_nature
+              use, intrinsic :: iso_fortran_env, only: wp => real64
+              use, non_intrinsic :: helper
+              use :: other, only: x
+            end module use_nature
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        assert mod[0]["use"] == {
+            "iso_fortran_env": {"only": 1, "map": {"wp": "real64"}},
+            "helper": {},
+            "other": {"only": 1, "map": {"x": "x"}},
+        }
+
+
 class TestStringLiteralDepend:
     # gh-28700: identifiers inside a character parameter's literal value
     # must not be harvested as dependencies (a self-dependency crashes the
