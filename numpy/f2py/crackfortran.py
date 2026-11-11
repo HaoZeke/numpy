@@ -2807,7 +2807,9 @@ def analyzevars(block):
                     if len(dl) == 1 and dl[0] != dim_char:
                         dl = ['1', dl[0]]
                     if len(dl) == 2:
-                        d1, d2 = map(symbolic.Expr.parse, dl)
+                        d1, d2 = (symbolic.Expr.parse(
+                            bound, language=symbolic.Language.Fortran)
+                            for bound in dl)
                         dsize = d2 - d1 + 1
                         d = dsize.tostring(language=symbolic.Language.C)
                         # find variables v that define d as a linear
@@ -3544,8 +3546,12 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
                 vardef = f"{vardef}, {','.join(attr)}"
                 c = ','
         if 'dimension' in vars[a]:
+            # Stored dimensions are C (`pow`) for setdims. Declarations
+            # that this routine reprints are Fortran, so rewrite powers.
             # `real*8 dimension(n)` is not Fortran; the comma is required.
-            vardef = f"{vardef}, dimension({','.join(vars[a]['dimension'])})"
+            fdims = [symbolic.c_dimension_to_fortran(d)
+                     for d in vars[a]['dimension']]
+            vardef = f"{vardef}, dimension({','.join(fdims)})"
             c = ','
         if 'intent' in vars[a]:
             lst = true_intent_list(vars[a])
