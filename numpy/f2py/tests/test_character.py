@@ -1,3 +1,4 @@
+import collections
 import textwrap
 
 import pytest
@@ -551,6 +552,19 @@ class TestMiscCharacter(util.F2PyTest):
             r = f(x)
             for k, v in expected.items():
                 assert_equal(getattr(r, k), v)
+
+    @pytest.mark.parametrize("x, dtype", [
+        ([b'1', b'22', b'333'], 'S3'),
+        (('a', b'bc'), 'S2'),
+        (collections.UserList(['ab', 'cde']), 'S3'),
+        (['ab', 1], 'S2'),
+    ])
+    def test_gh4519_sequence(self, x, dtype):
+        # Assumed length is the longest str/bytes item of the sequence
+        f = getattr(self.module, self.fprefix + '_gh4519')
+        r = f(x)
+        assert_equal(r.dtype, np.dtype(dtype))
+        assert_array_equal(r, np.array(x, dtype=dtype))
 
     def test_gh3425(self):
         # Test returning a copy of assumed length string
