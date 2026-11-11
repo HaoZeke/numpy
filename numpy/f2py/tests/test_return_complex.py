@@ -5,6 +5,12 @@ from numpy import array
 from . import util
 
 
+class ComplexSubclass(complex):
+    # The value stored in a complex instance is used, not __complex__
+    def __complex__(self):
+        return 1j
+
+
 @pytest.mark.slow
 class TestReturnComplex(util.F2PyTest):
     def check_function(self, t, tname):
@@ -16,6 +22,7 @@ class TestReturnComplex(util.F2PyTest):
         assert abs(t(234.6) - 234.6) <= err
         assert abs(t(234) - 234.0) <= err
         assert abs(t(234.6 + 3j) - (234.6 + 3j)) <= err
+        assert abs(t(ComplexSubclass(234.6 + 3j)) - (234.6 + 3j)) <= err
         # assert abs(t('234')-234.)<=err
         # assert abs(t('234.6')-234.6)<=err
         assert abs(t(-234) + 234.0) <= err

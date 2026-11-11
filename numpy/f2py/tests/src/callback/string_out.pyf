@@ -1,0 +1,17 @@
+python module __user__routines
+    interface
+        subroutine fun(s)
+            character*5, intent(out) :: s
+        end subroutine fun
+    end interface
+end python module __user__routines
+
+python module callback_string_out
+    interface
+        subroutine string_out(f,s)
+            use __user__routines, f=>fun
+            external f
+            character*5, intent(out) :: s
+        end subroutine string_out
+    end interface
+end python module callback_string_out
