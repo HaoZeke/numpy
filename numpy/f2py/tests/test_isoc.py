@@ -25,6 +25,20 @@ class TestISOC(util.F2PyTest):
         assert_allclose(out, exp)
         assert out.dtype == exp.dtype
 
+    # gh-30352
+    @pytest.mark.parametrize("dtype", [np.complex64, np.complex128, np.clongdouble])
+    def test_complex_real_kinds(self, dtype):
+        a = np.array([1j, 2j, 3j], dtype=dtype)
+        b = np.array([4j, 5j, 6j], dtype=dtype)
+        out = {
+            np.complex64: self.module.coddity.add_cfloat_rkind_arr,
+            np.complex128: self.module.coddity.add_cdouble_rkind_arr,
+            np.clongdouble: self.module.coddity.add_clong_double_rkind_arr
+        }[dtype](a, b)
+        exp = a + b
+        assert_allclose(out, exp)
+        assert out.dtype == exp.dtype
+
     # gh-24553
     def test_c_double(self):
         out = self.module.coddity.c_add(1, 2)
@@ -56,6 +70,17 @@ class TestISOC(util.F2PyTest):
         exp_out = a + b
         assert_allclose(out, exp_out)
         assert out.dtype == exp_out.dtype
+
+
+@pytest.mark.parametrize("kind, ctype", [
+    ("c_float", "complex_float"),
+    ("c_double", "complex_double"),
+    ("c_long_double", "complex_long_double"),
+])
+def test_complex_real_kind_ctype(kind, ctype):
+    from numpy.f2py.capi_maps import getctype
+
+    assert getctype({"typespec": "complex", "kindselector": {"kind": kind}}) == ctype
 
 
 def test_process_f2cmap_dict():
