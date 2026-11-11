@@ -1,0 +1,9 @@
+python module gh17563_case
+    interface
+        function twice(x) result(y)
+            USE ISO_FORTRAN_ENV
+            REAL(KIND=REAL64), intent(in) :: x
+            REAL(KIND=REAL64) :: y
+        end function twice
+    end interface
+end python module gh17563_case
