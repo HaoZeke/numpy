@@ -11,3 +11,7 @@ F2PY handles more ``use`` statements and named kinds
   (``real32``, ``real64``) or ``iso_c_binding`` (``c_float``, ``c_double``,
   ``c_long_double``) now map to the matching complex C type. Previously
   they were all treated as single precision complex.
+* Kinds renamed on import, as in ``use iso_fortran_env, only: dp => real64``
+  or ``use iso_c_binding, only: dp => c_double``, now resolve to the
+  intrinsic kind. Previously ``real(dp)`` was silently mapped to C ``float``
+  and the Fortran wrappers of module procedures failed to compile.
