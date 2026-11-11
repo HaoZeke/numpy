@@ -20,3 +20,9 @@ Character array arguments of assumed length, such as
 ``bytes`` or ``str`` input as ``npy_intp``. An element longer than the
 largest C ``int`` previously raised ``SystemError``, or from 4 GiB on
 was silently truncated; it is now passed whole.
+
+Arrays with an initial value in a signature file, such as
+``dimension(n) :: a = _i[0]``, are now filled using ``npy_intp``
+indices, so ``_i[k]`` is an ``npy_intp``. Filling an array with more
+elements than the largest C ``int`` previously overflowed the index and
+wrote out of bounds.

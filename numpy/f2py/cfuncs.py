@@ -607,7 +607,7 @@ static int calcarrindextr(int *i,PyArrayObject *arr) {
     return ii;
 }"""
 cfuncs['forcomb'] = """
-struct ForcombCache { int nd;npy_intp *d;int *i,*i_tr,tr; };
+struct ForcombCache { int nd;npy_intp *d;npy_intp *i,*i_tr;int tr; };
 static int initforcomb(struct ForcombCache *cache, npy_intp *dims,int nd,int tr) {
   int k;
   if (dims==NULL) return 0;
@@ -616,9 +616,9 @@ static int initforcomb(struct ForcombCache *cache, npy_intp *dims,int nd,int tr)
   cache->d = dims;
   cache->tr = tr;
 
-  cache->i = (int *)malloc(sizeof(int)*nd);
+  cache->i = (npy_intp *)malloc(sizeof(npy_intp)*nd);
   if (cache->i==NULL) return 0;
-  cache->i_tr = (int *)malloc(sizeof(int)*nd);
+  cache->i_tr = (npy_intp *)malloc(sizeof(npy_intp)*nd);
   if (cache->i_tr==NULL) {free(cache->i); return 0;};
 
   for (k=1;k<nd;k++) {
@@ -627,9 +627,10 @@ static int initforcomb(struct ForcombCache *cache, npy_intp *dims,int nd,int tr)
   cache->i[0] = cache->i_tr[nd-1] = -1;
   return 1;
 }
-static int *nextforcomb(struct ForcombCache *cache) {
+static npy_intp *nextforcomb(struct ForcombCache *cache) {
   if (cache==NULL) return NULL;
-  int j,*i,*i_tr,k;
+  int j,k;
+  npy_intp *i,*i_tr;
   int nd=cache->nd;
   if ((i=cache->i) == NULL) return NULL;
   if ((i_tr=cache->i_tr) == NULL) return NULL;
