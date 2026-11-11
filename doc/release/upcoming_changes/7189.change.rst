@@ -1,0 +1,5 @@
+``f2py`` no longer treats ``DATA d(1)`` as a variable named ``d(1)``
+--------------------------------------------------------------------
+A ``DATA`` statement that names an array element, such as ``data d(1) / 1 /``, was stored as a variable ``d(1)``. Implicit typing
+made that a real optional, and the wrapper declared ``char *d(1)``,
+which does not compile. The element belongs to the array ``d``.
