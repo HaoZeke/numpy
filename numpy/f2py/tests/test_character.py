@@ -637,7 +637,7 @@ class TestBCCharHandling(util.F2PyTest):
         util.getpath("tests", "src", "string", "gh25286_bc.pyf"),
         util.getpath("tests", "src", "string", "gh25286.f90")
     ]
-    module_name = "_char_handling_test"
+    module_name = "_char_handling_bc_test"
 
     def test_gh25286(self):
         info = self.module.charint('T')
