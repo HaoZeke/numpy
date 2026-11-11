@@ -451,32 +451,54 @@ set_data(char *d, npy_intp *f)
     /* printf("set_data: d=%p,f=%d\n",d,*f); */
 }
 
+/* Python 3.13 added PyDict_GetItemRef and PyDict_GetItemStringRef.
+ * NumPy's pythoncapi-compat header is not on the f2py include path,
+ * so the same shim lives here. 1 means found and 0 means missing.
+ * F2PY_ERR means an error. A found item is a new reference. */
+#if PY_VERSION_HEX < 0x030D00A1
+static int
+PyDict_GetItemRef(PyObject *mp, PyObject *key, PyObject **result)
+{
+    PyObject *item = PyDict_GetItemWithError(mp, key);
+    if (item != NULL) {
+        *result = Py_NewRef(item);
+        return 1;
+    }
+    *result = NULL;
+    if (!PyErr_Occurred()) {
+        return 0;
+    }
+    return F2PY_ERR;
+}
+
+static int
+PyDict_GetItemStringRef(PyObject *mp, const char *key, PyObject **result)
+{
+    int res;
+    PyObject *key_obj = PyUnicode_FromString(key);
+    if (key_obj == NULL) {
+        *result = NULL;
+        return F2PY_ERR;
+    }
+    res = PyDict_GetItemRef(mp, key_obj, result);
+    Py_DECREF(key_obj);
+    return res;
+}
+#endif
+
 static PyObject *
 fortran_getattr(PyFortranObject *fp, char *name)
 {
     int i, j, k, flag;
     if (fp->dict != NULL) {
-        // python 3.13 added PyDict_GetItemRef
-#if PY_VERSION_HEX < 0x030D0000
-        PyObject *v = _PyDict_GetItemStringWithError(fp->dict, name); // noqa: borrowed-ref OK
-        if (v == NULL && PyErr_Occurred()) {
-            return NULL;
-        }
-        else if (v != NULL) {
-            Py_INCREF(v);
-            return v;
-        }
-#else
-        PyObject *v;
+        PyObject *v = NULL;
         int result = PyDict_GetItemStringRef(fp->dict, name, &v);
-        if (result == -1) {
+        if (result < 0) {
             return NULL;
         }
         else if (result == 1) {
             return v;
         }
-#endif
-
     }
     for (i = 0, j = 1; i < fp->len && (j = strcmp(name, fp->defs[i].name));
          i++)
@@ -705,41 +727,6 @@ fortran_dir(PyFortranObject *fp, PyObject *Py_UNUSED(args))
     }
     return dir_list;
 }
-
-/* Python 3.13 added PyDict_GetItemStringRef.
- * NumPy's pythoncapi-compat header is not on the f2py include path,
- * so the same shim lives here. 1 means found and 0 means missing.
- * F2PY_ERR means an error. A found item is a new reference. */
-#if PY_VERSION_HEX < 0x030D00A1
-static int
-PyDict_GetItemRef(PyObject *mp, PyObject *key, PyObject **result)
-{
-    PyObject *item = PyDict_GetItemWithError(mp, key);
-    if (item != NULL) {
-        *result = Py_NewRef(item);
-        return 1;
-    }
-    *result = NULL;
-    if (!PyErr_Occurred()) {
-        return 0;
-    }
-    return F2PY_ERR;
-}
-
-static int
-PyDict_GetItemStringRef(PyObject *mp, const char *key, PyObject **result)
-{
-    int res;
-    PyObject *key_obj = PyUnicode_FromString(key);
-    if (key_obj == NULL) {
-        *result = NULL;
-        return F2PY_ERR;
-    }
-    res = PyDict_GetItemRef(mp, key_obj, result);
-    Py_DECREF(key_obj);
-    return res;
-}
-#endif
 
 static void
 fortran_set_unpickleable(PyFortranObject *fp)
