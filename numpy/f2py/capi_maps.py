@@ -329,8 +329,12 @@ def getarrdims(a, var, verbose=0):
             if d not in ['*', ':', '(*)', '(:)']:
                 ret['cbsetdims'] = f"{ret['cbsetdims']}#varname#_Dims[{i}]={d},"
             elif isintent_in(var):
-                outmess('getarrdims:warning: assumed shape array, using 0 '
-                        f'instead of {d!r}\n')
+                # Allocatable arrays are deferred-shape. A variable with
+                # no intent list is module data, not a callback dummy.
+                # Warning for those is a false alarm (gh-25777).
+                if not isallocatable(var) and 'intent' in var:
+                    outmess('getarrdims:warning: assumed shape array, using 0 '
+                            f'instead of {d!r}\n')
                 ret['cbsetdims'] = f"{ret['cbsetdims']}#varname#_Dims[{i}]={0},"
             elif verbose:
                 errmess(

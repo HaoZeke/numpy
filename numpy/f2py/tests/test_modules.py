@@ -114,3 +114,15 @@ class TestUsedParameters(util.F2PyTest):
         assert self.module.test2.c == 1
         assert not hasattr(self.module.test2, "a")
         assert not hasattr(self.module.test2, "not_param")
+
+
+def test_gh25777_allocatable_no_assumed_shape_warning(capfd):
+    from numpy.f2py import f90mod_rules
+    from numpy.f2py.crackfortran import crackfortran
+
+    src = util.getpath("tests", "src", "modules", "gh25777.f90")
+    blocks = crackfortran([str(src)])
+    capfd.readouterr()
+    f90mod_rules.buildhooks(blocks[0])
+    out, err = capfd.readouterr()
+    assert "assumed shape array" not in out + err
