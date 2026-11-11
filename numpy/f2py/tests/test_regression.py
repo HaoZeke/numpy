@@ -1,4 +1,6 @@
+import copy
 import os
+import pickle
 import platform
 import sys
 from pathlib import Path
@@ -317,3 +319,56 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+@pytest.mark.slow
+class TestPickleFortranRoutine(util.F2PyTest):
+    # gh-21767: routine objects pickle by reference. Data objects refuse.
+    sources = [util.getpath("tests", "src", "regression", "gh21767.f90")]
+
+    def test_attribute_identity(self):
+        assert self.module.s is self.module.s
+        assert self.module.m.t is self.module.m.t
+
+    def test_module_and_qualname(self):
+        mod = self.module
+        assert mod.s.__module__ == mod.__name__
+        assert mod.s.__qualname__ == "s"
+        assert mod.m.t.__module__ == mod.__name__
+        assert mod.m.t.__qualname__ == "m.t"
+
+    def test_pickle_protocols(self):
+        highest = pickle.HIGHEST_PROTOCOL
+        routines = (self.module.s, self.module.m.t)
+        for proto in range(highest + 1):
+            for routine in routines:
+                blob = pickle.dumps(routine, protocol=proto)
+                assert pickle.loads(blob) is routine
+
+    def test_copy_identity(self):
+        routines = (self.module.s, self.module.m.t)
+        for routine in routines:
+            assert copy.copy(routine) is routine
+            assert copy.deepcopy(routine) is routine
+
+    def test_cloudpickle_roundtrip(self):
+        cloudpickle = pytest.importorskip("cloudpickle")
+        routines = (self.module.s, self.module.m.t)
+        for routine in routines:
+            blob = cloudpickle.dumps(routine)
+            assert cloudpickle.loads(blob) is routine
+
+    def test_data_objects_refuse(self):
+        why = "f2py data objects wrap Fortran memory and cannot be pickled"
+        cases = (
+            (self.module.m, r"F90 module 'm'"),
+            (self.module.vmod, r"module variable container 'vmod'"),
+            (self.module.cblock, r"COMMON block 'cblock'"),
+        )
+        for obj, label in cases:
+            with pytest.raises(TypeError, match=why):
+                pickle.dumps(obj)
+            with pytest.raises(TypeError, match=label):
+                pickle.dumps(obj)
+            with pytest.raises(TypeError, match="copy the array data"):
+                pickle.dumps(obj)

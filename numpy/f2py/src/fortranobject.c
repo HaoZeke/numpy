@@ -227,6 +227,146 @@ PyFortranObject_NewAsAttr(FortranDataDef *defs)
     return (PyObject *)fp;
 }
 
+/*
+ * FortranDataDef.rank is this value for a routine.
+ * Data entries use a rank of 0 or higher.
+ */
+#define F2PY_RANK_ROUTINE (-1)
+/* Negative return used by the helpers below, matching the C API. */
+#define F2PY_ERR (-1)
+/* __reduce__ reference tuple is (callable, args). */
+#define F2PY_REDUCE_LEN 2
+/* Reconstructor arguments are (module name, qualname). */
+#define F2PY_RECON_ARGS 2
+
+/* Dict key: full import name of the extension that owns the routine. */
+static const char F2PY_KEY_MODULE[] = "__module__";
+/* Dict key: routine name, or "module.routine" for an F90 module routine. */
+static const char F2PY_KEY_QUALNAME[] = "__qualname__";
+/* Dict keys used only to name a data object in the pickle error. */
+static const char F2PY_KEY_KIND[] = "_f2py_pickle_kind";
+static const char F2PY_KEY_OBJNAME[] = "_f2py_pickle_name";
+/* Shared refusal text. Data objects wrap Fortran memory. */
+static const char F2PY_PICKLE_WHY[] =
+        "f2py data objects wrap Fortran memory and cannot be pickled; "
+        "copy the array data instead";
+
+static int
+f2py_dict_set_str(PyObject *dict, const char *key, const char *value)
+{
+    PyObject *obj = PyUnicode_FromString(value);
+    int rv;
+
+    if (obj == NULL) {
+        return F2PY_ERR;
+    }
+    rv = PyDict_SetItemString(dict, key, obj);
+    Py_DECREF(obj);
+    return rv;
+}
+
+int
+PyFortranObject_SetRoutineRef(PyObject *obj, PyObject *module,
+                              const char *qualname)
+{
+    PyFortranObject *fp;
+    const char *modname_c;
+    PyObject *modname;
+    int rv;
+
+    if (!PyFortran_Check(obj) || qualname == NULL || module == NULL) {
+        PyErr_SetString(PyExc_TypeError,
+                        "f2py routine reference requires a fortran object");
+        return F2PY_ERR;
+    }
+    fp = (PyFortranObject *)obj;
+    if (fp->len != 1 || fp->defs == NULL || fp->dict == NULL ||
+        fp->defs[0].rank != F2PY_RANK_ROUTINE) {
+        PyErr_SetString(PyExc_TypeError,
+                        "f2py routine reference requires a routine object");
+        return F2PY_ERR;
+    }
+    modname_c = PyModule_GetName(module);
+    if (modname_c == NULL) {
+        return F2PY_ERR;
+    }
+    modname = PyUnicode_FromString(modname_c);
+    if (modname == NULL) {
+        return F2PY_ERR;
+    }
+    rv = PyDict_SetItemString(fp->dict, F2PY_KEY_MODULE, modname);
+    Py_DECREF(modname);
+    if (rv < 0) {
+        return F2PY_ERR;
+    }
+    return f2py_dict_set_str(fp->dict, F2PY_KEY_QUALNAME, qualname);
+}
+
+int
+PyFortranObject_TagModuleRoutines(PyObject *modobj, PyObject *module,
+                                  const char *prefix)
+{
+    PyFortranObject *fp;
+    int i;
+
+    if (!PyFortran_Check(modobj) || prefix == NULL || module == NULL) {
+        PyErr_SetString(PyExc_TypeError,
+                        "f2py module routine tagging requires a fortran object");
+        return F2PY_ERR;
+    }
+    fp = (PyFortranObject *)modobj;
+    for (i = 0; i < fp->len; i++) {
+        PyObject *child;
+        PyObject *qual;
+        const char *qual_c;
+        int rv;
+
+        if (fp->defs[i].rank != F2PY_RANK_ROUTINE) {
+            continue;
+        }
+        child = PyDict_GetItemString(fp->dict, fp->defs[i].name);
+        if (child == NULL) {
+            continue;
+        }
+        qual = PyUnicode_FromFormat("%s.%s", prefix, fp->defs[i].name);
+        if (qual == NULL) {
+            return F2PY_ERR;
+        }
+        qual_c = PyUnicode_AsUTF8(qual);
+        if (qual_c == NULL) {
+            Py_DECREF(qual);
+            return F2PY_ERR;
+        }
+        rv = PyFortranObject_SetRoutineRef(child, module, qual_c);
+        Py_DECREF(qual);
+        if (rv < 0) {
+            return F2PY_ERR;
+        }
+    }
+    return 0;
+}
+
+int
+PyFortranObject_SetDataKind(PyObject *obj, const char *kind, const char *name)
+{
+    PyFortranObject *fp;
+
+    if (!PyFortran_Check(obj) || kind == NULL || name == NULL) {
+        PyErr_SetString(PyExc_TypeError,
+                        "f2py data kind requires a fortran object");
+        return F2PY_ERR;
+    }
+    fp = (PyFortranObject *)obj;
+    if (fp->dict == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "fortran object has no dict");
+        return F2PY_ERR;
+    }
+    if (f2py_dict_set_str(fp->dict, F2PY_KEY_KIND, kind) < 0) {
+        return F2PY_ERR;
+    }
+    return f2py_dict_set_str(fp->dict, F2PY_KEY_OBJNAME, name);
+}
+
 /* Fortran methods */
 
 static void
@@ -557,8 +697,125 @@ fortran_dir(PyFortranObject *fp, PyObject *Py_UNUSED(args))
     return dir_list;
 }
 
+static int
+fortran_is_tagged_routine(PyFortranObject *fp)
+{
+    if (fp->len != 1 || fp->defs == NULL || fp->dict == NULL) {
+        return 0;
+    }
+    if (fp->defs[0].rank != F2PY_RANK_ROUTINE) {
+        return 0;
+    }
+    if (PyDict_GetItemString(fp->dict, F2PY_KEY_KIND) != NULL) {
+        return 0;
+    }
+    if (PyDict_GetItemString(fp->dict, F2PY_KEY_QUALNAME) == NULL) {
+        return 0;
+    }
+    if (PyDict_GetItemString(fp->dict, F2PY_KEY_MODULE) == NULL) {
+        return 0;
+    }
+    return 1;
+}
+
+static void
+fortran_set_unpickleable(PyFortranObject *fp)
+{
+    PyObject *kind = NULL;
+    PyObject *name = NULL;
+    const char *kind_c = "fortran data object";
+    const char *name_c = "unknown";
+    const char *tmp;
+
+    if (fp->dict != NULL) {
+        kind = PyDict_GetItemString(fp->dict, F2PY_KEY_KIND);
+        name = PyDict_GetItemString(fp->dict, F2PY_KEY_OBJNAME);
+    }
+    if (kind != NULL && PyUnicode_Check(kind)) {
+        tmp = PyUnicode_AsUTF8(kind);
+        if (tmp != NULL) {
+            kind_c = tmp;
+        }
+    }
+    if (name != NULL && PyUnicode_Check(name)) {
+        tmp = PyUnicode_AsUTF8(name);
+        if (tmp != NULL) {
+            name_c = tmp;
+        }
+    }
+    else if (fp->defs != NULL && fp->len >= 1 && fp->defs[0].name != NULL) {
+        name_c = fp->defs[0].name;
+    }
+    PyErr_Format(PyExc_TypeError, "cannot pickle f2py %s '%s': %s", kind_c,
+                 name_c, F2PY_PICKLE_WHY);
+}
+
+static PyObject *
+f2py_load_reconstructor(void)
+{
+    PyObject *mod = PyImport_ImportModule("numpy.f2py");
+    PyObject *fn;
+
+    if (mod == NULL) {
+        return NULL;
+    }
+    fn = PyObject_GetAttrString(mod, "_fortran_reconstruct");
+    Py_DECREF(mod);
+    return fn;
+}
+
+static PyObject *
+fortran_reduce(PyFortranObject *fp, PyObject *Py_UNUSED(ignored))
+{
+    PyObject *qualname;
+    PyObject *modname;
+    const char *qual_c;
+
+    if (!fortran_is_tagged_routine(fp)) {
+        fortran_set_unpickleable(fp);
+        return NULL;
+    }
+    qualname = PyDict_GetItemString(fp->dict, F2PY_KEY_QUALNAME);
+    modname = PyDict_GetItemString(fp->dict, F2PY_KEY_MODULE);
+    if (qualname == NULL || modname == NULL || !PyUnicode_Check(qualname) ||
+        !PyUnicode_Check(modname)) {
+        fortran_set_unpickleable(fp);
+        return NULL;
+    }
+    qual_c = PyUnicode_AsUTF8(qualname);
+    if (qual_c == NULL) {
+        return NULL;
+    }
+    /*
+     * A dot marks an F90 module routine ("m.t"). Low protocols
+     * do not resolve a dotted GLOBAL name, and the string form would
+     * try to pickle the parent module object. Hand back a reconstructor
+     * that imports the extension and walks the qualname.
+     */
+    if (strchr(qual_c, '.') != NULL) {
+        PyObject *fn = f2py_load_reconstructor();
+        PyObject *args;
+        PyObject *ret;
+
+        if (fn == NULL) {
+            return NULL;
+        }
+        args = PyTuple_Pack(F2PY_RECON_ARGS, modname, qualname);
+        if (args == NULL) {
+            Py_DECREF(fn);
+            return NULL;
+        }
+        ret = PyTuple_Pack(F2PY_REDUCE_LEN, fn, args);
+        Py_DECREF(fn);
+        Py_DECREF(args);
+        return ret;
+    }
+    return Py_NewRef(qualname);
+}
+
 static PyMethodDef fortran_methods[] = {
         {"__dir__", (PyCFunction)fortran_dir, METH_NOARGS, NULL},
+        {"__reduce__", (PyCFunction)fortran_reduce, METH_NOARGS, NULL},
         {NULL, NULL, 0, NULL}
 };
 
