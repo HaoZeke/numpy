@@ -819,6 +819,8 @@ def crackline(line, reset=0):
                         return
                     analyzeline(m, 'callfun', line)
                     return
+        # A call that passes an EXTERNAL dummy on, rather than calling it.
+        _record_passes_in_line(line, groupcounter)
         if verbose > 1 or (verbose == 1 and currentfilename.lower().endswith('.pyf')):
             previous_context = None
             outmess(f'crackline:{groupcounter}: No pattern for line\n')
@@ -1083,6 +1085,9 @@ def analyzeline(m, case, line):
             if 'args' not in groupcache[groupcounter]:
                 return
             if name not in groupcache[groupcounter]['args']:
+                # ``name`` is not a dummy here, so this is not a call-back
+                # call. It may still pass one on, as in ``call sub(ext)``.
+                _record_external_pass(groupcounter, name, args)
                 return
             for it in grouplist[groupcounter]:
                 if it['name'] == name:
@@ -2073,7 +2078,9 @@ def postcrack(block, args=None, tab=''):
                 uret.append(g)
             else:
                 gret.append(g)
-        return uret + gret
+        out = uret + gret
+        _link_forwarded_externals(out)
+        return out
     setmesstext(block)
     if not isinstance(block, dict) and 'block' not in block:
         raise Exception('postcrack: Expected block dictionary instead of ' +
@@ -2101,6 +2108,9 @@ def postcrack(block, args=None, tab=''):
         name = block['name']
     # and not userisdefined: # Build a __user__ module
     if block.get('externals'):
+        # A hand-written signature file already names its callbacks.
+        if userisdefined:
+            block['kept_user_signatures'] = True
         interfaced = []
         if 'interfaced' in block:
             interfaced = block['interfaced']
@@ -2165,9 +2175,254 @@ def _uncalled_external(block, name, tab):
     else:
         rout = {'block': 'subroutine', 'vars': {}}
     rout.update(name=name, args=[], body=[])
-    outmess(f"postcrack: no call or interface found for external {name!r} "
-            f"of {block['name']!r}, assuming it takes no arguments.\n")
+    # Replaced later when the dummy is passed to a callee that has a signature.
+    rout['no_call_site'] = True
+    if not _external_is_passed(block, name):
+        outmess(f"postcrack: no call or interface found for external {name!r} "
+                f"of {block['name']!r}, assuming it takes no arguments.\n")
     return postcrack(rout, tab=tab + '\t')
+
+
+_bare_fortran_name = re.compile(r'\A[a-zA-Z_]\w*\Z')
+_outer_call_pattern = re.compile(
+    r'\b(?P<name>[a-zA-Z_]\w*)\s*@\(@(?P<args>[^@]*)@\)@', re.I)
+
+
+def _record_external_pass(groupcounter, callee, actuals):
+    """Remember that ``callee`` was called with these actual arguments.
+
+    Only a call that passes an EXTERNAL dummy of the current routine is
+    kept. ``actuals`` stays aligned with the callee's dummy list, so a
+    non-name actual is stored as ``None``.
+    """
+    if not callee or groupcache is None:
+        return
+    block = groupcache.get(groupcounter) or {}
+    if block.get('block') not in ('function', 'subroutine'):
+        return
+    externals = block.get('externals') or []
+    if not externals or not actuals:
+        return
+    names = []
+    for raw in actuals:
+        text = (raw or '').strip()
+        if _bare_fortran_name.match(text):
+            names.append(rmbadname1(text))
+        else:
+            names.append(None)
+    if not any(name in externals for name in names if name):
+        return
+    entry = {'callee': rmbadname1(callee), 'actuals': names}
+    passes = block.setdefault('external_passes', [])
+    if entry not in passes:
+        passes.append(entry)
+
+
+def _record_passes_in_line(line, groupcounter):
+    """Record calls on a line that did not become a call-back interface."""
+    if groupcache is None or not line:
+        return
+    block = groupcache.get(groupcounter) or {}
+    if not block.get('externals'):
+        return
+    marked = markouterparen(line)
+    for match in _outer_call_pattern.finditer(marked):
+        args = match.group('args').strip()
+        if args:
+            actuals = [item.strip() for item in markoutercomma(args).split('@,@')]
+        else:
+            actuals = []
+        _record_external_pass(groupcounter, match.group('name'), actuals)
+
+
+def _external_is_passed(block, name):
+    for item in block.get('external_passes') or []:
+        if name in (item.get('actuals') or []):
+            return True
+    return False
+
+
+def _find_usermodule(modname):
+    for mblock in usermodules:
+        if mblock.get('name') == modname:
+            return mblock
+    return None
+
+
+def _real_callback(modname, signame):
+    mblock = _find_usermodule(modname)
+    if mblock is None:
+        return None
+    for iface in mblock.get('body') or []:
+        if not isinstance(iface, dict) or iface.get('block') != 'interface':
+            continue
+        for rout in iface.get('body') or []:
+            if not isinstance(rout, dict):
+                continue
+            if rout.get('name') == signame and not rout.get('no_call_site'):
+                return rout
+    return None
+
+
+def _mapped_signature(block, external):
+    """Return ``(module, signature name)`` for a real callback of ``external``."""
+    for modname, spec in (block.get('use') or {}).items():
+        if '__user__' not in modname:
+            continue
+        mapped = external
+        mapping = spec.get('map') or {}
+        if external in mapping:
+            mapped = mapping[external]
+        if _real_callback(modname, mapped) is not None:
+            return modname, mapped
+    return None
+
+
+def _reuse_signature(block, modname, external, signame):
+    use = block.setdefault('use', {})
+    spec = use.setdefault(modname, {})
+    mapping = spec.setdefault('map', {})
+    mapping[external] = signame
+
+
+def _module_has_signature(mblock):
+    for iface in mblock.get('body') or []:
+        if not isinstance(iface, dict):
+            continue
+        if iface.get('body') or iface.get('vars'):
+            return True
+    return False
+
+
+def _drop_no_call_site(block, external):
+    """Remove the no-argument stand-in for ``external`` from ``block``."""
+    use = block.get('use') or {}
+    for modname in list(use):
+        if '__user__' not in modname:
+            continue
+        mblock = _find_usermodule(modname)
+        if mblock is None:
+            continue
+        removed = False
+        for iface in mblock.get('body') or []:
+            if not isinstance(iface, dict):
+                continue
+            kept = []
+            for rout in iface.get('body') or []:
+                if (isinstance(rout, dict) and rout.get('name') == external
+                        and rout.get('no_call_site')):
+                    removed = True
+                    continue
+                kept.append(rout)
+            iface['body'] = kept
+        if not removed:
+            continue
+        mblock['interfaced'] = [
+            name for name in (mblock.get('interfaced') or []) if name != external]
+        if not _module_has_signature(mblock):
+            usermodules.remove(mblock)
+            del use[modname]
+    if block.get('use') == {}:
+        del block['use']
+
+
+def _link_one_routine(rout, by_name):
+    if rout.get('kept_user_signatures'):
+        return False
+    changed = False
+    externals = rout.get('externals') or []
+    for item in rout.get('external_passes') or []:
+        callee = by_name.get(item.get('callee'))
+        if callee is None or callee is rout:
+            continue
+        dummy_args = callee.get('args') or []
+        for pos, actual in enumerate(item.get('actuals') or []):
+            if not actual or actual not in externals:
+                continue
+            if _mapped_signature(rout, actual):
+                continue
+            if pos >= len(dummy_args):
+                continue
+            found = _mapped_signature(callee, dummy_args[pos])
+            if not found:
+                continue
+            modname, signame = found
+            _reuse_signature(rout, modname, actual, signame)
+            _drop_no_call_site(rout, actual)
+            outmess(f"postcrack: external {actual!r} of {rout['name']!r} "
+                    f"is passed to {callee['name']!r}, "
+                    f"reusing the signature of {signame!r}.\n")
+            changed = True
+    return changed
+
+
+def _index_routines(blocks, by_name):
+    if isinstance(blocks, dict):
+        blocks = [blocks]
+    for block in blocks or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get('block') in ('function', 'subroutine') and block.get('name'):
+            by_name.setdefault(block['name'], block)
+        if block.get('body'):
+            _index_routines(block['body'], by_name)
+
+
+def _report_passed_without_signature(rout):
+    passed = set()
+    for item in rout.get('external_passes') or []:
+        for actual in item.get('actuals') or []:
+            if actual:
+                passed.add(actual)
+    if not passed:
+        return
+    for modname in (rout.get('use') or {}):
+        mblock = _find_usermodule(modname)
+        if mblock is None:
+            continue
+        for iface in mblock.get('body') or []:
+            if not isinstance(iface, dict):
+                continue
+            for cb in iface.get('body') or []:
+                if not isinstance(cb, dict) or not cb.get('no_call_site'):
+                    continue
+                if cb.get('name') in passed:
+                    outmess(f"postcrack: no call or interface found for external "
+                            f"{cb['name']!r} of {rout['name']!r}, "
+                            f"assuming it takes no arguments.\n")
+
+
+def _strip_pass_metadata(blocks):
+    if isinstance(blocks, dict):
+        blocks = [blocks]
+    for block in blocks or []:
+        if not isinstance(block, dict):
+            continue
+        block.pop('external_passes', None)
+        block.pop('kept_user_signatures', None)
+        block.pop('no_call_site', None)
+        if block.get('body'):
+            _strip_pass_metadata(block['body'])
+
+
+def _link_forwarded_externals(routines):
+    """Reuse a callee's callback signature for an EXTERNAL that is only passed on."""
+    by_name = {}
+    _index_routines(routines, by_name)
+    # A chain A -> B -> C needs the downstream signature first.
+    guard = len(by_name) + 1
+    while guard:
+        guard -= 1
+        changed = False
+        for rout in by_name.values():
+            if _link_one_routine(rout, by_name):
+                changed = True
+        if not changed:
+            break
+    for rout in by_name.values():
+        _report_passed_without_signature(rout)
+    _strip_pass_metadata(routines)
+    _strip_pass_metadata(usermodules)
 
 
 def _sort_cyclic_dependents(dep, vars):
