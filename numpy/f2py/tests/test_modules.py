@@ -101,3 +101,15 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+def test_gh25777_allocatable_no_assumed_shape_warning(capfd):
+    from numpy.f2py import f90mod_rules
+    from numpy.f2py.crackfortran import crackfortran
+
+    src = util.getpath("tests", "src", "modules", "gh25777.f90")
+    blocks = crackfortran([str(src)])
+    capfd.readouterr()
+    f90mod_rules.buildhooks(blocks[0])
+    out, err = capfd.readouterr()
+    assert "assumed shape array" not in out + err
