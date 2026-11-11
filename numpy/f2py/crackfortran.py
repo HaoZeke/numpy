@@ -1525,12 +1525,12 @@ def analyzeline(m, case, line):
             if 'use' not in groupcache[groupcounter]:
                 groupcache[groupcounter]['use'] = {}
             name = m1.group('name')
-            groupcache[groupcounter]['use'][name] = {}
+            use = {}
             isonly = 0
             if 'list' in mm and mm['list'] is not None:
                 if 'notonly' in mm and mm['notonly'] is None:
                     isonly = 1
-                groupcache[groupcounter]['use'][name]['only'] = isonly
+                use['only'] = isonly
                 ll = [x.strip() for x in mm['list'].split(',')]
                 rl = {}
                 for l in ll:
@@ -1545,7 +1545,9 @@ def analyzeline(m, case, line):
                                 f'analyzeline: Not local=>use pattern found in {repr(l)}\n')
                     else:
                         rl[l] = l
-                    groupcache[groupcounter]['use'][name]['map'] = rl
+                    use['map'] = rl
+            uses = groupcache[groupcounter]['use']
+            uses[name] = _merge_use(uses[name], use) if name in uses else use
         else:
             print(m.groupdict())
             outmess('analyzeline: Could not crack the use statement.\n')
@@ -1983,12 +1985,26 @@ def setmesstext(block):
         pass
 
 
+def _merge_use(old, new):
+    """Combine two USE records of the same module.
+
+    Every name either record makes accessible stays accessible: ONLY
+    restricts access only if each record has it (F2018 14.2.2).
+    """
+    only = old.get('only', 0) and new.get('only', 0)
+    rmap = {**old.get('map', {}), **new.get('map', {})}
+    if not (only or rmap):
+        return {}
+    return {'only': only, 'map': rmap}
+
+
 def get_usedict(block):
     usedict = {}
     if 'parent_block' in block:
         usedict = get_usedict(block['parent_block'])
-    if 'use' in block:
-        usedict.update(block['use'])
+    # Names of the host's USE stay visible by host association.
+    for name, use in block.get('use', {}).items():
+        usedict[name] = _merge_use(usedict[name], use) if name in usedict else use
     return usedict
 
 
@@ -3413,7 +3429,7 @@ def use2fortran(use, tab=''):
         if 'map' in use[m] and use[m]['map']:
             c = ' '
             for k in list(use[m]['map'].keys()):
-                if k == use[m]['map'][k]:
+                if k == use[m]['map'][k] and use[m].get('only'):
                     ret = f'{ret}{c}{k}'
                     c = ','
                 else:
