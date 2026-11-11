@@ -261,6 +261,22 @@ class TestGH25211(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestStringOutCallback(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "string_out.f"),
+               util.getpath("tests", "src", "callback", "string_out.pyf")]
+    module_name = "callback_string_out"
+
+    def test_string_out(self):
+        assert self.module.string_out(lambda: b"hello") == b"hello"
+        assert self.module.string_out(lambda: b"hi") == b"hi"
+
+    def test_string_out_not_bytes(self):
+        err = getattr(self.module, f"_{self.module_name}_error")
+        with pytest.raises(err, match="string object expected"):
+            self.module.string_out(lambda: "hello")
+
+
+@pytest.mark.slow
 @pytest.mark.xfail(condition=(platform.system().lower() == 'darwin'),
                    run=False,
                    reason="Callback aborts cause CI failures on macOS")
