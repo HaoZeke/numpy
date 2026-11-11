@@ -94,6 +94,16 @@ typedefs['complex_float'] = 'typedef union { struct {float r,i;}; npy_cfloat _np
 typedefs['complex_double'] = 'typedef union { struct {double r,i;}; npy_cdouble _npy; } complex_double;'
 typedefs['string'] = """typedef char * string;"""
 typedefs['character'] = """typedef char character;"""
+typedefs['f2py_allocatable'] = """
+typedef struct {
+    int type_num;
+    int elsize;
+    int nd;
+    PyArrayObject *arr;
+} f2py_allocatable;
+typedef void (*f2py_allocatable_setter)(f2py_allocatable *, char *,
+                                        npy_intp *);
+"""
 
 
 ############### CPP macros ####################
@@ -1477,6 +1487,29 @@ capi_fail:
         PyErr_SetString(#modulename#_error, errmess);
     Py_XDECREF(tmp_fun);
     return 0;
+}
+"""
+
+needs['f2py_allocatable_set'] = ['f2py_allocatable', 'string.h']
+cfuncs['f2py_allocatable_set'] = """
+/*
+  Called by a Fortran wrapper with the allocation of an allocatable dummy
+  argument after the wrapped routine returned. The wrapper deallocates it
+  on return, so the data is copied into a new array here.
+*/
+static void
+f2py_allocatable_set(f2py_allocatable *alloc, char *data, npy_intp *dims)
+{
+    /* threadsafe routines are called with the GIL released */
+    PyGILState_STATE gilstate = PyGILState_Ensure();
+    alloc->arr = (PyArrayObject *)PyArray_New(&PyArray_Type, alloc->nd,
+                                              dims, alloc->type_num, NULL,
+                                              NULL, alloc->elsize,
+                                              NPY_ARRAY_FARRAY, NULL);
+    if (alloc->arr != NULL && PyArray_NBYTES(alloc->arr) > 0) {
+        memcpy(PyArray_DATA(alloc->arr), data, PyArray_NBYTES(alloc->arr));
+    }
+    PyGILState_Release(gilstate);
 }
 """
 
