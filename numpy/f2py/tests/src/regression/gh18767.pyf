@@ -1,0 +1,14 @@
+python module gh18767_init
+    interface
+        subroutine myrange(a, n)
+            fortranname
+            integer intent(in) :: n
+            real*8 intent(c,out), dimension(n), depend(n) :: a = _i[0]
+        end subroutine myrange
+        subroutine ones(a, n)
+            fortranname
+            integer*8 intent(in) :: n
+            integer*1 intent(c,out), dimension(n), depend(n) :: a = 1
+        end subroutine ones
+    end interface
+end python module gh18767_init
