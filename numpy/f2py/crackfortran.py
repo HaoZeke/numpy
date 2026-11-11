@@ -71,6 +71,9 @@ Usage:
      B['varnames'] --- list of variable names given in the order of reading the
                        Fortran code, useful for derived types.
      B['saved_interface'] --- a string of scanned routine signature, defines explicit interface
+     B['implementedby'] --- list of procedure names given by the procedure
+                            statements of a generic interface block, such as
+                            'interface operator(+)'
  *** Variable definition is a dictionary
      D = B['vars'][<variable name>] =
      {'typespec'[,'attrspec','kindselector','charselector','=','typename']}
@@ -1308,8 +1311,13 @@ def analyzeline(m, case, line):
         if last_name is not None:
             previous_context = ('variable', last_name, groupcounter)
     elif case == 'moduleprocedure':
-        groupcache[groupcounter]['implementedby'] = \
-            [x.strip() for x in m.group('after').split(',')]
+        # F2018 R1506: [MODULE] PROCEDURE [::] specific-procedure-list,
+        # repeatable within one generic interface block (R1501, R1502).
+        ll = m.group('after').strip()
+        if ll.startswith('::'):
+            ll = ll[2:]
+        groupcache[groupcounter].setdefault('implementedby', []).extend(
+            rmbadname([x.strip() for x in ll.split(',')]))
     elif case == 'parameter':
         edecl = groupcache[groupcounter]['vars']
         ll = m.group('after').strip()[1:-1]
