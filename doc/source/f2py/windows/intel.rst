@@ -54,6 +54,17 @@ which ``meson`` reads:
 
 Note that the actual path to your local installation of `ifort` may vary, and the command above will need to be updated accordingly.
 
+The generated C wrappers call Fortran routines by their lowercase name with a
+trailing underscore, while Intel Fortran on Windows uses uppercase names
+without one by default. ``f2py -c`` therefore compiles Fortran sources with
+``/names:lowercase /assume:underscore`` for ``ifort`` and ``ifx``. To wrap
+objects or libraries built with the Intel defaults instead, switch both sides
+back:
+
+.. code-block:: bat
+
+   python -m numpy.f2py -c fib1.f -m fib1 --f90flags="/names:uppercase /assume:nounderscore" -DUPPERCASE_FORTRAN -DNO_APPEND_FORTRAN
+
 .. _have been relaxed: https://www.intel.com/content/www/us/en/developer/articles/release-notes/oneapi-fortran-compiler-release-notes.html
 .. _disassembly of components and liability: https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html
 .. _Intel Fortran Compilers: https://www.intel.com/content/www/us/en/developer/articles/tool/oneapi-standalone-components.html#inpage-nav-6-1
