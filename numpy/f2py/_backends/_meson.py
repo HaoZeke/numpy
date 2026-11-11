@@ -18,6 +18,24 @@ def _meson_identifier(prefix: str, value: str, index: int) -> str:
     return f"{prefix}_{index}_{safe_value}"
 
 
+def _meson_dependency(dep: str) -> str:
+    """Translate a ``--dep`` value, ``name`` or ``name[kwargs]``, into a
+    ``dependency()`` call, passing ``kwargs`` through as meson keyword
+    arguments. Meson resolves dependencies which exist for several
+    languages, like MPI, for C unless ``language: 'fortran'`` is given.
+    """
+    name, bracket, kwargs = dep.strip().partition("[")
+    name = name.strip()
+    if not bracket:
+        return f"dependency('{name}')"
+    if not name or not kwargs.endswith("]"):
+        raise ValueError(
+            f"Invalid --dep value {dep!r}, expected 'name' or 'name[kwargs]',"
+            " e.g. \"mpi[language: 'fortran']\""
+        )
+    return f"dependency('{name}', {kwargs[:-1]})"
+
+
 class MesonTemplate:
     """Template meson build file generation class."""
 
@@ -94,7 +112,7 @@ class MesonTemplate:
 
     def deps_substitution(self) -> None:
         self.substitutions["dep_list"] = f",\n{self.indent}".join(
-            [f"{self.indent}dependency('{dep}')," for dep in self.deps]
+            [f"{self.indent}{_meson_dependency(dep)}," for dep in self.deps]
         )
 
     def libraries_substitution(self) -> None:
