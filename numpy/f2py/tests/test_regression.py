@@ -1,5 +1,6 @@
 import os
 import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -219,6 +220,43 @@ class TestComplexStructCompat(util.F2PyTest):
         self.module.zero_imag(c)
         npt.assert_array_equal(c.imag, [0.0, 0.0, 0.0])
         npt.assert_array_equal(c.real, [1.0, 3.0, 5.0])
+
+
+def test_gh30167_callstatement_prototype(tmp_path):
+    # Without callprotoargument the prototype of f2py_func must come from
+    # the call in callstatement: C23 reads an empty parameter list as (void)
+    pyf = util.getpath("tests", "src", "regression", "gh30167.pyf")
+    # A subprocess, as f2py leaves crackfortran.dolowercase set afterwards.
+    # Its working directory is the build directory so Python does not put a
+    # source checkout on sys.path ahead of the installed package.
+    subprocess.run([sys.executable, "-m", "numpy.f2py", str(pyf),
+                    "--build-dir", str(tmp_path)],
+                   check=True, capture_output=True, cwd=tmp_path)
+    cmod = (tmp_path / "_gh30167module.c").read_text()
+    assert "void (*f2py_func)())" not in cmod
+    assert "F_FUNC(scale,SCALE)(int*,double*,double*);" in cmod
+    assert ("F_FUNC(apply,APPLY)(cb_fun_in__gh30167__user__routines_typedef,"
+            "int*,double*);") in cmod
+
+
+@pytest.mark.slow
+class TestCallstatementPrototype(util.F2PyTest):
+    # gh-30167: callstatement without callprotoargument, passing the
+    # arguments in another order than the signature and a call-back
+    sources = [
+        util.getpath("tests", "src", "regression", "gh30167.pyf"),
+        util.getpath("tests", "src", "regression", "gh30167.f"),
+    ]
+    module_name = "_gh30167"
+
+    def test_reordered_arguments(self):
+        x = np.arange(1.0, 4.0)
+        npt.assert_array_equal(self.module.scale(x, 2.0), [2.0, 4.0, 6.0])
+
+    def test_callback_argument(self):
+        x = np.arange(1.0, 4.0)
+        npt.assert_array_equal(self.module.apply(lambda v: v * v, x),
+                               [1.0, 4.0, 9.0])
 
 
 @pytest.mark.slow
