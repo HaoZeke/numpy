@@ -3239,11 +3239,19 @@ def analyzeargs(block):
                     block['vars'][a] = {}
 
     for b in block['body']:
-        if b['name'] in args:
-            if 'externals' not in block:
-                block['externals'] = []
-            if b['name'] not in block['externals']:
-                block['externals'].append(b['name'])
+        # A dummy procedure with an explicit interface is nested inside
+        # an interface block, not a direct child of the routine. Without
+        # this, the callback typedef is never built (gh-7577).
+        if b.get('block') in ('interface', 'abstract interface'):
+            candidates = [item for item in b.get('body', []) if item]
+        else:
+            candidates = [b]
+        for item in candidates:
+            if item.get('name') in args:
+                if 'externals' not in block:
+                    block['externals'] = []
+                if item['name'] not in block['externals']:
+                    block['externals'].append(item['name'])
     if 'result' in block and block['result'] not in block['vars']:
         block['vars'][block['result']] = {}
     return block

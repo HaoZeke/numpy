@@ -177,6 +177,15 @@ extern \"C\" {
 #define PY_SSIZE_T_CLEAN
 #endif /* PY_SSIZE_T_CLEAN */
 
+/* gfortran returns COMPLEX by value. gh-7577 */
+#if defined(__GNUC__) && !defined(__INTEL_COMPILER) \
+    && !defined(__INTEL_LLVM_COMPILER) && !defined(__PGI) \
+    && !defined(__NVCOMPILER)
+#ifndef F2PY_CB_RETURNCOMPLEX
+#define F2PY_CB_RETURNCOMPLEX 1
+#endif
+#endif
+
 /* Unconditionally included */
 #include <Python.h>
 #include <numpy/npy_os.h>
