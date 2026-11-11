@@ -648,11 +648,19 @@ def run_compile():
     flib_flags = [_m for _m in sys.argv[1:] if _reg3.match(_m)]
     sys.argv = [_m for _m in sys.argv if _m not in flib_flags]
     # TODO: Once distutils is dropped completely, i.e. min_ver >= 3.12, unify into --fflags
-    reg_f77_f90_flags = re.compile(r'--f(77|90)flags=')
-    reg_distutils_flags = re.compile(r'--((f(77|90)exec|opt|arch)=|(debug|noopt|noarch|help-fcompiler))')
-    fc_flags = [_m for _m in sys.argv[1:] if reg_f77_f90_flags.match(_m)]
+    reg_fc_flags = re.compile(r'--(f(77|90)flags=|debug$)')
+    reg_distutils_flags = re.compile(r'--((f(77|90)exec|opt|arch)=|(noopt|noarch|help-fcompiler))')
+    fc_flags = [_m for _m in sys.argv[1:] if reg_fc_flags.match(_m)]
     distutils_flags = [_m for _m in sys.argv[1:] if reg_distutils_flags.match(_m)]
     sys.argv = [_m for _m in sys.argv if _m not in (fc_flags + distutils_flags)]
+    for s in distutils_flags:
+        if s.startswith(('--opt=', '--arch=')):
+            hint = ", pass compiler flags with --f77flags or --f90flags"
+        elif s.startswith(('--f77exec=', '--f90exec=')):
+            hint = ", set compiler with the FC environment variable"
+        else:
+            hint = ""
+        outmess(f"{s} cannot be used with meson and is ignored{hint}\n")
 
     del_list = []
     for s in flib_flags:

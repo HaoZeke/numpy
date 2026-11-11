@@ -893,6 +893,16 @@ def test_freethreading_compatible(hello_world_f90, monkeypatch):
 # Numpy distutils flags
 # TODO: These should be tested separately
 
+def check_meson_ignores(capfd, hello_world_f90, monkeypatch, flag, hint=""):
+    ipath = Path(hello_world_f90)
+    monkeypatch.setattr(sys, "argv", f"f2py -m blah {ipath} -c {flag}".split())
+
+    with util.switchdir(ipath.parent):
+        compiler_check_f2pycli()
+        out, _ = capfd.readouterr()
+        assert f"{flag} cannot be used with meson and is ignored{hint}\n" in out
+
+
 def test_npd_fcompiler():
     """
     CLI :: -c --fcompiler
@@ -909,28 +919,30 @@ def test_npd_compiler():
     pass
 
 
-def test_npd_help_fcompiler():
+@pytest.mark.slow
+def test_npd_help_fcompiler(capfd, hello_world_f90, monkeypatch):
     """
     CLI :: -c --help-fcompiler
     """
-    # TODO: populate
-    pass
+    check_meson_ignores(capfd, hello_world_f90, monkeypatch, "--help-fcompiler")
 
 
-def test_npd_f77exec():
+@pytest.mark.slow
+def test_npd_f77exec(capfd, hello_world_f90, monkeypatch):
     """
     CLI :: -c --f77exec
     """
-    # TODO: populate
-    pass
+    check_meson_ignores(capfd, hello_world_f90, monkeypatch, "--f77exec=gfortran",
+                        ", set compiler with the FC environment variable")
 
 
-def test_npd_f90exec():
+@pytest.mark.slow
+def test_npd_f90exec(capfd, hello_world_f90, monkeypatch):
     """
     CLI :: -c --f90exec
     """
-    # TODO: populate
-    pass
+    check_meson_ignores(capfd, hello_world_f90, monkeypatch, "--f90exec=gfortran",
+                        ", set compiler with the FC environment variable")
 
 
 def test_npd_f77flags():
@@ -949,44 +961,54 @@ def test_npd_f90flags():
     pass
 
 
-def test_npd_opt():
+@pytest.mark.slow
+def test_npd_opt(capfd, hello_world_f90, monkeypatch):
     """
     CLI :: -c --opt
     """
-    # TODO: populate
-    pass
+    # gh-30804
+    check_meson_ignores(capfd, hello_world_f90, monkeypatch, "--opt=-fopenmp",
+                        ", pass compiler flags with --f77flags or --f90flags")
 
 
-def test_npd_arch():
+@pytest.mark.slow
+def test_npd_arch(capfd, hello_world_f90, monkeypatch):
     """
     CLI :: -c --arch
     """
-    # TODO: populate
-    pass
+    check_meson_ignores(capfd, hello_world_f90, monkeypatch, "--arch=-march=native",
+                        ", pass compiler flags with --f77flags or --f90flags")
 
 
-def test_npd_noopt():
+@pytest.mark.slow
+def test_npd_noopt(capfd, hello_world_f90, monkeypatch):
     """
     CLI :: -c --noopt
     """
-    # TODO: populate
-    pass
+    check_meson_ignores(capfd, hello_world_f90, monkeypatch, "--noopt")
 
 
-def test_npd_noarch():
+@pytest.mark.slow
+def test_npd_noarch(capfd, hello_world_f90, monkeypatch):
     """
     CLI :: -c --noarch
     """
-    # TODO: populate
-    pass
+    check_meson_ignores(capfd, hello_world_f90, monkeypatch, "--noarch")
 
 
-def test_npd_debug():
+@pytest.mark.slow
+def test_npd_debug(hello_world_f90, monkeypatch):
     """
     CLI :: -c --debug
     """
-    # TODO: populate
-    pass
+    ipath = Path(hello_world_f90)
+    monkeypatch.setattr(
+        sys, "argv", f"f2py -m blah {ipath} -c --debug --build-dir dbgbld".split()
+    )
+
+    with util.switchdir(ipath.parent):
+        compiler_check_f2pycli()
+        assert "'buildtype=debug'" in Path("dbgbld", "meson.build").read_text()
 
 
 def test_npd_link_auto():
