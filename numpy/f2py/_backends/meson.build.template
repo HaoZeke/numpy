@@ -37,6 +37,27 @@ inc_np = include_directories(incdir_numpy, incdir_f2py)
 # gh-25000
 quadmath_dep = fc.find_library('quadmath', required: false)
 
+# LLVM flang >= 19 does not put its runtime on a C link of a Python
+# extension, so print and character intrinsics stay undefined.
+flang_runtime_deps = []
+if fc.get_id() == 'llvm-flang'
+  _fs = import('fs')
+  _res = run_command(fc.cmd_array(), '-print-resource-dir', check: true).stdout().strip()
+  _libdir = _fs.parent(_fs.parent(_res))
+  _rt = fc.find_library('FortranRuntime', dirs: [_libdir], static: true, required: false)
+  _dec = fc.find_library('FortranDecimal', dirs: [_libdir], static: true, required: false)
+  _mlib = cc.find_library('m', required: false)
+  if _rt.found()
+    flang_runtime_deps += _rt
+  endif
+  if _dec.found()
+    flang_runtime_deps += _dec
+  endif
+  if _mlib.found()
+    flang_runtime_deps += _mlib
+  endif
+endif
+
 ${lib_declarations}
 ${lib_dir_declarations}
 
@@ -52,7 +73,7 @@ ${inc_list}
                      objects: [
 ${obj_list}
                      ],
-                     dependencies : [
+                     dependencies : flang_runtime_deps + [
                      py_dep,
                      quadmath_dep,
 ${dep_list}

@@ -1136,3 +1136,33 @@ def test_gh28648_define_selects_fortran_branch(tmp_path, monkeypatch):
     mod = __import__("gh28648")
     assert mod.model.run_passive(2.0) == 4.0
     assert mod.model.run_active(2.0) == 6.0
+
+
+@pytest.mark.slow
+def test_flang_fortran_runtime_link(tmp_path):
+    # A routine that prints must import under flang, which needs
+    # libFortranRuntime on the C link line.
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    (tmp_path / "hi.f90").write_text(
+        'subroutine hi\n  print *, "hello"\nend subroutine\n'
+    )
+    code = """
+import sys
+sys.path.insert(0, ".")
+sys.argv = ["f2py", "-c", "-m", "flangrt", "hi.f90",
+            "--backend", "meson", "--freethreading-compatible"]
+from numpy.f2py.f2py2e import main
+main()
+import flangrt
+flangrt.hi()
+"""
+    proc = subprocess.run(
+        [sys.executable, "-P", "-c", code],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
+    assert "hello" in (proc.stdout + proc.stderr).lower()
