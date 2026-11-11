@@ -2,6 +2,8 @@ import textwrap
 
 import pytest
 
+import numpy as np
+
 from . import util
 
 
@@ -86,6 +88,13 @@ class TestAllocatableCharacterArray(util.F2PyTest):
         names = mod.names
         assert names.shape == (3,)
         assert names.dtype.kind == 'U' or names.dtype.kind == 'S'
+
+    def test_allocatable_char_assignment(self):
+        # gh-9370: the assigned value is converted to character(len=10)
+        mod = self.module.alloc_char_mod
+        mod.names = [b"ab", b"cdefghijklmn"]
+        assert mod.names.dtype == np.dtype("S10")
+        assert mod.names.tobytes() == b"ab" + b"\x00" * 8 + b"cdefghijkl"
 
 
 @pytest.mark.slow
