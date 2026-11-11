@@ -210,24 +210,47 @@ class MesonBackend(Backend):
         self._move_exec_to_root(self.build_dir)
 
 
+def _copy_if_distinct(src, dst):
+    """Copy src to dst.
+
+    ``--build-dir`` may already be the directory that holds the sources.
+    ``shutil.copy`` then raises SameFileError (gh-29762). Return whether a
+    new file was written so callers can avoid deleting the only copy.
+    """
+    src_path = Path(src)
+    dst_path = Path(dst)
+    try:
+        if src_path.resolve() == dst_path.resolve():
+            return False
+    except OSError:
+        pass
+    try:
+        shutil.copy(src_path, dst_path)
+    except shutil.SameFileError:
+        return False
+    return True
+
+
 def _prepare_sources(mname, sources, bdir):
     extended_sources = sources.copy()
-    Path(bdir).mkdir(parents=True, exist_ok=True)
+    bdir = Path(bdir)
+    bdir.mkdir(parents=True, exist_ok=True)
     # Copy sources
     for source in sources:
         if Path(source).exists() and Path(source).is_file():
-            shutil.copy(source, bdir)
+            _copy_if_distinct(source, bdir / Path(source).name)
     generated_sources = [
         Path(f"{mname}module.c"),
         Path(f"{mname}-f2pywrappers2.f90"),
         Path(f"{mname}-f2pywrappers.f"),
     ]
-    bdir = Path(bdir)
     for generated_source in generated_sources:
         if generated_source.exists():
-            shutil.copy(generated_source, bdir / generated_source.name)
+            copied = _copy_if_distinct(
+                generated_source, bdir / generated_source.name)
             extended_sources.append(generated_source.name)
-            generated_source.unlink()
+            if copied:
+                generated_source.unlink()
     extended_sources = [
         Path(source).name
         for source in extended_sources
@@ -236,11 +259,12 @@ def _prepare_sources(mname, sources, bdir):
     return extended_sources
 
 def _prepare_objects(mname, objects, bdir):
-    Path(bdir).mkdir(parents=True, exist_ok=True)
+    bdir = Path(bdir)
+    bdir.mkdir(parents=True, exist_ok=True)
     # Copy objects
     for obj in objects:
         if Path(obj).exists() and Path(obj).is_file():
-            shutil.copy(obj, bdir)
+            _copy_if_distinct(obj, bdir / Path(obj).name)
 
 def _get_flags(fc_flags):
     flag_values = []
