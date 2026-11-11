@@ -382,6 +382,7 @@ def buildmodules(lst):
     cfuncs.buildcfuncs()
     outmess('Building modules...\n')
     modules, mnames, isusedby = [], [], {}
+    cb_rules._extern_cb_map.clear()
     for item in lst:
         if '__user__' in item['name']:
             cb_rules.buildcallbacks(item)
