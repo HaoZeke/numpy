@@ -234,38 +234,52 @@ def test_untitled_cli(capfd, hello_world_f90, monkeypatch):
         out, _ = capfd.readouterr()
         assert "untitledmodule.c" in out
 
-@pytest.mark.slow
-def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
-    """Check that distutils backend and related options fail
-    CLI :: --fcompiler --help-link --backend distutils
+@pytest.mark.parametrize("opts, shown, hint", [
+    (["-c", "--backend", "distutils"], "--backend distutils", "meson is the only"),
+    (["-c", "--backend=distutils"], "--backend distutils", "meson is the only"),
+    (["--backend", "distutils"], "--backend distutils", "meson is the only"),
+    (["-c", "--fcompiler=gnu95"], "--fcompiler=gnu95", "FC environment"),
+    (["-c", "--f77exec=/bin/f77"], "--f77exec=/bin/f77", "FC environment"),
+    (["-c", "--f90exec=/bin/f90"], "--f90exec=/bin/f90", "FC environment"),
+    (["-c", "--help-fcompiler"], "--help-fcompiler", "FC environment"),
+    (["-c", "--compiler=unix"], "--compiler=unix", "CC environment"),
+    (["-c", "--help-compiler"], "--help-compiler", "CC environment"),
+    (["-c", "--opt=-O3"], "--opt=-O3", "--f77flags or --f90flags"),
+    (["-c", "--arch=-mavx"], "--arch=-mavx", "--f77flags or --f90flags"),
+    (["-c", "--noopt"], "--noopt", "--f77flags or --f90flags"),
+    (["-c", "--noarch"], "--noarch", "--f77flags or --f90flags"),
+    (["-c", "--link-lapack_opt"], "--link-lapack_opt", "--dep <dependency>"),
+    (["--help-link"], "--help-link", "--dep <dependency>"),
+])
+def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch, opts, shown, hint):
+    """Check that options of the removed distutils backend fail with a hint
+
+    CLI :: --backend distutils, --help-link, -c --fcompiler --opt ...
     """
-    MNAME = "hi"
-    foutl = get_io_paths(hello_world_f90, mname=MNAME)
-    ipath = foutl.f90inp
-    monkeypatch.setattr(
-        sys, "argv", f"f2py {ipath} -c --fcompiler=gfortran -m {MNAME}".split()
-    )
-    with util.switchdir(ipath.parent):
-        compiler_check_f2pycli()
-        out, _ = capfd.readouterr()
-        assert "--fcompiler cannot be used with meson" in out
+    monkeypatch.setattr(sys, "argv", ["f2py", str(hello_world_f90), *opts])
+    with pytest.raises(SystemExit) as excinfo:
+        f2pycli()
+    assert excinfo.value.code == 2
+    out, err = capfd.readouterr()
+    assert not out
+    assert f"  {shown}: " in err
+    assert hint in err
 
+
+def test_no_distutils_backend_all_options(capfd, hello_world_f90, monkeypatch):
+    """Check that every rejected option is reported at once
+
+    CLI :: -c --fcompiler --opt
+    """
     monkeypatch.setattr(
-        sys, "argv", ["f2py", "--help-link"]
+        sys, "argv",
+        ["f2py", "-c", str(hello_world_f90), "--fcompiler=gnu95", "--opt=-O3"],
     )
     with pytest.raises(SystemExit):
         f2pycli()
-        out, _ = capfd.readouterr()
-        assert "Unknown option --help-link" in out
-
-    monkeypatch.setattr(
-        sys, "argv", ["f2py", "--backend", "distutils"]
-    )
-    with pytest.raises(SystemExit):
-        compiler_check_f2pycli()
-        f2pycli()
-        out, _ = capfd.readouterr()
-        assert "'distutils' backend was removed" in out
+    _, err = capfd.readouterr()
+    assert "  --fcompiler=gnu95: " in err
+    assert "  --opt=-O3: " in err
 
 @pytest.mark.xfail
 def test_f2py_skip(capfd, retreal_f77, monkeypatch):
@@ -754,15 +768,6 @@ def test_inclpath(monkeypatch):
     assert remain == []
 
 
-def test_hlink():
-    """Add to the include directories
-
-    CLI :: --help-link
-    """
-    # TODO: populate
-    pass
-
-
 def test_f2cmap(capfd, f2cmap_f90, monkeypatch):
     """Check that Fortran-to-Python KIND specs can be passed
 
@@ -890,48 +895,8 @@ def test_freethreading_compatible(hello_world_f90, monkeypatch):
         assert rout.returncode == 0
 
 
-# Numpy distutils flags
+# Build flags
 # TODO: These should be tested separately
-
-def test_npd_fcompiler():
-    """
-    CLI :: -c --fcompiler
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_compiler():
-    """
-    CLI :: -c --compiler
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_help_fcompiler():
-    """
-    CLI :: -c --help-fcompiler
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_f77exec():
-    """
-    CLI :: -c --f77exec
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_f90exec():
-    """
-    CLI :: -c --f90exec
-    """
-    # TODO: populate
-    pass
-
 
 def test_npd_f77flags():
     """
@@ -949,49 +914,9 @@ def test_npd_f90flags():
     pass
 
 
-def test_npd_opt():
-    """
-    CLI :: -c --opt
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_arch():
-    """
-    CLI :: -c --arch
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_noopt():
-    """
-    CLI :: -c --noopt
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_noarch():
-    """
-    CLI :: -c --noarch
-    """
-    # TODO: populate
-    pass
-
-
 def test_npd_debug():
     """
     CLI :: -c --debug
-    """
-    # TODO: populate
-    pass
-
-
-def test_npd_link_auto():
-    """
-    CLI :: -c --link-<resource>
     """
     # TODO: populate
     pass
