@@ -5,6 +5,9 @@ extern "C" {
 #endif
 
 #include <Python.h>
+#include <inttypes.h>
+#include <stdbool.h>
+#include <stddef.h>
 
 #ifndef NPY_NO_DEPRECATED_API
 #define NPY_NO_DEPRECATED_API NPY_API_VERSION
@@ -132,6 +135,23 @@ F2PyGetThreadLocalCallbackPtr(char *key);
 #define F2PY_ARRAY_IS_CHARACTER_COMPATIBLE(arr) ((PyDataType_TYPENUM(PyArray_DESCR(arr)) == NPY_STRING && PyArray_ITEMSIZE(arr) >= 1) \
                                                  || PyDataType_TYPENUM(PyArray_DESCR(arr)) == NPY_UINT8)
 #define F2PY_IS_UNICODE_ARRAY(arr) (PyDataType_TYPENUM(PyArray_DESCR(arr)) == NPY_UNICODE)
+
+/* Type numbers for C types whose width the C implementation chooses: the
+   sized NumPy type of the same width, or NPY_NOTYPE if NumPy has none. */
+#define F2PY_INT_TYPENUM(T)                          \
+    (sizeof(T) == sizeof(npy_int8)    ? NPY_INT8     \
+     : sizeof(T) == sizeof(npy_int16) ? NPY_INT16    \
+     : sizeof(T) == sizeof(npy_int32) ? NPY_INT32    \
+     : sizeof(T) == sizeof(npy_int64) ? NPY_INT64    \
+                                      : NPY_NOTYPE)
+#define F2PY_UINT_TYPENUM(T)                           \
+    (sizeof(T) == sizeof(npy_uint8)    ? NPY_UINT8     \
+     : sizeof(T) == sizeof(npy_uint16) ? NPY_UINT16    \
+     : sizeof(T) == sizeof(npy_uint32) ? NPY_UINT32    \
+     : sizeof(T) == sizeof(npy_uint64) ? NPY_UINT64    \
+                                       : NPY_NOTYPE)
+#define F2PY_BOOL_TYPENUM(T) \
+    (sizeof(T) == sizeof(npy_bool) ? NPY_BOOL : F2PY_UINT_TYPENUM(T))
 
 extern PyArrayObject *
 ndarray_from_pyobj(const int type_num, const int elsize_, npy_intp *dims,
