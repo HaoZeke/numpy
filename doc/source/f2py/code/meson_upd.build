@@ -1,12 +1,13 @@
 project('f2py_examples', 'c',
   version : '0.1',
   license: 'BSD-3',
-  meson_version: '>=0.64.0',
+  meson_version: '>=1.3.0',
   default_options : ['warning_level=2'],
 )
 
 add_languages('fortran')
 
+fs = import('fs')
 py_mod = import('python')
 py = py_mod.find_installation(pure: false)
 py_dep = py.dependency()
@@ -27,7 +28,12 @@ fibby_source = custom_target('fibbymodule.c',
   command : [py, '-m', 'numpy.f2py', '@INPUT@', '-m', 'fibby', '--lower']
 )
 
-inc_np = include_directories(incdir_numpy, incdir_f2py)
+# Meson rejects absolute paths into the project directory, which is where
+# NumPy lives when the virtual environment does, so pass relative ones
+inc_np = include_directories(
+  fs.relative_to(incdir_numpy, meson.current_source_dir()),
+  fs.relative_to(incdir_f2py, meson.current_source_dir()),
+)
 
 py.extension_module('fibby',
   ['fib1.f', fibby_source],
