@@ -369,6 +369,62 @@ class TestUseStatement:
             "double", "complex_double", "long_long"]
 
 
+class TestGH30352Cases:
+    """Cases from gh-30352 that the gh-17563 tests do not already build."""
+
+    @pytest.mark.parametrize("stmt", [
+        "use, intrinsic :: iso_fortran_env, only: dp => real64",
+        "use,intrinsic::iso_fortran_env, dp => real64",
+        "use :: iso_fortran_env, only: dp => real64",
+    ])
+    def test_intrinsic_spellings(self, tmp_path, capsys, stmt):
+        fpath = tmp_path / "nature.f90"
+        fpath.write_text(
+            "module m\n"
+            f"  {stmt}\n"
+            "contains\n"
+            "  subroutine s(x)\n"
+            "    complex(kind=dp), intent(inout) :: x\n"
+            "  end subroutine s\n"
+            "end module m\n"
+        )
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert "Could not crack the use statement" not in capsys.readouterr().out
+        var = mod[0]["body"][0]["vars"]["x"]
+        assert var["kindselector"] == {"kind": "real64"}
+        assert capi_maps.getctype(var) == "complex_double"
+
+    def test_non_intrinsic_only(self, tmp_path):
+        fpath = tmp_path / "nature.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module kinds
+              integer, parameter :: dp = 8
+            end module kinds
+            module m
+              use, non_intrinsic :: kinds, only: wp => dp
+            end module m
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert mod[1]["use"] == {"kinds": {"only": 1, "map": {"wp": "dp"}}}
+
+    def test_rename_without_lowercasing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crackfortran, "dolowercase", 0)
+        fpath = tmp_path / "upper.f90"
+        fpath.write_text(
+            "MODULE M\n"
+            "  USE ISO_FORTRAN_ENV, ONLY: DP => REAL64\n"
+            "CONTAINS\n"
+            "  SUBROUTINE S(X)\n"
+            "    COMPLEX(KIND=DP), INTENT(INOUT) :: X\n"
+            "  END SUBROUTINE S\n"
+            "END MODULE M\n"
+        )
+        mod = crackfortran.crackfortran([str(fpath)])
+        var = mod[0]["body"][0]["vars"]["X"]
+        assert var["kindselector"] == {"kind": "real64"}
+        assert capi_maps.getctype(var) == "complex_double"
+
+
 class TestStringLiteralDepend:
     # gh-28700: identifiers inside a character parameter's literal value
     # must not be harvested as dependencies (a self-dependency crashes the

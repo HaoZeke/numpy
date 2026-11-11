@@ -2028,8 +2028,8 @@ def get_useparameters(block, param_map=None):
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
         if usename in _intrinsic_kinds and usename not in f90modulevars:
-            # A kind imported under a local name (dp => real64) stands
-            # for the intrinsic name
+            # A kind imported under a local name (dp => real64) is stored
+            # as the intrinsic name.
             for local, name in mapping.get('map', {}).items():
                 local, name = local.lower(), name.lower()
                 if local != name and name in _intrinsic_kinds[usename]:
