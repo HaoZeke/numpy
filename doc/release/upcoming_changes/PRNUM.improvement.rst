@@ -14,3 +14,9 @@ results as ``npy_intp``, the width that gfortran 8 and later and LLVM
 flang pass. A callback that returns a character value now builds with
 GCC 14 and later, and passes its result length rather than the address
 of that length when the callback is a ``PyCapsule``.
+
+Character array arguments of assumed length, such as
+``character(len=*) :: a(n)``, now take their element size from a
+``bytes`` or ``str`` input as ``npy_intp``. An element longer than the
+largest C ``int`` previously raised ``SystemError``, or from 4 GiB on
+was silently truncated; it is now passed whole.

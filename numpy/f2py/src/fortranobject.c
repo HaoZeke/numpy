@@ -117,7 +117,7 @@ F2PyGetThreadLocalCallbackPtr(char *key)
 }
 
 static PyArray_Descr *
-get_descr_from_type_and_elsize(const int type_num, const int elsize)  {
+get_descr_from_type_and_elsize(const int type_num, const npy_intp elsize)  {
   PyArray_Descr * descr = PyArray_DescrFromType(type_num);
   if (type_num == NPY_STRING) {
     // PyArray_DescrFromType returns descr with elsize = 0.
@@ -779,7 +779,7 @@ dump_attrs(const PyArrayObject *obj)
      (PyArray_ISBOOL(arr) && PyTypeNum_ISBOOL(type_num)) ||           \
      (PyArray_ISSTRING(arr) && PyTypeNum_ISSTRING(type_num)))
 
-static int
+static npy_intp
 get_elsize(PyObject *obj) {
   /*
     get_elsize determines array itemsize from a Python object.  Returns
@@ -799,7 +799,7 @@ get_elsize(PyObject *obj) {
     PyObject* fast = PySequence_Fast(obj, "f2py:fortranobject.c:get_elsize"); // noqa: borrowed-ref OK
     if (fast != NULL) {
       Py_ssize_t i, n = PySequence_Fast_GET_SIZE(fast);
-      int sz, elsize = 0;
+      npy_intp sz, elsize = 0;
       for (i=0; i<n; i++) {
         sz = get_elsize(PySequence_Fast_GET_ITEM(fast, i) /* borrowed */);
         if (sz > elsize) {
@@ -815,7 +815,7 @@ get_elsize(PyObject *obj) {
 
 extern PyArrayObject *
 ndarray_from_pyobj(const int type_num,
-                   const int elsize_,
+                   const npy_intp elsize_,
                    npy_intp *dims,
                    const int rank,
                    const int intent,
@@ -875,7 +875,7 @@ ndarray_from_pyobj(const int type_num,
      *
      */
     PyArrayObject *arr = NULL;
-    int elsize = (elsize_ < 0 ? get_elsize(obj) : elsize_);
+    npy_intp elsize = (elsize_ < 0 ? get_elsize(obj) : elsize_);
     if (elsize < 0) {
       void *tp_name = GET_TP_NAME(obj);
       if (errmess == NULL) {
@@ -929,7 +929,7 @@ ndarray_from_pyobj(const int type_num,
         if (PyArray_ITEMSIZE(arr) != elsize) {
           PyErr_Format(
             PyExc_ValueError,
-            "failed to create intent(cache|hide)|optional array -- expected elsize=%d got %" NPY_INTP_FMT,
+            "failed to create intent(cache|hide)|optional array -- expected elsize=%" NPY_INTP_FMT " got %" NPY_INTP_FMT,
             elsize, (npy_intp)PyArray_ITEMSIZE(arr));
           Py_DECREF(arr);
           return NULL;
@@ -958,7 +958,7 @@ ndarray_from_pyobj(const int type_num,
             }
             if (PyArray_ITEMSIZE(arr) < elsize) {
                 too_small_str = PyUnicode_FromFormat(
-                    " -- expected at least elsize=%d but got %" NPY_INTP_FMT,
+                    " -- expected at least elsize=%" NPY_INTP_FMT " but got %" NPY_INTP_FMT,
                     elsize, (npy_intp)PyArray_ITEMSIZE(arr));
             } else {
                 too_small_str = PyUnicode_FromStringAndSize(NULL, 0);
@@ -1018,7 +1018,7 @@ ndarray_from_pyobj(const int type_num,
             if (!msg) goto end_intent_err_handling;
             if (PyArray_ITEMSIZE(arr) != elsize) {
                 extra_msg = PyUnicode_FromFormat(
-                    " -- expected elsize=%d but got %" NPY_INTP_FMT,
+                    " -- expected elsize=%" NPY_INTP_FMT " but got %" NPY_INTP_FMT,
                     elsize, (npy_intp)PyArray_ITEMSIZE(arr));
                 if (!extra_msg) goto end_intent_err_handling;
                 PyUnicode_AppendAndDel(&msg, extra_msg);
@@ -1117,7 +1117,7 @@ ndarray_from_pyobj(const int type_num,
           // descr->elsize in the beginning of this function.
           PyErr_Format(
             PyExc_ValueError,
-            "failed to initialize intent(in) array -- expected elsize=%d got %" NPY_INTP_FMT,
+            "failed to initialize intent(in) array -- expected elsize=%" NPY_INTP_FMT " got %" NPY_INTP_FMT,
             elsize, (npy_intp)PyArray_ITEMSIZE(arr));
           Py_DECREF(arr);
           return NULL;
@@ -1141,7 +1141,7 @@ array_from_pyobj(const int type_num,
     if possible. Provided for backward compatibility.
    */
   PyArray_Descr* descr = PyArray_DescrFromType(type_num);
-  int elsize = PyDataType_ELSIZE(descr);
+  npy_intp elsize = PyDataType_ELSIZE(descr);
   Py_DECREF(descr);
   return ndarray_from_pyobj(type_num, elsize, dims, rank, intent, obj, NULL);
 }

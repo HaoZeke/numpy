@@ -134,7 +134,7 @@ F2PyGetThreadLocalCallbackPtr(char *key);
 #define F2PY_IS_UNICODE_ARRAY(arr) (PyDataType_TYPENUM(PyArray_DESCR(arr)) == NPY_UNICODE)
 
 extern PyArrayObject *
-ndarray_from_pyobj(const int type_num, const int elsize_, npy_intp *dims,
+ndarray_from_pyobj(const int type_num, const npy_intp elsize_, npy_intp *dims,
                    const int rank, const int intent, PyObject *obj,
                    const char *errmess);
 
