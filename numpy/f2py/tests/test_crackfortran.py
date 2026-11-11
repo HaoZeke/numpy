@@ -282,6 +282,47 @@ class TestUseStatement:
             "other": {"only": 1, "map": {"x": "x"}},
         }
 
+    def test_repeated_use_merges(self, tmp_path):
+        # gh-17563: a second USE of a module must not discard the first
+        src = tmp_path / "use_repeat.f90"
+        src.write_text(textwrap.dedent("""\
+            subroutine use_repeat(i, x)
+              use iso_fortran_env, only: sp => real32, dp => real64
+              use iso_fortran_env, only: int32
+              use helper, only: a
+              use helper
+              integer(int32), intent(in) :: i
+              real(dp), intent(out) :: x
+            end subroutine use_repeat
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        assert mod[0]["use"] == {
+            "iso_fortran_env": {
+                "only": 1,
+                "map": {"sp": "real32", "dp": "real64", "int32": "int32"}},
+            "helper": {"only": 0, "map": {"a": "a"}},
+        }
+        pyf = crackfortran.crack2fortran(mod)
+        assert "use iso_fortran_env, only: sp=>real32,dp=>real64,int32" in pyf
+        assert "use helper, a=>a" in pyf
+
+    def test_host_use_merges(self, tmp_path):
+        src = tmp_path / "use_host.f90"
+        src.write_text(textwrap.dedent("""\
+            module use_host
+              use iso_fortran_env, only: wp => real64
+            contains
+              subroutine s(n)
+                use iso_fortran_env, only: int32
+                integer(int32), intent(in) :: n
+              end subroutine s
+            end module use_host
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        s = mod[0]["body"][0]
+        assert crackfortran.get_usedict(s)["iso_fortran_env"] == {
+            "only": 1, "map": {"wp": "real64", "int32": "int32"}}
+
 
 class TestStringLiteralDepend:
     # gh-28700: identifiers inside a character parameter's literal value
