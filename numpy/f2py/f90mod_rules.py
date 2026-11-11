@@ -79,6 +79,36 @@ fgetdims2_sa = """\
       call f2pysetdata(d,allocated(d))"""
 
 
+def _saved_parameter_decl(copy_name, var):
+    """Fortran declaration of a SAVE copy of a module PARAMETER.
+
+    Flang materializes PARAMETER values as stack temporaries and the init
+    wrapper stores that address (gh-22511). A saved local outlives the call.
+    """
+    typespec = var.get('typespec') or 'integer'
+    if typespec == 'type' and var.get('typename'):
+        typespec = f"type({var['typename']})"
+    selector = ''
+    kindselector = var.get('kindselector') or {}
+    charselector = var.get('charselector') or {}
+    if '*' in kindselector:
+        selector = f"*{kindselector['*']}"
+    elif 'kind' in kindselector:
+        selector = f"(kind={kindselector['kind']})"
+    elif '*' in charselector:
+        selector = f"*{charselector['*']}"
+    elif 'len' in charselector:
+        if 'kind' in charselector:
+            selector = (
+                f"(len={charselector['len']},kind={charselector['kind']})")
+        else:
+            selector = f"(len={charselector['len']})"
+    dims = ''
+    if var.get('dimension'):
+        dims = f", dimension({','.join(var['dimension'])})"
+    return f"{typespec}{selector}{dims}, save :: {copy_name}"
+
+
 def buildhooks(pymod):
     from . import rules
     ret = {'f90modhooks': [], 'initf90modhooks': [], 'body': [],
@@ -99,6 +129,7 @@ def buildhooks(pymod):
     for m in findf90modules(pymod):
         sargs, fargs, efargs, modobjs, notvars, onlyvars = [], [], [], [], [
             m['name']], []
+        param_copies = set()
         sargsp = []
         ifargs = []
         mfargs = []
@@ -188,6 +219,8 @@ def buildhooks(pymod):
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
                 iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
+                if 'parameter' in var.get('attrspec', []):
+                    param_copies.add(n)
         if onlyvars:
             dadd('\\end{description}')
         if hasbody(m):
@@ -262,7 +295,20 @@ def buildhooks(pymod):
         if efargs:
             for a in undo_rmbadname(efargs):
                 fadd(f'external {a}')
-        fadd(f"call f2pysetupfunc({','.join(undo_rmbadname(fargs))})")
+        call_args = []
+        copies = []
+        for a in fargs:
+            fa = undo_rmbadname1(a)
+            if a in param_copies:
+                cname = f'f2py_copy_{fa}'
+                fadd(_saved_parameter_decl(cname, m['vars'][a]))
+                copies.append((cname, fa))
+                call_args.append(cname)
+            else:
+                call_args.append(fa)
+        for cname, fa in copies:
+            fadd(f'{cname} = {fa}')
+        fadd(f"call f2pysetupfunc({','.join(call_args)})")
         fadd(f"end subroutine f2pyinit{m_name}\n")
 
         dadd('\n'.join(ret['latexdoc']).replace(

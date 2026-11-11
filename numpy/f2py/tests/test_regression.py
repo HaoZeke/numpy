@@ -317,3 +317,51 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+def test_gh22511_parameter_is_copied_to_saved_variable():
+    # Flang passes PARAMETER addresses as stack temporaries. The init
+    # wrapper must copy them into saved locals (gh-22511).
+    from numpy.f2py import f90mod_rules
+    from numpy.f2py.crackfortran import crackfortran
+
+    src = util.getpath("tests", "src", "regression", "gh22511.f90")
+    blocks = crackfortran([str(src)])
+    _, hooks = f90mod_rules.buildhooks(blocks[0])
+    assert "integer, save :: f2py_copy_my_const" in hooks
+    assert "f2py_copy_my_const = my_const" in hooks
+    assert "real(kind=8), save :: f2py_copy_pi" in hooks
+    assert "f2py_copy_pi = pi" in hooks
+    assert "integer, dimension(2), save :: f2py_copy_arr" in hooks
+    assert "f2py_copy_arr = arr" in hooks
+    assert "character(len=5), save :: f2py_copy_word" in hooks
+    assert "f2py_copy_word = word" in hooks
+    assert "f2py_copy_my_var" not in hooks
+    call = hooks.split("call f2pysetupfunc(", 1)[1].split(")", 1)[0]
+    args = [item.strip() for item in call.split(",")]
+    assert "f2py_copy_my_const" in args
+    assert "f2py_copy_pi" in args
+    assert "f2py_copy_arr" in args
+    assert "f2py_copy_word" in args
+    assert "my_var" in args
+    assert "f2py_copy_my_var" not in args
+
+
+@pytest.mark.slow
+class TestGh22511ParameterCopy(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "regression", "gh22511.f90")]
+
+    def test_parameter_values_and_mutable_variable(self):
+        mod = self.module.gh22511
+        assert mod.my_const == 1234
+        assert mod.pi == 3.0
+        assert np.array_equal(np.asarray(mod.arr).reshape(-1), [2, 4])
+        assert np.asarray(mod.word).tobytes().split(b"\x00", 1)[0] == b"hello"
+        assert mod.my_var == 7
+        mod.my_var = 11
+        assert mod.my_var == 11
+        c = mod.cross(
+            np.array([1.0, 0.0, 0.0], dtype=np.float32),
+            np.array([0.0, 1.0, 0.0], dtype=np.float32),
+        )
+        assert np.allclose(c, [0.0, 0.0, 1.0])
