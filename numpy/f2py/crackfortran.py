@@ -2091,6 +2091,7 @@ def _resolve_forwarded_callbacks(blocks, source_blocks):
     def collect(body, scope=()):
         for block in body:
             if block['block'] in ('interface', 'abstract interface'):
+                collect(block.get('body', ()), scope)
                 continue
             name = block.get('name', '')
             if block['block'] in ('function', 'subroutine'):
@@ -2102,6 +2103,7 @@ def _resolve_forwarded_callbacks(blocks, source_blocks):
     def collect_sources(body, scope=()):
         for block in body:
             if block['block'] in ('interface', 'abstract interface'):
+                collect_sources(block.get('body', ()), scope)
                 continue
             name = block.get('name', '')
             if block['block'] in ('function', 'subroutine'):
