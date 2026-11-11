@@ -113,6 +113,20 @@ class TestRenamedKindsModule(util.F2PyTest):
         assert_array_equal(z, np.array([1 + 1j, 2 - 1j]) * (1 + self.eps))
 
 
+@pytest.mark.slow
+class TestKindCaseSignature(util.F2PyTest):
+    # gh-17563: signature files keep their case, kind names ignore it
+    module_name = "gh17563_case"
+    sources = [
+        util.getpath('tests', 'src', 'isofenv', 'gh17563_case.pyf'),
+        util.getpath('tests', 'src', 'isofenv', 'gh17563_case.f90'),
+    ]
+
+    def test_uppercase_real64(self):
+        eps = 2.0 ** -30
+        assert self.module.twice(1 + eps) == 2 + 2 * eps
+
+
 @pytest.mark.parametrize("kind, ctype", [
     ("real32", "complex_float"),
     ("real64", "complex_double"),

@@ -15,3 +15,5 @@ F2PY handles more ``use`` statements and named kinds
   or ``use iso_c_binding, only: dp => c_double``, now resolve to the
   intrinsic kind. Previously ``real(dp)`` was silently mapped to C ``float``
   and the Fortran wrappers of module procedures failed to compile.
+* Kind names are matched regardless of case, so ``REAL(KIND=REAL64)`` in a
+  signature file, which keeps its case, now maps to C ``double``.
