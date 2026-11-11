@@ -346,6 +346,28 @@ class TestUseStatement:
         assert [capi_maps.getctype(vs[n]) for n in "xzn"] == [
             "double", "complex_double", "long_long"]
 
+    def test_kind_names_ignore_case(self, tmp_path, monkeypatch):
+        # signature files keep their case unless --lower is given
+        monkeypatch.setattr(crackfortran, "dolowercase", 0)
+        src = tmp_path / "use_case.pyf"
+        src.write_text(textwrap.dedent("""\
+            python module use_case
+                interface
+                    subroutine s(x, z, n)
+                        use iso_fortran_env
+                        use iso_c_binding, only: DP => C_DOUBLE
+                        REAL(KIND=REAL64), intent(inout) :: x
+                        complex(dp), intent(inout) :: z
+                        integer(Int64), intent(in) :: n
+                    end subroutine s
+                end interface
+            end python module use_case
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        vs = mod[0]["body"][0]["body"][0]["vars"]
+        assert [capi_maps.getctype(vs[n]) for n in "xzn"] == [
+            "double", "complex_double", "long_long"]
+
 
 class TestStringLiteralDepend:
     # gh-28700: identifiers inside a character parameter's literal value
