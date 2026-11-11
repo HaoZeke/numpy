@@ -361,7 +361,8 @@ The following attributes can be used by F2PY.
 
 ``dimension(<arrayspec>)``
   The corresponding variable is considered as an array with dimensions given in
-  ``<arrayspec>``.
+  ``<arrayspec>``. The dimension bounds may use the Fortran exponentiation
+  operator ``**``, which F2PY translates to ``pow`` in the generated C code.
 
 ``intent(<intentspec>)``
   This specifies the "intention" of the corresponding argument. ``<intentspec>``

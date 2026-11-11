@@ -232,6 +232,22 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.j_max == 72)
 
 
+@pytest.mark.slow
+class TestPowerInDimensions(util.F2PyTest):
+    # Fortran `**` in array dimension specifications
+    sources = [util.getpath("tests", "src", "regression", "gh5506.f90")]
+
+    def test_gh5506(self):
+        out = self.module.blah(3)
+        assert out.shape == (6, 9)
+        npt.assert_array_equal(out, 1)
+
+    def test_gh7184(self):
+        self.module.s(3, np.zeros(8, dtype=np.int32))
+        with pytest.raises(ValueError, match="must be fixed to 8"):
+            self.module.s(3, np.zeros(7, dtype=np.int32))
+
+
 def _wrap_f90(funcwrappers2):
     """Reproduce the F90 line-wrapping logic from rules.py buildmodule."""
     lines = []
