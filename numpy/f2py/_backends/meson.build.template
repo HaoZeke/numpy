@@ -13,6 +13,12 @@ add_project_arguments(
   cc.get_supported_arguments( '-fno-strict-aliasing'), language : 'c'
 )
 
+# These compilers return COMPLEX function results through a hidden first
+# argument, see F2PY_CB_RETURNCOMPLEX in numpy/f2py/cfuncs.py
+if fc.get_id() in ['intel', 'intel-cl', 'intel-llvm', 'intel-llvm-cl', 'nvidia_hpc', 'pgi']
+  add_project_arguments('-DF2PY_CB_RETURNCOMPLEX=0', language : 'c')
+endif
+
 py = import('python').find_installation('''${python}''', pure: false)
 py_dep = py.dependency()
 

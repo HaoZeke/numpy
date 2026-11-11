@@ -742,7 +742,7 @@ def cb_routsign2map(rout, um):
     if ret['rctype'] != 'void':
         if iscomplexfunction(rout):
             ret['returncptr'] = """
-#ifdef F2PY_CB_RETURNCOMPLEX
+#if F2PY_CB_RETURNCOMPLEX
 return_value=
 #endif
 """
@@ -764,7 +764,7 @@ return_value=
         ret['pydocsign'], ret['pydocsignout'] = getpydocsign(a, rout)
         if iscomplexfunction(rout):
             ret['rctype'] = """
-#ifdef F2PY_CB_RETURNCOMPLEX
+#if F2PY_CB_RETURNCOMPLEX
 #ctype#
 #else
 void
