@@ -2099,6 +2099,12 @@ def postcrack(block, args=None, tab=''):
         name = block['name']
     # and not userisdefined: # Build a __user__ module
     if block.get('externals'):
+        # `external p` and a later `real*8 p` both append p (gh-28605).
+        deduped = []
+        for e in block['externals']:
+            if e not in deduped:
+                deduped.append(e)
+        block['externals'] = deduped
         interfaced = []
         if 'interfaced' in block:
             interfaced = block['interfaced']
@@ -2114,6 +2120,11 @@ def postcrack(block, args=None, tab=''):
             mname = f"{mname}_{i}"
         interface = {'block': 'interface', 'body': [],
                      'vars': {}, 'name': name + '_user_interface'}
+        # A signature file already provides these via `use ...__user__...`.
+        provided = set()
+        for uname, uinfo in useblock.items():
+            if '__user__' in uname and isinstance(uinfo, dict):
+                provided.update(uinfo.get('map') or {})
         for e in block['externals']:
             if e in interfaced:
                 edef = []
@@ -2136,6 +2147,36 @@ def postcrack(block, args=None, tab=''):
                 interface['body'].append(edef)
             elif e in mvars and not isexternal(mvars[e]):
                 interface['vars'][e] = mvars[e]
+            elif (e in mvars and isexternal(mvars[e])
+                  and e not in provided):
+                # Typed external with no interface and no call that would
+                # reveal the argument list. Still a callback; use the
+                # declared return type and no arguments (gh-28605).
+                var = copy.deepcopy(mvars[e])
+                attrs = [a for a in (var.get('attrspec') or [])
+                         if a != 'external']
+                if attrs:
+                    var['attrspec'] = attrs
+                else:
+                    var.pop('attrspec', None)
+                if var.get('typespec'):
+                    edef = {
+                        'block': 'function',
+                        'name': e,
+                        'args': [],
+                        'result': e,
+                        'vars': {e: var},
+                        'body': [],
+                    }
+                else:
+                    edef = {
+                        'block': 'subroutine',
+                        'name': e,
+                        'args': [],
+                        'vars': {},
+                        'body': [],
+                    }
+                interface['body'].append(edef)
         if interface['vars'] or interface['body']:
             block['interfaced'] = interfaced
             mblock = {'block': 'python module', 'body': [

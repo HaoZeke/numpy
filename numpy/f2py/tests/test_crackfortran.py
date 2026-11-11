@@ -1,6 +1,8 @@
 import contextlib
 import importlib
 import io
+import subprocess
+import sys
 import textwrap
 import time
 
@@ -116,6 +118,37 @@ class TestExternal(util.F2PyTest):
 
         r = self.module.external_as_attribute(incr)
         assert r == 123
+
+
+@pytest.mark.slow
+def test_gh28605_typed_external_without_call(tmp_path):
+    # `external p` plus `real*8 p` and no call used to emit invalid C.
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    src = util.getpath("tests", "src", "crackfortran", "gh28605.f90")
+    (tmp_path / "gh28605.f90").write_text(src.read_text())
+    code = """
+import sys
+sys.path.insert(0, ".")
+sys.argv = ["f2py", "-c", "-m", "gh28605", "gh28605.f90",
+            "--backend", "meson", "--freethreading-compatible"]
+from numpy.f2py.f2py2e import main
+main()
+import gh28605
+def unused():
+    return 0.0
+got = gh28605.tcb(unused)
+if abs(got - 1.0) > 1e-12:
+    raise SystemExit(f"tcb={got!r}")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-P", "-c", code],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
 
 
 @pytest.mark.slow
