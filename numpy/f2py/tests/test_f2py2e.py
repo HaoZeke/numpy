@@ -177,6 +177,31 @@ def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
         assert "intproductf2pywrap, intpr" not in wrapper
 
 
+def test_gh25777_init_uses_only_passed_names(tmp_path, monkeypatch):
+    """f2pyinit<mod> use-associates only what it passes to f2pysetupfunc
+
+    Allocatables reach f2pysetupfunc through their getdims helper, so a
+    ``use mod, only : b`` there is unused (gfortran -Wall warns).
+    """
+    ipath = tmp_path / "moddata.f90"
+    ipath.write_text(
+        util.getpath("tests", "src", "modules", "module_data_docstring.f90")
+        .read_text(), encoding="ascii")
+    foutl = get_io_paths(ipath, mname="moddata")
+    monkeypatch.setattr(sys, "argv", f"f2py {ipath} -m moddata".split())
+
+    with util.switchdir(tmp_path):
+        f2pycli()
+        wrapper = foutl.wrap90.read_text()
+
+    init = re.search(r"subroutine f2pyinitmod\(.*?end subroutine f2pyinitmod",
+                     wrapper, re.DOTALL).group()
+    used = re.findall(r"use mod, only : (\w+)", init)
+    passed = re.search(r"call f2pysetupfunc\((.*)\)", init).group(1).split(",")
+    assert used == ["i", "x", "a", "foo"]
+    assert set(used) <= set(passed)
+
+
 def test_gen_pyf(capfd, hello_world_f90, monkeypatch):
     """Ensures that a signature file is generated via the CLI
     CLI :: -h
