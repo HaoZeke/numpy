@@ -1,6 +1,9 @@
 module f90_features
   implicit none
 
+  integer :: counter = 3
+  real(8) :: table(2, 3)
+
   interface add
     module procedure add_int, add_real
   end interface add
