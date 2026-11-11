@@ -323,6 +323,29 @@ class TestUseStatement:
         assert crackfortran.get_usedict(s)["iso_fortran_env"] == {
             "only": 1, "map": {"wp": "real64", "int32": "int32"}}
 
+    def test_renamed_intrinsic_kinds(self, tmp_path):
+        # gh-17563, gh-30352: renamed kinds resolve to the intrinsic names
+        src = tmp_path / "use_rename.f90"
+        src.write_text(textwrap.dedent("""\
+            module use_rename
+              use, intrinsic :: iso_fortran_env, only: wp => real64
+              use, intrinsic :: iso_c_binding, only: cdp => c_double
+            contains
+              subroutine s(x, z, n)
+                use iso_fortran_env, only: ik => int64
+                real(wp), intent(inout) :: x
+                complex(kind=cdp), intent(inout) :: z
+                integer(ik), intent(in) :: n
+              end subroutine s
+            end module use_rename
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        vs = mod[0]["body"][0]["vars"]
+        assert [vs[n]["kindselector"]["kind"] for n in "xzn"] == [
+            "real64", "c_double", "int64"]
+        assert [capi_maps.getctype(vs[n]) for n in "xzn"] == [
+            "double", "complex_double", "long_long"]
+
 
 class TestStringLiteralDepend:
     # gh-28700: identifiers inside a character parameter's literal value
