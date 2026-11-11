@@ -1,5 +1,6 @@
 import math
 import platform
+import re
 import sys
 import textwrap
 import threading
@@ -9,7 +10,7 @@ import traceback
 import pytest
 
 import numpy as np
-from numpy.f2py import crackfortran
+from numpy.f2py import crackfortran, f2py2e
 
 from . import util
 
@@ -330,6 +331,23 @@ class TestForwardedCallbackArguments(util.F2PyTest):
 
 
 class TestForwardedCallbackSignatures:
+    @pytest.mark.parametrize("selected", [False, True])
+    def test_generated_callback_argument_counts(self, tmp_path, monkeypatch, selected):
+        source = util.getpath("tests", "src", "callback", "gh22451.f90")
+        monkeypatch.chdir(tmp_path)
+        module = "gh22451_generated"
+        arguments = ["-m", module, str(source)]
+        if selected:
+            arguments += ["only:", "fun2", ":"]
+        f2py2e.run_main(arguments)
+        generated = (tmp_path / f"{module}module.c").read_text()
+        callback_arguments = re.findall(
+            r"create_cb_arglist\([^,\n]+,[^,\n]+,\s*(\d+),\s*(\d+),",
+            generated,
+        )
+        expected_callbacks = 1 if selected else 8
+        assert callback_arguments == [("1", "0")] * expected_callbacks
+
     def test_chained_argument_type(self):
         source = util.getpath("tests", "src", "callback", "gh22451.f90")
         blocks = crackfortran.crackfortran([str(source)])
