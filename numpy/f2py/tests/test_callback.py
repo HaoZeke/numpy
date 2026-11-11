@@ -1,5 +1,6 @@
 import math
 import platform
+import subprocess
 import sys
 import textwrap
 import threading
@@ -260,3 +261,56 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+def test_gh7577_interface_dummy_is_external():
+    from numpy.f2py.crackfortran import crackfortran
+
+    src = util.getpath("tests", "src", "callback", "gh7577.f90")
+
+    def find(block):
+        if isinstance(block, list):
+            for item in block:
+                found = find(item)
+                if found is not None:
+                    return found
+            return None
+        if isinstance(block, dict):
+            if block.get("name") == "foo" and block.get("block") == "function":
+                return block
+            return find(block.get("body", []))
+        return None
+
+    foo = find(crackfortran([str(src)]))
+    assert foo is not None
+    assert "func_complex" in foo.get("externals", [])
+
+
+@pytest.mark.slow
+def test_gh7577_complex_callback_return(tmp_path):
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    src = util.getpath("tests", "src", "callback", "gh7577.f90")
+    (tmp_path / "gh7577.f90").write_text(src.read_text())
+    code = """
+import sys
+sys.path.insert(0, ".")
+sys.argv = ["f2py", "-c", "-m", "gh7577", "gh7577.f90",
+            "--backend", "meson", "--freethreading-compatible"]
+from numpy.f2py.f2py2e import main
+main()
+import gh7577
+def sq(z):
+    return z * z
+got = gh7577.gh7577.foo(1j, sq)
+if abs(got - (-1 + 0j)) > 1e-6:
+    raise SystemExit(f"got={got!r}")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-P", "-c", code],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
