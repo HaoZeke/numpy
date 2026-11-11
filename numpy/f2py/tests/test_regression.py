@@ -396,7 +396,12 @@ if abs(pi - math.pi) > 1e-12 or abs(e - 1.0) > 1e-12:
         text=True,
         check=False,
     )
-    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
+    combined = proc.stdout + "\n" + proc.stderr
+    # atan(1.0_16) calls _FortranAAtanF128. Some flang packages compile
+    # that call but do not ship the symbol.
+    if proc.returncode != 0 and "_FortranAAtanF128" in combined:
+        pytest.skip("Fortran runtime has no real128 atan")
+    assert proc.returncode == 0, combined
 
 
 @pytest.mark.slow
