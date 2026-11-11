@@ -186,6 +186,37 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\n1foo =" not in meson_build
 
 
+@pytest.mark.parametrize("kwarg", ["link_language: 'fortran'"])
+def test_meson_extension_module_kwargs(kwarg):
+    # gh-30804
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = MesonTemplate(
+        modulename="Blah",
+        sources=[Path("f90continuation.f90")],
+        deps=[],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=[],
+        build_type="release",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+
+    mparser.Parser(meson_build, "meson.build").parse()
+    assert f"{kwarg}," in meson_build
+
+
+@pytest.mark.slow
+class TestFortranRuntimeLink(util.F2PyTest):
+    # gh-30804: the module must link the Fortran runtime library
+    sources = [util.getpath("tests", "src", "regression", "fortran_runtime.f90")]
+
+    def test_internal_write(self):
+        assert self.module.format_int(42).strip() == b"42"
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():
