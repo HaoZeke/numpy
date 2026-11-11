@@ -32,6 +32,19 @@ class TestDefaultTypedEntry(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestEntriesInOneModule(util.F2PyTest):
+    # The IMPLICIT statement of eta0 must not change the type of rfun
+    sources = [
+        util.getpath("tests", "src", "entry", "gh13356.f"),
+        util.getpath("tests", "src", "entry", "default_typing.f"),
+    ]
+
+    def test_entry(self):
+        assert self.module.eta1(0.1, 3) == 0.1 * 3
+        assert self.module.rfun(3) == 1.5
+
+
+@pytest.mark.slow
 class TestEntryInResultFunction(util.F2PyTest):
     # Each ENTRY returns its own type, not that of the function RESULT
     sources = [util.getpath("tests", "src", "entry", "result_entry.f90")]
