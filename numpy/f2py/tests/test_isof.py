@@ -52,3 +52,26 @@ class TestIOSF(util.F2PyTest):
         exp_out = args[:3] + args[3:]
         assert_allclose(out, exp_out)
         assert out.dtype == exp_out.dtype
+
+    # gh-30352
+    @pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+    def test_f_add_complex_arr(self, dtype):
+        a = np.array([1j, 2j, 3j], dtype=dtype)
+        b = np.array([4j, 5j, 6j], dtype=dtype)
+        out = {
+            np.complex64: self.module.foddity.f_add_complex64_arr,
+            np.complex128: self.module.foddity.f_add_complex128_arr,
+        }[dtype](a, b)
+        exp_out = a + b
+        assert_allclose(out, exp_out)
+        assert out.dtype == exp_out.dtype
+
+
+@pytest.mark.parametrize("kind, ctype", [
+    ("real32", "complex_float"),
+    ("real64", "complex_double"),
+])
+def test_complex_real_kind_ctype(kind, ctype):
+    from numpy.f2py.capi_maps import getctype
+
+    assert getctype({"typespec": "complex", "kindselector": {"kind": kind}}) == ctype

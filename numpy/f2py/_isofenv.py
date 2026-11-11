@@ -11,7 +11,12 @@ iso_fortran_env_map: dict[str, dict[str, str]] = {
     'real': {
         'real32': 'float',
         'real64': 'double',
-    }
+    },
+    # The kind of a complex is the kind of its real and imaginary parts
+    'complex': {
+        'real32': 'complex_float',
+        'real64': 'complex_double',
+    },
 }
 
 isof_kindmap: dict[str, str] = {}

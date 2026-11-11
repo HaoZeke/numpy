@@ -42,7 +42,11 @@ iso_c_binding_map = {
     'complex': {
         'c_float_complex': 'complex_float',
         'c_double_complex': 'complex_double',
-        'c_long_double_complex': 'complex_long_double'
+        'c_long_double_complex': 'complex_long_double',
+        # C_FLOAT_COMPLEX has the value of C_FLOAT, etc. (F2018 18.2.2)
+        'c_float': 'complex_float',
+        'c_double': 'complex_double',
+        'c_long_double': 'complex_long_double',
     },
     'logical': {
         'c_bool': 'unsigned_char'  # _Bool <=> 'unsigned_char' for now
