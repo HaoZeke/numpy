@@ -1222,7 +1222,7 @@ if (#varname#_cb.capi==Py_None) {
                 {isintent_hide: '    {'},
                 {iscomplexarray: '        #ctype# capi_c;'},
                 """\
-        int *_i,capi_i=0;
+        npy_intp *_i,capi_i=0;
         CFUNCSMESS(\"#name#: Initializing #varname#=#init#\\n\");
         struct ForcombCache cache;
         if (initforcomb(&cache, PyArray_DIMS(capi_#varname#_as_array),
