@@ -79,7 +79,10 @@ class RelOp(Enum):
         if language is Language.Fortran:
             return {'.eq.': RelOp.EQ, '.ne.': RelOp.NE,
                     '.lt.': RelOp.LT, '.le.': RelOp.LE,
-                    '.gt.': RelOp.GT, '.ge.': RelOp.GE}[s.lower()]
+                    '.gt.': RelOp.GT, '.ge.': RelOp.GE,
+                    '==': RelOp.EQ, '!=': RelOp.NE, '/=': RelOp.NE,
+                    '<': RelOp.LT, '<=': RelOp.LE,
+                    '>': RelOp.GT, '>=': RelOp.GE}[s.lower()]
         return {'==': RelOp.EQ, '!=': RelOp.NE, '<': RelOp.LT,
                 '<=': RelOp.LE, '>': RelOp.GT, '>=': RelOp.GE}[s]
 
@@ -358,12 +361,27 @@ class Expr:
             precedence = Precedence.PRODUCT if factors else Precedence.ATOM
         elif self.op is Op.APPLY:
             name, args, kwargs = self.data
-            if name is ArithOp.DIV and language is Language.C:
+            if name is ArithOp.DIV and language in (Language.C,
+                                                    Language.Fortran):
                 numer, denom = [arg.tostring(Precedence.PRODUCT,
                                              language=language)
                                 for arg in args]
                 r = f'{numer} / {denom}'
                 precedence = Precedence.PRODUCT
+            elif name is ArithOp.POW and language is Language.C:
+                base, exponent = [arg.tostring(Precedence.TUPLE,
+                                               language=language)
+                                  for arg in args]
+                r = f'pow({base}, {exponent})'
+                precedence = Precedence.ATOM
+            elif name is ArithOp.POW:
+                # `**` is right-associative: parenthesize a power base.
+                base, exponent = args
+                base = base.tostring(Precedence.ATOM, language=language)
+                exponent = exponent.tostring(Precedence.POWER,
+                                             language=language)
+                r = f'{base} ** {exponent}'
+                precedence = Precedence.POWER
             else:
                 args = [arg.tostring(Precedence.TUPLE, language=language)
                         for arg in args]
@@ -1281,6 +1299,21 @@ def fromstring(s, language=Language.C):
     raise ValueError(f'failed to parse `{s}` to Expr instance: got `{r}`')
 
 
+def c_dimension_to_fortran(dim):
+    """Rewrite a C dimension expression so a Fortran wrapper can compile it.
+
+    ``pow(2, n)`` is a real-valued libm call. Fortran array bounds need
+    the integer power operator ``**``.
+    """
+    if not isinstance(dim, str) or dim in ('*', ':', '(*)', '(:)') or 'pow(' not in dim:
+        return dim
+    try:
+        return fromstring(dim, language=Language.C).tostring(
+            language=Language.Fortran)
+    except Exception:
+        return dim
+
+
 class _Pair:
     # Internal class to represent a pair of expressions
 
@@ -1364,15 +1397,16 @@ class _FromStringWorker:
 
         # relational expression
         if self.language is Language.Fortran:
+            # Signature files use C operators inside dimension expressions.
             m = re.match(
-                r'\A(.+)\s*[.](eq|ne|lt|le|gt|ge)[.]\s*(.+)\Z', r, re.I)
+                r'\A(.+)\s*([.](?:eq|ne|lt|le|gt|ge)[.]'
+                r'|[=][=]|[!][=]|[/][=]|[<][=]|[<]|[>][=]|[>])\s*(.+)\Z',
+                r, re.I)
         else:
             m = re.match(
                 r'\A(.+)\s*([=][=]|[!][=]|[<][=]|[<]|[>][=]|[>])\s*(.+)\Z', r)
         if m:
             left, rop, right = m.groups()
-            if self.language is Language.Fortran:
-                rop = '.' + rop + '.'
             left, right = self.process(restore((left, right)))
             rop = RelOp.fromstring(rop, language=self.language)
             return Expr(Op.RELATIONAL, (rop, left, right))
@@ -1498,6 +1532,11 @@ class _FromStringWorker:
                 kwargs = {a.left: a.right for a in args
                               if isinstance(a, _Pair)}
                 args = tuple(a for a in args if not isinstance(a, _Pair))
+                # pow(base, exp) in a signature file is exponentiation, so
+                # Fortran wrappers can print it as **.
+                if (target == as_symbol('pow')
+                        and len(args) == 2 and not kwargs):
+                    return args[0] ** args[1]
                 # Warning: this could also be Fortran indexing operation..
                 return as_apply(target, *args, **kwargs)
             else:
