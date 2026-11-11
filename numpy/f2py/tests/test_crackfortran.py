@@ -425,6 +425,43 @@ class TestUseRenamedKindsRuntime(util.F2PyTest):
         assert self.module.gh30352.add_ik(2**32, 2**32) == 2**33
 
 
+class TestUseModuleNature:
+    # A use statement may name the module nature (Fortran 2018, R1409).
+    @pytest.mark.parametrize("stmt", [
+        "use, intrinsic :: iso_fortran_env, only: dp => real64",
+        "use,intrinsic::iso_fortran_env, dp => real64",
+        "use :: iso_fortran_env, only: dp => real64",
+    ])
+    def test_intrinsic(self, tmp_path, capsys, stmt):
+        fpath = tmp_path / "nature.f90"
+        fpath.write_text(
+            "module m\n"
+            f"  {stmt}\n"
+            "contains\n"
+            "  subroutine s(x)\n"
+            "    complex(kind=dp), intent(inout) :: x\n"
+            "  end subroutine s\n"
+            "end module m\n"
+        )
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert "Could not crack the use statement" not in capsys.readouterr().out
+        assert mod[0]["use"]["iso_fortran_env"]["map"] == {"dp": "real64"}
+        assert mod[0]["body"][0]["vars"]["x"]["kindselector"] == {"kind": "real64"}
+
+    def test_non_intrinsic(self, tmp_path):
+        fpath = tmp_path / "nature.f90"
+        fpath.write_text(
+            "module kinds\n"
+            "  integer, parameter :: dp = 8\n"
+            "end module kinds\n"
+            "module m\n"
+            "  use, non_intrinsic :: kinds, only: wp => dp\n"
+            "end module m\n"
+        )
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert mod[1]["use"] == {"kinds": {"only": 1, "map": {"wp": "dp"}}}
+
+
 @pytest.mark.slow
 class TestEval(util.F2PyTest):
     def test_eval_scalar(self):

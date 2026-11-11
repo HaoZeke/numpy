@@ -7,4 +7,5 @@ kinds and renamed parameters of other wrapped modules resolve the same way.
 ``complex(kind=real64)`` from ``iso_fortran_env`` and ``complex(kind=c_double)``
 from ``iso_c_binding`` also map to double precision complex now. Previously,
 passing a ``complex128`` array to such an argument was rejected or overflowed the
-buffer handed to Fortran.
+buffer handed to Fortran. ``use`` statements that name the module nature, such as
+``use, intrinsic :: iso_fortran_env``, are no longer ignored.
