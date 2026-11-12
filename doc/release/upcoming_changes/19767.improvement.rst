@@ -1,0 +1,3 @@
+Keep kind and length on a function result
+-----------------------------------------
+A prefix such as `real(kind=8) function f() result(r)` stored the kind on the function name, which is then dropped, so the wrapper treated `r` as a default real and returned 0 (gh-19767).
