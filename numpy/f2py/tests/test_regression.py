@@ -388,6 +388,15 @@ class TestPrecompiledModuleUse(util.F2PyTest):
         mod = self.module.gh19162_use
         mod.x = [1, 2, 3]
         assert mod.scaled_total(2) == 12
+
+
+def test_gh25415_meson_include_dirs_from_running_numpy():
+    # meson setup must not spawn Python to look up the include directories
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = MesonTemplate(
+        modulename="Blah",
+        sources=[Path("f90continuation.f90")],
+        deps=[],
         libraries=[],
         library_dirs=[],
         include_dirs=[],
