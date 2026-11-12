@@ -304,30 +304,30 @@ cb_rout_rules = [
     },
     {  # Complex function
         'optargs': """
-#ifndef F2PY_CB_RETURNCOMPLEX
+#if !F2PY_CB_RETURNCOMPLEX
 #ctype# *return_value
 #endif
 """,
         'optargs_nm': """
-#ifndef F2PY_CB_RETURNCOMPLEX
+#if !F2PY_CB_RETURNCOMPLEX
 return_value
 #endif
 """,
         'optargs_td': """
-#ifndef F2PY_CB_RETURNCOMPLEX
+#if !F2PY_CB_RETURNCOMPLEX
 #ctype# *
 #endif
 """,
         'decl': """
-#ifdef F2PY_CB_RETURNCOMPLEX
-    #ctype# return_value = {0, 0};
+#if F2PY_CB_RETURNCOMPLEX
+    #ctype# return_value = {0};
 #endif
 """,
         'frompyobj': [
             {debugcapi: '    CFUNCSMESS("cb:Getting return_value->");'},
             """\
     if (capi_j>capi_i) {
-#ifdef F2PY_CB_RETURNCOMPLEX
+#if F2PY_CB_RETURNCOMPLEX
         GETSCALARFROMPYTUPLE(capi_return,capi_i++,&return_value,#ctype#,
           \"#ctype#_from_pyobj failed in converting return_value of call-back\"
           \" function #name# to C #ctype#\\n\");
@@ -342,7 +342,7 @@ return_value
         goto capi_fail;
     }""",
             {debugcapi: """\
-#ifdef F2PY_CB_RETURNCOMPLEX
+#if F2PY_CB_RETURNCOMPLEX
     fprintf(stderr,\"#showvalueformat#.\\n\",(return_value).r,(return_value).i);
 #else
     fprintf(stderr,\"#showvalueformat#.\\n\",(*return_value).r,(*return_value).i);
@@ -350,14 +350,15 @@ return_value
 """}
         ],
         'return': """
-#ifdef F2PY_CB_RETURNCOMPLEX
+#if F2PY_CB_RETURNCOMPLEX
     return return_value;
 #else
     return;
 #endif
 """,
         'need': ['#ctype#_from_pyobj', {debugcapi: 'CFUNCSMESS'},
-                 'string.h', 'GETSCALARFROMPYTUPLE', '#ctype#'],
+                 'string.h', 'GETSCALARFROMPYTUPLE', '#ctype#',
+                 'F2PY_CB_RETURNCOMPLEX'],
         '_check': iscomplexfunction
     },
     {'docstrout': '        #pydocsignout#',
@@ -611,17 +612,17 @@ def buildcallback(rout, um):
     if 'args' in rd and 'optargs' in rd:
         if isinstance(rd['optargs'], list):
             rd['optargs'] = rd['optargs'] + ["""
-#ifndef F2PY_CB_RETURNCOMPLEX
+#if !F2PY_CB_RETURNCOMPLEX
 ,
 #endif
 """]
             rd['optargs_nm'] = rd['optargs_nm'] + ["""
-#ifndef F2PY_CB_RETURNCOMPLEX
+#if !F2PY_CB_RETURNCOMPLEX
 ,
 #endif
 """]
             rd['optargs_td'] = rd['optargs_td'] + ["""
-#ifndef F2PY_CB_RETURNCOMPLEX
+#if !F2PY_CB_RETURNCOMPLEX
 ,
 #endif
 """]
