@@ -1481,9 +1481,13 @@ capi_fail:
 """
 
 
-def buildcfuncs():
-    # A previous module leaves its needs here. The next run would emit
-    # macros in that leftover order, so two entry points disagree.
+def reset_needs():
+    """Drop macros and callbacks recorded by the previous run.
+
+    ``-include`` is stored in ``outneeds`` while the command line is
+    scanned, so this must run before that scan. ``buildcfuncs`` is too
+    late: it would throw the include away.
+    """
     for value in outneeds.values():
         value.clear()
     for bucket in (typedefs_generated, callbacks):
@@ -1491,6 +1495,9 @@ def buildcfuncs():
         for key in list(bucket):
             if key != sentinel:
                 del bucket[key]
+
+
+def buildcfuncs():
     from .capi_maps import c2capi_map
     for k in c2capi_map.keys():
         m = f'pyarr_from_p_{k}1'
