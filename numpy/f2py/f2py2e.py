@@ -336,6 +336,59 @@ def scaninputline(inputline):
     return files, options
 
 
+def _note_hidden_callbacks(postlist):
+    """A hidden callback is invoked by name, so its trampoline must be exported.
+
+    ``intent(callback, hide)`` is stored on the caller. The ``__user__``
+    routine otherwise keeps ``intent(out, hide)`` and the generated function
+    is static, which leaves ``global_f_`` undefined when the signature file
+    is compiled without cracking the Fortran source again.
+    """
+    user_routines = {}
+
+    def collect(block, in_user=False):
+        if isinstance(block, list):
+            for item in block:
+                collect(item, in_user)
+            return
+        if not isinstance(block, dict) or 'block' not in block:
+            return
+        name = block.get('name') or ''
+        here = in_user or (
+            block.get('block') == 'python module' and '__user__' in name)
+        if here and block.get('block') in ('function', 'subroutine') and name:
+            user_routines.setdefault(name, []).append(block)
+        collect(block.get('body') or [], here)
+
+    def hidden_names(block, found):
+        if isinstance(block, list):
+            for item in block:
+                hidden_names(item, found)
+            return
+        if not isinstance(block, dict) or 'block' not in block:
+            return
+        name = block.get('name') or ''
+        if not (block.get('block') == 'python module' and '__user__' in name):
+            for varname, var in (block.get('vars') or {}).items():
+                intent = var.get('intent') or []
+                if 'callback' in intent and 'hide' in intent:
+                    found.add(varname)
+        hidden_names(block.get('body') or [], found)
+
+    collect(postlist)
+    found = set()
+    hidden_names(postlist, found)
+    for name in found:
+        routines = user_routines.get(name) or []
+        if any('callback' in (rout.get('intent') or []) for rout in routines):
+            continue
+        for rout in routines:
+            intent = rout.setdefault('intent', [])
+            if 'callback' not in intent:
+                intent.append('callback')
+                break
+
+
 def callcrackfortran(files, options):
     rules.options = options
     crackfortran.debug = options['debug']
@@ -349,6 +402,7 @@ def callcrackfortran(files, options):
     crackfortran.include_paths[:] = options['include_paths']
     crackfortran.dolowercase = options['do-lower']
     postlist = crackfortran.crackfortran(files)
+    _note_hidden_callbacks(postlist)
     if 'signsfile' in options:
         outmess(f"Saving signatures to file \"{options['signsfile']}\"\n")
         pyf = crackfortran.crack2fortran(postlist)
