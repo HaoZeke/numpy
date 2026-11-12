@@ -1353,7 +1353,3 @@ def test_gh31249(target, tmp_path):
     module.gh31249_cb = seen.append
     module.gh31249_apply(42)
     assert seen == [42]
-
-
-@pytest.mark.slow
-@pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
