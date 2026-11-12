@@ -24,6 +24,7 @@ f77modulename: str
 pyffilename: str
 sourcecodeform: L["fix", "gree"]
 strictf77: L[0, 1]
+form_override: tuple[int, str] | None
 quiet: L[0, 1]
 verbose: L[0, 1, 2]
 skipemptyends: L[0, 1]

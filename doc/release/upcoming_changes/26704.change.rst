@@ -1,0 +1,6 @@
+``f2py -f77`` reads fixed form even when the file ends in ``.f90``
+------------------------------------------------------------------
+``-f77``, ``-f90``, and ``-fix`` choose how the source is read. The
+file suffix used to replace that choice, so a fixed-form continuation
+in a ``.f90`` file lost the procedure name. Compiler flags such as
+``-ffixed-form`` are not used for this.
