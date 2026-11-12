@@ -575,8 +575,23 @@ fortran_getattr(PyFortranObject *fp, char *name)
         return s;
     }
     if ((strcmp(name, "_cpointer") == 0) && (fp->len == 1)) {
+        /* An unallocated allocatable leaves data NULL. The array name
+         * is the one f2py stored on the def. PyDict_SetItemString
+         * crashes on a NULL value. */
+        if (fp->defs[0].data == NULL) {
+            PyErr_Format(PyExc_ValueError, "array '%s' is not allocated",
+                         fp->defs[0].name);
+            return NULL;
+        }
         PyObject *cobj =
                 F2PyCapsule_FromVoidPtr((void *)(fp->defs[0].data), NULL);
+        if (cobj == NULL) {
+            /* The NULL data path was handled above. Capsule creation
+             * failed for another reason. Report MemoryError, including
+             * when the helper already set one. */
+            PyErr_NoMemory();
+            return NULL;
+        }
         if (PyDict_SetItemString(fp->dict, name, cobj)) {
             Py_DECREF(cobj);
             return NULL;
@@ -1634,7 +1649,7 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                 PyExc_ValueError,
                 "unexpected array size: size=%" NPY_INTP_FMT
                 ", arr_size=%" NPY_INTP_FMT
-                ", rank=%d, effrank=%d, arr.nd=%d, dims=[%U]"
+                ", rank=%d, effrank=%d, arr.nd=%d, dims=[%U ]"
                 ", arr.dims=[%U ]\n",
                 size, arr_size, rank, effrank, PyArray_NDIM(arr),
                 dims_str, arr_dims_str);
@@ -1669,9 +1684,27 @@ PyObject *f2py_describe_obj(PyObject *obj) {
     void *tp_name = GET_TP_NAME(obj);
     if (!tp_name) return NULL;
     if (PyArray_CheckScalar(obj)) {
-        PyArrayObject* arr = (PyArrayObject*)obj;
-        result = PyUnicode_FromFormat("%c%" NPY_INTP_FMT "-" TP_NAME_FMT "-scalar",
-                                    PyArray_DESCR(arr)->kind, PyArray_ITEMSIZE(arr), tp_name);
+        /* 0-d arrays are PyArrayObjects. NumPy scalars are not, and
+         * PyArray_DESCR on them faults. Scalars have a descriptor of
+         * their own. */
+        PyArray_Descr *descr;
+        int own_descr = 0;
+        if (PyArray_Check(obj)) {
+            descr = PyArray_DESCR((PyArrayObject *)obj);
+        }
+        else {
+            descr = PyArray_DescrFromScalar(obj);
+            if (descr == NULL) {
+                goto end;
+            }
+            own_descr = 1;
+        }
+        result = PyUnicode_FromFormat(
+            "%c%" NPY_INTP_FMT "-" TP_NAME_FMT "-scalar",
+            PyDataType_KIND(descr), PyDataType_ELSIZE(descr), tp_name);
+        if (own_descr) {
+            Py_DECREF(descr);
+        }
     } else if (PyArray_Check(obj)) {
         int i;
         PyArrayObject* arr = (PyArrayObject*)obj;

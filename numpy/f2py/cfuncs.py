@@ -516,22 +516,72 @@ cppmacros['CHECKARRAY'] = """
         PyErr_SetString(#modulename#_error,\"(\"tcheck\") failed for \"name);\\
         /*goto capi_fail;*/\\
     } else """
-cppmacros['CHECKSTRING'] = """
-#define CHECKSTRING(check,tcheck,name,show,var)\\
-    if (!(check)) {\\
-        PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, slen(var), var);\\
-        /*goto capi_fail;*/\\
+needs['f2py_check_error'] = ['stdarg.h', 'string.h']
+cfuncs['f2py_check_error'] = r"""
+/*
+ * `show` is a printf conversion from cformat_map. PyUnicode_FromFormat
+ * (and therefore PyErr_Format) has no float conversions and no h/hh
+ * length modifiers, and the check text is caller data that may itself
+ * contain '%'. Render `show` with vsnprintf, then pass the check text,
+ * the argument name, and the rendered value to PyErr_Format as data.
+ * `%s` decodes the bytes the same way a direct PyErr_Format `%s` does,
+ * including a non-UTF-8 string value.
+ */
+static void
+f2py_check_error(PyObject *exc, const char *tcheck, const char *name,
+                 const char *show, ...)
+{
+    va_list ap, ap_copy;
+    int n;
+    char *buf;
+
+    va_start(ap, show);
+    va_copy(ap_copy, ap);
+    n = vsnprintf(NULL, 0, show, ap_copy);
+    va_end(ap_copy);
+    if (n < 0) {
+        va_end(ap);
+        PyErr_Format(exc, "(%s) failed for %s", tcheck, name);
+        return;
+    }
+    buf = (char *)PyMem_Malloc((size_t)n + 1);
+    if (buf == NULL) {
+        va_end(ap);
+        PyErr_NoMemory();
+        return;
+    }
+    if (vsnprintf(buf, (size_t)n + 1, show, ap) < 0) {
+        va_end(ap);
+        PyMem_Free(buf);
+        PyErr_Format(exc, "(%s) failed for %s", tcheck, name);
+        return;
+    }
+    va_end(ap);
+    if (strstr(tcheck, "shape(") != NULL) {
+        PyErr_Format(exc,
+            "(%s) failed for %s: %s Check the generated Python signature: "
+            "optional size arguments follow their arrays and may be omitted "
+            "or passed by keyword.",
+            tcheck, name, buf);
+    } else {
+        PyErr_Format(exc, "(%s) failed for %s: %s", tcheck, name, buf);
+    }
+    PyMem_Free(buf);
+}
+"""
+needs['CHECKSTRING'] = ['f2py_check_error', 'len..']
+cppmacros['CHECKSTRING'] = r"""
+#define CHECKSTRING(check,tcheck,name,show,var)\
+    if (!(check)) {\
+        f2py_check_error(#modulename#_error, tcheck, name, show, slen(var), (var));\
+        /*goto capi_fail;*/\
     } else """
-needs['CHECKSCALAR'] = ['string.h']
-cppmacros['CHECKSCALAR'] = """
-#define CHECKSCALAR(check,tcheck,name,show,var)\\
-    if (!(check)) {\\
-        if (strstr(tcheck, \"shape(\") != NULL) {\\
-            PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show \" Check the generated Python signature: optional size arguments follow their arrays and may be omitted or passed by keyword.\", var);\\
-        } else {\\
-            PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, var);\\
-        }\\
-        /*goto capi_fail;*/\\
+needs['CHECKSCALAR'] = ['f2py_check_error']
+cppmacros['CHECKSCALAR'] = r"""
+#define CHECKSCALAR(check,tcheck,name,show,var)\
+    if (!(check)) {\
+        f2py_check_error(#modulename#_error, tcheck, name, show, (var));\
+        /*goto capi_fail;*/\
     } else """
 # cppmacros['CHECKDIMS']="""
 # define CHECKDIMS(dims,rank) \\
@@ -1500,7 +1550,7 @@ static int try_pyarr_from_character(PyObject* obj, character* v) {
             if (describe_obj) {
                 PyErr_Format(
                     err,
-                    "try_pyarr_from_character failed  -- expected bytes array-scalar|array, got %U",
+                    "try_pyarr_from_character failed -- expected bytes array-scalar|array, got %U",
                     describe_obj
                 );
                 Py_DECREF(describe_obj);

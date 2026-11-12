@@ -12,6 +12,7 @@ import contextlib
 import functools
 import glob
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,7 +31,15 @@ from numpy.testing import IS_IOS, IS_WASM, temppath
 # Check if compilers are available at all...
 #
 
-def check_language(lang, code_snippet=None):
+def _compiler_cmd_from_meson(output):
+    marker = "F2PY_COMPILER_CMD:"
+    for line in output.splitlines():
+        if marker in line:
+            return shlex.split(line.split(marker, 1)[1].strip())
+    return None
+
+
+def check_language(lang, code_snippet=None, suffix=None):
     if sys.platform == "win32":
         pytest.skip("No Fortran tests on Windows (Issue #25134)", allow_module_level=True)
     tmpdir = tempfile.mkdtemp()
@@ -40,12 +49,14 @@ def check_language(lang, code_snippet=None):
             f.write("project('check_compilers')\n")
             f.write(f"add_languages('{lang}')\n")
             if code_snippet:
+                # Meson adds -Werror=* flags to compiler.compiles. Flang
+                # rejects those flags, so a valid snippet looks unavailable.
+                # Record the compiler Meson selected and compile the snippet
+                # with that command.
                 f.write(f"{lang}_compiler = meson.get_compiler('{lang}')\n")
-                f.write(f"{lang}_code = '''{code_snippet}'''\n")
                 f.write(
-                    f"_have_{lang}_feature ="
-                    f"{lang}_compiler.compiles({lang}_code,"
-                    f" name: '{lang} feature check')\n"
+                    "message('F2PY_COMPILER_CMD: ' + ' '.join("
+                    f"{lang}_compiler.cmd_array()))\n"
                 )
         try:
             runmeson = subprocess.run(
@@ -53,10 +64,26 @@ def check_language(lang, code_snippet=None):
                 check=False,
                 cwd=tmpdir,
                 capture_output=True,
+                text=True,
             )
         except OSError:
             pytest.skip("meson not present, skipping compiler dependent test", allow_module_level=True)
-        return runmeson.returncode == 0
+        if runmeson.returncode != 0 or not code_snippet:
+            return runmeson.returncode == 0
+        cmd = _compiler_cmd_from_meson(runmeson.stdout + "\n" + runmeson.stderr)
+        if not cmd:
+            return False
+        if suffix is None:
+            suffix = {"c": ".c", "fortran": ".f90", "cpp": ".cpp"}.get(lang, ".txt")
+        src = os.path.join(tmpdir, "snippet" + suffix)
+        obj = os.path.join(tmpdir, "snippet.o")
+        with open(src, "w") as handle:
+            handle.write(code_snippet)
+        compiled = subprocess.run(
+            cmd + ["-c", src, "-o", obj],
+            capture_output=True,
+        )
+        return compiled.returncode == 0
     finally:
         # On Windows another process can still hold a probe file open, and a
         # scratch directory that cannot be removed must not fail the check.
@@ -96,7 +123,7 @@ class CompilerChecker:
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 futures = [
                     executor.submit(check_language, "c"),
-                    executor.submit(check_language, "fortran", fortran77_code),
+                    executor.submit(check_language, "fortran", fortran77_code, ".f"),
                     executor.submit(check_language, "fortran", fortran90_code)
                 ]
 
