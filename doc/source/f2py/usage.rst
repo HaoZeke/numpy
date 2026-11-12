@@ -153,6 +153,11 @@ Among other options (see below) and options described for previous modes, the fo
    .. versionchanged:: 2.5.0
       The ``distutils`` backend has been removed.
 
+   .. versionchanged:: 2.6.0
+      Options of the removed backend, such as ``--fcompiler``, ``--opt`` or
+      ``--link-<resource>``, are rejected with an error instead of being
+      ignored. See :ref:`f2py-meson-distutils` for their replacements.
+
 Common build flags:
 
 ``--backend <backend_type>``

@@ -154,6 +154,21 @@ The compiler wrapper and MPI libraries must belong to the same installation.
 
   python -m numpy.f2py -c fib.f90 -m fib -lmylib -L/path/to/mylib
 
+1.2.6 Removed options
+^^^^^^^^^^^^^^^^^^^^^
+
+``f2py`` exits with an error when it is passed an option that only the
+``distutils`` backend understood. Use these instead:
+
+* ``--backend distutils``: drop it, ``meson`` is the only backend.
+* ``--fcompiler``, ``--f77exec``, ``--f90exec`` and ``--help-fcompiler``: set
+  the ``FC`` environment variable, see `1.2.3 Pass a compiler name`_.
+* ``--compiler``: set the ``CC`` environment variable.
+* ``--opt``, ``--arch``, ``--noopt`` and ``--noarch``: pass the compiler flags
+  with ``--f77flags`` or ``--f90flags``.
+* ``--link-<resource>`` and ``--help-link``: declare the dependency with
+  ``--dep``, see `1.2.4 Dependencies`_.
+
 1.3 Customizing builds
 ~~~~~~~~~~~~~~~~~~~~~~
 

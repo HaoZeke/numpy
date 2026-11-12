@@ -130,18 +130,8 @@ build backend options (only effective with -c)
 [NO_MESON] marks options of the removed numpy.distutils backend,
 which are accepted and ignored:
 
-  --fcompiler=         Specify Fortran compiler type by vendor [NO_MESON]
-  --compiler=          Specify distutils C compiler type [NO_MESON]
-
-  --help-fcompiler     List available Fortran compilers and exit [NO_MESON]
-  --f77exec=           Specify the path to F77 compiler [NO_MESON]
-  --f90exec=           Specify the path to F90 compiler [NO_MESON]
   --f77flags=          Specify F77 compiler flags
   --f90flags=          Specify F90 compiler flags
-  --opt=               Specify optimization flags [NO_MESON]
-  --arch=              Specify architecture specific optimization flags [NO_MESON]
-  --noopt              Compile without optimization [NO_MESON]
-  --noarch             Compile without arch-dependent optimization [NO_MESON]
   --debug              Compile with debugging information
 
   --dep                <dependency>
@@ -170,8 +160,13 @@ which are accepted and ignored:
   --backend            <backend_type>
                        Specify the build backend for the compilation process.
                        The only supported backend is 'meson', which is the
-                       default. The 'distutils' backend has been removed;
-                       requesting it falls back to 'meson'.
+                       default. The 'distutils' backend was removed in
+                       NumPy 2.5.0.
+
+  The Fortran and C compilers are selected with the FC and CC environment
+  variables. The options of the removed distutils backend (--fcompiler,
+  --compiler, --f77exec, --f90exec, --opt, --arch, --noopt, --noarch,
+  --help-fcompiler, --link-<resource> and --help-link) are rejected.
 
 Extra options (only effective with -c):
 
@@ -623,11 +618,53 @@ def get_newer_options(iline):
 def make_f2py_compile_parser():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--dep", action="append", dest="dependencies")
-    parser.add_argument("--backend", choices=['meson', 'distutils'], default='meson')
+    parser.add_argument("--backend", choices=['meson'], default='meson')
     parser.add_argument("-m", dest="module_name")
     parser.add_argument("--cross-file", action="append", dest="cross_files")
     parser.add_argument("--native-file", action="append", dest="native_files")
     return parser
+
+
+# Options of the numpy.distutils backend, which was removed in NumPy 2.5.0,
+# and what replaces them for the meson backend
+_removed_distutils_options = {
+    **dict.fromkeys(
+        ["--fcompiler", "--f90compiler", "--fcompiler-exec", "--f90compiler-exec",
+         "--f77exec", "--f90exec", "--help-fcompiler"],
+        "select the Fortran compiler with the FC environment variable"),
+    **dict.fromkeys(
+        ["--compiler", "--help-compiler"],
+        "select the C compiler with the CC environment variable"),
+    **dict.fromkeys(
+        ["--opt", "--arch", "--noopt", "--noarch"],
+        "pass compiler flags with --f77flags or --f90flags"),
+    **dict.fromkeys(
+        ["--link-", "--help-link"],
+        "link dependencies with --dep <dependency>"),
+}
+
+def _reject_distutils_options(argv):
+    """Exit if `argv` uses options of the removed distutils backend."""
+    rejected = []
+    for i, arg in enumerate(argv):
+        if arg == "--backend=distutils" or argv[i:i + 2] == ["--backend", "distutils"]:
+            rejected.append(("--backend distutils",
+                             "drop it, meson is the only backend"))
+            continue
+        name = arg.split("=", 1)[0]
+        if name.startswith("--link-"):
+            name = "--link-"
+        if name in _removed_distutils_options:
+            rejected.append((arg, _removed_distutils_options[name]))
+    if rejected:
+        errmess(
+            "f2py: error: the distutils backend was removed in NumPy 2.5.0,"
+            " replace its options:\n"
+            + "".join(f"  {arg}: {hint}\n" for arg, hint in rejected)
+            + "See https://numpy.org/doc/stable/f2py/buildtools/"
+            "distutils-to-meson.html\n"
+        )
+        sys.exit(2)
 
 def preparse_sysargv():
     # To keep backwards bug compatibility, newer flags are handled by argparse,
@@ -638,14 +675,9 @@ def preparse_sysargv():
     sys.argv = [sys.argv[0]] + remaining_argv
 
     backend_key = args.backend
-    if backend_key == 'distutils':
-        outmess("The distutils backend has been removed,"
-                " using the meson backend instead.\n")
-        backend_key = "meson"
-
     return {
         "dependencies": args.dependencies or [],
-        "backend": backend_key,
+        "backend": args.backend,
         "modulename": args.module_name,
         "cross_files": args.cross_files or [],
         "native_files": args.native_files or [],
@@ -683,12 +715,6 @@ def run_compile():
     else:
         remove_build_dir = 1
         build_dir = tempfile.mkdtemp()
-
-    _reg1 = re.compile(r'--link-')
-    sysinfo_flags = [_m for _m in sys.argv[1:] if _reg1.match(_m)]
-    sys.argv = [_m for _m in sys.argv if _m not in sysinfo_flags]
-    if sysinfo_flags:
-        sysinfo_flags = [f[7:] for f in sysinfo_flags]
 
     _reg2 = re.compile(
         r'--((no-|)(wrap-functions|lower|freethreading-compatible|latex-doc)|debug-capi|quiet|skip-empty-wrappers)|-include')
@@ -788,9 +814,9 @@ def run_compile():
         define_macros,
         undef_macros,
         f2py_flags,
-        sysinfo_flags,
+        [],
         fc_flags,
-        flib_flags,
+        [],
         setup_flags,
         remove_build_dir,
         {
@@ -819,6 +845,7 @@ def validate_modulename(pyf_files, modulename='untitled'):
     return modulename
 
 def main():
+    _reject_distutils_options(sys.argv[1:])
     if '-c' in sys.argv[1:]:
         run_compile()
     else:
