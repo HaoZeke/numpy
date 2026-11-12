@@ -169,6 +169,16 @@ class TestExternal(util.F2PyTest):
         assert r == 123
 
 
+class TestExternalStatementAndType:
+    # gh-28605: ``external fcn`` followed by a type statement for ``fcn``
+    # recorded the dummy once per statement
+    def test_externals_once(self):
+        fpath = util.getpath("tests", "src", "crackfortran", "gh17859.f")
+        mod = crackfortran.crackfortran([str(fpath)])
+        rout = next(b for b in mod if b["name"] == "external_as_statement")
+        assert rout["externals"] == ["fcn"]
+
+
 @pytest.mark.slow
 def test_gh28605_typed_external_without_call(tmp_path):
     # `external p` plus `real*8 p` and no call used to emit invalid C.

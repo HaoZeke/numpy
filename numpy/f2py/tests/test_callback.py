@@ -612,6 +612,48 @@ class TestGH18767(util.F2PyTest):
         self.module.call_cb(cb, s)
         assert seen == [(LEN_BEYOND_INT,)]
         assert (s[0], s[-1]) == (b"a", b"Z")
+class TestGH28605(util.F2PyTest):
+    # EXTERNAL dummies that the routine never calls must still be wrapped
+    sources = [util.getpath("tests", "src", "callback", "gh28605.f90")]
+
+    def test_typed(self):
+        assert self.module.tcb(lambda: 0.0) == 1.0
+
+    def test_untyped(self):
+        assert self.module.scb(lambda: None) == 2
+
+    def test_passed_on(self):
+        assert self.module.forward(lambda: 2.5) == 2.5
+
+
+class TestGH28605Signature:
+    def test_no_arguments(self):
+        fpath = util.getpath("tests", "src", "callback", "gh28605.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        cbs = {m["name"]: m["body"][0]["body"][0]
+               for m in mod if "__user__" in m["name"]}
+        for module, block, name in [("tcb", "function", "p"),
+                                    ("scb", "subroutine", "s")]:
+            cb = cbs[f"{module}__user__routines"]
+            assert (cb["block"], cb["name"], cb["args"]) == (block, name, [])
+        p = cbs["tcb__user__routines"]["vars"]["p"]
+        assert (p["typespec"], p["kindselector"]) == ("real", {"*": "8"})
+        pyf = crackfortran.crack2fortran(mod)
+        assert "use tcb__user__routines" in pyf
+        # forward does not call g. It passes g to callee, and callee calls
+        # f with no arguments, so g reuses that signature.
+        fwd = next(b for b in mod if b["name"] == "forward")
+        assert fwd["use"]["callee__user__routines"]["map"] == {"g": "f"}
+        assert "forward__user__routines" not in cbs
+        assert "use callee__user__routines, g=>f" in pyf
+        fsig = cbs["callee__user__routines"]
+        assert (fsig["block"], fsig["name"], fsig["args"]) == ("function", "f", [])
+
+    def test_signature_file_kept(self):
+        fpath = util.getpath("tests", "src", "callback", "gh28605.pyf")
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert [m["name"] for m in mod] == ["gh28605__user__routines",
+                                           "gh28605"]
 
 
 @pytest.mark.slow
@@ -679,3 +721,102 @@ if abs(got - (-1 + 0j)) > 1e-6:
         check=False,
     )
     assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
+@pytest.mark.slow
+class TestGH22451(util.F2PyTest):
+    # gh-22451: an EXTERNAL dummy that is only passed on to another routine
+    sources = [util.getpath("tests", "src", "callback", "gh22451.f90")]
+
+    def test_identity(self):
+        # fun1 calls the callback with the integer literal 1.
+        argument = 1
+        assert self.module.fun2(argument, lambda x: x) == float(argument)
+
+    def test_scaled(self):
+        # Distinct from 1 so a dropped callback return cannot pass.
+        argument = 1
+        scale = 10.0
+        result = self.module.fun2(argument, lambda x: scale * x)
+        assert result == scale * argument
+
+
+class TestGH22451Signature:
+    def test_reuses_callee_signature(self):
+        fpath = util.getpath("tests", "src", "callback", "gh22451.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        fun2 = next(b for b in mod if b["name"] == "fun2")
+        assert fun2["use"]["fun1__user__routines"]["map"] == {"myfun2": "myfun1"}
+        names = [m["name"] for m in mod]
+        assert "fun1__user__routines" in names
+        assert "fun2__user__routines" not in names
+        pyf = crackfortran.crack2fortran(mod)
+        assert "use fun1__user__routines, myfun2=>myfun1" in pyf
+
+    def test_interface_block_wins(self, tmp_path):
+        src = tmp_path / "iface.f90"
+        src.write_text(textwrap.dedent("""\
+            function fun2(myfun2)
+                implicit none
+                real(8) :: fun2
+                interface
+                    function myfun2(x)
+                        real(8) :: myfun2
+                        real(8) :: x
+                    end function myfun2
+                end interface
+                fun2 = fun1(myfun2)
+            end function fun2
+
+            function fun1(myfun1)
+                implicit none
+                real(8) :: fun1
+                real(8), external :: myfun1
+                fun1 = myfun1(1)
+            end function fun1
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        pyf = crackfortran.crack2fortran(mod)
+        assert "function myfun2(x)" in pyf
+        assert "myfun2=>myfun1" not in pyf
+
+    def test_missing_callee_keeps_no_arguments(self, tmp_path):
+        src = tmp_path / "missing.f90"
+        src.write_text(textwrap.dedent("""\
+            function t(p)
+                implicit none
+                real(8) :: t
+                real(8), external :: p
+                call missing(p)
+                t = 1.0
+            end function t
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        cbs = {m["name"]: m["body"][0]["body"][0]
+               for m in mod if "__user__" in m["name"]}
+        cb = cbs["t__user__routines"]
+        assert (cb["block"], cb["name"], cb["args"]) == ("function", "p", [])
+
+
+@pytest.mark.slow
+class TestGH24284(util.F2PyTest):
+    # gh-24284: fixed-form EXTERNAL dummies passed down, then called
+    sources = [util.getpath("tests", "src", "callback", "gh24284.f")]
+
+    def test_both_called(self):
+        # divam calls the typed callback with this integer.
+        n_value = 4
+        # Value the untyped callback must then receive.
+        typed_return = 3.0
+        seen = {}
+
+        def typed_cb(n):
+            seen["typed"] = n
+            return typed_return
+
+        def untyped_cb(n, y):
+            seen["untyped_n"] = n
+            seen["untyped_y"] = y
+
+        self.module.diva(typed_cb, untyped_cb, n_value)
+        assert int(seen["typed"]) == n_value
+        assert int(seen["untyped_n"]) == n_value
+        assert seen["untyped_y"] == typed_return

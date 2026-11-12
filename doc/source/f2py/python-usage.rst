@@ -171,9 +171,16 @@ In Python:
   :language: python
 
 In the above example F2PY was able to guess accurately the signature
-of the call-back function. However, sometimes F2PY cannot establish the
-appropriate signature; in these cases the signature of the call-back
-function must be explicitly defined in the signature file.
+of the call-back function from the way the routine calls it. A call-back
+argument that the routine never calls takes no arguments, unless the routine
+passes it to another routine in the same source whose matching argument
+already has a signature. The passed argument reuses that signature, and
+``f2py -h`` writes a ``use`` rename such as ``local=>dummy``. Otherwise the
+call-back is a function of its declared type, or a subroutine if it has no
+type. An interface block or a signature in a signature file is kept as
+written. However, sometimes F2PY cannot establish the appropriate signature;
+in these cases the signature of the call-back function must be explicitly
+defined in the signature file.
 
 To facilitate this, signature files may contain special modules (the names of
 these modules contain the special ``__user__`` sub-string) that define the
