@@ -159,6 +159,8 @@ except ImportError:
     charset_normalizer = None
 
 from . import __version__, symbolic
+from ._isocbind import isoc_kindmap
+from ._isofenv import isof_kindmap
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -1536,19 +1538,21 @@ def analyzeline(m, case, line):
         groupcache[groupcounter]['common'] = commonkey
         previous_context = ('common', bn, groupcounter)
     elif case == 'use':
+        # F2018 R1409: USE [[, module-nature] ::] module-name ...
         m1 = re.match(
-            r'\A\s*(?P<name>\b\w+\b)\s*((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z', m.group('after'), re.I)
+            r'\A\s*((,\s*(intrinsic|non_intrinsic)\s*)?::)?'
+            r'\s*(?P<name>\b\w+\b)\s*((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z', m.group('after'), re.I)
         if m1:
             mm = m1.groupdict()
             if 'use' not in groupcache[groupcounter]:
                 groupcache[groupcounter]['use'] = {}
             name = m1.group('name')
-            groupcache[groupcounter]['use'][name] = {}
+            use = {}
             isonly = 0
             if 'list' in mm and mm['list'] is not None:
                 if 'notonly' in mm and mm['notonly'] is None:
                     isonly = 1
-                groupcache[groupcounter]['use'][name]['only'] = isonly
+                use['only'] = isonly
                 ll = [x.strip() for x in mm['list'].split(',')]
                 rl = {}
                 for l in ll:
@@ -1563,7 +1567,9 @@ def analyzeline(m, case, line):
                                 f'analyzeline: Not local=>use pattern found in {repr(l)}\n')
                     else:
                         rl[l] = l
-                    groupcache[groupcounter]['use'][name]['map'] = rl
+                    use['map'] = rl
+            uses = groupcache[groupcounter]['use']
+            uses[name] = _merge_use(uses[name], use) if name in uses else use
         else:
             print(m.groupdict())
             outmess('analyzeline: Could not crack the use statement.\n')
@@ -2001,13 +2007,34 @@ def setmesstext(block):
         pass
 
 
+def _merge_use(old, new):
+    """Combine two USE records of the same module.
+
+    Every name either record makes accessible stays accessible: ONLY
+    restricts access only if each record has it (F2018 14.2.2).
+    """
+    only = old.get('only', 0) and new.get('only', 0)
+    rmap = {**old.get('map', {}), **new.get('map', {})}
+    if not (only or rmap):
+        return {}
+    return {'only': only, 'map': rmap}
+
+
 def get_usedict(block):
     usedict = {}
     if 'parent_block' in block:
         usedict = get_usedict(block['parent_block'])
-    if 'use' in block:
-        usedict.update(block['use'])
+    # Names of the host's USE stay visible by host association.
+    for name, use in block.get('use', {}).items():
+        usedict[name] = _merge_use(usedict[name], use) if name in usedict else use
     return usedict
+
+
+# Named kinds of the intrinsic modules that the kind maps know by name
+_intrinsic_kinds = {
+    'iso_c_binding': isoc_kindmap,
+    'iso_fortran_env': isof_kindmap,
+}
 
 
 def get_useparameters(block, param_map=None):
@@ -2020,6 +2047,14 @@ def get_useparameters(block, param_map=None):
         return param_map
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
+        if usename in _intrinsic_kinds and usename not in f90modulevars:
+            # A kind imported under a local name (dp => real64) is stored
+            # as the intrinsic name.
+            for local, name in mapping.get('map', {}).items():
+                local, name = local.lower(), name.lower()
+                if local != name and name in _intrinsic_kinds[usename]:
+                    param_map[local] = name
+            continue
         if usename not in f90modulevars:
             outmess(f'get_useparameters: no module {usename} info used by '
                     f'{block.get("name")}\n')
@@ -2857,9 +2892,10 @@ def analyzevars(block):
 
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
-                l = vars[n]['kindselector']['kind']
+                # Kind names are case insensitive, the kind maps are lower case
+                l = vars[n]['kindselector']['kind'].lower()
                 try:
-                    l = str(eval(l, {}, params))
+                    l = str(eval(l, {}, params)).lower()
                 except Exception:
                     pass
                 vars[n]['kindselector']['kind'] = l
@@ -3130,6 +3166,7 @@ def analyzevars(block):
                             pass
                         if kindselect:
                             if 'kind' in kindselect:
+                                kindselect['kind'] = kindselect['kind'].lower()
                                 try:
                                     kindselect['kind'] = eval(
                                         kindselect['kind'], {}, params)
@@ -3599,7 +3636,7 @@ def use2fortran(use, tab=''):
         if 'map' in use[m] and use[m]['map']:
             c = ' '
             for k in list(use[m]['map'].keys()):
-                if k == use[m]['map'][k]:
+                if k == use[m]['map'][k] and use[m].get('only'):
                     ret = f'{ret}{c}{k}'
                     c = ','
                 else:

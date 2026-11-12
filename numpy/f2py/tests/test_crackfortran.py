@@ -324,6 +324,167 @@ class TestSignatureInterface:
             assert word not in interfaces
 
 
+class TestUseStatement:
+    # gh-17563: USE statements with a module-nature (F2018 R1409)
+    def test_module_nature(self, tmp_path):
+        src = tmp_path / "use_nature.f90"
+        src.write_text(textwrap.dedent("""\
+            module use_nature
+              use, intrinsic :: iso_fortran_env, only: wp => real64
+              use, non_intrinsic :: helper
+              use :: other, only: x
+            end module use_nature
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        assert mod[0]["use"] == {
+            "iso_fortran_env": {"only": 1, "map": {"wp": "real64"}},
+            "helper": {},
+            "other": {"only": 1, "map": {"x": "x"}},
+        }
+
+    def test_repeated_use_merges(self, tmp_path):
+        # gh-17563: a second USE of a module must not discard the first
+        src = tmp_path / "use_repeat.f90"
+        src.write_text(textwrap.dedent("""\
+            subroutine use_repeat(i, x)
+              use iso_fortran_env, only: sp => real32, dp => real64
+              use iso_fortran_env, only: int32
+              use helper, only: a
+              use helper
+              integer(int32), intent(in) :: i
+              real(dp), intent(out) :: x
+            end subroutine use_repeat
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        assert mod[0]["use"] == {
+            "iso_fortran_env": {
+                "only": 1,
+                "map": {"sp": "real32", "dp": "real64", "int32": "int32"}},
+            "helper": {"only": 0, "map": {"a": "a"}},
+        }
+        pyf = crackfortran.crack2fortran(mod)
+        assert "use iso_fortran_env, only: sp=>real32,dp=>real64,int32" in pyf
+        assert "use helper, a=>a" in pyf
+
+    def test_host_use_merges(self, tmp_path):
+        src = tmp_path / "use_host.f90"
+        src.write_text(textwrap.dedent("""\
+            module use_host
+              use iso_fortran_env, only: wp => real64
+            contains
+              subroutine s(n)
+                use iso_fortran_env, only: int32
+                integer(int32), intent(in) :: n
+              end subroutine s
+            end module use_host
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        s = mod[0]["body"][0]
+        assert crackfortran.get_usedict(s)["iso_fortran_env"] == {
+            "only": 1, "map": {"wp": "real64", "int32": "int32"}}
+
+    def test_renamed_intrinsic_kinds(self, tmp_path):
+        # gh-17563, gh-30352: renamed kinds resolve to the intrinsic names
+        src = tmp_path / "use_rename.f90"
+        src.write_text(textwrap.dedent("""\
+            module use_rename
+              use, intrinsic :: iso_fortran_env, only: wp => real64
+              use, intrinsic :: iso_c_binding, only: cdp => c_double
+            contains
+              subroutine s(x, z, n)
+                use iso_fortran_env, only: ik => int64
+                real(wp), intent(inout) :: x
+                complex(kind=cdp), intent(inout) :: z
+                integer(ik), intent(in) :: n
+              end subroutine s
+            end module use_rename
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        vs = mod[0]["body"][0]["vars"]
+        assert [vs[n]["kindselector"]["kind"] for n in "xzn"] == [
+            "real64", "c_double", "int64"]
+        assert [capi_maps.getctype(vs[n]) for n in "xzn"] == [
+            "double", "complex_double", "long_long"]
+
+    def test_kind_names_ignore_case(self, tmp_path, monkeypatch):
+        # signature files keep their case unless --lower is given
+        monkeypatch.setattr(crackfortran, "dolowercase", 0)
+        src = tmp_path / "use_case.pyf"
+        src.write_text(textwrap.dedent("""\
+            python module use_case
+                interface
+                    subroutine s(x, z, n)
+                        use iso_fortran_env
+                        use iso_c_binding, only: DP => C_DOUBLE
+                        REAL(KIND=REAL64), intent(inout) :: x
+                        complex(dp), intent(inout) :: z
+                        integer(Int64), intent(in) :: n
+                    end subroutine s
+                end interface
+            end python module use_case
+            """))
+        mod = crackfortran.crackfortran([str(src)])
+        vs = mod[0]["body"][0]["body"][0]["vars"]
+        assert [capi_maps.getctype(vs[n]) for n in "xzn"] == [
+            "double", "complex_double", "long_long"]
+
+
+class TestGH30352Cases:
+    """Cases from gh-30352 that the gh-17563 tests do not already build."""
+
+    @pytest.mark.parametrize("stmt", [
+        "use, intrinsic :: iso_fortran_env, only: dp => real64",
+        "use,intrinsic::iso_fortran_env, dp => real64",
+        "use :: iso_fortran_env, only: dp => real64",
+    ])
+    def test_intrinsic_spellings(self, tmp_path, capsys, stmt):
+        fpath = tmp_path / "nature.f90"
+        fpath.write_text(
+            "module m\n"
+            f"  {stmt}\n"
+            "contains\n"
+            "  subroutine s(x)\n"
+            "    complex(kind=dp), intent(inout) :: x\n"
+            "  end subroutine s\n"
+            "end module m\n"
+        )
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert "Could not crack the use statement" not in capsys.readouterr().out
+        var = mod[0]["body"][0]["vars"]["x"]
+        assert var["kindselector"] == {"kind": "real64"}
+        assert capi_maps.getctype(var) == "complex_double"
+
+    def test_non_intrinsic_only(self, tmp_path):
+        fpath = tmp_path / "nature.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module kinds
+              integer, parameter :: dp = 8
+            end module kinds
+            module m
+              use, non_intrinsic :: kinds, only: wp => dp
+            end module m
+            """))
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert mod[1]["use"] == {"kinds": {"only": 1, "map": {"wp": "dp"}}}
+
+    def test_rename_without_lowercasing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crackfortran, "dolowercase", 0)
+        fpath = tmp_path / "upper.f90"
+        fpath.write_text(
+            "MODULE M\n"
+            "  USE ISO_FORTRAN_ENV, ONLY: DP => REAL64\n"
+            "CONTAINS\n"
+            "  SUBROUTINE S(X)\n"
+            "    COMPLEX(KIND=DP), INTENT(INOUT) :: X\n"
+            "  END SUBROUTINE S\n"
+            "END MODULE M\n"
+        )
+        mod = crackfortran.crackfortran([str(fpath)])
+        var = mod[0]["body"][0]["vars"]["X"]
+        assert var["kindselector"] == {"kind": "real64"}
+        assert capi_maps.getctype(var) == "complex_double"
+
+
 class TestStringLiteralDepend:
     # gh-28700: identifiers inside a character parameter's literal value
     # must not be harvested as dependencies (a self-dependency crashes the
