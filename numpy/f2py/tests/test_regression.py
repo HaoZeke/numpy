@@ -542,6 +542,16 @@ class TestComplexStructCompat(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestSharedLibraryInterface(util.F2PyTest):
+    # Check that explicit interfaces to procedures in shared libraries link
+    # with compilers that apply -fvisibility to references, like ifx
+    sources = [util.getpath("tests", "src", "regression", "shlib_interface.f90")]
+
+    def test_gh27163(self):
+        assert self.module.get_pid() == os.getpid()
+
+
+@pytest.mark.slow
 class TestAssignmentOnlyModules(util.F2PyTest):
     # Ensure that variables are exposed without functions or subroutines in a module
     sources = [util.getpath("tests", "src", "regression", "assignOnlyModule.f90")]
