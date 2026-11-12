@@ -415,3 +415,29 @@ class TestSelectedForwardedCallbackArguments(util.F2PyTest):
         assert self.module.fun2(0.0, callback) == 1
         assert received == [1]
         assert not hasattr(self.module, "fun1")
+
+
+@pytest.mark.slow
+class TestGH24284(util.F2PyTest):
+    # gh-24284: fixed-form EXTERNAL dummies passed down, then called
+    sources = [util.getpath("tests", "src", "callback", "gh24284.f")]
+
+    def test_both_called(self):
+        # divam calls the typed callback with this integer.
+        n_value = 4
+        # Value the untyped callback must then receive.
+        typed_return = 3.0
+        seen = {}
+
+        def typed_cb(n):
+            seen["typed"] = n
+            return typed_return
+
+        def untyped_cb(n, y):
+            seen["untyped_n"] = n
+            seen["untyped_y"] = y
+
+        self.module.diva(typed_cb, untyped_cb, n_value)
+        assert int(seen["typed"]) == n_value
+        assert int(seen["untyped_n"]) == n_value
+        assert seen["untyped_y"] == typed_return
