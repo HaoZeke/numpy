@@ -34,6 +34,7 @@ fib_source = custom_target('fibmodule.c',
 py.extension_module('fib',
   ['fib.f90', fib_source, incdir_f2py / 'fortranobject.c'],
   dependencies : [np_dep, f2py_dep],
+  link_language: 'fortran',
   subdir: 'fib_wrapper',
   install : true,
 )

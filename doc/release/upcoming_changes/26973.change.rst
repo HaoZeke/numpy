@@ -1,0 +1,6 @@
+Documented Meson examples link with the Fortran compiler
+--------------------------------------------------------
+The hand-written ``meson.build`` examples linked the extension with
+the C compiler. ifx then could not find ``libifcore`` or ``libimf``.
+Those examples now set ``link_language`` to Fortran, which is what
+``f2py`` generates for its own builds.

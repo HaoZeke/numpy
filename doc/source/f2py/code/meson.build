@@ -37,5 +37,6 @@ py.extension_module('fib2',
   incdir_f2py / 'fortranobject.c',
   include_directories: inc_np,
   dependencies : py_dep,
+  link_language: 'fortran',
   install : true
 )
