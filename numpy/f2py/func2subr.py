@@ -312,13 +312,39 @@ def createsubrwrapper(rout, signature=0):
     return ret[0]
 
 
+def _copy_for_wrap(rout):
+    """Copy a routine for a Fortran wrapper.
+
+    A module procedure's ``value`` dummy is a property of that procedure.
+    The wrapper receives the argument by reference, and the compiler
+    applies ``value`` when the wrapper calls the original. C therefore
+    sees an ordinary dummy and passes a pointer. That matches gfortran,
+    which would otherwise receive the value in a register, and ifx,
+    which dereferences the first argument (gh-21665).
+    """
+    variables = rout.get('vars', {})
+    has_value = ismoduleroutine(rout) and any(
+        'value' in variables.get(arg, {}).get('attrspec', [])
+        for arg in rout.get('args', ())
+    )
+    if not has_value:
+        return copy.copy(rout)
+    copied = copy.deepcopy(rout)
+    for arg in copied.get('args', ()):
+        var = copied.get('vars', {}).get(arg, {})
+        attr = var.get('attrspec')
+        if attr and 'value' in attr:
+            var['attrspec'] = [item for item in attr if item != 'value']
+    return copied
+
+
 def assubr(rout):
     if isfunction_wrap(rout):
         fortranname = getfortranname(rout)
         name = rout['name']
         outmess('\t\tCreating wrapper for Fortran function '
                 f'"{name}"("{fortranname}")...\n')
-        rout = copy.copy(rout)
+        rout = _copy_for_wrap(rout)
         fname = name
         rname = fname
         if 'result' in rout:
@@ -343,6 +369,6 @@ def assubr(rout):
         name = rout['name']
         outmess('\t\tCreating wrapper for Fortran subroutine '
                 f'"{name}"("{fortranname}")...\n')
-        rout = copy.copy(rout)
+        rout = _copy_for_wrap(rout)
         return rout, createsubrwrapper(rout)
     return rout, ''

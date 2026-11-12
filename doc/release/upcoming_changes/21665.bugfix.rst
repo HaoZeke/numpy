@@ -1,0 +1,8 @@
+``value`` arguments follow the compiler that builds the wrapper
+---------------------------------------------------------------
+``f2py`` passed a Fortran ``value`` dummy by value. That matches
+gfortran. ifx passes a non-``bind(c)`` ``value`` dummy by reference, so
+the generated call dereferenced the value and crashed. A module
+procedure with ``value`` is now reached through a Fortran wrapper, and
+the compiler that compiles the wrapper applies its own convention.
+``bind(c)`` procedures stay pass-by-value.

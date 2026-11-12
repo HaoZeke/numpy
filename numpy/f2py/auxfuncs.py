@@ -309,10 +309,25 @@ def issubroutine(rout):
     return 'block' in rout and 'subroutine' == rout['block']
 
 
+def routine_has_value(rout):
+    """True when a dummy argument has the Fortran ``value`` attribute."""
+    variables = rout.get('vars', {})
+    return any(
+        'value' in variables.get(arg, {}).get('attrspec', [])
+        for arg in rout.get('args', ())
+    )
+
+
 def issubroutine_wrap(rout):
     if isintent_c(rout):
         return 0
-    return issubroutine(rout) and hasassumedshape(rout)
+    # gfortran passes a non-BIND(C) value dummy by value. ifx passes the
+    # same dummy by reference (gh-21665). A module wrapper lets the
+    # compiler that compiles the call apply its own convention.
+    # BIND(C) procedures are excluded above and stay pass-by-value.
+    return issubroutine(rout) and (
+        hasassumedshape(rout)
+        or (ismoduleroutine(rout) and routine_has_value(rout)))
 
 def isattr_value(var):
     return 'value' in var.get('attrspec', [])
