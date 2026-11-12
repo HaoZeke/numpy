@@ -1,0 +1,5 @@
+``f2py`` rejects the unused options of the removed ``distutils`` backend
+------------------------------------------------------------------------
+``f2py`` now exits with an error that names the replacement when it is passed ``--backend distutils`` or a build option that only the removed ``distutils`` backend understood and that meson does not implement: ``--fcompiler``, ``--compiler``, ``--f77exec``, ``--f90exec``, ``--help-fcompiler``, ``--arch``, ``--noopt``, ``--noarch``, ``--link-<resource>`` and ``--help-link``.
+``--opt=`` is not rejected. It is forwarded to the Fortran compilers.
+Select the compilers with the ``FC`` and ``CC`` environment variables, pass other compiler flags with ``--f77flags`` or ``--f90flags``, and link dependencies with ``--dep``.

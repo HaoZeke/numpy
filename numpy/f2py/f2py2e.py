@@ -569,6 +569,49 @@ def make_f2py_compile_parser():
     parser.add_argument("-m", dest="module_name")
     return parser
 
+
+# Options of the removed numpy.distutils backend that meson does not
+# implement. --opt= is not here: run_compile forwards it to the Fortran
+# compilers (gh-30804).
+_removed_distutils_options = {
+    **dict.fromkeys(
+        ["--fcompiler", "--f90compiler", "--fcompiler-exec", "--f90compiler-exec",
+         "--f77exec", "--f90exec", "--help-fcompiler"],
+        "select the Fortran compiler with the FC environment variable"),
+    **dict.fromkeys(
+        ["--compiler", "--help-compiler"],
+        "select the C compiler with the CC environment variable"),
+    **dict.fromkeys(
+        ["--arch", "--noopt", "--noarch"],
+        "pass compiler flags with --f77flags or --f90flags"),
+    **dict.fromkeys(
+        ["--link-", "--help-link"],
+        "link dependencies with --dep <dependency>"),
+}
+
+def _reject_distutils_options(argv):
+    """Exit if `argv` uses a distutils option that meson does not implement."""
+    rejected = []
+    for i, arg in enumerate(argv):
+        if arg == "--backend=distutils" or argv[i:i + 2] == ["--backend", "distutils"]:
+            rejected.append(("--backend distutils",
+                             "drop it, meson is the only backend"))
+            continue
+        name = arg.split("=", 1)[0]
+        if name.startswith("--link-"):
+            name = "--link-"
+        if name in _removed_distutils_options:
+            rejected.append((arg, _removed_distutils_options[name]))
+    if rejected:
+        errmess(
+            "f2py: error: the distutils backend was removed in NumPy 2.5.0,"
+            " replace its options:\n"
+            + "".join(f"  {arg}: {hint}\n" for arg, hint in rejected)
+            + "See https://numpy.org/doc/stable/f2py/buildtools/"
+            "distutils-to-meson.html\n"
+        )
+        sys.exit(2)
+
 def preparse_sysargv():
     # To keep backwards bug compatibility, newer flags are handled by argparse,
     # and `sys.argv` is passed to the rest of `f2py` as is.
@@ -756,6 +799,7 @@ def validate_modulename(pyf_files, modulename='untitled'):
     return modulename
 
 def main():
+    _reject_distutils_options(sys.argv[1:])
     if '-c' in sys.argv[1:]:
         run_compile()
     else:
