@@ -263,8 +263,12 @@ class TestLogicalBoolArrays(util.F2PyTest):
         a = np.array([True, False, True])
         with pytest.raises(ValueError, match="not compatible"):
             self.module.logical_bool.negate_l1(a)
-        out = self.module.logical_bool.negate_l1_inout(a)
-        npt.assert_array_equal(out, [False, True, False])
+        out = np.asarray(self.module.logical_bool.negate_l1_inout(a))
+        # gfortran's bytes are 0 and 1, so they compare equal to False
+        # and True. ifx complements the byte. The low bit is the truth
+        # value on both compilers.
+        truth = np.bitwise_and(out.view(np.uint8), 1).astype(bool)
+        npt.assert_array_equal(truth, [False, True, False])
         npt.assert_array_equal(a, [True, False, True])
 
         b = a.astype(np.int8)
