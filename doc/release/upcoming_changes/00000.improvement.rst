@@ -1,3 +1,0 @@
-Combine related fixes for reference-docs
-----------------------------------------
-f2py gives an optional size argument of an input array a default. That default is shape(a, 0). It checks the argument with shape(a, 0) == n. This is so since NumPy 1.22. The getting-started guide still showed the older len(a) default. It also showed the old len(a)>=n check. It claimed that n can be smaller than the length of the array. The example for the external attribute showed the same old declaration. Update both to what f2py generates now. Test the getting-started example.

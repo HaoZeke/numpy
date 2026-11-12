@@ -1,0 +1,7 @@
+``f2py`` documentation matches the wrappers it generates
+--------------------------------------------------------
+The getting-started guide, the Fortran support page and
+``numpy.f2py.get_include`` now describe the files a signature-file
+build produces and the ``shape(a, 0)`` default of an optional ``size``
+argument, which is what f2py has generated since NumPy 1.22
+(gh-25424, gh-25616, gh-25654).
