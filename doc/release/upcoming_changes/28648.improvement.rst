@@ -1,0 +1,3 @@
+Pass -D and -U macros through the meson backend
+-----------------------------------------------
+The flags were parsed and then discarded, so Fortran preprocessor branches and documented wrapper defines never reached the compiler (gh-28648).
