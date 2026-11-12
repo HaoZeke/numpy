@@ -14,6 +14,13 @@ add_project_arguments(
   cc.get_supported_arguments( '-fno-strict-aliasing'), language : 'c'
 )
 
+# The C wrappers reference Fortran symbols as lowercase names with a
+# trailing underscore, Intel Fortran on Windows defaults to neither
+if fc.get_id() in ['intel-cl', 'intel-llvm-cl']
+  add_project_arguments('/names:lowercase', '/assume:underscore',
+                        language : 'fortran')
+endif
+
 py = import('python').find_installation('''${python}''', pure: false)
 py_dep = py.dependency()
 

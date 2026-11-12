@@ -343,6 +343,12 @@ def test_gh25415_meson_include_dirs_from_running_numpy():
     meson_build = MesonTemplate(
         modulename="Blah",
         sources=[Path("f90continuation.f90")],
+def test_gh26352_intel_windows_symbol_names():
+    # F_FUNC expects lowercase Fortran symbols with a trailing underscore
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = MesonTemplate(
+        modulename="fib1",
+        sources=[Path("fib1.f90")],
         deps=[],
         libraries=[],
         library_dirs=[],
@@ -434,6 +440,12 @@ def test_gh25415_meson_configures_host_compilers_only(tmp_path):
     compilers = json.loads(intro.read_text())
     assert set(compilers["host"]) == {"c", "fortran"}
     assert not compilers.get("build")
+    intel_windows = "if fc.get_id() in ['intel-cl', 'intel-llvm-cl']"
+    assert intel_windows in meson_build
+    start = meson_build.index(intel_windows)
+    block = meson_build[start:meson_build.index("endif", start)]
+    assert "'/names:lowercase', '/assume:underscore'" in block
+    assert "language : 'fortran'" in block
 
 
 @pytest.mark.slow
