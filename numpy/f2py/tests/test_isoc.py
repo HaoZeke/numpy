@@ -1,9 +1,23 @@
+import os
+
 import pytest
 
 import numpy as np
 from numpy.testing import assert_allclose
 
 from . import util
+
+
+def _xfail_ifx_long_double(dtype):
+    # ifx's c_long_double is IEEE binary128. NumPy's long double on
+    # x86_64 with gcc is 80-bit extended precision stored in 16 bytes.
+    # The widths match and the values do not. This is the same choice
+    # as leaving real128 unmapped.
+    if dtype == np.clongdouble and "ifx" in os.environ.get("FC", ""):
+        pytest.xfail(
+            "ifx c_long_double is IEEE binary128; NumPy long double "
+            "is 80-bit extended precision in 16 bytes"
+        )
 
 
 @pytest.mark.slow
@@ -14,6 +28,7 @@ class TestISOC(util.F2PyTest):
 
     @pytest.mark.parametrize("dtype", [np.complex64, np.complex128, np.clongdouble])
     def test_bindc_complex_float(self, dtype):
+        _xfail_ifx_long_double(dtype)
         a = np.array([1j, 2j, 3j], dtype=dtype)
         b = np.array([4j, 5j, 6j], dtype=dtype)
         out = {
@@ -28,6 +43,7 @@ class TestISOC(util.F2PyTest):
     # gh-30352
     @pytest.mark.parametrize("dtype", [np.complex64, np.complex128, np.clongdouble])
     def test_complex_real_kinds(self, dtype):
+        _xfail_ifx_long_double(dtype)
         a = np.array([1j, 2j, 3j], dtype=dtype)
         b = np.array([4j, 5j, 6j], dtype=dtype)
         out = {
