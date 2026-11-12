@@ -135,6 +135,14 @@ class TestF77Callback(util.F2PyTest):
             res = f(callback, cu, cu.size)
             assert res == 0
 
+    def test_raising_callback(self):
+        def callback():
+            raise RuntimeError("raised in callback")
+
+        with pytest.raises(RuntimeError, match="raised in callback"):
+            self.module.t(callback)
+        assert self.module.t(lambda: 4) == 4
+
     def test_threadsafety(self):
         # Segfaults if the callback handling is not threadsafe
 
