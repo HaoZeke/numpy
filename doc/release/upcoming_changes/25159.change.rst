@@ -1,0 +1,6 @@
+ifx extensions find ``libifcore`` through the Fortran link
+----------------------------------------------------------
+Linking an ifx object with the C compiler asks for ``libifcore`` and
+``libimf`` and does not search the compiler's library directory. The
+extension is linked with the Fortran compiler, which supplies those
+libraries. A small ifx import covers that path.
