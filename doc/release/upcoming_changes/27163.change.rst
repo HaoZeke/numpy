@@ -1,0 +1,7 @@
+``f2py`` links the OpenMP runtime when ``-qopenmp`` is requested
+----------------------------------------------------------------
+``--f90flags=-qopenmp`` was only a compile flag. ifx still referenced
+``omp_set_num_threads``, and the link did not pull in the OpenMP
+runtime, so the module failed to import. That flag is now also a link
+flag, and the extension is not built with hidden visibility, which
+stopped ifx from binding the reference.

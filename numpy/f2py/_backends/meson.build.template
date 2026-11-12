@@ -45,6 +45,10 @@ py.extension_module('${modulename}',
 ${source_list},
                      fortranobject_c
                      ],
+                     # ifx compiles OpenMP calls as hidden references, which
+                     # cannot bind to libiomp5 (gh-27163).
+                     gnu_symbol_visibility: 'default',
+                     link_language: 'fortran',
                      include_directories: [
                      inc_np,
 ${inc_list}
@@ -60,4 +64,5 @@ ${lib_list}
 ${lib_dir_list}
                      ],
 ${fortran_args}
+${link_args}
                      install : true)

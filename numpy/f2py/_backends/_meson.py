@@ -18,6 +18,11 @@ def _meson_identifier(prefix: str, value: str, index: int) -> str:
     return f"{prefix}_{index}_{safe_value}"
 
 
+def _is_openmp_flag(flag: str) -> bool:
+    token = flag.strip("'\"")
+    return token in {"-qopenmp", "-fopenmp", "-fiopenmp", "-openmp"}
+
+
 class MesonTemplate:
     """Template meson build file generation class."""
 
@@ -136,6 +141,16 @@ class MesonTemplate:
             )
         else:
             self.substitutions["fortran_args"] = ""
+        # -qopenmp/-fopenmp select the OpenMP runtime at link time.
+        # Leaving them as compile-only flags drops omp_set_num_threads
+        # (gh-27163). --allow-shlib-undefined hides that until import.
+        link = [flag for flag in self.fortran_args if _is_openmp_flag(flag)]
+        if link:
+            self.substitutions["link_args"] = (
+                f"{self.indent}link_args: [{', '.join(link)}],"
+            )
+        else:
+            self.substitutions["link_args"] = ""
 
     def generate_meson_build(self):
         for node in self.pipeline:
