@@ -100,10 +100,10 @@ Fortran subroutine ``FIB`` is accessible via ``fib1.fib``::
   ----------
   a : input rank-1 array('d') with bounds (n)
 
-  Other parameters
+  Other Parameters
   ----------------
   n : input int, optional
-      Default: len(a)
+      Default: shape(a, 0)
 
   >>> a = np.zeros(8, 'd')
   >>> fib1.fib(a)
@@ -115,22 +115,16 @@ Fortran subroutine ``FIB`` is accessible via ``fib1.fib``::
   * Note that F2PY recognized that the second argument ``n`` is the
     dimension of the first array argument ``a``. Since by default all
     arguments are input-only arguments, F2PY concludes that ``n`` can
-    be optional with the default value ``len(a)``.
+    be optional with the default value ``shape(a, 0)``, the length of
+    ``a``.
 
-  * One can use different values for optional ``n``::
+  * ``n`` can still be passed explicitly, but an exception is raised when
+    it does not match the shape of the input array ``a``::
 
-      >>> a1 = np.zeros(8, 'd')
-      >>> fib1.fib(a1, 6)
-      >>> print(a1)
-      [ 0.  1.  1.  2.  3.  5.  0.  0.]
-
-    but an exception is raised when it is incompatible with the input
-    array ``a``::
-
-      >>> fib1.fib(a, 10)
+      >>> fib1.fib(a, 6)
       Traceback (most recent call last):
         File "<stdin>", line 1, in <module>
-      fib.error: (len(a)>=n) failed for 1st keyword n: fib:n=10
+      fib1.error: (shape(a, 0) == n) failed for 1st keyword n: fib:n=6
       >>>
 
     F2PY implements basic compatibility checks between related
