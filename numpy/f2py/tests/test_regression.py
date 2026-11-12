@@ -189,7 +189,11 @@ def test_meson_library_names_use_valid_identifiers():
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():
-    # Compile dubious file using passed flags
+    # Compile dubious file using passed flags. -ffixed-form is gfortran's
+    # spelling. ifx rejects it, so the compile stops before the link this
+    # test is checking.
+    if "ifx" in os.environ.get("FC", ""):
+        pytest.skip("-ffixed-form is a gfortran flag and ifx rejects it")
     try:
         aa = util.build_module(
             [util.getpath("tests", "src", "regression", "f77fixedform.f95")],
