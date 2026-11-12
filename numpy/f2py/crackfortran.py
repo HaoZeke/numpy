@@ -169,6 +169,7 @@ from ._isofenv import isof_kindmap
 # As the needed functions cannot be determined by static inspection of the
 # code, it is safest to use import * pending a major refactoring of f2py.
 from .auxfuncs import *
+from .auxfuncs import F2PYError
 
 f2py_version = __version__.version
 
@@ -788,6 +789,7 @@ def crackline(line, reset=0):
         return
     if line == '':
         return
+    _record_callback_calls(line)
     flag = 0
     for pat in [dimensionpattern, externalpattern, intentpattern, optionalpattern,
                 requiredpattern,
@@ -2123,6 +2125,211 @@ def postcrack2(block, tab='', param_map=None):
     return block
 
 
+def _record_callback_calls(line):
+    """Retain procedure actuals whose interfaces come from another routine."""
+    block = groupcache[groupcounter]
+    variables = block.get('vars', {})
+    callbacks = {name for name in block.get('args', ())
+                 if 'external' in variables.get(name, {}).get('attrspec', ())}
+    if not callbacks:
+        return
+    pending = [mask_string_literals(line)]
+    while pending:
+        for match in re.finditer(r'(?<![\w%])\b(\w+)\s*@\(@([^@]*)@\)@', markouterparen(pending.pop())):
+            actuals = []
+            for position, argument in enumerate(markoutercomma(match[2]).split('@,@')):
+                if '(' in argument:
+                    pending.append(argument)
+                keyword, separator, value = argument.partition('=')
+                if not separator:
+                    value, keyword = keyword, None
+                actual = rmbadname1(value.strip())
+                if actual in callbacks:
+                    actuals.append((position, rmbadname1(keyword.strip()) if keyword else None, actual))
+            if actuals:
+                block.setdefault('_f2py_callback_calls', []).append((rmbadname1(match[1]), actuals))
+
+
+def _resolve_forwarded_callbacks(blocks, source_blocks):
+    """Use known consumer interfaces for procedure arguments passed onward."""
+    routines = {}
+    calls = []
+    source_routines = {}
+    source_cache = {}
+
+    def block_slots(body):
+        """Retain each block's owning container through nested parser lists."""
+        for index, block in enumerate(body):
+            if isinstance(block, list):
+                yield from block_slots(block)
+            else:
+                yield body, index, block
+
+    def collect(body, scope=()):
+        for _, _, block in block_slots(body):
+            if block['block'] in ('interface', 'abstract interface'):
+                collect(block.get('body', ()), scope)
+                continue
+            name = block.get('name', '')
+            if block['block'] in ('function', 'subroutine'):
+                routines[scope + (name,)] = block
+                for callee, actuals in block.pop('_f2py_callback_calls', []):
+                    calls.append((block, scope, callee, actuals))
+            collect(block.get('body', ()), scope + (name,))
+
+    def collect_sources(body, scope=()):
+        for _, _, block in block_slots(body):
+            if block['block'] in ('interface', 'abstract interface'):
+                collect_sources(block.get('body', ()), scope)
+                continue
+            name = block.get('name', '')
+            if block['block'] in ('function', 'subroutine'):
+                source_routines[scope + (name,)] = block
+            collect_sources(block.get('body', ()), scope + (name,))
+
+    def lookup(scope, name, table):
+        for depth in range(len(scope), -1, -1):
+            key = scope[:depth] + (name,)
+            if key in table:
+                return key
+        return None
+
+    def callback(block, name):
+        candidates = []
+        for _, _, module in block_slots(usermodules):
+            if module['name'] not in block.get('use', {}):
+                continue
+            if module.get('_f2py_owner', id(block)) != id(block):
+                continue
+            for _, _, interface in block_slots(module.get('body', ())):
+                if interface['block'] not in ('interface', 'abstract interface'):
+                    continue
+                for container, index, routine in block_slots(interface.get('body', ())):
+                    if routine.get('name') == name:
+                        candidates.append((interface, container, index, routine))
+        if len(candidates) > 1:
+            raise F2PYError(f"Ambiguous callback interface for {name!r} in {block['name']!r}")
+        return candidates[0] if candidates else None
+
+    def copy_signature(value):
+        if isinstance(value, dict):
+            return {key: copy_signature(item) for key, item in value.items()
+                    if key not in ('parent_block', '_f2py_uncalled_external')}
+        if isinstance(value, list):
+            return [copy_signature(item) for item in value]
+        return copy.deepcopy(value)
+
+    def signature(routine):
+        names = {name: f'argument_{index}' for index, name in enumerate(routine['args'])}
+
+        def normalized(value):
+            if isinstance(value, str):
+                return re.sub(r'\b\w+\b', lambda match: names.get(match[0], match[0]), value)
+            if isinstance(value, list):
+                return [normalized(item) for item in value]
+            if isinstance(value, dict):
+                return {key: normalized(item) for key, item in value.items()}
+            return value
+
+        def declaration(name, argument=False):
+            variable = routine['vars'][name]
+            result = {key: normalized(variable[key]) for key in
+                      ('typespec', 'kindselector', 'charselector', 'dimension', 'typename') if key in variable}
+            if argument:
+                result['intent'] = variable.get('intent', ['in'])
+                result['optional'] = 'optional' in variable.get('attrspec', ())
+            return result
+
+        result = declaration(routine.get('result', routine['name'])) if isfunction(routine) else None
+        return routine['block'], result, [declaration(name, True) for name in routine['args']]
+
+    def source_callback(key, formal, visiting=frozenset()):
+        cache_key = key, formal
+        if cache_key in source_cache:
+            return source_cache[cache_key]
+        if cache_key in visiting:
+            return None
+        consumer = source_routines[key]
+        for _, _, interface in block_slots(consumer.get('body', ())):
+            if interface['block'] in ('interface', 'abstract interface'):
+                for _, _, routine in block_slots(interface.get('body', ())):
+                    if routine.get('name') == formal:
+                        source_cache[cache_key] = postcrack(copy_signature(routine))
+                        return source_cache[cache_key]
+        found = None
+        for callee, actuals in consumer.get('_f2py_callback_calls', ()):
+            target_key = lookup(key[:-1], callee, source_routines)
+            if target_key is None:
+                continue
+            arguments = source_routines[target_key]['args']
+            for position, keyword, actual in actuals:
+                if actual != formal or (keyword is None and position >= len(arguments)):
+                    continue
+                argument = keyword if keyword is not None else arguments[position]
+                if argument not in arguments:
+                    continue
+                template = source_callback(target_key, argument, visiting | {cache_key})
+                if template is None:
+                    continue
+                if found is not None and signature(found) != signature(template):
+                    raise F2PYError(f"Incompatible interfaces for forwarded callback {formal!r} in {consumer['name']!r}")
+                found = copy_signature(template)
+                if isfunction(found):
+                    found['result'] = found.get('result', found['name'])
+                found['name'] = formal
+        source_cache[cache_key] = found
+        return found
+
+    collect(blocks)
+    collect_sources(source_blocks)
+    changed = True
+    while changed:
+        changed = False
+        for block, scope, callee, actuals in calls:
+            key = lookup(scope, callee, source_routines)
+            if key is None:
+                continue
+            consumer = routines.get(key, source_routines[key])
+            for position, keyword, actual in actuals:
+                if keyword is None and position >= len(consumer['args']):
+                    continue
+                formal = keyword if keyword is not None else consumer['args'][position]
+                if formal not in consumer['args']:
+                    continue
+                target, source = callback(block, actual), callback(consumer, formal)
+                template = source[3] if source is not None and not source[3].get('_f2py_uncalled_external') else source_callback(key, formal)
+                if target is None or template is None:
+                    continue
+                if target[3].get('_f2py_uncalled_external'):
+                    declared = block['vars'][actual]
+                    expected = {key: value for key, value in declared.items()
+                                if key in ('typespec', 'kindselector', 'charselector', 'typename')}
+                    returned = signature(template)[1]
+                    if expected and (returned is None or any(returned.get(key) != value for key, value in expected.items())):
+                        raise F2PYError(f"Incompatible return type for forwarded callback {actual!r} in {block['name']!r}")
+                    inferred = copy_signature(template)
+                    if isfunction(inferred):
+                        inferred['result'] = inferred.get('result', inferred['name'])
+                    inferred['name'] = actual
+                    inferred['parent_block'] = target[0]
+                    target[1][target[2]] = inferred
+                    changed = True
+                elif signature(target[3]) != signature(template):
+                    raise F2PYError(f"Incompatible interfaces for forwarded callback {actual!r} in {block['name']!r}")
+
+    def remove_markers(body):
+        for _, _, block in block_slots(body):
+            if block.get('_f2py_uncalled_external'):
+                outmess(f"postcrack: no resolved interface for external {block['name']!r}, "
+                        "assuming it takes no arguments.\n")
+            block.pop('_f2py_owner', None)
+            block.pop('_f2py_uncalled_external', None)
+            block.pop('_f2py_callback_calls', None)
+            remove_markers(block.get('body', ()))
+
+    remove_markers(usermodules + blocks)
+
+
 def postcrack(block, args=None, tab=''):
     """
     TODO:
@@ -2236,6 +2443,7 @@ def postcrack(block, args=None, tab=''):
             mblock = {'block': 'python module', 'body': [
                 interface], 'vars': {}, 'name': mname, 'interfaced': block['externals']}
             useblock[mname] = {}
+            mblock['_f2py_owner'] = id(block)
             usermodules.append(mblock)
     if useblock:
         block['use'] = useblock
@@ -4113,7 +4321,9 @@ def crackfortran(files):
     readfortrancode(files, crackline)
     outmess('Post-processing...\n', 0)
     usermodules = []
+    source_blocks = copy.deepcopy(grouplist[0])
     postlist = postcrack(grouplist[0])
+    _resolve_forwarded_callbacks(postlist, source_blocks)
     outmess('Applying post-processing hooks...\n', 0)
     for hook in post_processing_hooks:
         outmess(f'  {hook.__name__}\n', 0)

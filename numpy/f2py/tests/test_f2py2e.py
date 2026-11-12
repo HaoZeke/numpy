@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from numpy.f2py._backends._meson import MesonBackend
+from numpy.f2py import auxfuncs, crackfortran, f2py2e
 from numpy.f2py.f2py2e import get_newer_options, main as f2pycli
 from numpy.testing._private.utils import NOGIL_BUILD
 
@@ -1303,3 +1304,33 @@ def test_compile_relative_include_dir(tmp_path, monkeypatch):
             capture_output=True, encoding="UTF-8")
     assert rout.returncode == 0, rout.stderr
     assert rout.stdout.strip() == "42"
+    # TODO: populate
+    pass
+
+
+def test_run_main_preserves_parser_settings(hello_world_f90, monkeypatch):
+    monkeypatch.setattr(crackfortran, "dolowercase", 1)
+    monkeypatch.setattr(crackfortran, "onlyfuncs", [])
+    monkeypatch.setattr(crackfortran, "skipfuncs", [])
+    before = (crackfortran.dolowercase, list(crackfortran.onlyfuncs),
+              list(crackfortran.skipfuncs), dict(auxfuncs.options))
+    source = Path(hello_world_f90)
+    with util.switchdir(source.parent):
+        f2py2e.run_main([str(source), "-m", "hi", "--quiet", "only:", "hi", ":"])
+    assert (crackfortran.dolowercase, crackfortran.onlyfuncs,
+            crackfortran.skipfuncs, auxfuncs.options) == before
+    public = util.getpath("tests", "src", "crackfortran", "publicmod.f90")
+    assert "seta" in crackfortran.crackfortran([str(public)])[0]["vars"]
+    data = util.getpath("tests", "src", "crackfortran", "data_common.f")
+    assert crackfortran.crackfortran([str(data)])[0]["vars"]["mydata"]["="] == "0"
+
+
+def test_run_main_restores_settings_on_option_error(monkeypatch):
+    monkeypatch.setattr(crackfortran, "dolowercase", 0)
+    monkeypatch.setattr(crackfortran, "onlyfuncs", ["caller_routine"])
+    monkeypatch.setattr(auxfuncs, "options", {"caller_option": "retained"})
+    with pytest.raises(SystemExit):
+        f2py2e.run_main(["--invalid-parser-lifecycle-option"])
+    assert crackfortran.dolowercase == 0
+    assert crackfortran.onlyfuncs == ["caller_routine"]
+    assert auxfuncs.options == {"caller_option": "retained"}

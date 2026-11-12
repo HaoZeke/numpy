@@ -11,6 +11,7 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import argparse
+import copy
 import os
 import pprint
 import re
@@ -446,6 +447,29 @@ def run_main(comline_list):
         :language: python
 
     """
+    saved = [(module, name, copy.deepcopy(getattr(module, name)))
+             for module, names in _RUN_SETTINGS for name in names]
+    try:
+        return _run_main(comline_list)
+    finally:
+        for module, name, value in saved:
+            setattr(module, name, value)
+
+
+# A generation call owns its command-line settings and restores caller configuration.
+_RUN_SETTINGS = (
+    (crackfortran, ('strictf77', 'sourcecodeform', 'quiet', 'verbose',
+                    'tabchar', 'pyffilename', 'f77modulename',
+                    'skipemptyends', 'ignorecontains', 'dolowercase', 'debug',
+                    'skipfuncs', 'onlyfuncs', 'include_paths')),
+    (auxfuncs, ('options', 'debugoptions', 'wrapfuncs')),
+    (capi_maps, ('f2cmap_all', 'f2cmap_mapped')),
+    (rules, ('options',)),
+    (f90mod_rules, ('options',)),
+)
+
+
+def _run_main(comline_list):
     crackfortran.reset_global_f2py_vars()
     f2pydir = os.path.dirname(os.path.abspath(cfuncs.__file__))
     fobjhsrc = os.path.join(f2pydir, 'src', 'fortranobject.h')

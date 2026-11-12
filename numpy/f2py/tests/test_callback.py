@@ -1,6 +1,7 @@
 import math
 import platform
 import subprocess
+import re
 import sys
 import textwrap
 import threading
@@ -16,6 +17,7 @@ from numpy.f2py.f2py2e import main as f2pycli
 from numpy.f2py.f2py2e import run_main
 from numpy.testing import HAS_REFCOUNT, IS_64BIT, assert_array_equal
 from numpy.testing._private.utils import requires_memory
+from numpy.f2py import crackfortran, f2py2e
 
 from . import util
 
@@ -634,6 +636,8 @@ class TestGH28605Signature:
                for m in mod if "__user__" in m["name"]}
         for module, block, name in [("tcb", "function", "p"),
                                     ("scb", "subroutine", "s")]:
+                                    ("scb", "subroutine", "s"),
+                                    ("forward", "function", "g")]:
             cb = cbs[f"{module}__user__routines"]
             assert (cb["block"], cb["name"], cb["args"]) == (block, name, [])
         p = cbs["tcb__user__routines"]["vars"]["p"]
@@ -648,6 +652,7 @@ class TestGH28605Signature:
         assert "use callee__user__routines, g=>f" in pyf
         fsig = cbs["callee__user__routines"]
         assert (fsig["block"], fsig["name"], fsig["args"]) == ("function", "f", [])
+        assert "use tcb__user__routines" in crackfortran.crack2fortran(mod)
 
     def test_signature_file_kept(self):
         fpath = util.getpath("tests", "src", "callback", "gh28605.pyf")
@@ -820,3 +825,117 @@ class TestGH24284(util.F2PyTest):
         assert int(seen["typed"]) == n_value
         assert int(seen["untyped_n"]) == n_value
         assert seen["untyped_y"] == typed_return
+@pytest.mark.slow
+class TestForwardedCallbackArguments(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh22451.f90")]
+
+    @pytest.mark.parametrize("name", ["fun1", "fun2", "fun3", "named_forward", "nested_forward"])
+    def test_integer_argument(self, name):
+        received = []
+
+        def callback(value):
+            received.append(value)
+            return value
+
+        expected = 3 if name == "named_forward" else 1
+        function = getattr(self.module, name)
+        result = function(0.0, callback) if name in ("fun2", "fun3") else function(callback)
+        assert received == [expected]
+        assert result == expected
+
+    def test_subroutine_forwarding(self):
+        received = []
+
+        def callback(value):
+            received.append(value)
+            return value * 3
+
+        assert self.module.forward_sub(callback) == 6
+        assert received == [2]
+
+
+class TestForwardedCallbackSignatures:
+    @pytest.mark.parametrize("selected", [False, True])
+    def test_generated_callback_argument_counts(self, tmp_path, monkeypatch, selected):
+        source = util.getpath("tests", "src", "callback", "gh22451.f90")
+        monkeypatch.chdir(tmp_path)
+        module = "gh22451_generated"
+        arguments = ["-m", module, str(source)]
+        if selected:
+            arguments += ["only:", "fun2", ":"]
+        f2py2e.run_main(arguments)
+        generated = (tmp_path / f"{module}module.c").read_text()
+        callback_arguments = re.findall(
+            r"create_cb_arglist\([^,\n]+,[^,\n]+,\s*(\d+),\s*(\d+),",
+            generated,
+        )
+        expected_callbacks = 1 if selected else 8
+        assert callback_arguments == [("1", "0")] * expected_callbacks
+
+    def test_chained_argument_type(self):
+        source = util.getpath("tests", "src", "callback", "gh22451.f90")
+        blocks = crackfortran.crackfortran([str(source)])
+        callbacks = {module["name"]: module["body"][0]["body"][0]
+                     for module in blocks if "__user__" in module["name"]}
+        for routine, callback in [("fun1", "myfun1"), ("fun2", "myfun2"), ("fun3", "myfun3")]:
+            declaration = callbacks[f"{routine}__user__routines"]
+            assert declaration["name"] == callback
+            assert len(declaration["args"]) == 1
+            argument = declaration["args"][0]
+            assert declaration["vars"][argument]["typespec"] == "integer"
+
+    def test_incompatible_consumers(self, tmp_path):
+        source = tmp_path / "incompatible.f90"
+        source.write_text(textwrap.dedent("""\
+            real(8) function integer_consumer(cb)
+                real(8), external :: cb
+                integer_consumer = cb(1)
+            end function
+            real(8) function real_consumer(cb)
+                real(8), external :: cb
+                real_consumer = cb(1d0)
+            end function
+            real(8) function forward(cb)
+                real(8), external :: cb,integer_consumer,real_consumer
+                forward = integer_consumer(cb) + real_consumer(cb)
+            end function
+            """))
+        from numpy.f2py.auxfuncs import F2PYError
+
+        with pytest.raises(F2PYError, match="Incompatible interfaces for forwarded callback"):
+            crackfortran.crackfortran([str(source)])
+
+    def test_call_in_string_literal(self, tmp_path):
+        source = tmp_path / "literal.f90"
+        source.write_text(textwrap.dedent("""\
+            real(8) function consumer(cb)
+                real(8), external :: cb
+                consumer = cb(1)
+            end function
+            real(8) function unused(cb)
+                real(8), external :: cb
+                character(20) :: message
+                message = 'consumer(cb)'
+                unused = 0d0
+            end function
+            """))
+        blocks = crackfortran.crackfortran([str(source)])
+        module = next(block for block in blocks if block["name"] == "unused__user__routines")
+        assert module["body"][0]["body"][0]["args"] == []
+
+
+@pytest.mark.slow
+class TestSelectedForwardedCallbackArguments(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh22451.f90")]
+    options = ["only:", "fun2", ":"]
+
+    def test_selected_wrapper(self):
+        received = []
+
+        def callback(value):
+            received.append(value)
+            return value
+
+        assert self.module.fun2(0.0, callback) == 1
+        assert received == [1]
+        assert not hasattr(self.module, "fun1")
