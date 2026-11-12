@@ -31,13 +31,16 @@ def test_openmp_flag_is_a_link_argument():
     # gh-27163
     text = _meson(["-qopenmp"])
     assert "link_args: ['-qopenmp']" in text
-    assert "gnu_symbol_visibility: 'default'" in text
+    # The visibility keyword is a dict entry, so the quote sits before
+    # the colon. Collapse both before matching.
+    collapsed = text.replace("'", "").replace(" ", "")
+    assert "gnu_symbol_visibility:default" in collapsed
     assert "link_args:" not in _meson([])
 
 
 def _gfortran_openmp():
     fc = os.environ.get("FC", "gfortran")
-    return "flang" not in fc and "ifx" not in fc
+    return "flang" not in fc and "ifx" not in fc and "lfortran" not in fc
 
 
 @pytest.mark.slow

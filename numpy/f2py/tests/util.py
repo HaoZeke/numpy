@@ -25,6 +25,11 @@ from numpy._utils import asunicode
 from numpy.f2py._backends._meson import MesonBackend
 from numpy.testing import IS_IOS, IS_WASM, temppath
 
+
+def using_lfortran():
+    """True when this process was asked to compile with LFortran."""
+    return "lfortran" in os.environ.get("FC", "")
+
 #
 # Check if compilers are available at all...
 #
