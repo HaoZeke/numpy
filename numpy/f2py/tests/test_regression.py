@@ -1280,5 +1280,3 @@ def test_gh28902_fortran_mpi():
     assert not module.mpi_initialized_flag()
 
 
-@pytest.mark.slow
-@pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
