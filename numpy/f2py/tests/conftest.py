@@ -92,6 +92,11 @@ _SKIPS = (
         "LFortran 0.69 rejects -ffixed-form",
     ),
     (
+        "test_regression.py::test_gh31249",
+        "LFortran 0.69 does not add a trailing underscore unless asked, "
+        "so a prebuilt library and the f2py wrapper disagree",
+    ),
+    (
         "test_regression.py::test_gh13356_entry_return",
         "LFortran 0.69 returns 0 from an ENTRY instead of the entry's value",
     ),
