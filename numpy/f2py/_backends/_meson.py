@@ -20,6 +20,14 @@ def _meson_identifier(prefix: str, value: str, index: int) -> str:
     return f"{prefix}_{index}_{safe_value}"
 
 
+def _quote_args(args: list[str]) -> list[str]:
+    # Convert args to '' wrapped variant for meson
+    return [
+        f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
+        for x in args
+    ]
+
+
 class MesonTemplate:
     """Template meson build file generation class."""
 
@@ -77,6 +85,7 @@ class MesonTemplate:
             self.libraries_substitution,
             self.c_args_substitution,
             self.fortran_args_substitution,
+            self.c_args_substitution,
         ]
         self.build_type = build_type
         self.python_exe = python_exe
@@ -164,6 +173,14 @@ class MesonTemplate:
         else:
             self.substitutions["fortran_args"] = ""
 
+    def c_args_substitution(self) -> None:
+        if self.c_args:
+            self.substitutions["c_args"] = (
+                f"{self.indent}c_args: [{', '.join(self.c_args)}],"
+            )
+        else:
+            self.substitutions["c_args"] = ""
+
     def generate_meson_build(self):
         for node in self.pipeline:
             node()
@@ -178,9 +195,7 @@ class MesonBackend(Backend):
         super().__init__(*args, **kwargs)
         self.dependencies = self.extra_dat.get("dependencies", [])
         self.meson_build_dir = "bbdir"
-        self.build_type = (
-            "debug" if any("debug" in flag for flag in self.fc_flags) else "release"
-        )
+        self.build_type = "debug" if "--debug" in self.fc_flags else "release"
         self.fc_flags = _get_flags(self.fc_flags)
         # -D/-U used to be parsed and then discarded (gh-28648).
         self.pp_flags = _preprocessor_flags(

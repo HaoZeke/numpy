@@ -82,4 +82,6 @@ ${lib_dir_list}
                      ],
 ${c_args}
 ${fortran_args}
+${c_args}
+                     link_language: 'fortran',
                      install : true)
