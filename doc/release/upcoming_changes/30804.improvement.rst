@@ -1,0 +1,3 @@
+Pass --opt through to the Fortran compilers
+-------------------------------------------
+The meson backend dropped --opt, so -fopenmp never reached gfortran and OpenMP sentinels were compiled as comments (gh-30804).
