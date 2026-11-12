@@ -413,6 +413,11 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                             "over-writing fortran routine");
             return -1;
         }
+        if (v == NULL) {
+            PyErr_Format(PyExc_AttributeError,
+                         "cannot delete fortran data '%s'", name);
+            return -1;
+        }
         if (fp->defs[i].func != NULL) { /* is allocatable array */
             npy_intp dims[F2PY_MAX_DIMS];
             int k;
