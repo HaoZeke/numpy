@@ -2300,7 +2300,9 @@ def analyzebody(block, args, tab=''):
             as_ = args
             if b['block'] == 'module':
                 # analyzevars consumes the access statements, read them first
-                access[b['name'].lower()] = _access_specs(b['vars'])
+                spec = _access_specs(b['vars'])
+                access[b['name'].lower()] = spec
+                b['_f2py_access'] = spec
         b = postcrack(b, as_, tab=tab + '\t')
         if b['block'] in ['interface', 'abstract interface'] and \
            not b['body'] and not b.get('implementedby'):
