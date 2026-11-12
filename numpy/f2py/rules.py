@@ -74,6 +74,8 @@ from .auxfuncs import (
     hasinitvalue,
     hasnote,
     hasresultnote,
+    isallocatablearray_hide,
+    isallocatablearray_out,
     isarray,
     isarrayofstrings,
     isattr_value,
@@ -1140,14 +1142,18 @@ if (#varname#_cb.capi==Py_None) {
     },
     # Array
     {  # Common
-        'decl': ['    #ctype# *#varname# = NULL;',
-                 '    npy_intp #varname#_Dims[#rank#] = {#rank*[-1]#};',
-                 '    const int #varname#_Rank = #rank#;',
+        'decl': [{l_not(isallocatablearray_hide): [
+                     '    #ctype# *#varname# = NULL;',
+                     '    npy_intp #varname#_Dims[#rank#] = {#rank*[-1]#};',
+                     '    const int #varname#_Rank = #rank#;']},
                  '    PyArrayObject *capi_#varname#_as_array = NULL;',
-                 '    int capi_#varname#_intent = 0;',
+                 {l_not(isallocatablearray_hide):
+                     '    int capi_#varname#_intent = 0;'},
                  {isstringarray: '    int slen(#varname#) = 0;'},
                  ],
-        'callfortran': '#varname#,',
+        'callfortran': [{l_not(isallocatablearray_hide): '#varname#,'},
+                        {isallocatablearray_out:
+                         'f2py_allocatable_set,&capi_#varname#_alloc,'}],
         'callfortranappend': {isstringarray: 'slen(#varname#),'},
         'return': {isintent_out: ',capi_#varname#_as_array'},
         'need': 'len..',
@@ -1261,7 +1267,37 @@ if (#varname#_cb.capi==Py_None) {
                    : """        Py_XDECREF(capi_#varname#_as_array);"""},
             {hasinitvalue: '    }  /*if (f2py_success) of #varname# init*/'},
         ],
-        '_check': isarray,
+        '_check': l_and(isarray, l_not(isallocatablearray_hide)),
+        '_depend': ''
+    }, {  # allocatable array handed back by the Fortran wrapper
+        'decl': ('    f2py_allocatable capi_#varname#_alloc = '
+                 '{#atype#, #elsize#, #rank#, NULL};'),
+        'pyobjfrom': [
+            {l_not(isintent_inout): """\
+        if (capi_#varname#_alloc.arr == NULL) { /* left unallocated */
+            Py_INCREF(Py_None);
+            capi_#varname#_alloc.arr = (PyArrayObject *)Py_None;
+        }
+        Py_XSETREF(capi_#varname#_as_array, capi_#varname#_alloc.arr);
+        capi_#varname#_alloc.arr = NULL;"""},
+            {isintent_inout: """\
+        f2py_success = (capi_#varname#_alloc.arr != NULL
+                        && PyArray_SAMESHAPE(capi_#varname#_alloc.arr,
+                                             capi_#varname#_as_array));
+        if (!f2py_success) {
+            PyErr_SetString(PyExc_ValueError, "#pyname#: intent(inout) "
+                "allocatable `#varname#` was deallocated or reallocated "
+                "to a different shape");
+        } else {
+            f2py_success = (PyArray_CopyInto(capi_#varname#_as_array,
+                                             capi_#varname#_alloc.arr) == 0);
+        }
+        if (f2py_success) { /* inout allocatable #varname# has been written back to */"""},
+        ],
+        'closepyobjfrom': {isintent_inout: '    } /*if (f2py_success) of #varname# pyobjfrom*/'},
+        'cleanupfrompyobj': '    Py_XDECREF(capi_#varname#_alloc.arr);',
+        'need': 'f2py_allocatable_set',
+        '_check': isallocatablearray_out,
         '_depend': ''
     },
     # Scalararray

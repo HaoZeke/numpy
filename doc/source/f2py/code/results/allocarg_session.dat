@@ -1,0 +1,23 @@
+>>> import allocarg
+>>> print(allocarg.positive.__doc__)
+idx = positive(x,[n])
+
+Wrapper for ``positive``.
+
+Parameters
+----------
+x : input rank-1 array('d') with bounds (n)
+
+Other Parameters
+----------------
+n : input int, optional
+    Default: shape(x, 0)
+
+Returns
+-------
+idx : rank-1 array('i') with bounds (:)
+
+>>> allocarg.positive([1.0, -2.0, 3.0, 0.0, 5.0])
+array([1, 3, 5], dtype=int32)
+>>> print(allocarg.positive([-1.0, -2.0]))  # idx was allocated with size 0
+[]
