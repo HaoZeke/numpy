@@ -37,6 +37,21 @@ class TestModuleWithoutPublicEntities(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestModuleWithoutWrappableEntities(util.F2PyTest):
+    sources = [
+        util.getpath(
+            "tests", "src", "modules", "gh20053", "no_wrappable_entities.f90"
+        )
+    ]
+
+    def test_gh20053(self):
+        # Importing used to crash on the empty tables of these modules
+        assert self.module.twice(2.0) == 4.0
+        assert not hasattr(self.module, "type_only")
+        assert not hasattr(self.module, "interface_only")
+
+
+@pytest.mark.slow
 class TestModuleDocString(util.F2PyTest):
     sources = [util.getpath("tests", "src", "modules", "module_data_docstring.f90")]
 
@@ -69,6 +84,19 @@ class TestModuleAttributes(util.F2PyTest):
             del mod.custom
         with pytest.raises(AttributeError):
             mod.no_such_attribute
+
+
+@pytest.mark.slow
+class TestModuleDataDelete(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "modules", "module_data_docstring.f90")]
+
+    @pytest.mark.parametrize("name", ["i", "x", "a", "b"])
+    def test_delete_module_data(self, name):
+        mod = self.module.mod
+        mod.b = [[1.0, 2.0, 3.0]]
+        with pytest.raises(AttributeError, match="cannot delete fortran data"):
+            delattr(mod, name)
+        assert getattr(mod, name) is not None
 
 
 @pytest.mark.slow

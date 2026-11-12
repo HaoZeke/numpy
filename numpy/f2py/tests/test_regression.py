@@ -33,6 +33,85 @@ class TestIntentInOut(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestIntentInOutScalar(util.F2PyTest):
+    # gh-20053: write-back of scalar intent(inout) arguments
+    sources = [util.getpath("tests", "src", "regression", "inout_scalar.f90")]
+
+    @pytest.mark.parametrize(
+        "dtype", ["f8", ">f8", "f4", "f2", "i8", ">i4", "u1", "?", "O"])
+    def test_write_back(self, dtype):
+        x = np.array(1, dtype=dtype)
+        self.module.inc_d(x)
+        assert x.dtype == dtype
+        assert x == np.array(2, dtype=dtype)
+
+    def test_not_an_array(self):
+        # Nothing to write back to, but the call works
+        lst = [1.0]
+        self.module.inc_d(1.0)
+        self.module.inc_d(lst)
+        assert lst == [1.0]
+
+    def test_first_element(self):
+        x = np.array([1.0, 5.0])
+        self.module.inc_d(x)
+        npt.assert_array_equal(x, [2.0, 5.0])
+
+    def test_unsafe_cast(self):
+        x = np.array(255, dtype=np.uint8)
+        self.module.inc_i8(x)
+        assert x == 0
+
+    def test_read_only(self):
+        x = np.array(1.0)
+        x.flags.writeable = False
+        with pytest.raises(ValueError, match="read-only"):
+            self.module.inc_d(x)
+        assert x == 1.0
+
+    @pytest.mark.skipif(not npt.HAS_REFCOUNT, reason="Python lacks refcounts")
+    def test_object_array_refcount(self):
+        x = np.array(1.0, dtype=object)
+        self.module.inc_d(x)
+        value = x[()]
+        del x
+        fresh = float("2.0")
+        refs, fresh_refs = sys.getrefcount(value), sys.getrefcount(fresh)
+        assert value == fresh
+        assert refs == fresh_refs
+
+    @pytest.mark.parametrize("dtype", ["c16", ">c16", "c8"])
+    def test_complex(self, dtype):
+        x = np.array(1 + 1j, dtype=dtype)
+        self.module.scale_z(x)
+        assert x == 2 + 2j
+
+    def test_complex_to_real(self):
+        # Only the real part is written back, without a ComplexWarning
+        x = np.array(2.0)
+        self.module.scale_z(x)
+        assert x == 4.0
+
+    def test_complex_to_bool(self):
+        x = np.array(True)
+        self.module.scale_z(x)
+        assert x
+
+
+@pytest.mark.slow
+class TestIntentInOutInteger1(util.F2PyTest):
+    # gh-20053: the integer(1) write-back did not compile
+    sources = [
+        util.getpath("tests", "src", "regression", "inout_scalar_int1.f90")
+    ]
+
+    def test_write_back(self):
+        x = np.array(1, dtype=np.int8)
+        self.module.inc_i1(x)
+        assert x == 2
+
+
+@pytest.mark.slow
 class TestDataOnlyMultiModule(util.F2PyTest):
     # Check that modules without subroutines work
     sources = [util.getpath("tests", "src", "regression", "datonly.f90")]

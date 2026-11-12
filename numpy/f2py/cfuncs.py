@@ -327,99 +327,54 @@ cppmacros['pyobj_from_string1'] = """
 needs['pyobj_from_string1size'] = ['string']
 cppmacros['pyobj_from_string1size'] = """
 #define pyobj_from_string1size(v,len) (PyUnicode_FromStringAndSize((char *)v, len))"""
-needs['TRYPYARRAYTEMPLATE'] = ['PRINTPYOBJERR']
-cppmacros['TRYPYARRAYTEMPLATE'] = """
-/* New SciPy */
-#define TRYPYARRAYTEMPLATECHAR case NPY_STRING: *(char *)(PyArray_DATA(arr))=*v; break;
-#define TRYPYARRAYTEMPLATELONG case NPY_LONG: *(long *)(PyArray_DATA(arr))=*v; break;
-#define TRYPYARRAYTEMPLATEOBJECT case NPY_OBJECT: PyArray_SETITEM(arr,PyArray_DATA(arr),pyobj_from_ ## ctype ## 1(*v)); break;
+cfuncs['try_pyarr_from_typenum'] = """
+/*
+  try_pyarr_from_typenum writes the scalar *v, of NumPy type typenum, back
+  to the first element of obj for scalar intent(inout) arguments.  The value
+  is cast with NumPy's unsafe casting, as in any array assignment, so byte
+  order, alignment and object arrays are taken care of.
 
-#define TRYPYARRAYTEMPLATE(ctype,typecode) \\
-        PyArrayObject *arr = NULL;\\
-        if (!obj) return -2;\\
-        if (!PyArray_Check(obj)) return -1;\\
-        if (!(arr=(PyArrayObject *)obj)) {fprintf(stderr,\"TRYPYARRAYTEMPLATE:\");PRINTPYOBJERR(obj);return 0;}\\
-        if (PyArray_DESCR(arr)->type==typecode)  {*(ctype *)(PyArray_DATA(arr))=*v; return 1;}\\
-        switch (PyArray_TYPE(arr)) {\\
-                case NPY_DOUBLE: *(npy_double *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_INT: *(npy_int *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_LONG: *(npy_long *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_FLOAT: *(npy_float *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_CDOUBLE: *(npy_double *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_CFLOAT: *(npy_float *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_BOOL: *(npy_bool *)(PyArray_DATA(arr))=(*v!=0); break;\\
-                case NPY_UBYTE: *(npy_ubyte *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_BYTE: *(npy_byte *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_SHORT: *(npy_short *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_USHORT: *(npy_ushort *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_UINT: *(npy_uint *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_ULONG: *(npy_ulong *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_LONGLONG: *(npy_longlong *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_ULONGLONG: *(npy_ulonglong *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_LONGDOUBLE: *(npy_longdouble *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_CLONGDOUBLE: *(npy_longdouble *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_OBJECT: PyArray_SETITEM(arr, PyArray_DATA(arr), pyobj_from_ ## ctype ## 1(*v)); break;\\
-        default: return -2;\\
-        };\\
-        return 1
-"""
+  Returns 1 if the value was written back, -1 if obj is not an ndarray (a
+  Python scalar, for example, cannot be modified in place) and 0 with an
+  exception set on failure.
+*/
+static int
+try_pyarr_from_typenum(PyObject *obj, int typenum, void *v)
+{
+    PyArrayObject *arr = (PyArrayObject *)obj, *src, *dst;
+    int ret;
 
-needs['TRYCOMPLEXPYARRAYTEMPLATE'] = ['PRINTPYOBJERR', 'npy_math.h']
-cppmacros['TRYCOMPLEXPYARRAYTEMPLATE'] = """
-#define TRYCOMPLEXPYARRAYTEMPLATEOBJECT case NPY_OBJECT: PyArray_SETITEM(arr, PyArray_DATA(arr), pyobj_from_complex_ ## ctype ## 1((*v))); break;
-/* Helper to extract real/imag from complex value via cast to npy_cdouble */
-static inline double _f2py_creal_as_double(const void *p, int typenum) {
-    if (typenum == NPY_CFLOAT) return (double)npy_crealf(*(const npy_cfloat *)p);
-    if (typenum == NPY_CLONGDOUBLE) return (double)npy_creall(*(const npy_clongdouble *)p);
-    return npy_creal(*(const npy_cdouble *)p);
-}
-static inline double _f2py_cimag_as_double(const void *p, int typenum) {
-    if (typenum == NPY_CFLOAT) return (double)npy_cimagf(*(const npy_cfloat *)p);
-    if (typenum == NPY_CLONGDOUBLE) return (double)npy_cimagl(*(const npy_clongdouble *)p);
-    return npy_cimag(*(const npy_cdouble *)p);
-}
-#define TRYCOMPLEXPYARRAYTEMPLATE(ctype,typenum)\\
-        PyArrayObject *arr = NULL;\\
-        double _re, _im;\\
-        if (!obj) return -2;\\
-        if (!PyArray_Check(obj)) return -1;\\
-        if (!(arr=(PyArrayObject *)obj)) {fprintf(stderr,\"TRYCOMPLEXPYARRAYTEMPLATE:\");PRINTPYOBJERR(obj);return 0;}\\
-        _re = _f2py_creal_as_double(v, typenum);\\
-        _im = _f2py_cimag_as_double(v, typenum);\\
-        if (PyArray_TYPE(arr)==typenum) {\\
-            *(ctype *)(PyArray_DATA(arr))=(ctype)_re;\\
-            *(ctype *)(PyArray_DATA(arr)+sizeof(ctype))=(ctype)_im;\\
-            return 1;\\
-        }\\
-        switch (PyArray_TYPE(arr)) {\\
-                case NPY_CDOUBLE: npy_csetreal((npy_cdouble *)PyArray_DATA(arr), _re);\\
-                                  npy_csetimag((npy_cdouble *)PyArray_DATA(arr), _im);\\
-                                  break;\\
-                case NPY_CFLOAT: npy_csetrealf((npy_cfloat *)PyArray_DATA(arr), (float)_re);\\
-                                 npy_csetimagf((npy_cfloat *)PyArray_DATA(arr), (float)_im);\\
-                                 break;\\
-                case NPY_DOUBLE: *(npy_double *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_LONG: *(npy_long *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_FLOAT: *(npy_float *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_INT: *(npy_int *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_SHORT: *(npy_short *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_UBYTE: *(npy_ubyte *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_BYTE: *(npy_byte *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_BOOL: *(npy_bool *)(PyArray_DATA(arr))=(_re!=0 && _im!=0); break;\\
-                case NPY_USHORT: *(npy_ushort *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_UINT: *(npy_uint *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_ULONG: *(npy_ulong *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_LONGLONG: *(npy_longlong *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_ULONGLONG: *(npy_ulonglong *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_LONGDOUBLE: *(npy_longdouble *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_CLONGDOUBLE: npy_csetreall((npy_clongdouble *)PyArray_DATA(arr), (npy_longdouble)_re);\\
-                                      npy_csetimagl((npy_clongdouble *)PyArray_DATA(arr), (npy_longdouble)_im);\\
-                                      break;\\
-                case NPY_OBJECT: PyArray_SETITEM(arr, PyArray_DATA(arr), pyobj_from_complex_ ## ctype ## 1((*v))); break;\\
-                default: return -2;\\
-        };\\
+    if (!PyArray_Check(obj)) {
         return -1;
+    }
+    if (PyArray_FailUnlessWriteable(arr, "intent(inout) argument") < 0) {
+        return 0;
+    }
+    if (PyArray_ISBEHAVED(arr) &&
+            PyArray_EquivTypenums(PyArray_TYPE(arr), typenum)) {
+        memcpy(PyArray_DATA(arr), v, PyArray_ITEMSIZE(arr));
+        return 1;
+    }
+    src = (PyArrayObject *)PyArray_SimpleNewFromData(0, NULL, typenum, v);
+    if (src == NULL) {
+        return 0;
+    }
+    /* 0-d view of the first element of obj */
+    Py_INCREF(PyArray_DESCR(arr));
+    dst = (PyArrayObject *)PyArray_NewFromDescr(
+            &PyArray_Type, PyArray_DESCR(arr), 0, NULL, NULL,
+            PyArray_DATA(arr), NPY_ARRAY_WRITEABLE, NULL);
+    if (dst == NULL) {
+        Py_DECREF(src);
+        return 0;
+    }
+    ret = PyArray_CopyInto(dst, src);
+    Py_DECREF(dst);
+    Py_DECREF(src);
+    return ret < 0 ? 0 : 1;
+}
 """
+
 # cppmacros['NUMFROMARROBJ']="""
 # define NUMFROMARROBJ(typenum,ctype) \\
 #     if (PyArray_Check(obj)) arr = (PyArrayObject *)obj;\\
@@ -733,6 +688,10 @@ fprintf(stderr, "try_pyarr_from_string(str='%s', len=%" NPY_INTP_FMT ", obj=%p)\
         }
         if (n > PyArray_NBYTES(dst)) {
             n = PyArray_NBYTES(dst);
+        }
+        if (n > 0 &&
+                PyArray_FailUnlessWriteable(arr, "intent(inout) argument") < 0) {
+            return 0;
         }
         STRINGCOPYN(buf, str, n);
         if (tmp != NULL) {
@@ -1336,6 +1295,9 @@ static int try_pyarr_from_character(PyObject* obj, character* v) {
     if (!obj) return -2;
     if (PyArray_Check(obj)) {
         if (F2PY_ARRAY_IS_CHARACTER_COMPATIBLE(arr))  {
+            if (PyArray_FailUnlessWriteable(arr, "intent(inout) argument") < 0) {
+                return 0;
+            }
             *(character *)(PyArray_DATA(arr)) = *v;
             return 1;
         }
@@ -1360,42 +1322,56 @@ static int try_pyarr_from_character(PyObject* obj, character* v) {
 }
 """
 
-needs['try_pyarr_from_char'] = ['pyobj_from_char1', 'TRYPYARRAYTEMPLATE']
+needs['try_pyarr_from_char'] = ['try_pyarr_from_typenum']
 cfuncs[
-    'try_pyarr_from_char'] = 'static int try_pyarr_from_char(PyObject* obj,char* v) {\n    TRYPYARRAYTEMPLATE(char,\'c\');\n}\n'
-needs['try_pyarr_from_signed_char'] = ['TRYPYARRAYTEMPLATE', 'unsigned_char']
+    'try_pyarr_from_char'] = 'static int try_pyarr_from_char(PyObject* obj,char* v) {\n    return try_pyarr_from_typenum(obj, NPY_BYTE, v);\n}\n'
+needs['try_pyarr_from_unsigned_char'] = ['try_pyarr_from_typenum', 'unsigned_char']
 cfuncs[
-    'try_pyarr_from_unsigned_char'] = 'static int try_pyarr_from_unsigned_char(PyObject* obj,unsigned_char* v) {\n    TRYPYARRAYTEMPLATE(unsigned_char,\'b\');\n}\n'
-needs['try_pyarr_from_signed_char'] = ['TRYPYARRAYTEMPLATE', 'signed_char']
+    'try_pyarr_from_unsigned_char'] = 'static int try_pyarr_from_unsigned_char(PyObject* obj,unsigned_char* v) {\n    return try_pyarr_from_typenum(obj, NPY_UBYTE, v);\n}\n'
+needs['try_pyarr_from_signed_char'] = ['try_pyarr_from_typenum', 'signed_char']
 cfuncs[
-    'try_pyarr_from_signed_char'] = 'static int try_pyarr_from_signed_char(PyObject* obj,signed_char* v) {\n    TRYPYARRAYTEMPLATE(signed_char,\'1\');\n}\n'
-needs['try_pyarr_from_short'] = ['pyobj_from_short1', 'TRYPYARRAYTEMPLATE']
+    'try_pyarr_from_signed_char'] = 'static int try_pyarr_from_signed_char(PyObject* obj,signed_char* v) {\n    return try_pyarr_from_typenum(obj, NPY_BYTE, v);\n}\n'
+needs['try_pyarr_from_short'] = ['try_pyarr_from_typenum']
 cfuncs[
-    'try_pyarr_from_short'] = 'static int try_pyarr_from_short(PyObject* obj,short* v) {\n    TRYPYARRAYTEMPLATE(short,\'s\');\n}\n'
-needs['try_pyarr_from_int'] = ['pyobj_from_int1', 'TRYPYARRAYTEMPLATE']
+    'try_pyarr_from_short'] = 'static int try_pyarr_from_short(PyObject* obj,short* v) {\n    return try_pyarr_from_typenum(obj, NPY_SHORT, v);\n}\n'
+needs['try_pyarr_from_int'] = ['try_pyarr_from_typenum']
 cfuncs[
-    'try_pyarr_from_int'] = 'static int try_pyarr_from_int(PyObject* obj,int* v) {\n    TRYPYARRAYTEMPLATE(int,\'i\');\n}\n'
-needs['try_pyarr_from_long'] = ['pyobj_from_long1', 'TRYPYARRAYTEMPLATE']
+    'try_pyarr_from_int'] = 'static int try_pyarr_from_int(PyObject* obj,int* v) {\n    return try_pyarr_from_typenum(obj, NPY_INT, v);\n}\n'
+needs['try_pyarr_from_long'] = ['try_pyarr_from_typenum']
 cfuncs[
-    'try_pyarr_from_long'] = 'static int try_pyarr_from_long(PyObject* obj,long* v) {\n    TRYPYARRAYTEMPLATE(long,\'l\');\n}\n'
-needs['try_pyarr_from_long_long'] = [
-    'pyobj_from_long_long1', 'TRYPYARRAYTEMPLATE', 'long_long']
+    'try_pyarr_from_long'] = 'static int try_pyarr_from_long(PyObject* obj,long* v) {\n    return try_pyarr_from_typenum(obj, NPY_LONG, v);\n}\n'
+needs['try_pyarr_from_long_long'] = ['try_pyarr_from_typenum', 'long_long']
 cfuncs[
-    'try_pyarr_from_long_long'] = 'static int try_pyarr_from_long_long(PyObject* obj,long_long* v) {\n    TRYPYARRAYTEMPLATE(long_long,\'L\');\n}\n'
-needs['try_pyarr_from_float'] = ['pyobj_from_float1', 'TRYPYARRAYTEMPLATE']
+    'try_pyarr_from_long_long'] = 'static int try_pyarr_from_long_long(PyObject* obj,long_long* v) {\n    return try_pyarr_from_typenum(obj, NPY_LONGLONG, v);\n}\n'
+needs['try_pyarr_from_float'] = ['try_pyarr_from_typenum']
 cfuncs[
-    'try_pyarr_from_float'] = 'static int try_pyarr_from_float(PyObject* obj,float* v) {\n    TRYPYARRAYTEMPLATE(float,\'f\');\n}\n'
-needs['try_pyarr_from_double'] = ['pyobj_from_double1', 'TRYPYARRAYTEMPLATE']
+    'try_pyarr_from_float'] = 'static int try_pyarr_from_float(PyObject* obj,float* v) {\n    return try_pyarr_from_typenum(obj, NPY_FLOAT, v);\n}\n'
+needs['try_pyarr_from_double'] = ['try_pyarr_from_typenum']
 cfuncs[
-    'try_pyarr_from_double'] = 'static int try_pyarr_from_double(PyObject* obj,double* v) {\n    TRYPYARRAYTEMPLATE(double,\'d\');\n}\n'
+    'try_pyarr_from_double'] = 'static int try_pyarr_from_double(PyObject* obj,double* v) {\n    return try_pyarr_from_typenum(obj, NPY_DOUBLE, v);\n}\n'
 needs['try_pyarr_from_complex_float'] = [
-    'pyobj_from_complex_float1', 'TRYCOMPLEXPYARRAYTEMPLATE', 'complex_float']
-cfuncs[
-    'try_pyarr_from_complex_float'] = 'static int try_pyarr_from_complex_float(PyObject* obj,complex_float* v) {\n    TRYCOMPLEXPYARRAYTEMPLATE(float,NPY_CFLOAT);\n}\n'
+    'try_pyarr_from_typenum', 'complex_float']
+cfuncs['try_pyarr_from_complex_float'] = """
+static int try_pyarr_from_complex_float(PyObject* obj,complex_float* v) {
+    /* As when converting a complex argument, real arrays get the real part */
+    if (PyArray_Check(obj) && (PyArray_ISINTEGER((PyArrayObject *)obj) ||
+                               PyArray_ISFLOAT((PyArrayObject *)obj))) {
+        return try_pyarr_from_typenum(obj, NPY_FLOAT, &v->r);
+    }
+    return try_pyarr_from_typenum(obj, NPY_CFLOAT, v);
+}
+"""
 needs['try_pyarr_from_complex_double'] = [
-    'pyobj_from_complex_double1', 'TRYCOMPLEXPYARRAYTEMPLATE', 'complex_double']
-cfuncs[
-    'try_pyarr_from_complex_double'] = 'static int try_pyarr_from_complex_double(PyObject* obj,complex_double* v) {\n    TRYCOMPLEXPYARRAYTEMPLATE(double,NPY_CDOUBLE);\n}\n'
+    'try_pyarr_from_typenum', 'complex_double']
+cfuncs['try_pyarr_from_complex_double'] = """
+static int try_pyarr_from_complex_double(PyObject* obj,complex_double* v) {
+    if (PyArray_Check(obj) && (PyArray_ISINTEGER((PyArrayObject *)obj) ||
+                               PyArray_ISFLOAT((PyArrayObject *)obj))) {
+        return try_pyarr_from_typenum(obj, NPY_DOUBLE, &v->r);
+    }
+    return try_pyarr_from_typenum(obj, NPY_CDOUBLE, v);
+}
+"""
 
 
 needs['create_cb_arglist'] = ['CFUNCSMESS', 'PRINTPYOBJERR', 'MINMAX']

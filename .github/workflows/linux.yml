@@ -121,12 +121,12 @@ jobs:
     - name: Install build and test dependencies from PyPI
       run: |
         pip install --group build --group test    # includes hypothesis
-    - name: Install gfortran and setup OpenBLAS 32 bits
+    - name: Install gfortran, cmocka and setup OpenBLAS 32 bits
       timeout-minutes: ${{ fromJSON(env.APT_TIMEOUT_MINUTES) }}
       run: |
         set -xe
         sudo apt update
-        sudo apt install gfortran libgfortran5
+        sudo apt install gfortran libgfortran5 libcmocka-dev
         python -m pip install --group openblas32
         mkdir -p ./.openblas
         python -c"import scipy_openblas32 as ob32; print(ob32.get_pkg_config())" > ./.openblas/scipy-openblas.pc

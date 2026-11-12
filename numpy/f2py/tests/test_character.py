@@ -393,6 +393,15 @@ class TestCharacter(util.F2PyTest):
         f(a, 'A')
         assert_array_equal(a, np.array(['Abc'], dtype=a.dtype))
 
+    def test_inout_read_only(self):
+        # gh-20053: the value used to be written into read-only arrays
+        f = getattr(self.module, self.fprefix + '_inout')
+        a = np.array(list('abc'), dtype='S1')
+        a.flags.writeable = False
+        with pytest.raises(ValueError, match="read-only"):
+            f(a, 'A')
+        assert_array_equal(a, np.array(list('abc'), dtype='S1'))
+
     def test_inout_varia(self):
         f = getattr(self.module, self.fprefix + '_inout')
         a = np.array('abc', dtype='S3')
@@ -665,6 +674,14 @@ class TestStringOptionalInOut(util.F2PyTest):
         with pytest.raises(Exception):  # noqa: B017
             aa = "Hi"
             self.module.string_inout_optional(aa)
+
+    def test_read_only(self):
+        # gh-20053: the string used to be written into read-only arrays
+        a = np.array('hi', dtype='S32')
+        a.flags.writeable = False
+        with pytest.raises(ValueError, match="read-only"):
+            self.module.string_inout_optional(a)
+        assert a == b'hi'
 
 
 @pytest.mark.slow

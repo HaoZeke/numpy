@@ -262,31 +262,37 @@ static PyObject *f2py_module_interface_usercode(PyObject *m, PyObject *d) {
 
 static int f2py_module_exec(PyObject *m) {
     int i;
-    PyObject *d, *s, *tmp;
+    PyObject *d, *tmp;
     #modulename#_module = m;
     Py_SET_TYPE((PyObject*)&PyFortran_Type, &PyType_Type);
     import_array2(\"can't initialize module #modulename# (failed to import numpy)\", -1);
     d = PyModule_GetDict(m);
-    s = PyUnicode_FromString(\"#f2py_version#\");
-    PyDict_SetItemString(d, \"__version__\", s);
-    Py_DECREF(s);
-    s = PyUnicode_FromString(
-        \"This module '#modulename#' is auto-generated with f2py (version:#f2py_version#).\\nFunctions:\\n\"\n#docs#\".\");
-    PyDict_SetItemString(d, \"__doc__\", s);
-    Py_DECREF(s);
-    s = PyUnicode_FromString(\"""" + numpy_version + """\");
-    PyDict_SetItemString(d, \"__f2py_numpy_version__\", s);
-    Py_DECREF(s);
+    if (PyModule_AddStringConstant(m, \"__version__\", \"#f2py_version#\") < 0) {
+        return -1;
+    }
+    if (PyModule_AddStringConstant(m, \"__doc__\",
+        \"This module '#modulename#' is auto-generated with f2py (version:#f2py_version#).\\nFunctions:\\n\"\n#docs#\".\") < 0) {
+        return -1;
+    }
+    if (PyModule_AddStringConstant(m, \"__f2py_numpy_version__\", \"""" + numpy_version + """\") < 0) {
+        return -1;
+    }
     #modulename#_error = PyErr_NewException (\"#modulename#.error\", NULL, NULL);
     /*
      * Store the error object inside the dict, so that it could get deallocated.
      * (in practice, this is a module, so it likely will not and cannot.)
      */
-    PyDict_SetItemString(d, \"_#modulename#_error\", #modulename#_error);
+    if (PyModule_AddObjectRef(m, \"_#modulename#_error\", #modulename#_error) < 0) {
+        Py_XDECREF(#modulename#_error);
+        return -1;
+    }
     Py_DECREF(#modulename#_error);
     for(i=0;f2py_routine_defs[i].name!=NULL;i++) {
         tmp = PyFortranObject_NewAsAttr(&f2py_routine_defs[i]);
-        PyDict_SetItemString(d, f2py_routine_defs[i].name, tmp);
+        if (PyModule_AddObjectRef(m, f2py_routine_defs[i].name, tmp) < 0) {
+            Py_XDECREF(tmp);
+            return -1;
+        }
         Py_DECREF(tmp);
     }
 
@@ -568,13 +574,23 @@ rout_rules = [
         'initf2pywraphook': {l_not(l_or(ismoduleroutine, isdummyroutine)): '''
     {
       extern #ctype# #F_FUNC#(#name_lower#,#NAME#)(void);
-      PyObject* o = PyDict_GetItemString(d,"#name#");
+      PyObject* o = PyObject_GetAttrString(m,"#name#");
+      if (o == NULL) return -1;
       tmp = F2PyCapsule_FromVoidPtr((void*)#F_WRAPPEDFUNC#(#name_lower#,#NAME#),NULL);
-      PyObject_SetAttrString(o,"_cpointer", tmp);
+      if (tmp == NULL || PyObject_SetAttrString(o,"_cpointer", tmp) < 0) {
+        Py_XDECREF(tmp);
+        Py_DECREF(o);
+        return -1;
+      }
       Py_DECREF(tmp);
-      s = PyUnicode_FromString("#name#");
-      PyObject_SetAttrString(o,"__name__", s);
-      Py_DECREF(s);
+      tmp = PyUnicode_FromString("#name#");
+      if (tmp == NULL || PyObject_SetAttrString(o,"__name__", tmp) < 0) {
+        Py_XDECREF(tmp);
+        Py_DECREF(o);
+        return -1;
+      }
+      Py_DECREF(tmp);
+      Py_DECREF(o);
     }
     '''},
         'need': {l_not(l_or(ismoduleroutine, isdummyroutine)): ['F_WRAPPEDFUNC', 'F_FUNC']},
@@ -612,13 +628,23 @@ rout_rules = [
         'initf2pywraphook': {l_not(l_or(ismoduleroutine, isdummyroutine)): '''
     {
       extern void #F_FUNC#(#name_lower#,#NAME#)(void);
-      PyObject* o = PyDict_GetItemString(d,"#name#");
+      PyObject* o = PyObject_GetAttrString(m,"#name#");
+      if (o == NULL) return -1;
       tmp = F2PyCapsule_FromVoidPtr((void*)#F_FUNC#(#name_lower#,#NAME#),NULL);
-      PyObject_SetAttrString(o,"_cpointer", tmp);
+      if (tmp == NULL || PyObject_SetAttrString(o,"_cpointer", tmp) < 0) {
+        Py_XDECREF(tmp);
+        Py_DECREF(o);
+        return -1;
+      }
       Py_DECREF(tmp);
-      s = PyUnicode_FromString("#name#");
-      PyObject_SetAttrString(o,"__name__", s);
-      Py_DECREF(s);
+      tmp = PyUnicode_FromString("#name#");
+      if (tmp == NULL || PyObject_SetAttrString(o,"__name__", tmp) < 0) {
+        Py_XDECREF(tmp);
+        Py_DECREF(o);
+        return -1;
+      }
+      Py_DECREF(tmp);
+      Py_DECREF(o);
     }
     '''},
         'need': {l_not(l_or(ismoduleroutine, isdummyroutine)): ['F_WRAPPEDFUNC', 'F_FUNC']},

@@ -56,9 +56,11 @@ scalar argument.
        is used.
 
    * ``intent(inout)`` scalar arguments are assumed to be array objects in
-     order to have *in situ* changes be effective. It is recommended to use
-     arrays with proper type but also other types work. :ref:`Read more about
-     the intent attribute <f2py-attributes>`.
+     order to have *in situ* changes be effective. The new value is stored in
+     the first element of the array, cast to its dtype as in an array
+     assignment, and a read-only array raises ``ValueError``. Other objects,
+     such as Python scalars, are accepted but not modified. :ref:`Read more
+     about the intent attribute <f2py-attributes>`.
 
 Consider the following Fortran 77 code:
 

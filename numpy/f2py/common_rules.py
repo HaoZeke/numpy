@@ -67,8 +67,8 @@ def buildhooks(m):
         hnames_str = ','.join(hnames)
         inames_str = ','.join(inames)
         if not inames:
-            outmess(f'\t\tSkipping COMMON block "{name}" since all its members'
-                    ' are hidden...\n')
+            outmess(f'\t\tSkipping COMMON block "{name}" since all its '
+                    f'variables are hidden: {hnames_str}\n')
             continue
         if hnames:
             outmess(f'\t\tConstructing COMMON block support for "{name}"...\n\t\t  '
@@ -124,8 +124,10 @@ def buildhooks(m):
              f'(f2py_setup_{name});')
         cadd('}\n')
         iadd(f'\ttmp = PyFortranObject_New(f2py_{name}_def,f2py_init_{name});')
-        iadd('\tif (tmp == NULL) return -1;')
-        iadd(f'\tif (F2PyDict_SetItemString(d, "{name}", tmp) == -1) return -1;')
+        iadd(f'\tif (PyModule_AddObjectRef(m, "{name}", tmp) < 0) {{')
+        iadd('\t\tPy_XDECREF(tmp);')
+        iadd('\t\treturn -1;')
+        iadd('\t}')
         iadd('\tPy_DECREF(tmp);')
         tname = name.replace('_', '\\_')
         dadd(f'\\subsection{{Common block \\texttt{{{tname}}}}}\n')

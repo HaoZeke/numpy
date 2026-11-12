@@ -186,7 +186,8 @@ def buildhooks(pymod):
             imported_vars[local] = var
             onlyvars.append(local)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
-        if len(onlyvars) == 0 and len(notvars) == 1 and m['name'] in notvars:
+        # Must agree with the loops below, which wrap only variables and routines.
+        if not onlyvars and not any(isroutine(b) for b in m.get('body', [])):
             outmess(f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n")
             continue
 
@@ -322,8 +323,11 @@ def buildhooks(pymod):
             '\t{',
             ('\t\tPyObject *tmp = '
             f'PyFortranObject_New(f2py_{m_name}_def,f2py_init_{m_name});'),
-            f'\t\tPyDict_SetItemString(d, "{m_name}", tmp);',
-            '\t\tPy_XDECREF(tmp);',
+            f'\t\tif (PyModule_AddObjectRef(m, "{m_name}", tmp) < 0) {{',
+            '\t\t\tPy_XDECREF(tmp);',
+            '\t\t\treturn -1;',
+            '\t\t}',
+            '\t\tPy_DECREF(tmp);',
             '\t}',
         ] + ret["initf90modhooks"]
         fadd('')
