@@ -1,0 +1,3 @@
+Parse &&, ||, and C casts in dimension expressions
+--------------------------------------------------
+Those operators were folded into symbols, so .pyf dimensions warned and were rewritten incorrectly (gh-20771).
