@@ -299,6 +299,12 @@ In addition, F2PY introduces the following statements:
 
     extern <return type> FUNC_F(<routine name>,<ROUTINE NAME>)(<callprotoargument>);
 
+  Without ``callprotoargument``, F2PY derives the prototype from the arguments
+  that ``callstatement`` passes to ``(*f2py_func)``, provided each one is a
+  variable of the signature, its address ``&<name>``, or a call-back function.
+  Otherwise F2PY declares an empty parameter list, which C23 compilers read as
+  ``(void)``; give ``callprotoargument`` in that case.
+
 ``fortranname [<actual Fortran/C routine name>]``
   F2PY allows for the use of an arbitrary ``<routine name>`` for a given
   Fortran/C function. Then this statement is used for the ``<actual
