@@ -522,10 +522,15 @@ cppmacros['CHECKSTRING'] = """
         PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, slen(var), var);\\
         /*goto capi_fail;*/\\
     } else """
+needs['CHECKSCALAR'] = ['string.h']
 cppmacros['CHECKSCALAR'] = """
 #define CHECKSCALAR(check,tcheck,name,show,var)\\
     if (!(check)) {\\
-        PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, var);\\
+        if (strstr(tcheck, \"shape(\") != NULL) {\\
+            PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show \" Check the generated Python signature: optional size arguments follow their arrays and may be omitted or passed by keyword.\", var);\\
+        } else {\\
+            PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, var);\\
+        }\\
         /*goto capi_fail;*/\\
     } else """
 # cppmacros['CHECKDIMS']="""
