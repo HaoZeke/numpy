@@ -320,11 +320,20 @@ evaluates the call-back argument ``gun``:
 * If ``n + p`` is less than the number of required arguments to ``gun`` then an
   exception is raised.
 
-If the function ``gun`` may return any number of objects as a tuple; then the
-following rules are applied:
+If the function ``gun`` returns ``l`` objects as a tuple, then the following
+rules are applied:
 
 * If ``k < l``, then ``y_{k + 1}, ..., y_l`` are ignored.
 * If ``k > l``, then only ``x_1, ..., x_l`` are set.
+
+.. note::
+
+   A returned tuple is always unpacked into ``x_1, ..., x_k``, even when
+   ``k == 1``. To return a sequence as a single value, for example an array,
+   return a list or a NumPy array instead of a tuple:
+   ``return [y_1, y_2, y_3]`` sets ``x_1`` from the whole sequence, whereas
+   ``return y_1, y_2, y_3`` returns three objects, so ``x_1`` is set from
+   ``y_1`` alone.
 
 
 Common blocks
