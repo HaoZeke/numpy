@@ -343,6 +343,23 @@ def test_gh25415_meson_include_dirs_from_running_numpy():
     meson_build = MesonTemplate(
         modulename="Blah",
         sources=[Path("f90continuation.f90")],
+        deps=[],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=[],
+        build_type="release",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+
+    mparser.Parser(meson_build, "meson.build").parse()
+    assert "run_command" not in meson_build
+    assert f"incdir_numpy = '''{np.get_include()}'''" in meson_build
+    assert f"incdir_f2py = '''{np.f2py.get_include()}'''" in meson_build
+
+
 def test_gh26352_intel_windows_symbol_names():
     # F_FUNC expects lowercase Fortran symbols with a trailing underscore
     mparser = pytest.importorskip("mesonbuild.mparser")
@@ -361,9 +378,12 @@ def test_gh26352_intel_windows_symbol_names():
     ).generate_meson_build()
 
     mparser.Parser(meson_build, "meson.build").parse()
-    assert "run_command" not in meson_build
-    assert f"incdir_numpy = '''{np.get_include()}'''" in meson_build
-    assert f"incdir_f2py = '''{np.f2py.get_include()}'''" in meson_build
+    intel_windows = "if fc.get_id() in ['intel-cl', 'intel-llvm-cl']"
+    assert intel_windows in meson_build
+    start = meson_build.index(intel_windows)
+    block = meson_build[start:meson_build.index("endif", start)]
+    assert "'/names:lowercase', '/assume:underscore'" in block
+    assert "language : 'fortran'" in block
 
 
 @pytest.mark.slow
