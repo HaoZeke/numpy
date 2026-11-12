@@ -2648,6 +2648,11 @@ def _eval_scalar(value, params):
     return value
 
 
+def _truncating_extent(lower, upper):
+    """True when a bound multiplies and divides, so ``n/2*2`` is not ``n``."""
+    return any('/' in bound and '*' in bound for bound in (lower, upper))
+
+
 def analyzevars(block):
     """
     Sets correct dimension information for each variable/parameter
@@ -2806,7 +2811,12 @@ def analyzevars(block):
                         d = '*'
                     if len(dl) == 1 and dl[0] != dim_char:
                         dl = ['1', dl[0]]
-                    if len(dl) == 2:
+                    if len(dl) == 2 and _truncating_extent(dl[0], dl[1]):
+                        # ``n/2*2`` is not ``n`` when division truncates.
+                        # Cancelling it makes ``a(0:n/2*2)`` one element
+                        # too long for odd n (gh-25421).
+                        d = f"({dl[1]})-({dl[0]})+1"
+                    elif len(dl) == 2:
                         d1, d2 = map(symbolic.Expr.parse, dl)
                         dsize = d2 - d1 + 1
                         d = dsize.tostring(language=symbolic.Language.C)

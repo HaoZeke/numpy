@@ -1,0 +1,5 @@
+``f2py`` keeps truncating division in array extents
+---------------------------------------------------
+An array declared ``a(0:n/2*2)`` was given ``n + 1`` elements. Integer
+division truncates, so the extent is ``n/2*2 + 1``: five elements when
+``n`` is 5, not six.
