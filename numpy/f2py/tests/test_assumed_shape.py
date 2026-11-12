@@ -3,6 +3,8 @@ import tempfile
 
 import pytest
 
+import numpy as np
+
 from . import util
 
 
@@ -29,6 +31,53 @@ class TestAssumedShapeSumExample(util.F2PyTest):
         assert r == 3
         r = self.module.mod.fsum([1, 2])
         assert r == 3
+
+
+@pytest.mark.slow
+class TestAssumedShapeFunctionResult(util.F2PyTest):
+    # The function name is the result variable when there is no
+    # result clause.
+    sources = [
+        util.getpath("tests", "src", "assumed_shape", "function_result.f90"),
+    ]
+
+    def test_function_result(self):
+        assert self.module.sum_noresult([1, -2, 3]) == 2
+        assert self.module.count_noresult([1, -2, 3]) == 2
+
+
+@pytest.mark.slow
+class TestAssumedShapeSignature(util.F2PyTest):
+    # gh-13553: f2py-only syntax of a signature file must not reach the
+    # interface in the Fortran wrapper
+    sources = [
+        util.getpath("tests", "src", "assumed_shape", "gh13553.f90"),
+        util.getpath("tests", "src", "assumed_shape", "gh13553.pyf"),
+    ]
+    module_name = "gh13553"
+
+    def test_generated_signature(self):
+        assert self.module.trapz([0, 1, 2], [0, 1, 4]) == 3
+        with pytest.raises(ValueError, match="2nd argument `y`"):
+            self.module.trapz([0, 1, 2], [0, 1])
+        a = np.ones(4)
+        self.module.scale_by(a, [2, 3])
+        assert a.tolist() == [2, 3, 1, 1]
+
+    def test_written_signature(self):
+        assert self.module.fill(np.zeros(3), [1, 2]).tolist() == [1, 2, 0]
+        assert self.module.dsum([1, 2, 3]) == 6
+
+
+@pytest.mark.slow
+class TestAssumedShapeDirective(util.F2PyTest):
+    # gh-13553: the same holds for f2py directives in a Fortran source
+    sources = [util.getpath("tests", "src", "assumed_shape", "gh13553.f90")]
+
+    def test_hidden_argument(self):
+        a = np.zeros(3)
+        self.module.fill_hidden(a, [1, 2])
+        assert a.tolist() == [1, 2, 0]
 
 
 @pytest.mark.slow

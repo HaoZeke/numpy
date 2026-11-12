@@ -3522,14 +3522,14 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         if block['block'] == 'function' or argsl:
             args = f"({','.join(argsl)})"
     f2pyenhancements = ''
-    if 'f2pyenhancements' in block:
+    if 'f2pyenhancements' in block and not as_interface:
         for k in list(block['f2pyenhancements'].keys()):
             f2pyenhancements = (f"{f2pyenhancements}{tab + tabchar}{k} "
                                 f"{block['f2pyenhancements'][k]}")
     intent_lst = block.get('intent', [])[:]
     if blocktype == 'function' and 'callback' in intent_lst:
         intent_lst.remove('callback')
-    if intent_lst:
+    if intent_lst and not as_interface:
         f2pyenhancements = (f"{f2pyenhancements}{tab + tabchar}"
                             f"intent({','.join(intent_lst)}) {name}")
     use = ''
@@ -3545,6 +3545,15 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         result = f" result ({block['result']})"
         if block['result'] not in argsl:
             argsl.append(block['result'])
+    elif blocktype == 'function' and as_interface:
+        # An interface body declares only argsl, and without a result
+        # clause the function name is the result variable.
+        argsl.append(name)
+    if as_interface and blocktype in ('function', 'subroutine'):
+        # The interface describes the procedure that the wrapper calls.
+        name = getfortranname(block)
+        if blocktype == 'function' and not result and name != block['name']:
+            result = f" result ({block['name']})"
     body = block['body']
     if as_interface:
         body = _body_without_external_interfaces(block)
@@ -3615,6 +3624,40 @@ def true_intent_list(var):
     return ret
 
 
+def _interface_intent_list(intents):
+    # A Fortran argument has at most one of the intents in, out and inout.
+    # f2py intent(in, out) is usually a Fortran intent(in) argument with an
+    # `!f2py intent(out)` directive, so in takes precedence.
+    for intent in ('in', 'inout', 'out'):
+        if intent in intents:
+            return [intent]
+    return []
+
+
+def _interface_attrspec(attrspec, f2py_default):
+    # check, depend, note and required only exist in signature files, as
+    # does the optional attribute implied by an f2py default value.
+    keys = [attr.split('(')[0].strip().lower() for attr in attrspec]
+    intents = []
+    for attr, key in zip(attrspec, keys):
+        if key == 'intent':
+            spec = attr.partition('(')[2].rpartition(')')[0]
+            intents.extend(i.replace(' ', '').lower() for i in spec.split(','))
+    intent = _interface_intent_list(intents)
+    ret = []
+    for attr, key in zip(attrspec, keys):
+        if key in ('check', 'depend', 'note', 'required'):
+            continue
+        if key == 'optional' and f2py_default:
+            continue
+        if key == 'intent':
+            ret.extend(f'intent({i})' for i in intent)
+            intent = []
+            continue
+        ret.append(attr)
+    return ret
+
+
 def vars2fortran(block, vars, args, tab='', as_interface=False):
     setmesstext(block)
     ret = ''
@@ -3643,7 +3686,7 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
                     errmess(
                         f'vars2fortran: Warning: cross-dependence between variables "{a}" and "{d}\"\n')
         if 'externals' in block and a in block['externals']:
-            if isintent_callback(vars[a]):
+            if isintent_callback(vars[a]) and not as_interface:
                 ret = f'{ret}{tab}intent(callback) {a}'
             ret = f'{ret}{tab}external {a}'
             if isoptional(vars[a]):
@@ -3698,27 +3741,16 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         elif 'kind' in selector:
             vardef = f"{vardef}(kind={selector['kind']})"
         c = ' '
-        # f2py-only attributes are not Fortran. They belong in the .pyf
-        # signature, not in the interface block compiled by gfortran.
-        # saved_interface is rendered before analyzevars moves check/depend
-        # out of attrspec, so match both the bare name and name(...) form
-        # (gh-13553).
-        def _fortran_attr(item):
-            head = item.split('(', 1)[0].strip().lower()
-            if head == 'external':
-                return False
-            if as_interface and head in {'required', 'check', 'depend', 'note'}:
-                return False
-            return True
+        # Fortran does not allow initializing a dummy argument, so its value
+        # is an f2py default that an interface body cannot declare.
+        f2py_default = (as_interface and '=' in vars[a]
+                        and a in block.get('args', ()))
         if 'attrspec' in vars[a]:
-            attr = [l for l in vars[a]['attrspec'] if _fortran_attr(l)]
-            if as_interface and 'intent(in)' in attr and 'intent(out)' in attr:
-                # In Fortran, intent(in, out) are conflicting while
-                # intent(in, out) can be specified only via
-                # `!f2py intent(out) ..`.
-                # So, for the Fortran interface, we'll drop
-                # intent(out) to resolve the conflict.
-                attr.remove('intent(out)')
+            def _not_external(item):
+                return item.split('(', 1)[0].strip().lower() != 'external'
+            attr = [l for l in vars[a]['attrspec'] if _not_external(l)]
+            if as_interface:
+                attr = _interface_attrspec(attr, f2py_default)
             if attr:
                 vardef = f"{vardef}, {','.join(attr)}"
                 c = ','
@@ -3728,6 +3760,8 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             c = ','
         if 'intent' in vars[a]:
             lst = true_intent_list(vars[a])
+            if as_interface:
+                lst = _interface_intent_list(lst)
             if lst:
                 vardef = f"{vardef}{c}intent({','.join(lst)})"
             c = ','
@@ -3737,7 +3771,7 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         if 'depend' in vars[a] and not as_interface:
             vardef = f"{vardef}{c}depend({','.join(vars[a]['depend'])})"
             c = ','
-        if '=' in vars[a]:
+        if '=' in vars[a] and not f2py_default:
             v = vars[a]['=']
             if vars[a]['typespec'] in ['complex', 'double complex']:
                 try:

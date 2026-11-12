@@ -250,6 +250,14 @@ class TestGH20157(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestF90CallbackSignature(TestF90Callback):
+    # gh17797.pyf is the signature that f2py -h writes for gh17797.f90
+    sources = [util.getpath("tests", "src", "callback", "gh17797.f90"),
+               util.getpath("tests", "src", "callback", "gh17797.pyf")]
+    module_name = "gh17797"
+
+
+@pytest.mark.slow
 class TestGH18335(util.F2PyTest):
     """The reproduction of the reported issue requires specific input that
     extensions may break the issue conditions, so the reproducer is

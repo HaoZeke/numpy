@@ -1,0 +1,26 @@
+python module gh13553
+    interface
+        ! trapz and scale_by as written by f2py -h
+        function trapz(x,y) result (r)
+            real*8, required,dimension(:),intent(in) :: x
+            real*8 dimension(size(x)),intent(in),check(shape(y, 0) == size(x)),depend(x) :: y
+            real*8 :: r
+        end function trapz
+        subroutine scale_by(a,b,n)
+            real(kind=8) dimension(:),intent(inout) :: a
+            real(kind=8) dimension(n),intent(in) :: b
+            integer, optional,intent(in),check(shape(b, 0) == n),depend(b) :: n=shape(b, 0)
+        end subroutine scale_by
+        subroutine fill(a,b,n)
+            real(kind=8) dimension(:),intent(in,out) :: a
+            real(kind=8) dimension(n),intent(in) :: b
+            integer intent(hide),depend(b) :: n=len(b)
+        end subroutine fill
+        function dsum(x)
+            threadsafe
+            fortranname dsum_impl
+            real(kind=8) dimension(:),intent(in) :: x
+            real(kind=8) :: dsum
+        end function dsum
+    end interface
+end python module gh13553

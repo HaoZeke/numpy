@@ -202,8 +202,12 @@ def createfuncwrapper(rout, signature=0):
             # f90 module already defines needed interface
             pass
         else:
+            interface = [
+                line for line in rout['saved_interface'].lstrip().split('\n')
+                if not (line.lstrip().startswith('use ') and '__user__' in line)
+            ]
             add('interface')
-            add(rout['saved_interface'].lstrip())
+            add('\n'.join(interface))
             add('end interface')
 
     sargs = ', '.join([a for a in args if a not in extra_args])

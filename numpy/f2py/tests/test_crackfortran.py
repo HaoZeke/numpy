@@ -297,6 +297,33 @@ class TestModuleDeclaration:
         assert mod[0]["vars"]["abar"]["="] == "bar('abar')"
 
 
+class TestSignatureInterface:
+    # gh-13553: the Fortran wrapper interface of a routine read from a
+    # signature file must not contain f2py-only syntax
+    def test_saved_interface(self):
+        fpath = util.getpath("tests", "src", "assumed_shape", "gh13553.pyf")
+        mod = crackfortran.crackfortran([str(fpath)])
+        routines = mod[0]["body"][0]["body"]
+        lines = {
+            r["name"]: [
+                line.strip() for line in r["saved_interface"].splitlines()
+                if line.strip()
+            ]
+            for r in routines
+        }
+        assert "real*8, dimension(size(x)),intent(in) :: y" in lines["trapz"]
+        assert "integer, intent(in) :: n" in lines["scale_by"]
+        assert "real(kind=8), dimension(:),intent(in) :: a" in lines["fill"]
+        assert "integer :: n" in lines["fill"]
+        assert lines["dsum"][0].startswith("function dsum_impl")
+        assert lines["dsum"][0].endswith("result (dsum)")
+        assert "real(kind=8) :: dsum" in lines["dsum"]
+        interfaces = "".join(r["saved_interface"] for r in routines)
+        for word in ("required", "optional", "check", "depend", "hide",
+                     "threadsafe", "fortranname"):
+            assert word not in interfaces
+
+
 class TestStringLiteralDepend:
     # gh-28700: identifiers inside a character parameter's literal value
     # must not be harvested as dependencies (a self-dependency crashes the
