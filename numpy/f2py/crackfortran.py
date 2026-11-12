@@ -3602,8 +3602,12 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         if blocktype == 'function' and not result and name != block['name']:
             result = f" result ({block['name']})"
     body = block['body']
+    if as_interface and blocktype in ['function', 'subroutine']:
+        # Routines nested directly in a routine are its CONTAINS
+        # procedures, and an interface body has no internal procedures.
+        body = [b for b in body if b['block'] not in ['function', 'subroutine']]
     if as_interface:
-        body = _body_without_external_interfaces(block)
+        body = _body_without_external_interfaces({**block, 'body': body})
     body = crack2fortrangen(body, tab + tabchar, as_interface=as_interface)
     vars = vars2fortran(
         block, block['vars'], argsl, tab + tabchar, as_interface=as_interface)
