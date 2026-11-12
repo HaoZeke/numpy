@@ -1482,6 +1482,15 @@ capi_fail:
 
 
 def buildcfuncs():
+    # A previous module leaves its needs here. The next run would emit
+    # macros in that leftover order, so two entry points disagree.
+    for value in outneeds.values():
+        value.clear()
+    for bucket in (typedefs_generated, callbacks):
+        sentinel = next(iter(bucket))
+        for key in list(bucket):
+            if key != sentinel:
+                del bucket[key]
     from .capi_maps import c2capi_map
     for k in c2capi_map.keys():
         m = f'pyarr_from_p_{k}1'
