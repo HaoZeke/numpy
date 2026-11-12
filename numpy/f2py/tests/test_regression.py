@@ -9,8 +9,11 @@ import pytest
 import numpy as np
 import numpy.testing as npt
 from numpy.f2py._backends._meson import MesonTemplate
+from numpy.testing._private.utils import requires_memory
 
 from . import util
+
+LEN_BEYOND_INT = np.iinfo(np.intc).max + 1
 
 
 @pytest.mark.slow
@@ -248,6 +251,23 @@ class TestAssignmentOnlyModules(util.F2PyTest):
         assert (self.module.f_globals.n_max == 16)
         assert (self.module.f_globals.i_max == 18)
         assert (self.module.f_globals.j_max == 72)
+
+
+@pytest.mark.slow
+class TestArrayInitValue(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "regression", "gh18767.pyf")]
+    module_name = "gh18767_init"
+
+    def test_myrange(self):
+        npt.assert_array_equal(self.module.myrange(5), np.arange(5.0))
+
+    @pytest.mark.skipif(not npt.IS_64BIT,
+                        reason="needs arrays larger than a C int")
+    @requires_memory(free_bytes=LEN_BEYOND_INT)
+    def test_init_beyond_int(self):
+        a = self.module.ones(LEN_BEYOND_INT)
+        assert a.shape == (LEN_BEYOND_INT,)
+        assert np.count_nonzero(a) == LEN_BEYOND_INT
 
 
 def _wrap_f90(funcwrappers2):

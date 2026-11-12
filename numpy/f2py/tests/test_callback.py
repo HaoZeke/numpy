@@ -14,9 +14,14 @@ import numpy as np
 from numpy.f2py import crackfortran
 from numpy.f2py.f2py2e import main as f2pycli
 from numpy.f2py.f2py2e import run_main
-from numpy.testing import HAS_REFCOUNT, assert_array_equal
+from numpy.testing import HAS_REFCOUNT, IS_64BIT, assert_array_equal
+from numpy.testing._private.utils import requires_memory
 
 from . import util
+
+LEN_BEYOND_INT = np.iinfo(np.intc).max + 1
+
+LEN_BEYOND_INT = np.iinfo(np.intc).max + 1
 
 
 @pytest.mark.slow
@@ -568,6 +573,45 @@ class TestStringOutCallback(util.F2PyTest):
             self.module.string_out(lambda: "hello")
         assert (f"{self.module_name}.error is related to hello\n"
                 in capfd.readouterr().err)
+
+
+@pytest.mark.slow
+class TestGH18767(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh18767.f90"),
+               util.getpath("tests", "src", "callback", "gh18767.pyf")]
+    module_name = "gh18767_callback"
+
+    def test_inout_string_callback(self):
+        seen = []
+
+        def cb(t):
+            seen.append((t.dtype, t.shape))
+            t[:] = np.frombuffer(b"HELLO", dtype="S1")
+
+        s = np.array(b"hello", dtype="S5")
+        self.module.call_cb(cb, s)
+        assert seen == [(np.dtype("S1"), (5,))]
+        assert s.item() == b"HELLO"
+
+    def test_string_function_callback(self):
+        f = self.module.call_string_function
+        assert f(lambda: b"world") == b"world"
+        assert f(self.module.hello._cpointer) == b"hello"
+
+    @pytest.mark.skipif(not IS_64BIT, reason="needs objects larger than a C int")
+    @requires_memory(free_bytes=2 * LEN_BEYOND_INT)
+    def test_inout_string_callback_beyond_int(self):
+        seen = []
+
+        def cb(t):
+            seen.append(t.shape)
+            t[-1] = b"Z"
+
+        s = np.full(LEN_BEYOND_INT, b"a", dtype="S1")
+        s[-1] = b"z"
+        self.module.call_cb(cb, s)
+        assert seen == [(LEN_BEYOND_INT,)]
+        assert (s[0], s[-1]) == (b"a", b"Z")
 
 
 @pytest.mark.slow

@@ -577,14 +577,15 @@ def sign2map(a, var):
             if ret['ctype'] in cformat_map:
                 ret['vardebugshowvalue'] = f"debug-capi:{a}={cformat_map[ret['ctype']]}"
         if isstring(var):
-            ret['vardebugshowvalue'] = f'debug-capi:slen({a})=%d {a}=\\"%s\\"'
+            ret['vardebugshowvalue'] = (f'debug-capi:slen({a})=%" NPY_INTP_FMT "'
+                                        f' {a}=\\"%s\\"')
         if isexternal(var):
             ret['vardebugshowvalue'] = f'debug-capi:{a}=%p'
     if ret['ctype'] in cformat_map:
         ret['varshowvalue'] = f"#name#:{a}={cformat_map[ret['ctype']]}"
         ret['showvalueformat'] = f"{cformat_map[ret['ctype']]}"
     if isstring(var):
-        ret['varshowvalue'] = f'#name#:slen({a})=%d {a}=\\"%s\\"'
+        ret['varshowvalue'] = f'#name#:slen({a})=%" NPY_INTP_FMT " {a}=\\"%s\\"'
     ret['pydocsign'], ret['pydocsignout'] = getpydocsign(a, var)
     if hasnote(var):
         ret['note'] = var['note']
@@ -661,7 +662,8 @@ def routsign2map(rout):
                 ret['routdebugshowvalue'] = ("debug-capi:"
                                              f"{a}={cformat_map[ret['ctype']]}")
             if isstringfunction(rout):
-                ret['routdebugshowvalue'] = f'debug-capi:slen({a})=%d {a}=\\"%s\\"'
+                ret['routdebugshowvalue'] = (f'debug-capi:slen({a})=%" NPY_INTP_FMT "'
+                                             f' {a}=\\"%s\\"')
         if isstringfunction(rout):
             ret['rlength'] = getstrlength(rout['vars'][a])
             if ret['rlength'] == '-1':

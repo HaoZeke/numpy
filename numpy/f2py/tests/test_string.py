@@ -1,9 +1,12 @@
 import pytest
 
 import numpy as np
-from numpy.testing import assert_array_equal
+from numpy.testing import IS_64BIT, assert_array_equal
+from numpy.testing._private.utils import requires_memory
 
 from . import util
+
+LEN_BEYOND_INT = np.iinfo(np.intc).max + 1
 
 
 @pytest.mark.slow
@@ -112,3 +115,19 @@ class TestFixedString(util.F2PyTest):
             r = self.module.test_inout_bytes4(s)
             assert self.module.test_inout_bytes4(u) == r
             assert_array_equal(u, s.astype(u.dtype))
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not IS_64BIT, reason="needs objects larger than a C int")
+class TestLargeString(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "string", "gh18767.f90")]
+
+    @requires_memory(free_bytes=2 * LEN_BEYOND_INT)
+    def test_string_len(self):
+        s = b"z".rjust(LEN_BEYOND_INT, b"a")
+        assert self.module.string_len(s) == (LEN_BEYOND_INT, ord("z"))
+
+    @requires_memory(free_bytes=2 * LEN_BEYOND_INT)
+    def test_string_array_len(self):
+        s = b"z".rjust(LEN_BEYOND_INT, b"a")
+        assert self.module.string_array_len(s) == (LEN_BEYOND_INT, ord("z"))

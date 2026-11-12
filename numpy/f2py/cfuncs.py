@@ -506,7 +506,7 @@ STRINGPADN(to, N, PADDING, NULLVALUE) is an inverse operation.
 */
 #define STRINGPADN(to, N, NULLVALUE, PADDING)                   \\
     do {                                                        \\
-        int _m = (N);                                           \\
+        npy_intp _m = (N);                                      \\
         char *_to = (to);                                       \\
         for (_m -= 1; _m >= 0 && _to[_m] == NULLVALUE; _m--) {  \\
              _to[_m] = PADDING;                                 \\
@@ -522,7 +522,7 @@ STRINGCOPYN copies N bytes.
 */
 #define STRINGCOPYN(to,from,N)                                  \\
     do {                                                        \\
-        int _m = (N);                                           \\
+        npy_intp _m = (N);                                      \\
         char *_to = (to);                                       \\
         char *_from = (from);                                   \\
         FAILNULL(_to); FAILNULL(_from);                         \\
@@ -622,7 +622,7 @@ static int calcarrindextr(int *i,PyArrayObject *arr) {
     return ii;
 }"""
 cfuncs['forcomb'] = """
-struct ForcombCache { int nd;npy_intp *d;int *i,*i_tr,tr; };
+struct ForcombCache { int nd;npy_intp *d;npy_intp *i,*i_tr;int tr; };
 static int initforcomb(struct ForcombCache *cache, npy_intp *dims,int nd,int tr) {
   int k;
   if (dims==NULL) return 0;
@@ -631,9 +631,9 @@ static int initforcomb(struct ForcombCache *cache, npy_intp *dims,int nd,int tr)
   cache->d = dims;
   cache->tr = tr;
 
-  cache->i = (int *)malloc(sizeof(int)*nd);
+  cache->i = (npy_intp *)malloc(sizeof(npy_intp)*nd);
   if (cache->i==NULL) return 0;
-  cache->i_tr = (int *)malloc(sizeof(int)*nd);
+  cache->i_tr = (npy_intp *)malloc(sizeof(npy_intp)*nd);
   if (cache->i_tr==NULL) {free(cache->i); return 0;};
 
   for (k=1;k<nd;k++) {
@@ -642,9 +642,10 @@ static int initforcomb(struct ForcombCache *cache, npy_intp *dims,int nd,int tr)
   cache->i[0] = cache->i_tr[nd-1] = -1;
   return 1;
 }
-static int *nextforcomb(struct ForcombCache *cache) {
+static npy_intp *nextforcomb(struct ForcombCache *cache) {
   if (cache==NULL) return NULL;
-  int j,*i,*i_tr,k;
+  int j,k;
+  npy_intp *i,*i_tr;
   int nd=cache->nd;
   if ((i=cache->i) == NULL) return NULL;
   if ((i_tr=cache->i_tr) == NULL) return NULL;
@@ -696,10 +697,10 @@ cfuncs['try_pyarr_from_string'] = """
   If the specified len==-1, str must be null-terminated.
 */
 static int try_pyarr_from_string(PyObject *obj,
-                                 const string str, const int len) {
+                                 const string str, const npy_intp len) {
     PyArrayObject *tmp = NULL;
 #ifdef DEBUGCFUNCS
-fprintf(stderr, "try_pyarr_from_string(str='%s', len=%d, obj=%p)\\n",
+fprintf(stderr, "try_pyarr_from_string(str='%s', len=%" NPY_INTP_FMT ", obj=%p)\\n",
         (char*)str,len, obj);
 #endif
     if (!obj) return -2; /* Object missing */
@@ -751,14 +752,14 @@ cfuncs['string_from_pyobj'] = """
   are insignificant contrary to C nulls.
  */
 static int
-string_from_pyobj(string *str, int *len, const string inistr, PyObject *obj,
+string_from_pyobj(string *str, npy_intp *len, const string inistr, PyObject *obj,
                   const char *errmess)
 {
     PyObject *tmp = NULL;
     string buf = NULL;
     npy_intp n = -1;
 #ifdef DEBUGCFUNCS
-fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
+fprintf(stderr,\"string_from_pyobj(str='%s',len=%\" NPY_INTP_FMT \",inistr='%s',obj=%p)\\n\",
                (char*)str, *len, (char *)inistr, obj);
 #endif
     if (obj == Py_None) {
@@ -805,12 +806,6 @@ fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
         buf = PyBytes_AsString(tmp);
     }
     if (*len == -1) {
-        /* TODO: change the type of `len` so that we can remove this */
-        if (n > NPY_MAX_INT) {
-            PyErr_SetString(PyExc_OverflowError,
-                            "object too large for a 32-bit int");
-            goto capi_fail;
-        }
         *len = n;
     }
     else if (*len < n) {
