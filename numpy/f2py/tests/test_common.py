@@ -22,3 +22,18 @@ class TestCommonWithUse(util.F2PyTest):
 
     def test_common_gh19161(self):
         assert self.module.data.x == 0
+
+
+@pytest.mark.slow
+class TestCommonAllHidden(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "common", "gh19573.pyf"),
+        util.getpath("tests", "src", "common", "gh19573.f"),
+    ]
+    module_name = "_gh19573_common"
+
+    def test_common_gh19573(self):
+        # a COMMON block whose members are all hidden is not exposed
+        assert not hasattr(self.module, "blk")
+        self.module.setn(7)
+        assert self.module.getn() == 7
