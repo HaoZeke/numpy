@@ -1,0 +1,3 @@
+Type an ENTRY name as its return value
+--------------------------------------
+Wrapping a function ENTRY crashed with KeyError because the entry name was never added to the routine variables (gh-13356).
