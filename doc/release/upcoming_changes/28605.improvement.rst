@@ -1,0 +1,3 @@
+Wrap a typed external that is never called
+------------------------------------------
+`external p` followed by `real*8 p` listed the name twice and, with no call and no interface, never built a callback, so the wrapper kept `#maxnofargs#` (gh-28605).
