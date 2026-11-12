@@ -68,6 +68,14 @@ _SKIPS = (
         "LFortran 0.69 appends an underscore to bind(c) f2py_check_signals",
     ),
     (
+        "test_docs.py::test_gh26973_meson_example",
+        "LFortran 0.69 does not declare an implicitly typed DO variable",
+    ),
+    (
+        "test_docs.py::test_gh26973_meson_python_example",
+        "LFortran 0.69 does not add the trailing underscore on a free subroutine",
+    ),
+    (
         "test_entry.py::TestEntryInResultFunction",
         "LFortran 0.69 returns 0 from an ENTRY instead of the entry's value",
     ),
