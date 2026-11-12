@@ -375,3 +375,37 @@ In Python:
 
 .. literalinclude:: ./code/results/allocarr_session.dat
   :language: python
+
+.. _Allocatable array arguments:
+
+Allocatable array arguments
+---------------------------
+
+Procedures with allocatable array dummy arguments, and functions returning an
+allocatable array, are wrapped as well. Fortran requires such an argument to
+be associated with an allocatable array, so the generated wrapper calls the
+procedure with a local allocatable array and maps the argument by its intent:
+
+* ``intent(out)``: the argument is removed from the Python signature and
+  returned as a new Fortran-contiguous array with the shape allocated by the
+  procedure, or as ``None`` if the procedure leaves it unallocated. An
+  allocatable function result is returned in the same way.
+* ``intent(in)`` or no ``intent``: the input is copied into an allocated
+  array before the call.
+* ``intent(inout)``: the input is copied in and the values are written back
+  to the input array after the call. A ``ValueError`` is raised if the
+  procedure deallocates the array or changes its shape. An argument that is
+  ``intent(in,out)`` for F2PY is returned as a new array instead, so it may
+  be reallocated.
+
+Consider the following Fortran code:
+
+.. literalinclude:: ./code/allocarg.f90
+  :language: fortran
+
+and wrap it using ``f2py -c -m allocarg allocarg.f90``.
+
+In Python:
+
+.. literalinclude:: ./code/results/allocarg_session.dat
+  :language: python
