@@ -7,6 +7,7 @@ import pytest
 
 import numpy as np
 from numpy._core._type_aliases import c_names_dict as _c_names_dict
+from numpy.testing import HAS_REFCOUNT
 
 from . import util
 
@@ -378,6 +379,19 @@ class TestIntent:
         assert intent.in_.c.is_intent_exact("c", "in")
         assert intent.in_.c.is_intent_exact("in", "c")
         assert not intent.in_.is_intent("c")
+
+
+@pytest.mark.skipif(not HAS_REFCOUNT, reason="Python lacks refcounts")
+def test_failed_array_creation_keeps_dtype_refcount():
+    dtype = np.dtype(np.float64)
+    refcount = sys.getrefcount(dtype)
+    with pytest.raises(ValueError):
+        wrap.call(dtype.num, dtype.itemsize, [-1], intent.in_.flags,
+                  [[1.0], [1.0, 2.0]])
+    with pytest.raises(ValueError):
+        wrap.call(dtype.num, dtype.itemsize, [np.iinfo(np.intp).max],
+                  intent.hide.flags, None)
+    assert sys.getrefcount(dtype) == refcount
 
 
 class TestSharedMemory:
