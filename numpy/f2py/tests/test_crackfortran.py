@@ -626,3 +626,27 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+
+class TestImplicitRules:
+    def test_rules_stay_in_their_unit(self):
+        fpath = util.getpath("tests", "src", "crackfortran", "implicit_units.f")
+        first, second = crackfortran.crackfortran([str(fpath)])
+        assert first["vars"]["x"]["typespec"] == "double precision"
+        assert second["vars"]["x"]["typespec"] == "real"
+        assert crackfortran.defaultimplicitrules["x"] == {"typespec": "real"}
+
+    def test_module_procedure_uses_module_rules(self):
+        fpath = util.getpath("tests", "src", "crackfortran", "implicit_module.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        sub = mod[0]["body"][0]
+        assert sub["vars"]["x"]["typespec"] == "double precision"
+
+    def test_uppercase_letters(self, monkeypatch):
+        # gh-13356: without -h, ``f2py -m`` keeps the case of the source
+        monkeypatch.setattr(crackfortran, "dolowercase", 0)
+        fpath = util.getpath("tests", "src", "crackfortran", "implicit_upper.f")
+        fvars = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+        for name in ("TK", "X", "ETA1"):
+            assert fvars[name]["typespec"] == "double precision"
+        assert fvars["KK"]["typespec"] == "integer"

@@ -1400,13 +1400,13 @@ def analyzeline(m, case, line):
                 for r in markoutercomma(m1.group('after')).split('@,@'):
                     if '-' in r:
                         try:
-                            begc, endc = [x.strip() for x in r.split('-')]
+                            begc, endc = [x.strip().lower() for x in r.split('-')]
                         except Exception:
                             outmess(
                                 f'analyzeline: expected "<char>-<char>" instead of "{r}" in range list of implicit statement\n')
                             continue
                     else:
-                        begc = endc = r.strip()
+                        begc = endc = r.strip().lower()
                     if not len(begc) == len(endc) == 1:
                         outmess(
                             f'analyzeline: expected "<char>-<char>" instead of "{r}" in range list of implicit statement (2)\n')
@@ -2373,8 +2373,13 @@ def analyzebody(block, args, tab=''):
 
 
 def buildimplicitrules(block):
-    setmesstext(block)
+    # IMPLICIT statements apply to their own block and to the blocks it
+    # contains, never to other program units.
     implicitrules = defaultimplicitrules
+    if 'parent_block' in block:
+        implicitrules = (buildimplicitrules(block['parent_block'])[0]
+                         or implicitrules)
+    setmesstext(block)
     attrrules = {}
     if 'implicit' in block:
         if block['implicit'] is None:
@@ -2383,6 +2388,7 @@ def buildimplicitrules(block):
                 outmess(
                     f"buildimplicitrules: no implicit rules for routine {repr(block['name'])}.\n")
         else:
+            implicitrules = dict(implicitrules)
             for k in list(block['implicit'].keys()):
                 if block['implicit'][k].get('typespec') not in ['static', 'automatic']:
                     implicitrules[k] = block['implicit'][k]

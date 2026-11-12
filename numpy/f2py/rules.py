@@ -1398,6 +1398,9 @@ def buildmodule(m, um):
             for k, a in nb['entry'].items():
                 nb1 = copy.deepcopy(nb)
                 del nb1['entry']
+                # An ENTRY returns through its own name, not the RESULT
+                # variable of the function.
+                nb1.pop('result', None)
                 nb1['name'] = k
                 nb1['args'] = a
                 nb_list.append(nb1)
