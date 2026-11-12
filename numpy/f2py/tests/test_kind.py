@@ -1,3 +1,4 @@
+import os
 import platform
 import sys
 
@@ -18,6 +19,15 @@ class TestKind(util.F2PyTest):
 
     @pytest.mark.skipif(sys.maxsize < 2 ** 31 + 1,
                         reason="Fails for 32 bit machines")
+    @pytest.mark.xfail(
+        "ifx" in os.environ.get("FC", ""),
+        reason=(
+            "ifx has no integer kind for 19 decimal digits, so "
+            "selected_int_kind(19) is -1. f2py's static kind table "
+            "uses gfortran's 16. Using ifx's answer in that table "
+            "would break gfortran."
+        ),
+    )
     def test_int(self):
         """Test `int` kind_func for integers up to 10**40."""
         selectedintkind = self.module.selectedintkind
@@ -27,6 +37,14 @@ class TestKind(util.F2PyTest):
                 i
             ), f"selectedintkind({i}): expected {selected_int_kind(i)!r} but got {selectedintkind(i)!r}"
 
+    @pytest.mark.xfail(
+        "ifx" in os.environ.get("FC", ""),
+        reason=(
+            "ifx's selected_real_kind(16) is 16, IEEE quad. gfortran's "
+            "is 10, 80-bit extended precision. f2py's static kind table "
+            "follows gfortran."
+        ),
+    )
     def test_real(self):
         """
         Test (processor-dependent) `real` kind_func for real numbers
