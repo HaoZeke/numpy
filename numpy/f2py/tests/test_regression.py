@@ -310,9 +310,6 @@ def test_meson_paths_relative_to_cwd(tmp_path, monkeypatch):
 def test_meson_library_files_after_objects():
     # Libraries given as files must follow the objects that use them on the
     # link line, which meson does for link_args but not for objects
-def test_gh25415_meson_include_dirs_from_running_numpy():
-    # meson setup must not spawn Python to look up the include directories
-    mparser = pytest.importorskip("mesonbuild.mparser")
     meson_build = MesonTemplate(
         modulename="Blah",
         sources=[Path("f90continuation.f90")],
@@ -336,6 +333,29 @@ def test_gh25415_meson_include_dirs_from_running_numpy():
     deps = meson_build.split("dependencies : [")[1]
     assert (deps.index("lib_file_0_libfoo_a") < deps.index("lib_file_1_libbaz_so")
             < deps.index("lib_0_bar"))
+
+
+def test_gh25415_meson_include_dirs_from_running_numpy():
+    # meson setup must not spawn Python to look up the include directories
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = MesonTemplate(
+        modulename="Blah",
+        sources=[Path("f90continuation.f90")],
+        deps=[],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=[],
+        build_type="release",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+
+    mparser.Parser(meson_build, "meson.build").parse()
+    assert "run_command" not in meson_build
+    assert f"incdir_numpy = '''{np.get_include()}'''" in meson_build
+    assert f"incdir_f2py = '''{np.f2py.get_include()}'''" in meson_build
 
 
 @pytest.mark.slow
