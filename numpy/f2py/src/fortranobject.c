@@ -35,10 +35,10 @@ int
 F2PyDict_SetItemString(PyObject *dict, char *name, PyObject *obj)
 {
     if (obj == NULL) {
-        fprintf(stderr, "Error loading %s\n", name);
-        if (PyErr_Occurred()) {
-            PyErr_Print();
-            PyErr_Clear();
+        /* Keep the exception raised by whatever failed to create obj */
+        if (!PyErr_Occurred()) {
+            PyErr_Format(PyExc_SystemError,
+                         "F2PyDict_SetItemString: NULL value for %s", name);
         }
         return -1;
     }
@@ -137,7 +137,7 @@ typedef PyObject *(*fortranfunc)(PyObject *, PyObject *, PyObject *, void *);
 PyObject *
 PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
 {
-    int i;
+    int i, ret;
     PyFortranObject *fp = NULL;
     PyObject *v = NULL;
     if (init != NULL) { /* Initialize F90 module objects */
@@ -155,9 +155,6 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
     while (defs[fp->len].name != NULL) {
         fp->len++;
     }
-    if (fp->len == 0) {
-        goto fail;
-    }
     fp->defs = defs;
     for (i = 0; i < fp->len; i++) {
         if (fp->defs[i].rank == -1) { /* Is Fortran routine */
@@ -165,8 +162,11 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
             if (v == NULL) {
                 goto fail;
             }
-            PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
-            Py_XDECREF(v);
+            ret = PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
+            Py_DECREF(v);
+            if (ret < 0) {
+                goto fail;
+            }
         }
         else if ((fp->defs[i].data) !=
                  NULL) { /* Is Fortran variable or array (not allocatable) */
@@ -182,8 +182,11 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
             if (v == NULL) {
                 goto fail;
             }
-            PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
-            Py_XDECREF(v);
+            ret = PyDict_SetItemString(fp->dict, fp->defs[i].name, v);
+            Py_DECREF(v);
+            if (ret < 0) {
+                goto fail;
+            }
         }
     }
     return (PyObject *)fp;
@@ -1427,11 +1430,7 @@ f2py_size_impl(PyArrayObject* var, ...)
 PyObject *
 F2PyCapsule_FromVoidPtr(void *ptr, void (*dtor)(PyObject *))
 {
-    PyObject *ret = PyCapsule_New(ptr, NULL, dtor);
-    if (ret == NULL) {
-        PyErr_Clear();
-    }
-    return ret;
+    return PyCapsule_New(ptr, NULL, dtor);
 }
 
 void *
