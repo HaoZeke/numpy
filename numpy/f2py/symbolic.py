@@ -956,9 +956,10 @@ def normalize(obj):
                     and s.op is Op.STRING
                     and last.data[0][0] in '"\''
                     and s.data[0][0] == last.data[0][-1]
+                    and last.data[1] == s.data[1]
             ):
                 new_last = as_string(last.data[0][:-1] + s.data[0][1:],
-                                     max(last.data[1], s.data[1]))
+                                     last.data[1])
                 lst[-1] = new_last
             else:
                 lst.append(s)

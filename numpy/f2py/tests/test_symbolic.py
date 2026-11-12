@@ -528,3 +528,19 @@ class TestSymbolic(util.F2PyTest):
         assert "||" in both and "&&" in both
         assert fromstring("a && b").tostring(language=Language.C) == "a && b"
         assert fromstring("a || b && c").tostring(language=Language.C) == "a || b && c"
+    def test_concat_string_kinds(self):
+        ab, cd = as_string('"AB"'), as_string('"CD"')
+        ab4, cd4 = as_string('"AB"', 4), as_string('"CD"', 4)
+        assert ab // cd == as_string('"ABCD"')
+        assert ab4 // cd4 == as_string('"ABCD"', 4)
+        assert ab // cd4 == Expr(Op.CONCAT, (ab, cd4))
+
+        e = fromstring('"AB" // 1_"CD"', language=Language.Fortran)
+        assert normalize(e) == e
+        e = fromstring('1_"AB" // 1_"CD"', language=Language.Fortran)
+        assert normalize(e) == as_string('"ABCD"', '1')
+        e = fromstring('4_"AB" // 1_"CD"', language=Language.Fortran)
+        assert normalize(e) == e
+        e = fromstring('"AB" // MYSTRKIND_"CD"', language=Language.Fortran)
+        assert normalize(e) == e
+        assert e.substitute({}) == e
