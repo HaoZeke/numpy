@@ -250,6 +250,15 @@ def scaninputline(inputline):
             f10 = 1
         elif l == '--overwrite-signature':
             options['h-overwrite'] = 1
+        elif l == '-f77':
+            # Fixed form, strict F77. Not a compiler -ffixed-form flag.
+            crackfortran.form_override = (1, 'fix')
+        elif l == '-f90':
+            crackfortran.form_override = (0, 'free')
+        elif l == '-fix':
+            strict_now = (crackfortran.form_override[0]
+                          if crackfortran.form_override else 0)
+            crackfortran.form_override = (strict_now, 'fix')
         elif l == '-h':
             f2 = 1
         elif l == '-m':

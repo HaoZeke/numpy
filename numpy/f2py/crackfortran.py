@@ -166,6 +166,9 @@ f2py_version = __version__.version
 # Global flags:
 strictf77 = 1          # Ignore `!' comments unless line[0]=='!'
 sourcecodeform = 'fix'  # 'fix','free'
+# Set by -f77, -f90, or -fix. None means decide from the file name.
+# Compiler -ffixed-form / --fflags are not consulted (gh-26704).
+form_override = None
 quiet = 0              # Be verbose if 0 (Obsolete: not used any more)
 verbose = 1            # Be quiet if 0, extra verbose if > 1.
 tabchar = 4 * ' '
@@ -202,12 +205,13 @@ def reset_global_f2py_vars():
     global skipblocksuntil, usermodules, f90modulevars, gotnextfile
     global filepositiontext, currentfilename, skipfunctions, skipfuncs
     global onlyfuncs, include_paths, previous_context
-    global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
+    global strictf77, sourcecodeform, form_override, quiet, verbose, tabchar, pyffilename
     global f77modulename, skipemptyends, ignorecontains, dolowercase, debug
 
     # flags
     strictf77 = 1
     sourcecodeform = 'fix'
+    form_override = None
     quiet = 0
     verbose = 1
     tabchar = 4 * ' '
@@ -403,14 +407,19 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             currentfilename = fin.filename()
             gotnextfile = 1
             l1 = l
-            strictf77 = 0
-            sourcecodeform = 'fix'
             ext = os.path.splitext(currentfilename)[1]
-            if Path(currentfilename).suffix.lower() in COMMON_FIXED_EXTENSIONS and \
-                    not (_has_f90_header(l) or _has_fix_header(l)):
-                strictf77 = 1
-            elif is_free_format(currentfilename) and not _has_fix_header(l):
-                sourcecodeform = 'free'
+            if form_override is not None:
+                # -f77 / -f90 / -fix name the form. The suffix must not
+                # replace that choice (gh-26704).
+                strictf77, sourcecodeform = form_override
+            else:
+                strictf77 = 0
+                sourcecodeform = 'fix'
+                if Path(currentfilename).suffix.lower() in COMMON_FIXED_EXTENSIONS and \
+                        not (_has_f90_header(l) or _has_fix_header(l)):
+                    strictf77 = 1
+                elif is_free_format(currentfilename) and not _has_fix_header(l):
+                    sourcecodeform = 'free'
             if strictf77:
                 beginpattern = beginpattern77
             else:
@@ -3753,22 +3762,21 @@ if __name__ == "__main__":
             verbose = 2
             quiet = 0
         elif l == '-fix':
-            if strictf77:
+            strict_now = form_override[0] if form_override else strictf77
+            if strict_now:
                 outmess(
                     'Use option -f90 before -fix if Fortran 90 code is in fix form.\n', 0)
             skipemptyends = 1
-            sourcecodeform = 'fix'
+            form_override = (strict_now, 'fix')
         elif l == '-skipemptyends':
             skipemptyends = 1
         elif l == '--ignore-contains':
             ignorecontains = 1
         elif l == '-f77':
-            strictf77 = 1
-            sourcecodeform = 'fix'
+            form_override = (1, 'fix')
         elif l == '-f90':
-            strictf77 = 0
-            sourcecodeform = 'free'
             skipemptyends = 1
+            form_override = (0, 'free')
         elif l == '-h':
             f2 = 1
         elif l == '-show':
