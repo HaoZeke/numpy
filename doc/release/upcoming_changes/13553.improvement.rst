@@ -1,0 +1,3 @@
+Keep f2py-only attributes out of Fortran interfaces
+---------------------------------------------------
+required, check, and depend were copied into the compiled interface, and real*8 dimension(...) was missing its comma (gh-13553).
