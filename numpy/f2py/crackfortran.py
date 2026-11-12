@@ -71,6 +71,9 @@ Usage:
      B['varnames'] --- list of variable names given in the order of reading the
                        Fortran code, useful for derived types.
      B['saved_interface'] --- a string of scanned routine signature, defines explicit interface
+     B['implementedby'] --- list of procedure names given by the procedure
+                            statements of a generic interface block, such as
+                            'interface operator(+)'
  *** Variable definition is a dictionary
      D = B['vars'][<variable name>] =
      {'typespec'[,'attrspec','kindselector','charselector','=','typename']}
@@ -961,7 +964,7 @@ typedefpattern = re.compile(
 nameargspattern = re.compile(
     r'\s*(?P<name>\b[\w$]+\b)\s*(@\(@\s*(?P<args>[\w\s,]*)\s*@\)@|)\s*((result(\s*@\(@\s*(?P<result>\b[\w$]+\b)\s*@\)@|))|(bind\s*@\(@\s*(?P<bind>(?:(?!@\)@).)*)\s*@\)@))*\s*\Z', re.I)
 operatorpattern = re.compile(
-    r'\s*(?P<scheme>(operator|assignment))'
+    r'\s*(?P<scheme>(operator|assignment))\s*'
     r'@\(@\s*(?P<name>[^)]+)\s*@\)@\s*\Z', re.I)
 callnameargspattern = re.compile(
     r'\s*(?P<name>\b[\w$]+\b)\s*@\(@\s*(?P<args>.*)\s*@\)@\s*\Z', re.I)
@@ -1008,7 +1011,9 @@ def _resolvenameargspattern(line):
         return m1.group('name'), m1.group('args'), m1.group('result'), bind_cname
     m1 = operatorpattern.match(line)
     if m1:
-        name = m1.group('scheme') + '(' + m1.group('name') + ')'
+        # Blanks may separate but not split tokens (F2018 6.3.2.2)
+        op = ''.join(m1.group('name').split())
+        name = f"{m1.group('scheme')}({op})"
         return name, [], None, None
     m1 = callnameargspattern.match(line)
     if m1:
@@ -1275,7 +1280,7 @@ def analyzeline(m, case, line):
             else:
                 k = rmbadname1(m1.group('name'))
             if case in ['public', 'private'] and k in {'operator', 'assignment'}:
-                k += m1.group('after')
+                k += ''.join(m1.group('after').split())
             if k not in edecl:
                 edecl[k] = {}
             if case == 'dimension':
@@ -1320,8 +1325,13 @@ def analyzeline(m, case, line):
         if last_name is not None:
             previous_context = ('variable', last_name, groupcounter)
     elif case == 'moduleprocedure':
-        groupcache[groupcounter]['implementedby'] = \
-            [x.strip() for x in m.group('after').split(',')]
+        # F2018 R1506: [MODULE] PROCEDURE [::] specific-procedure-list,
+        # repeatable within one generic interface block (R1501, R1502).
+        ll = m.group('after').strip()
+        if ll.startswith('::'):
+            ll = ll[2:]
+        groupcache[groupcounter].setdefault('implementedby', []).extend(
+            rmbadname([x.strip() for x in ll.split(',')]))
     elif case == 'parameter':
         edecl = groupcache[groupcounter]['vars']
         ll = m.group('after').strip()[1:-1]
@@ -3600,6 +3610,9 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     mess = ''
     if 'from' in block and not as_interface:
         mess = f"! in {block['from']}"
+    if block.get('implementedby') and not as_interface:
+        procs = ', '.join(block['implementedby'])
+        body = f'{tab + tabchar}module procedure {procs}{body}'
     if 'entry' in block:
         entry_stmts = ''
         for k, i in list(block['entry'].items()):

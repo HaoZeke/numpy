@@ -90,6 +90,44 @@ class TestModuleProcedure:
         assert mod["body"][3]["implementedby"] == \
             ["get_int", "get_real"]
 
+    def test_procedure_statements(self):
+        # gh-19896: every procedure statement of a generic interface counts
+        fpath = util.getpath("tests", "src", "crackfortran", "gh19896.f90")
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        procs = {b["name"]: b["implementedby"] for b in mod["body"]
+                 if b["block"] == "interface"}
+        assert procs == {
+            "operator(.dot.)": ["dot_real", "dot_int"],
+            "operator(+)": ["union_bn"],
+            "assignment(=)": ["int_from_char", "real_from_char"],
+        }
+        routines = {b["name"] for b in mod["body"]
+                    if b["block"] in ("function", "subroutine")}
+        assert set().union(*procs.values()) <= routines
+
+    def test_generic_spec_blanks(self):
+        # gh-19896: blanks around the operator do not change the name
+        fpath = util.getpath("tests", "src", "crackfortran", "gh19896.f90")
+        mod = crackfortran.crackfortran([str(fpath)])[0]
+        names = [b["name"] for b in mod["body"] if b["block"] == "interface"]
+        assert names == ["operator(.dot.)", "operator(+)", "assignment(=)"]
+        for name in names:
+            assert mod["vars"][name]["attrspec"] == ["public"]
+
+    def test_signature_file_procedures(self, tmp_path):
+        # gh-19896: a signature file keeps the procedure statements
+        def procedures(mod):
+            return {b["name"]: b["implementedby"] for b in mod[0]["body"]
+                    if b["block"] == "interface"}
+
+        fpath = util.getpath("tests", "src", "crackfortran", "gh19896.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        pyf = tmp_path / "gh19896.pyf"
+        pyf.write_text(crackfortran.crack2fortran(mod))
+        assert "module procedure dot_real, dot_int" in pyf.read_text()
+        assert procedures(crackfortran.crackfortran([str(pyf)])) == \
+            procedures(mod)
+
     def test_notPublicPrivate(self, tmp_path):
         fpath = util.getpath("tests", "src", "crackfortran", "pubprivmod.f90")
         mod = crackfortran.crackfortran([str(fpath)])
