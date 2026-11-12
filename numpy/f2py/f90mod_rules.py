@@ -122,6 +122,11 @@ def _parameter_imports(m, pymod):
     available = {mod['name']: mod for mod in findf90modules(pymod)}
     found = []
     seen = set(m.get('vars') or {})
+    access = m.get('_f2py_access')
+    if access:
+        default, named = access[0], access[1]
+    else:
+        default, named = None, {}
     for uname, spec in use.items():
         src = available.get(uname)
         if not src:
@@ -141,6 +146,12 @@ def _parameter_imports(m, pymod):
             if 'parameter' not in (var.get('attrspec') or []):
                 continue
             if isprivate(var):
+                continue
+            # A PRIVATE module re-exports only the names it lists as public.
+            if local in named:
+                if named[local] == 'private':
+                    continue
+            elif default == 'private':
                 continue
             found.append((local, uname, remote, var))
             seen.add(local)
@@ -182,7 +193,6 @@ def buildhooks(pymod):
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
                 onlyvars.append(n)
-                mfargs.append(n)
         imported = _parameter_imports(m, pymod)
         imported_vars = {}
         for local, uname, remote, var in imported:
@@ -263,7 +273,9 @@ def buildhooks(pymod):
                 fadd(f'end subroutine {fargs[-1]}')
             else:
                 fargs.append(n)
-                mfargs.append(n)
+                # An imported parameter is USE'd from its own module below.
+                if n in m['vars']:
+                    mfargs.append(n)
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
                 iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")

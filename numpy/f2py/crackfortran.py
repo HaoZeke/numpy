@@ -2157,7 +2157,7 @@ def get_useparameters(block, param_map=None):
         # Only-lists are not enforced: a scope keeps one use record per
         # module, so they could hide names that another use statement of
         # the same module imports.
-        for local, name in renames.items():
+        for local, name in mapping.get('map', {}).items():
             if name in params:
                 params[local] = params[local.lower()] = params[name]
         for k, v in list(params.items()):
@@ -2417,7 +2417,13 @@ def postcrack(block, args=None, tab=''):
     if isinstance(block, list):
         gret = []
         uret = []
+        access = {}
         for g in block:
+            if isinstance(g, dict) and g.get('block') == 'module' and g.get('name'):
+                # Access statements are consumed while the module is analyzed.
+                spec = _access_specs(g.get('vars') or {})
+                access[g['name'].lower()] = spec
+                g['_f2py_access'] = spec
             setmesstext(g)
             g = postcrack(g, tab=tab + '\t')
             # sort user routines to appear first
@@ -2426,7 +2432,9 @@ def postcrack(block, args=None, tab=''):
             else:
                 gret.append(g)
         out = uret + gret
-        _link_forwarded_externals(out)
+        # Modules from separate files are siblings here, not inside one body.
+        if access:
+            _use_associate(out, access)
         return out
     setmesstext(block)
     if not isinstance(block, dict) and 'block' not in block:
@@ -2539,7 +2547,7 @@ def _uncalled_external(block, name, tab):
         rout = {'block': 'function', 'vars': {name: var}}
     else:
         rout = {'block': 'subroutine', 'vars': {}}
-    rout.update(name=name, args=[], body=[])
+    rout.update(name=name, args=[], body=[], _f2py_uncalled_external=True)
     # Replaced later when the dummy is passed to a callee that has a signature.
     rout['no_call_site'] = True
     if not _external_is_passed(block, name):
@@ -2590,7 +2598,8 @@ def _record_passes_in_line(line, groupcounter):
     block = groupcache.get(groupcounter) or {}
     if not block.get('externals'):
         return
-    marked = markouterparen(line)
+    # A call written inside a character literal is not a call (gh-22451).
+    marked = markouterparen(mask_string_literals(line))
     for match in _outer_call_pattern.finditer(marked):
         args = match.group('args').strip()
         if args:
@@ -2943,7 +2952,9 @@ def analyzebody(block, args, tab=''):
             as_ = args
             if b['block'] == 'module':
                 # analyzevars consumes the access statements, read them first
-                access[b['name'].lower()] = _access_specs(b['vars'])
+                spec = _access_specs(b['vars'])
+                access[b['name'].lower()] = spec
+                b['_f2py_access'] = spec
         b = postcrack(b, as_, tab=tab + '\t')
         if b['block'] in ['interface', 'abstract interface'] and \
            not b['body'] and not b.get('implementedby'):
@@ -4228,7 +4239,9 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
             f2pyenhancements = (f"{f2pyenhancements}{tab + tabchar}{k} "
                                 f"{block['f2pyenhancements'][k]}")
     intent_lst = block.get('intent', [])[:]
-    if blocktype == 'function' and 'callback' in intent_lst:
+    # A Fortran interface cannot say intent(callback). A signature file can,
+    # and the round trip needs it so the callback stays an exported symbol.
+    if as_interface and blocktype == 'function' and 'callback' in intent_lst:
         intent_lst.remove('callback')
     if intent_lst and not as_interface:
         f2pyenhancements = (f"{f2pyenhancements}{tab + tabchar}"
@@ -4520,7 +4533,10 @@ def crackfortran(files):
     usermodules = []
     source_blocks = copy.deepcopy(grouplist[0])
     postlist = postcrack(grouplist[0])
+    # Infer call-site signatures while the placeholders are still marked
+    # uncalled. Linking first rewrites them and the two disagree.
     _resolve_forwarded_callbacks(postlist, source_blocks)
+    _link_forwarded_externals(postlist)
     outmess('Applying post-processing hooks...\n', 0)
     for hook in post_processing_hooks:
         outmess(f'  {hook.__name__}\n', 0)

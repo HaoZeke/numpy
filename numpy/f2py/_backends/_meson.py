@@ -105,7 +105,6 @@ class MesonTemplate:
             self.libraries_substitution,
             self.c_args_substitution,
             self.fortran_args_substitution,
-            self.c_args_substitution,
         ]
         self.build_type = build_type
         self.python_exe = python_exe
@@ -195,14 +194,6 @@ class MesonTemplate:
         else:
             self.substitutions["fortran_args"] = ""
 
-    def c_args_substitution(self) -> None:
-        if self.c_args:
-            self.substitutions["c_args"] = (
-                f"{self.indent}c_args: [{', '.join(self.c_args)}],"
-            )
-        else:
-            self.substitutions["c_args"] = ""
-
     def generate_meson_build(self):
         for node in self.pipeline:
             node()
@@ -244,7 +235,21 @@ class MesonBackend(Backend):
     def write_meson_build(self, build_dir: Path) -> None:
         """Writes the meson build file at specified location"""
         # Paths from the command line are relative to the current directory,
-        # but meson resolves them from build_dir.
+        # but meson resolves them from build_dir. Objects are copied in,
+        # so the build file names the copies. Include and library directories
+        # stay absolute, except an include dir inside the build tree.
+        build_dir = Path(build_dir)
+        _prepare_objects(self.modulename, self.extra_objects, build_dir)
+        object_names = []
+        for obj in self.extra_objects:
+            path = Path(obj)
+            if path.suffix in _LIB_SUFFIXES or not path.is_file():
+                # link_args are resolved from the build directory, and a
+                # missing object has not been copied into the source tree.
+                object_names.append(str(path if path.is_absolute()
+                                        else path.absolute()))
+            else:
+                object_names.append(path.name)
         meson_template = MesonTemplate(
             self.modulename,
             self.sources,
@@ -252,7 +257,7 @@ class MesonBackend(Backend):
             self.libraries,
             [Path(lib_dir).absolute() for lib_dir in self.library_dirs],
             [_include_dir(inc_dir, build_dir) for inc_dir in self.include_dirs],
-            [Path(obj).absolute() for obj in self.extra_objects],
+            object_names,
             self.flib_flags,
             self.fc_flags + self.pp_flags,
             self.build_type,

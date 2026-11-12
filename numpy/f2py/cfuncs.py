@@ -343,6 +343,44 @@ cppmacros['pyobj_from_string1'] = """
 needs['pyobj_from_string1size'] = ['string']
 cppmacros['pyobj_from_string1size'] = """
 #define pyobj_from_string1size(v,len) (PyUnicode_FromStringAndSize((char *)v, len))"""
+
+needs['TRYPYARRAYTEMPLATE'] = ['PRINTPYOBJERR']
+cppmacros['TRYPYARRAYTEMPLATE'] = """
+/* New SciPy */
+#define TRYPYARRAYTEMPLATECHAR case NPY_STRING: *(char *)(PyArray_DATA(arr))=*v; break;
+#define TRYPYARRAYTEMPLATELONG case NPY_LONG: *(long *)(PyArray_DATA(arr))=*v; break;
+#define TRYPYARRAYTEMPLATEOBJECT case NPY_OBJECT: PyArray_SETITEM(arr,PyArray_DATA(arr),pyobj_from_ ## ctype ## 1(*v)); break;
+
+#define TRYPYARRAYTEMPLATE(ctype,typecode) \\
+        PyArrayObject *arr = NULL;\\
+        if (!obj) return -2;\\
+        if (!PyArray_Check(obj)) return -1;\\
+        if (!(arr=(PyArrayObject *)obj)) {fprintf(stderr,\"TRYPYARRAYTEMPLATE:\");PRINTPYOBJERR(obj);return 0;}\\
+        if (PyArray_DESCR(arr)->type==typecode)  {*(ctype *)(PyArray_DATA(arr))=*v; return 1;}\\
+        switch (PyArray_TYPE(arr)) {\\
+                case NPY_DOUBLE: *(npy_double *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_INT: *(npy_int *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_LONG: *(npy_long *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_FLOAT: *(npy_float *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_CDOUBLE: *(npy_double *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_CFLOAT: *(npy_float *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_BOOL: *(npy_bool *)(PyArray_DATA(arr))=(*v!=0); break;\\
+                case NPY_UBYTE: *(npy_ubyte *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_BYTE: *(npy_byte *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_SHORT: *(npy_short *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_USHORT: *(npy_ushort *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_UINT: *(npy_uint *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_ULONG: *(npy_ulong *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_LONGLONG: *(npy_longlong *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_ULONGLONG: *(npy_ulonglong *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_LONGDOUBLE: *(npy_longdouble *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_CLONGDOUBLE: *(npy_longdouble *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_OBJECT: PyArray_SETITEM(arr, PyArray_DATA(arr), pyobj_from_ ## ctype ## 1(*v)); break;\\
+        default: return -2;\\
+        };\\
+        return 1
+"""
+
 cfuncs['try_pyarr_from_typenum'] = """
 /*
   try_pyarr_from_typenum writes the scalar *v, of NumPy type typenum, back

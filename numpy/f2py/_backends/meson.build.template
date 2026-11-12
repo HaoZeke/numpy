@@ -43,6 +43,7 @@ fortranobject_lib = static_library('_fortranobject',
                      include_directories: [inc_np],
                      dependencies: py_dep,
                      gnu_symbol_visibility: 'hidden',
+${c_args}
                      )
 # gh-25000
 quadmath_dep = fc.find_library('quadmath', required: false)
@@ -98,8 +99,4 @@ ${lib_dir_list}
                      ],
 ${c_args}
 ${fortran_args}
-                     link_language: 'fortran',
-                     # Intel Fortran applies -fvisibility to external references
-                     # too, and hidden references cannot bind to shared libraries
-                     gnu_symbol_visibility : 'default',
                      install : true)

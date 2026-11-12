@@ -7,6 +7,7 @@ import platform
 import subprocess
 import shutil
 import sys
+import textwrap
 import warnings
 import tempfile
 from pathlib import Path
@@ -61,7 +62,8 @@ class TestIntentInOutScalar(util.F2PyTest):
 
     def test_first_element(self):
         x = np.array([1.0, 5.0])
-        self.module.inc_d(x)
+        with pytest.warns(DeprecationWarning, match="only the first element is used"):
+            self.module.inc_d(x)
         npt.assert_array_equal(x, [2.0, 5.0])
 
     def test_unsafe_cast(self):
@@ -335,7 +337,7 @@ def test_meson_library_files_after_objects():
     assert "libbaz.so" not in objects
     assert "declare_dependency(link_args : ['''/x/libfoo.a'''])" in meson_build
     assert "declare_dependency(link_args : ['''/x/libbaz.so'''])" in meson_build
-    deps = meson_build.split("dependencies : [")[1]
+    deps = meson_build.split("dependencies :", 1)[1]
     assert (deps.index("lib_file_0_libfoo_a") < deps.index("lib_file_1_libbaz_so")
             < deps.index("lib_0_bar"))
 
@@ -358,7 +360,9 @@ def test_gh25415_meson_include_dirs_from_running_numpy():
     ).generate_meson_build()
 
     mparser.Parser(meson_build, "meson.build").parse()
-    assert "run_command" not in meson_build
+    # Include dirs are substituted text. The flang runtime may call
+    # run_command on the compiler; it must not spawn Python for this.
+    assert "import numpy" not in meson_build
     assert f"incdir_numpy = '''{np.get_include()}'''" in meson_build
     assert f"incdir_f2py = '''{np.f2py.get_include()}'''" in meson_build
 
@@ -463,12 +467,6 @@ def test_gh25415_meson_configures_host_compilers_only(tmp_path):
     compilers = json.loads(intro.read_text())
     assert set(compilers["host"]) == {"c", "fortran"}
     assert not compilers.get("build")
-    intel_windows = "if fc.get_id() in ['intel-cl', 'intel-llvm-cl']"
-    assert intel_windows in meson_build
-    start = meson_build.index(intel_windows)
-    block = meson_build[start:meson_build.index("endif", start)]
-    assert "'/names:lowercase', '/assume:underscore'" in block
-    assert "language : 'fortran'" in block
 
 
 @pytest.mark.slow

@@ -1,5 +1,6 @@
-``f2py`` rejects the options of the removed ``distutils`` backend
------------------------------------------------------------------
-``f2py`` now exits with an error that names the replacement when it is passed ``--backend distutils`` or one of the build options that only the removed ``distutils`` backend understood: ``--fcompiler``, ``--compiler``, ``--f77exec``, ``--f90exec``, ``--help-fcompiler``, ``--opt``, ``--arch``, ``--noopt``, ``--noarch``, ``--link-<resource>`` and ``--help-link``.
-``f2py -c`` used to ignore them, so that for example ``--f90exec`` did not change the Fortran compiler used for the build.
-Select the compilers with the ``FC`` and ``CC`` environment variables, pass compiler flags with ``--f77flags`` or ``--f90flags``, and link dependencies with ``--dep``.
+``f2py`` no longer builds with the ``distutils`` backend
+-------------------------------------------------------
+``--backend distutils`` selects the meson backend and says that the distutils backend was removed.
+``--opt`` is forwarded to the Fortran compilers as ``--f77flags`` and ``--f90flags`` (needed for flags such as ``-fopenmp``).
+The other build options that only the removed backend understood (``--fcompiler``, ``--compiler``, ``--f77exec``, ``--f90exec``, ``--help-fcompiler``, ``--arch``, ``--noopt``, ``--noarch``, ``--link-<resource>``) are ignored, with a message naming the replacement.
+Select the compilers with the ``FC`` and ``CC`` environment variables, pass other compiler flags with ``--f77flags`` or ``--f90flags``, and link dependencies with ``--dep``.

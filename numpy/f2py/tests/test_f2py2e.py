@@ -187,8 +187,11 @@ class TestSizeArgumentDiagnostic(util.F2PyTest):
 
     def test_fortran_argument_order_hint(self):
         error_type = getattr(self.module, f"_{self.module.__name__}_error")
-        with pytest.raises(error_type, match="optional size arguments follow their arrays"):
-            self.module.get_fact(55, 3, [45, 845, 1845])
+        # The size scalar also matches the gh-24394 sequence warning. The
+        # shape check is what reports the swapped argument order.
+        with pytest.warns(DeprecationWarning, match="only the first element is used"):
+            with pytest.raises(error_type, match="optional size arguments follow their arrays"):
+                self.module.get_fact(55, 3, [45, 845, 1845])
 
     def test_explicit_size_mismatch_hint(self):
         error_type = getattr(self.module, f"_{self.module.__name__}_error")
@@ -838,7 +841,8 @@ def test_cli_obj(capfd, hello_world_f90, monkeypatch):
         with Path(f"{odir}/meson.build").open() as mesonbuild:
             mbld = mesonbuild.read()
             assert "objects:" in mbld
-            assert f"'''{Path(obj).absolute()}'''" in mbld
+            # The object is copied into the build directory and named there.
+            assert "'''extra.o'''" in mbld
 
 
 @pytest.mark.slow
@@ -1200,7 +1204,12 @@ def test_compile_distutils_option(meson_build_of, hello_world_f90, flag):
     """
     mbld = meson_build_of("-m", "blah", str(hello_world_f90), flag)
     assert "'''hello.f90'''" in mbld
-    assert flag.split("=", 1)[-1] not in mbld
+    value = flag.split("=", 1)[-1]
+    if flag.startswith("--opt="):
+        # --opt is forwarded to both Fortran compilers (gh-30804).
+        assert f"'{value}'" in mbld
+    else:
+        assert value not in mbld
 
 
 def test_compile_fortran_flags(meson_build_of, hello_world_f90):
@@ -1295,8 +1304,10 @@ def test_compile_extra_objects(meson_build_of, hello_world_f90, tmp_path):
         (tmp_path / obj).touch()
     mbld = meson_build_of("-m", "blah", str(hello_world_f90), *objs)
     objects = re.search(r"objects: \[(.*?)\]", mbld, re.DOTALL).group(1)
-    for obj in objs:
-        assert f"'''{obj}'''" in objects
+    assert "'''extra.o'''" in objects
+    for lib in ("libextra.a", "libextra.so", "libextra.dylib"):
+        assert lib in mbld
+        assert lib not in objects
 
 
 

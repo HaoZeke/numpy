@@ -145,10 +145,12 @@ def _decl_line(vars, a, f90mode):
     return f'{decl[:idx]}, optional :: {decl[idx + 1:]}'
 
 
-def _needs_explicit_interface(rout, f90mode, extra_args):
+def _needs_explicit_interface(rout, f90mode, extra_args, allocatables=()):
     # Module procedures already have an explicit interface via USE.
-    # An external absent actual needs the saved signature instead.
-    return bool(extra_args) or (not f90mode and routine_has_absent(rout))
+    # An allocatable dummy and an external absent actual need the saved
+    # signature instead (F2018 15.5.2.6).
+    return bool(extra_args or allocatables) or (
+        not f90mode and routine_has_absent(rout))
 
 def useiso_c_binding(rout):
     useisoc = False
@@ -192,7 +194,6 @@ def createfuncwrapper(rout, signature=0):
     name = rout['name']
     fortranname = getfortranname(rout)
     f90mode = ismoduleroutine(rout)
-    need_interface = _needs_explicit_interface(rout, f90mode, extra_args)
     newname = f'{name}f2pywrap'
 
     if newname not in vars:
@@ -202,7 +203,8 @@ def createfuncwrapper(rout, signature=0):
         args = [newname] + rout['args']
     allocatables = [a for a in args
                     if a != name and isallocatablearray(vars[a])]
-    need_interface = bool(extra_args or allocatables)
+    need_interface = _needs_explicit_interface(
+        rout, f90mode, extra_args, allocatables)
 
     l_tmpl = var2fixfortran(vars, name, '@@@NAME@@@', f90mode)
     if l_tmpl[:13] == 'character*(*)':
@@ -234,12 +236,19 @@ def createfuncwrapper(rout, signature=0):
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
+        # USE must precede external and other attribute statements.
+        if not signature and any(isallocatablearray_out(vars[a])
+                                 for a in allocatables):
+            add('use iso_c_binding, only: c_size_t')
     else:
         add(f'subroutine f2pywrap{name} ({sargs})')
         if useisoc:
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
+        if not signature and any(isallocatablearray_out(vars[a])
+                                 for a in allocatables):
+            add('use iso_c_binding, only: c_size_t')
         if not need_interface:
             add(f'external {fortranname}')
             rl = l_tmpl.replace('@@@NAME@@@', '') + ' ' + fortranname
@@ -248,9 +257,6 @@ def createfuncwrapper(rout, signature=0):
         for line in rout['saved_interface'].split('\n'):
             if line.lstrip().startswith('use ') and '__user__' not in line:
                 add(line)
-    if not signature and any(isallocatablearray_out(vars[a])
-                             for a in allocatables):
-        add('use iso_c_binding, only: c_size_t')
 
     args = args[1:]
     dumped_args = []
@@ -337,8 +343,6 @@ def createsubrwrapper(rout, signature=0):
                 v['dimension'][i] = dn
     rout['args'].extend(extra_args)
     allocatables = [a for a in rout['args'] if isallocatablearray(vars[a])]
-    need_interface = bool(extra_args or allocatables) or (
-        not f90mode and routine_has_absent(rout))
 
     ret = ['']
 
@@ -347,7 +351,8 @@ def createsubrwrapper(rout, signature=0):
     name = rout['name']
     fortranname = getfortranname(rout)
     f90mode = ismoduleroutine(rout)
-    need_interface = _needs_explicit_interface(rout, f90mode, extra_args)
+    need_interface = _needs_explicit_interface(
+        rout, f90mode, extra_args, allocatables)
 
     args = rout['args']
 
@@ -360,6 +365,9 @@ def createsubrwrapper(rout, signature=0):
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
+        if not signature and any(isallocatablearray_out(vars[a])
+                                 for a in allocatables):
+            add('use iso_c_binding, only: c_size_t')
         if not signature:
             add(f"use {rout['modulename']}, only : {fortranname}")
     else:
@@ -368,6 +376,9 @@ def createsubrwrapper(rout, signature=0):
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
+        if not signature and any(isallocatablearray_out(vars[a])
+                                 for a in allocatables):
+            add('use iso_c_binding, only: c_size_t')
         if not need_interface:
             add(f'external {fortranname}')
 
@@ -375,9 +386,6 @@ def createsubrwrapper(rout, signature=0):
         for line in rout['saved_interface'].split('\n'):
             if line.lstrip().startswith('use ') and '__user__' not in line:
                 add(line)
-    if not signature and any(isallocatablearray_out(vars[a])
-                             for a in allocatables):
-        add('use iso_c_binding, only: c_size_t')
 
     dumped_args = []
     for a in args:

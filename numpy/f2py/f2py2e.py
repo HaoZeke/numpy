@@ -524,6 +524,11 @@ def _parse_generation_input(comline_list, *, compile_mode=False):
 
 def _generate_sources(comline_list, *, compile_mode=False):
     crackfortran.reset_global_f2py_vars()
+    # A previous run leaves macro needs here, and the next file emits them
+    # in a different order (the two entry points then disagree).
+    for pending in cfuncs.outneeds.values():
+        if isinstance(pending, list):
+            pending.clear()
     f2pydir = os.path.dirname(os.path.abspath(cfuncs.__file__))
     fobjhsrc = os.path.join(f2pydir, 'src', 'fortranobject.h')
     fobjcsrc = os.path.join(f2pydir, 'src', 'fortranobject.c')
@@ -630,53 +635,12 @@ def get_newer_options(iline):
 def make_f2py_compile_parser():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--dep", action="append", dest="dependencies")
-    parser.add_argument("--backend", choices=['meson'], default='meson')
+    parser.add_argument("--backend", choices=['meson', 'distutils'], default='meson')
     parser.add_argument("-m", dest="module_name")
     parser.add_argument("--cross-file", action="append", dest="cross_files")
     parser.add_argument("--native-file", action="append", dest="native_files")
     return parser
 
-
-# Options of the numpy.distutils backend, which was removed in NumPy 2.5.0,
-# and what replaces them for the meson backend
-_removed_distutils_options = {
-    **dict.fromkeys(
-        ["--fcompiler", "--f90compiler", "--fcompiler-exec", "--f90compiler-exec",
-         "--f77exec", "--f90exec", "--help-fcompiler"],
-        "select the Fortran compiler with the FC environment variable"),
-    **dict.fromkeys(
-        ["--compiler", "--help-compiler"],
-        "select the C compiler with the CC environment variable"),
-    **dict.fromkeys(
-        ["--opt", "--arch", "--noopt", "--noarch"],
-        "pass compiler flags with --f77flags or --f90flags"),
-    **dict.fromkeys(
-        ["--link-", "--help-link"],
-        "link dependencies with --dep <dependency>"),
-}
-
-def _reject_distutils_options(argv):
-    """Exit if `argv` uses options of the removed distutils backend."""
-    rejected = []
-    for i, arg in enumerate(argv):
-        if arg == "--backend=distutils" or argv[i:i + 2] == ["--backend", "distutils"]:
-            rejected.append(("--backend distutils",
-                             "drop it, meson is the only backend"))
-            continue
-        name = arg.split("=", 1)[0]
-        if name.startswith("--link-"):
-            name = "--link-"
-        if name in _removed_distutils_options:
-            rejected.append((arg, _removed_distutils_options[name]))
-    if rejected:
-        errmess(
-            "f2py: error: the distutils backend was removed in NumPy 2.5.0,"
-            " replace its options:\n"
-            + "".join(f"  {arg}: {hint}\n" for arg, hint in rejected)
-            + "See https://numpy.org/doc/stable/f2py/buildtools/"
-            "distutils-to-meson.html\n"
-        )
-        sys.exit(2)
 
 def preparse_sysargv():
     # To keep backwards bug compatibility, newer flags are handled by argparse,
@@ -687,9 +651,13 @@ def preparse_sysargv():
     sys.argv = [sys.argv[0]] + remaining_argv
 
     backend_key = args.backend
+    if backend_key == 'distutils':
+        outmess("The distutils backend has been removed, "
+                "using the meson backend instead.\n")
+        backend_key = "meson"
     return {
         "dependencies": args.dependencies or [],
-        "backend": args.backend,
+        "backend": backend_key,
         "modulename": args.module_name,
         "cross_files": args.cross_files or [],
         "native_files": args.native_files or [],
@@ -727,6 +695,11 @@ def run_compile():
     else:
         remove_build_dir = 1
         build_dir = tempfile.mkdtemp()
+
+    # numpy.distutils --link-<resource> is not a meson dependency.
+    _reg1 = re.compile(r'--link-')
+    sysinfo_flags = [_m for _m in sys.argv[1:] if _reg1.match(_m)]
+    sys.argv = [_m for _m in sys.argv if _m not in sysinfo_flags]
 
     _reg2 = re.compile(
         r'--((no-|)(wrap-functions|lower|freethreading-compatible|latex-doc|strict-setattr)|debug-capi|quiet|skip-empty-wrappers)|-include')
@@ -865,7 +838,6 @@ def validate_modulename(pyf_files, modulename='untitled'):
     return modulename
 
 def main():
-    _reject_distutils_options(sys.argv[1:])
     if '-c' in sys.argv[1:]:
         run_compile()
     else:
