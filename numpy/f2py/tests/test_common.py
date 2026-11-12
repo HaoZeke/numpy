@@ -52,3 +52,27 @@ class TestCommonAllHidden(util.F2PyTest):
         assert not hasattr(self.module, "blk")
         self.module.setn(7)
         assert self.module.getn() == 7
+class TestCommonCharacterAssignment(util.F2PyTest):
+    # gh-9370: assigning to a CHARACTER*(3) member must use the declared
+    # length; GUARD follows BLOCK_STRING in the common block storage
+    sources = [util.getpath("tests", "src", "common", "gh9370.f")]
+
+    def test_bytes_from_intent_out(self):
+        self.module.initblock()
+        self.module.block.block_string = self.module.foo()
+        assert self.module.block.block_string.tobytes() == b"Foo"
+        assert self.module.block.guard.tobytes() == b"xyz"
+
+    @pytest.mark.parametrize("value, expected", [
+        (b"Fo", b"Fo\x00"),
+        (b"FooBar", b"Foo"),
+        ("bar", b"bar"),
+        (np.array(b"Fo"), b"Fo\x00"),
+        (np.array(b"FooBar"), b"Foo"),
+    ], ids=["short", "long", "str", "short-array", "long-array"])
+    def test_declared_length(self, value, expected):
+        self.module.initblock()
+        self.module.block.block_string = value
+        assert self.module.block.block_string.dtype == np.dtype("S3")
+        assert self.module.block.block_string.tobytes() == expected
+        assert self.module.block.guard.tobytes() == b"xyz"
