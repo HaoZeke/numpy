@@ -61,6 +61,22 @@ def get_include():
     return os.path.join(os.path.dirname(__file__), 'src')
 
 
+def _fortran_reconstruct(modname, qualname):
+    """Return the f2py routine named by an import path.
+
+    Pickle calls this for an F90 module routine. The qualname contains
+    a dot, as in ``m.t``. Low protocols do not walk a dotted
+    ``GLOBAL`` name, so ``__reduce__`` returns this callable instead
+    of a string.
+    """
+    import importlib
+
+    obj = importlib.import_module(modname)
+    for part in qualname.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
 def __getattr__(attr):
 
     # Avoid importing things that aren't needed for building

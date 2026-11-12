@@ -267,6 +267,7 @@ def buildhooks(pymod):
                     param_copies.add(n)
         if onlyvars:
             dadd('\\end{description}')
+        has_routines = False
         if hasbody(m):
             m_name = m['name']
             for b in m['body']:
@@ -275,6 +276,7 @@ def buildhooks(pymod):
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b['block']} {b_name}\n")
                     continue
+                has_routines = True
                 modobjs.append(f"{b_name}()")
                 b['modulename'] = m_name
                 api, wrap = rules.buildapi(b)
@@ -319,12 +321,27 @@ def buildhooks(pymod):
              f'F2PYINIT{m_name.upper()})(f2py_setup_{m_name});')
         iadd('}\n')
         ret['f90modhooks'] = ret['f90modhooks'] + chooks + ihooks
+        if has_routines:
+            data_kind = "F90 module"
+        else:
+            data_kind = "module variable container"
         ret['initf90modhooks'] = [
             '\t{',
             ('\t\tPyObject *tmp = '
             f'PyFortranObject_New(f2py_{m_name}_def,f2py_init_{m_name});'),
+            '\t\tif (tmp == NULL) return -1;',
+            ('\t\tif (PyFortranObject_SetDataKind(tmp, '
+             f'"{data_kind}", "{m_name}") < 0) {{'),
+            '\t\t\tPy_DECREF(tmp);',
+            '\t\t\treturn -1;',
+            '\t\t}',
+            ('\t\tif (PyFortranObject_TagModuleRoutines(tmp, m, '
+             f'"{m_name}") < 0) {{'),
+            '\t\t\tPy_DECREF(tmp);',
+            '\t\t\treturn -1;',
+            '\t\t}',
             f'\t\tif (PyModule_AddObjectRef(m, "{m_name}", tmp) < 0) {{',
-            '\t\t\tPy_XDECREF(tmp);',
+            '\t\t\tPy_DECREF(tmp);',
             '\t\t\treturn -1;',
             '\t\t}',
             '\t\tPy_DECREF(tmp);',

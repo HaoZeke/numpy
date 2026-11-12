@@ -289,8 +289,13 @@ static int f2py_module_exec(PyObject *m) {
     Py_DECREF(#modulename#_error);
     for(i=0;f2py_routine_defs[i].name!=NULL;i++) {
         tmp = PyFortranObject_NewAsAttr(&f2py_routine_defs[i]);
+        if (tmp == NULL) return -1;
+        if (PyFortranObject_SetRoutineRef(tmp, m, f2py_routine_defs[i].name) < 0) {
+            Py_DECREF(tmp);
+            return -1;
+        }
         if (PyModule_AddObjectRef(m, f2py_routine_defs[i].name, tmp) < 0) {
-            Py_XDECREF(tmp);
+            Py_DECREF(tmp);
             return -1;
         }
         Py_DECREF(tmp);

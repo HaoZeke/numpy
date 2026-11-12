@@ -1,4 +1,6 @@
+import copy
 import os
+import pickle
 import platform
 import subprocess
 import sys
@@ -792,3 +794,85 @@ if gh13356.iadd(1.0) != 3:
         check=False,
     )
     assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
+
+
+@pytest.mark.slow
+class TestPickleFortranRoutine(util.F2PyTest):
+    # gh-21767: routine objects pickle by reference. Data objects refuse.
+    sources = [util.getpath("tests", "src", "regression", "gh21767.f90")]
+
+    def test_attribute_identity(self):
+        assert self.module.s is self.module.s
+        assert self.module.m.t is self.module.m.t
+
+    def test_module_and_qualname(self):
+        mod = self.module
+        assert mod.s.__module__ == mod.__name__
+        assert mod.s.__qualname__ == "s"
+        assert mod.m.t.__module__ == mod.__name__
+        assert mod.m.t.__qualname__ == "m.t"
+
+    def test_pickle_protocols(self):
+        highest = pickle.HIGHEST_PROTOCOL
+        routines = (self.module.s, self.module.m.t)
+        for proto in range(highest + 1):
+            for routine in routines:
+                blob = pickle.dumps(routine, protocol=proto)
+                assert pickle.loads(blob) is routine
+
+    def test_copy_identity(self):
+        routines = (self.module.s, self.module.m.t)
+        for routine in routines:
+            assert copy.copy(routine) is routine
+            assert copy.deepcopy(routine) is routine
+
+    def test_cloudpickle_roundtrip(self):
+        cloudpickle = pytest.importorskip("cloudpickle")
+        routines = (self.module.s, self.module.m.t)
+        for routine in routines:
+            blob = cloudpickle.dumps(routine)
+            assert cloudpickle.loads(blob) is routine
+
+    def _assert_pickle_label_hidden(self, obj):
+        assert "_f2py_pickle_kind" not in obj.__dict__
+        assert "_f2py_pickle_kind" not in dir(obj)
+        assert "_f2py_pickle_name" not in obj.__dict__
+        assert "_f2py_pickle_name" not in dir(obj)
+
+    def test_f90_module_refuses_pickle(self):
+        obj = self.module.m
+        self._assert_pickle_label_hidden(obj)
+        with pytest.raises(
+            TypeError,
+            match=(
+                "F90 module 'm': f2py data objects wrap Fortran memory"
+                " and cannot be pickled; copy the array data instead"
+            ),
+        ):
+            pickle.dumps(obj)
+
+    def test_variable_container_refuses_pickle(self):
+        obj = self.module.vmod
+        self._assert_pickle_label_hidden(obj)
+        with pytest.raises(
+            TypeError,
+            match=(
+                "module variable container 'vmod': f2py data objects wrap"
+                " Fortran memory and cannot be pickled; copy the array"
+                " data instead"
+            ),
+        ):
+            pickle.dumps(obj)
+
+    def test_common_refuses_pickle(self):
+        obj = self.module.cblock
+        self._assert_pickle_label_hidden(obj)
+        with pytest.raises(
+            TypeError,
+            match=(
+                "COMMON block 'cblock': f2py data objects wrap Fortran"
+                " memory and cannot be pickled; copy the array data"
+                " instead"
+            ),
+        ):
+            pickle.dumps(obj)
