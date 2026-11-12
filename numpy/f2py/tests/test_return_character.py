@@ -54,3 +54,16 @@ class TestFReturnCharacter(TestReturnCharacter):
     @pytest.mark.parametrize("name", ["t0", "t1", "t5", "ts", "s0", "s1", "s5", "ss"])
     def test_all_f90(self, name):
         self.check_function(getattr(self.module.f90_return_char, name), name)
+
+
+@pytest.mark.slow
+class TestFReturnCharacterNoWrap(util.F2PyTest):
+    # --no-wrap-functions calls a CHARACTER*n function directly, passing
+    # the result buffer and its length ahead of the other arguments
+    sources = [util.getpath("tests", "src", "return_character", "foo77.f")]
+    options = ["--no-wrap-functions"]
+    only = ["t1", "t5"]
+
+    def test_direct_call(self):
+        assert self.module.t1(b"a") == b"a"
+        assert self.module.t5(b"abcde") == b"abcde"
