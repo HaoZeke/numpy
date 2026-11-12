@@ -8,6 +8,8 @@ from itertools import chain
 from pathlib import Path
 from string import Template
 
+import numpy as np
+
 from ._backend import Backend
 
 _LIB_SUFFIXES = (".a", ".so", ".dylib")
@@ -105,6 +107,8 @@ class MesonTemplate:
         self.substitutions["modulename"] = self.modulename
         self.substitutions["buildtype"] = self.build_type
         self.substitutions["python"] = self.python_exe
+        self.substitutions["incdir_numpy"] = np.get_include()
+        self.substitutions["incdir_f2py"] = np.f2py.get_include()
 
     def sources_substitution(self) -> None:
         self.substitutions["source_list"] = ",\n".join(
@@ -238,7 +242,7 @@ class MesonBackend(Backend):
         src = meson_template.generate_meson_build()
         Path(build_dir).mkdir(parents=True, exist_ok=True)
         meson_build_file = Path(build_dir) / "meson.build"
-        meson_build_file.write_text(src)
+        meson_build_file.write_text(src, encoding="utf-8")
         return meson_build_file
 
     def _run_subprocess_command(self, command, cwd):
