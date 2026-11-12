@@ -117,6 +117,20 @@ This maps to ``dependency("lapack")`` and so can be used for a wide variety
 of dependencies. They can be `customized further <https://mesonbuild.com/Dependencies.html>`_
 to use CMake or other systems to resolve dependencies.
 
+
+Compiler wrappers can also provide the Fortran MPI headers and link options.
+Select the wrapper with ``FC`` when compiling a source file such as
+``hello_mpi.f90`` that imports the MPI Fortran module:
+
+.. code-block:: bash
+
+  FC=mpifort python -m numpy.f2py -c hello_mpi.f90 -m hello_mpi
+
+The generated extension uses the Fortran compiler for linking, so the
+selected wrapper supplies its libraries during both compilation and
+linking. The same rule applies to site wrappers such as ``FC=ftn``.
+The compiler wrapper and MPI libraries must belong to the same installation.
+
 1.2.5 Libraries
 ^^^^^^^^^^^^^^^
 
