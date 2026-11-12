@@ -14,6 +14,7 @@ class MesonTemplate:
     include_dirs: Final[list[str | Path]]
     substitutions: Final[dict[str, str]]
     objects: Final[list[str | Path]]
+    library_files: Final[list[str | Path]]
     fortran_args: Final[list[str]]
     pipeline: Final[list[Callable[[], None]]]
     build_type: Final[str]

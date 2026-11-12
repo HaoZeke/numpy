@@ -376,6 +376,7 @@ In Python:
 .. literalinclude:: ./code/results/allocarr_session.dat
   :language: python
 
+<<<<<<< HEAD
 .. _Allocatable array arguments:
 
 Allocatable array arguments
@@ -408,4 +409,61 @@ and wrap it using ``f2py -c -m allocarg allocarg.f90``.
 In Python:
 
 .. literalinclude:: ./code/results/allocarg_session.dat
+  :language: python
+
+Modules from precompiled libraries
+==================================
+
+F2PY does not need to compile a Fortran module to wrap its data and
+procedures. When the module is part of a library that was built without F2PY,
+describe the module in a signature file and build the extension module from
+that signature file. F2PY then compiles only its wrappers, which ``use`` the
+module, so the Fortran compiler needs the module file (``.mod``) written when
+the library was built, and the extension module is linked to the library. The
+wrappers access the module variables of the library itself, so the library's
+procedures and Python see the same data.
+
+Consider the following module:
+
+.. literalinclude:: ./code/store.f90
+  :language: fortran
+
+compiled into the library ``libstore.a`` in the directory ``../store``, for
+example with ``gfortran -fPIC -c store.f90``, which also writes ``store.mod``,
+and ``ar rcs libstore.a store.o``. The signature file can be written by hand,
+or generated from the module source with ``f2py -m pystore -h store.pyf
+store.f90``:
+
+.. literalinclude:: ./code/store.pyf
+  :language: fortran
+
+Build the extension module from the signature file alone, pointing ``-I`` at
+the directory with ``store.mod`` and linking the library::
+
+  f2py -c store.pyf -I../store -L../store -lstore
+
+Module files are specific to the compiler that wrote them, and F2PY does not
+read them itself, so use the same Fortran compiler for the library and for
+F2PY. Do not also pass ``store.f90`` to ``f2py -c``: that would compile a second
+copy of the module, with its own variables, into the extension module. A shared
+library works the same way, but must also be found when the extension module
+is imported, for example through ``LD_LIBRARY_PATH`` on Linux.
+
+In Python:
+
+.. literalinclude:: ./code/results/store_session.dat
+  :language: python
+
+F2PY does not wrap variables that a module accesses from another module by use
+association. To make such a variable an attribute of the using module, declare
+it in an F2PY directive (see :doc:`signature-file`), which the Fortran compiler
+ignores:
+
+.. literalinclude:: ./code/scaling.f90
+  :language: fortran
+
+Wrapped with ``f2py -c -m pyscaling scaling.f90 -I../store -L../store
+-lstore``, this gives:
+
+.. literalinclude:: ./code/results/scaling_session.dat
   :language: python

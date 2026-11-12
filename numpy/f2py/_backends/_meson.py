@@ -10,6 +10,8 @@ from string import Template
 
 from ._backend import Backend
 
+_LIB_SUFFIXES = (".a", ".so", ".dylib")
+
 
 def _meson_identifier(prefix: str, value: str, index: int) -> str:
     safe_value = re.sub(r"[^a-zA-Z0-9_]", "_", value)
@@ -49,7 +51,14 @@ class MesonTemplate:
         else:
             self.include_dirs = []
         self.substitutions = {}
-        self.objects = object_files
+        # meson puts `objects` before the extension's own objects on the link
+        # line, too early for the linker to take anything from a static library
+        self.objects = [
+            obj for obj in object_files if Path(obj).suffix not in _LIB_SUFFIXES
+        ]
+        self.library_files = [
+            obj for obj in object_files if Path(obj).suffix in _LIB_SUFFIXES
+        ]
         # Convert args to '' wrapped variant for meson
         self.fortran_args = [
             f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
@@ -104,8 +113,12 @@ class MesonTemplate:
         )
 
     def libraries_substitution(self) -> None:
+        # Library files come first, as they may depend on the -l libraries
         lib_names = [
-            (_meson_identifier("lib", lib, i), lib)
+            (_meson_identifier("lib_file", Path(lib).name, i), f"'''{lib}'''")
+            for i, lib in enumerate(self.library_files)
+        ] + [
+            (_meson_identifier("lib", lib, i), f"'-l{lib}'")
             for i, lib in enumerate(self.libraries)
         ]
 
@@ -118,8 +131,8 @@ class MesonTemplate:
 
         self.substitutions["lib_declarations"] = "\n".join(
             [
-                f"{name} = declare_dependency(link_args : ['-l{lib}'])"
-                for name, lib in lib_names
+                f"{name} = declare_dependency(link_args : [{link_arg}])"
+                for name, link_arg in lib_names
             ]
         )
 
@@ -191,14 +204,16 @@ class MesonBackend(Backend):
 
     def write_meson_build(self, build_dir: Path) -> None:
         """Writes the meson build file at specified location"""
+        # Paths from the command line are relative to the current directory,
+        # but meson resolves them from build_dir.
         meson_template = MesonTemplate(
             self.modulename,
             self.sources,
             self.dependencies,
             self.libraries,
-            self.library_dirs,
-            self.include_dirs,
-            self.extra_objects,
+            [Path(lib_dir).absolute() for lib_dir in self.library_dirs],
+            [_include_dir(inc_dir, build_dir) for inc_dir in self.include_dirs],
+            [Path(obj).absolute() for obj in self.extra_objects],
             self.flib_flags,
             self.fc_flags + self.pp_flags,
             self.build_type,
@@ -222,7 +237,6 @@ class MesonBackend(Backend):
 
     def compile(self) -> None:
         self.sources = _prepare_sources(self.modulename, self.sources, self.build_dir)
-        _prepare_objects(self.modulename, self.extra_objects, self.build_dir)
         self.write_meson_build(self.build_dir)
         self.run_meson(self.build_dir)
         self._move_exec_to_root(self.build_dir)
@@ -284,6 +298,14 @@ def _prepare_objects(mname, objects, bdir):
         if Path(obj).exists() and Path(obj).is_file():
             _copy_if_distinct(obj, bdir / Path(obj).name)
 
+def _include_dir(inc_dir, bdir):
+    # meson rejects absolute include paths into its source tree, which is bdir
+    inc_dir = Path(inc_dir).resolve()
+    bdir = Path(bdir).resolve()
+    if inc_dir.is_relative_to(bdir):
+        return inc_dir.relative_to(bdir)
+    return inc_dir
+
 def _preprocessor_flags(define_macros, undef_macros):
     """Return -D/-U flags for the C and Fortran compilers.
 
@@ -305,7 +327,6 @@ def _preprocessor_flags(define_macros, undef_macros):
     for name in undef_macros or []:
         flags.append(f"-U{name}")
     return flags
-
 
 def _get_flags(fc_flags):
     flag_values = []
