@@ -667,7 +667,27 @@ static int *nextforcomb(struct ForcombCache *cache) {
   if (cache->tr) return i_tr;
   return i;
 }"""
-needs['try_pyarr_from_string'] = ['STRINGCOPYN', 'PRINTPYOBJERR', 'string']
+cfuncs['bytes_array_from_unicode_array'] = """
+/*
+  Cast a str_ array, whose items are UCS4 code points in the byte order
+  of the array, to a new C-contiguous bytes array with the same number
+  of characters per item.  Non-ASCII characters raise UnicodeEncodeError.
+*/
+static PyArrayObject *
+bytes_array_from_unicode_array(PyArrayObject *arr)
+{
+    PyArray_Descr *descr = PyArray_DescrNewFromType(NPY_STRING);
+    if (descr == NULL) {
+        return NULL;
+    }
+    PyDataType_SET_ELSIZE(descr, PyArray_ITEMSIZE(arr) / sizeof(npy_ucs4));
+    /* Steals reference to descr */
+    return (PyArrayObject *)PyArray_FromArray(
+        arr, descr, NPY_ARRAY_FORCECAST | NPY_ARRAY_IN_ARRAY);
+}
+"""
+needs['try_pyarr_from_string'] = ['STRINGCOPYN', 'PRINTPYOBJERR', 'string',
+                                  'bytes_array_from_unicode_array']
 cfuncs['try_pyarr_from_string'] = """
 /*
   try_pyarr_from_string copies str[:len(obj)] to the data of an `ndarray`.
@@ -678,6 +698,7 @@ cfuncs['try_pyarr_from_string'] = """
 */
 static int try_pyarr_from_string(PyObject *obj,
                                  const string str, const int len) {
+    PyArrayObject *tmp = NULL;
 #ifdef DEBUGCFUNCS
 fprintf(stderr, "try_pyarr_from_string(str='%s', len=%d, obj=%p)\\n",
         (char*)str,len, obj);
@@ -688,6 +709,11 @@ fprintf(stderr, "try_pyarr_from_string(str='%s', len=%d, obj=%p)\\n",
     if (PyArray_Check(obj)) {
         PyArrayObject *arr = (PyArrayObject *)obj;
         assert(ISCONTIGUOUS(arr));
+        if (F2PY_IS_UNICODE_ARRAY(arr)) {
+            /* Fill a bytes copy that is cast back into obj below */
+            arr = tmp = bytes_array_from_unicode_array(arr);
+            if (tmp == NULL) goto capi_fail;
+        }
         string buf = PyArray_DATA(arr);
         npy_intp n = len;
         if (n == -1) {
@@ -698,15 +724,23 @@ fprintf(stderr, "try_pyarr_from_string(str='%s', len=%d, obj=%p)\\n",
             n = PyArray_NBYTES(arr);
         }
         STRINGCOPYN(buf, str, n);
+        if (tmp != NULL) {
+            if (PyArray_CopyInto((PyArrayObject *)obj, tmp) < 0) {
+                goto capi_fail;
+            }
+            Py_DECREF(tmp);
+        }
         return 1;
     }
 capi_fail:
+    Py_XDECREF(tmp);
     PRINTPYOBJERR(obj);
     PyErr_SetString(#modulename#_error, \"try_pyarr_from_string failed\");
     return 0;
 }
 """
-needs['string_from_pyobj'] = ['string', 'STRINGMALLOC', 'STRINGCOPYN']
+needs['string_from_pyobj'] = ['string', 'STRINGMALLOC', 'STRINGCOPYN',
+                              'bytes_array_from_unicode_array']
 cfuncs['string_from_pyobj'] = """
 /*
   Create a new string buffer `str` of at most length `len` from a
@@ -738,6 +772,11 @@ fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
             PyErr_SetString(PyExc_ValueError,
                             \"array object is non-contiguous.\");
             goto capi_fail;
+        }
+        if (F2PY_IS_UNICODE_ARRAY(arr)) {
+            arr = bytes_array_from_unicode_array(arr);
+            if (arr == NULL) goto capi_fail;
+            tmp = (PyObject *)arr;
         }
         n = PyArray_NBYTES(arr);
         buf = PyArray_DATA(arr);
@@ -807,6 +846,7 @@ capi_fail:
 }
 """
 
+needs['character_from_pyobj'] = ['bytes_array_from_unicode_array']
 cfuncs['character_from_pyobj'] = """
 static int
 character_from_pyobj(character* v, PyObject *obj, const char *errmess) {
@@ -827,18 +867,11 @@ character_from_pyobj(character* v, PyObject *obj, const char *errmess) {
             *v = PyArray_BYTES(arr)[0];
             return 1;
         } else if (F2PY_IS_UNICODE_ARRAY(arr)) {
-            // TODO: update when numpy will support 1-byte and
-            // 2-byte unicode dtypes
-            PyObject* tmp = PyUnicode_FromKindAndData(
-                              PyUnicode_4BYTE_KIND,
-                              PyArray_BYTES(arr),
-                              (PyArray_NBYTES(arr)>0?1:0));
+            PyArrayObject* tmp = bytes_array_from_unicode_array(arr);
             if (tmp != NULL) {
-                if (character_from_pyobj(v, tmp, errmess)) {
-                    Py_DECREF(tmp);
-                    return 1;
-                }
+                *v = (PyArray_NBYTES(tmp) > 0 ? PyArray_BYTES(tmp)[0] : '\\0');
                 Py_DECREF(tmp);
+                return 1;
             }
         }
     } else if (PySequence_Check(obj)) {
