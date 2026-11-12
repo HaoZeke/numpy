@@ -1189,3 +1189,59 @@ def test_gh25159_mpi_compiler_wrapper(monkeypatch):
     assert not initialized
     assert initialized_status == success
     assert version_status == success
+
+def _meson_build_with_deps(deps):
+    return MesonTemplate(
+        modulename="Blah",
+        sources=[Path("gh28902.f90")],
+        deps=deps,
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=[],
+        build_type="debug",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+
+
+def test_gh28902_dependency_keywords():
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = _meson_build_with_deps([
+        "lapack",
+        "mpi[language: 'fortran']",
+        "boost [modules: ['thread', 'system'], static: true]",
+    ])
+
+    mparser.Parser(meson_build, "meson.build").parse()
+    assert "dependency('lapack')," in meson_build
+    assert "dependency('mpi', language: 'fortran')," in meson_build
+    assert ("dependency('boost', modules: ['thread', 'system'], static: true),"
+            in meson_build)
+
+
+@pytest.mark.parametrize("dep", ["mpi[language: 'fortran'", "[static: true]"])
+def test_gh28902_invalid_dependency(dep):
+    with pytest.raises(ValueError, match="Invalid --dep value"):
+        _meson_build_with_deps([dep])
+
+
+@pytest.mark.slow
+def test_gh28902_fortran_mpi():
+    # Plain --dep mpi gets meson's C MPI, which lacks the Fortran bindings,
+    # so the import fails with an undefined mpi_initialized_
+    try:
+        module = util.build_module(
+            [util.getpath("tests", "src", "regression", "gh28902.f90")],
+            options=["--dep", "mpi[language: 'fortran']"],
+        )
+    except RuntimeError as rerr:
+        if 'Dependency "mpi" not found' in str(rerr):
+            pytest.skip("No MPI for Fortran found by meson")
+        raise
+    assert not module.mpi_initialized_flag()
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')

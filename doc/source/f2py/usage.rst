@@ -183,6 +183,14 @@ Common build flags:
   "lapack" and "scalapack" as dependencies and remove them from argv, leaving a
   dependencies list containing ["lapack", "scalapack"].
 
+  .. versionadded:: 2.6.0
+
+  Keyword arguments for meson's ``dependency()`` can be appended in brackets,
+  written in meson syntax: ``--dep "mpi[language: 'fortran']"`` becomes
+  ``dependency('mpi', language: 'fortran')``. Meson resolves dependencies which
+  exist for several languages, like MPI or OpenMP, for C unless
+  ``language: 'fortran'`` is given, so Fortran code calling MPI needs it.
+
 ``--cross-file <filename>``
   Pass ``<filename>`` to ``meson setup`` as a `cross file
   <https://mesonbuild.com/Cross-compilation.html>`__, to build the extension

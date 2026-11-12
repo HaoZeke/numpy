@@ -153,6 +153,9 @@ which are accepted and ignored:
                        This will identify "lapack" and "scalapack" as dependencies
                        and remove them from argv, leaving a dependencies list
                        containing ["lapack", "scalapack"].
+                       Keyword arguments for meson's dependency() can be given
+                       in brackets, e.g. --dep "mpi[language: 'fortran']" for
+                       the Fortran MPI bindings.
 
   --cross-file         <filename>
                        Pass <filename> to meson setup as a cross file, to build
