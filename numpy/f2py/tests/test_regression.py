@@ -206,6 +206,23 @@ def test_gh25784():
 
 
 @pytest.mark.slow
+def test_build_rejects_imported_module_name():
+    # A second build under an imported name would import as the first one
+    code = """
+      subroutine which(k)
+      integer k
+cf2py intent(out) k
+      k = {}
+      end
+"""
+    name = "_test_regression_reused_name_ext_module"
+    mod = util.build_code(code.format(1), module_name=name)
+    assert mod.which() == 1
+    with pytest.raises(RuntimeError, match="already in use"):
+        util.build_code(code.format(2), module_name=name)
+
+
+@pytest.mark.slow
 class TestComplexStructCompat(util.F2PyTest):
     # Check that .r/.i field access works on complex_double pointers in
     # callstatements (scipy compatibility, gh-30966 follow-up)
