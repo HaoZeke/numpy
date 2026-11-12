@@ -105,6 +105,32 @@ This can be compiled and run as before.
     python -c "import numpy as np; import fibby; a = np.zeros(9); fibby.fib(a); print (a)"
     # [ 0.  1.  1.  2.  3.  5.  8. 13. 21.]
 
+Wrappers from a signature file
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To use a signature file edited as in :ref:`f2py-getting-started` (``fib2.pyf``
+from "The smart way"), generate the wrappers from the ``.pyf`` file alone. The
+signature file names the module, so ``-m`` is not needed, and the Fortran
+sources go to ``extension_module`` to be compiled:
+
+.. literalinclude:: ../code/meson_pyf.build
+
+.. code-block:: bash
+
+    rm -rf builddir
+    meson setup builddir
+    meson compile -C builddir
+    cd builddir
+    python -c "import fib2; print(fib2.fib(9))"
+    # [ 0.  1.  1.  2.  3.  5.  8. 13. 21.]
+
+.. versionchanged:: 2.6.0
+
+   ``f2py`` ignores ``-m`` and any Fortran sources passed together with a
+   signature file when it only generates wrappers. Earlier versions built a
+   second module from them that silently replaced the wrappers described by
+   the signature file.
+
 Salient points
 ===============
 
