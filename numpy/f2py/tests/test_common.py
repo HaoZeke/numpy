@@ -17,6 +17,21 @@ class TestCommonBlock(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestCommonBlockAllHidden(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "common", "gh20053.f"),
+        util.getpath("tests", "src", "common", "gh20053.pyf"),
+    ]
+    module_name = "gh20053_common"
+
+    def test_gh20053(self):
+        # Importing used to fail with SystemError on the empty table
+        self.module.set_hidden(3.0)
+        assert self.module.get_hidden() == 3.0
+        assert not hasattr(self.module, "hidden")
+
+
+@pytest.mark.slow
 class TestCommonWithUse(util.F2PyTest):
     sources = [util.getpath("tests", "src", "common", "gh19161.f90")]
 

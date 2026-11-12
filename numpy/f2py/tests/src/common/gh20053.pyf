@@ -1,0 +1,14 @@
+python module gh20053_common
+    interface
+        subroutine set_hidden(a)
+            real*8 intent(in) :: a
+            real*8 intent(hide) :: b
+            common /hidden/ b
+        end subroutine set_hidden
+        subroutine get_hidden(a)
+            real*8 intent(out) :: a
+            real*8 intent(hide) :: b
+            common /hidden/ b
+        end subroutine get_hidden
+    end interface
+end python module gh20053_common
