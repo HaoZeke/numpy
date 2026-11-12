@@ -1,0 +1,3 @@
+Expose parameters imported by USE
+---------------------------------
+A module that USEs another module kept only its own parameters on the Python object (gh-3562).
