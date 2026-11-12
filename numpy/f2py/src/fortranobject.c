@@ -1435,6 +1435,28 @@ f2py_size_impl(PyArrayObject* var, ...)
   return sz;
 }
 
+int
+f2py_check_signals(void)
+{
+    PyGILState_STATE gilstate;
+    int pending;
+
+    /* Python runs signal handlers only in the main thread, which always
+       has a thread state.  Threads without one, such as OpenMP workers,
+       return at once: taking the GIL there would block for as long as the
+       thread that called the wrapper holds it. */
+    if (PyGILState_GetThisThreadState() == NULL) {
+        return 0;
+    }
+    gilstate = PyGILState_Ensure();
+    /* An exception raised by an earlier call stays pending until the
+       wrapper returns; keep reporting it rather than running handlers
+       while it is set. */
+    pending = PyErr_Occurred() != NULL || PyErr_CheckSignals() != 0;
+    PyGILState_Release(gilstate);
+    return pending;
+}
+
 /*********************************************/
 /* Compatibility functions for Python >= 3.0 */
 /*********************************************/
