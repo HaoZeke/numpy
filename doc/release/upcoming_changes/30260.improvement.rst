@@ -1,0 +1,7 @@
+``f2py`` evaluates ``selected_real_kind`` for the compiler it will use
+----------------------------------------------------------------------
+``selected_real_kind`` now follows the Fortran compiler named by ``FC``
+or ``F77``, or the first of ``gfortran``, ``flang-new`` and ``flang`` on
+``PATH``. A precision below 4 is kind 2 when that compiler has IEEE
+binary16, which LLVM flang does, and kind 4 otherwise. It used to be
+kind 4 for every compiler.
