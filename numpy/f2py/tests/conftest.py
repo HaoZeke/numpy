@@ -80,6 +80,10 @@ _SKIPS = (
         "LFortran 0.69 does not accept -fopenmp",
     ),
     (
+        "test_regression.py::test_gh25784",
+        "LFortran 0.69 rejects -ffixed-form",
+    ),
+    (
         "test_regression.py::test_gh13356_entry_return",
         "LFortran 0.69 returns 0 from an ENTRY instead of the entry's value",
     ),
