@@ -376,7 +376,6 @@ In Python:
 .. literalinclude:: ./code/results/allocarr_session.dat
   :language: python
 
-<<<<<<< HEAD
 .. _Allocatable array arguments:
 
 Allocatable array arguments
