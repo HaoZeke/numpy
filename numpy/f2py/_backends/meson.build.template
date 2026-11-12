@@ -49,6 +49,15 @@ quadmath_dep = fc.find_library('quadmath', required: false)
 ${lib_declarations}
 ${lib_dir_declarations}
 
+# LFortran rejects -fvisibility. ifx needs the default so its
+# references can bind to shared libraries.
+_fc_cmd = ' '.join(fc.cmd_array())
+_lfortran = fc.get_id() == 'lfortran' or 'lfortran' in _fc_cmd
+_vis_kwargs = {}
+if not _lfortran
+  _vis_kwargs += {'gnu_symbol_visibility': 'default'}
+endif
+
 py.extension_module('${modulename}',
                      [
 ${source_list}
@@ -56,9 +65,6 @@ ${source_list}
                      # gh-30804: only the Fortran compiler driver knows its
                      # runtime libraries and their run paths
                      link_language: 'fortran',
-                     # gh-30804: ifx also applies -fvisibility=hidden to
-                     # references, which then cannot bind to shared libraries
-                     gnu_symbol_visibility: 'default',
                      link_with: fortranobject_lib,
                      include_directories: [
                      inc_np,
@@ -75,4 +81,5 @@ ${lib_list}
 ${lib_dir_list}
                      ],
 ${fortran_args}
-                     install : true)
+                     install : true,
+                     kwargs: _vis_kwargs)
