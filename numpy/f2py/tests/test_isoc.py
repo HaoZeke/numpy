@@ -1,3 +1,4 @@
+import os
 import textwrap
 
 import pytest
@@ -174,6 +175,15 @@ class TestISOCSizedKinds(util.F2PyTest):
         assert getattr(self.module.isoc_sized, f"add_{kind}")(1, b) == 42
         assert b == 42
 
+    @pytest.mark.xfail(
+        "ifx" in os.environ.get("FC", ""),
+        reason=(
+            "ifx stores logical(c_bool) .TRUE. as -1. .NOT. of the byte "
+            "1 that f2py writes for Python True is 0xFE, not 0. "
+            "gfortran uses 0 and 1, and assigning any other byte to a "
+            "logical is undefined there, so the byte is left as 1."
+        ),
+    )
     def test_c_bool(self):
         size = self.c_size("c_bool")
         m = self.module.isoc_sized
