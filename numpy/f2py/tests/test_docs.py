@@ -1,3 +1,6 @@
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -110,3 +113,61 @@ class TestDocGettingStarted(util.F2PyTest):
         assert_array_equal(a, [0, 1, 1, 2, 3, 5, 8, 13])
         with pytest.raises(Exception, match=r'\(shape\(a, 0\) == n\) failed'):
             fib(a, 6)
+def _meson_build(project):
+    # The examples build for the Python that runs meson unless told otherwise
+    native = project / "native.ini"
+    native.write_text(f"[binaries]\npython = '{Path(sys.executable).as_posix()}'\n")
+    for cmd in (["meson", "setup", "builddir", "--native-file", native.name],
+                ["meson", "compile", "-C", "builddir"]):
+        run = subprocess.run(cmd, cwd=project, capture_output=True, text=True)
+        assert run.returncode == 0, run.stdout + run.stderr
+    return project / "builddir"
+
+
+def _run_built(builddir, code):
+    # Not imported here: the examples' modules are not declared free-threading
+    # compatible, so importing one re-enables the GIL with a RuntimeWarning
+    run = subprocess.run([sys.executable, "-c", code], cwd=builddir,
+                         capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("meson_build, module",
+                         [("meson.build", "fib2"), ("meson_upd.build", "fibby")])
+def test_gh26973_meson_example(meson_build, module, tmp_path, monkeypatch):
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    project = tmp_path / "project"
+    util.numpy_inside(project, monkeypatch)
+    shutil.copy(_path("fib1.f"), project)
+    shutil.copy(_path(meson_build), project / "meson.build")
+    # meson.build compiles the wrapper that the walkthrough generates first
+    subprocess.run([sys.executable, "-m", "numpy.f2py", "fib1.f", "-m", "fib2",
+                    "--lower"], cwd=project, check=True, capture_output=True)
+    _run_built(_meson_build(project),
+               f"import numpy as np, {module}\n"
+               "a = np.zeros(9)\n"
+               f"{module}.fib(a)\n"
+               "assert a.tolist() == [0, 1, 1, 2, 3, 5, 8, 13, 21], a\n")
+
+
+@pytest.mark.slow
+def test_gh26973_meson_python_example(tmp_path, monkeypatch):
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    if shutil.which("pkg-config") is None:
+        pytest.skip("dependency('numpy') is found through pkg-config here")
+    project = tmp_path / "project"
+    util.numpy_inside(project, monkeypatch)
+    # What ``numpy-config --pkgconfigdir`` prints, ahead of any other numpy.pc
+    monkeypatch.setenv("PKG_CONFIG_PATH",
+                       str(Path(np.get_include()).parent / "lib" / "pkgconfig"))
+    shutil.copy(_path("fib_mesonpy.f90"), project / "fib.f90")
+    shutil.copy(_path("meson_mesonpy.build"), project / "meson.build")
+    (project / "fib_wrapper").mkdir()
+    (project / "fib_wrapper" / "__init__.py").write_text("from .fib import fib\n")
+    _run_built(_meson_build(project),
+               "import fib\n"
+               "a = fib.fib(10)\n"
+               "assert a.tolist() == [0, 1, 1, 2, 3, 5, 8, 13, 21, 34], a\n")

@@ -496,3 +496,15 @@ def switchdir(path):
         yield
     finally:
         os.chdir(curpath)
+
+
+def numpy_inside(path, monkeypatch):
+    """
+    Make subprocesses import this numpy from below ``path``, as they do
+    when the virtual environment is in a project directory.
+    """
+    site = Path(path) / ".venv" / "site-packages"
+    site.mkdir(parents=True)
+    (site / "numpy").symlink_to(Path(numpy.__file__).parent,
+                                target_is_directory=True)
+    monkeypatch.setenv("PYTHONPATH", str(site), prepend=os.pathsep)

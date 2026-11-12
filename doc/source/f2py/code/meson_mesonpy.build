@@ -1,11 +1,12 @@
 project('fib_wrapper', 'c',
   version : '0.1.0',
-  meson_version: '>=1.1.0',
+  meson_version: '>=1.4.0',
   default_options : ['warning_level=2'],
 )
 
 add_languages('fortran', native: false)
 
+fs = import('fs')
 py = import('python').find_installation(pure: false)
 
 # NumPy >=2.0 provides include dirs via dependency()
@@ -17,9 +18,10 @@ incdir_f2py = run_command(py,
 ).stdout().strip()
 
 # f2py include dir (for fortranobject.h) is not in dependency('numpy'),
-# so add it separately
+# so add it separately, relative to this directory since Meson rejects
+# absolute paths into the project (e.g. into a virtual environment there)
 f2py_dep = declare_dependency(
-  include_directories : incdir_f2py,
+  include_directories : fs.relative_to(incdir_f2py, meson.current_source_dir()),
 )
 
 # Generate the f2py wrappers

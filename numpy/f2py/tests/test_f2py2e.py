@@ -819,6 +819,26 @@ def test_cli_obj(capfd, hello_world_f90, monkeypatch):
             assert f"'''{Path(obj).absolute()}'''" in mbld
 
 
+@pytest.mark.slow
+def test_gh26973_numpy_in_build_dir(hello_world_f90, monkeypatch, tmp_path):
+    """Ensures the meson backend builds when numpy is inside the build
+    directory, as with a virtual environment in the project directory
+
+    CLI :: --build-dir -c
+    """
+    ipath = Path(hello_world_f90)
+    bdir = tmp_path / "project"
+    util.numpy_inside(bdir, monkeypatch)
+    monkeypatch.setattr(sys, "argv",
+                        f'f2py --backend meson --build-dir {bdir} -m blah -c {ipath}'.split())
+
+    with util.switchdir(tmp_path):
+        compiler_check_f2pycli()
+        rout = subprocess.run([sys.executable, "-c", "import blah; blah.hi()"],
+                              capture_output=True, encoding='UTF-8')
+        assert rout.stdout == ' Hello World\n'
+
+
 def test_inclpath(monkeypatch):
     """Add to the include directories
 
