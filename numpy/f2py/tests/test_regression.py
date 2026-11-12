@@ -268,8 +268,15 @@ class TestLogicalBoolArrays(util.F2PyTest):
         npt.assert_array_equal(a, [True, False, True])
 
         b = a.astype(np.int8)
+        original = b.copy()
         self.module.logical_bool.negate_l1(b)
-        npt.assert_array_equal(b, [0, 1, 0])
+        # gfortran writes 0 and 1. ifx complements the byte, so .NOT. of
+        # 1 is 0xFE and .NOT. of 0 is 0xFF. The low bit is what ifx treats
+        # as the truth value. Ask Fortran rather than requiring 0 and 1.
+        assert not np.array_equal(b, original)
+        cnt, addr = self.module.logical_bool.count_l1(b)
+        assert cnt == 1
+        assert addr == b.ctypes.data
 
 
 def _wrap_f90(funcwrappers2):
