@@ -4,25 +4,36 @@
 F2PY and Conda on Windows
 =========================
 
-As a convenience measure, we will additionally assume the
-existence of ``scoop``, which can be used to install tools without
-administrative access.
+The `conda-forge`_ channel provides two Fortran toolchains for Windows:
+
+- LLVM Flang (``flang_win-64``), its default Fortran compiler on Windows, which
+  pairs with MSVC, and
+- the Mingw-w64 ``gcc`` and ``gfortran`` compilers, built against the Universal
+  C Runtime.
+
+The two are not ABI compatible with each other, so use one of them per
+environment. MSVC cannot be redistributed through conda, which makes the
+Mingw-w64 compilers the simpler choice for ``f2py -c``: conda installs the whole
+toolchain.
+
+Install `Miniforge`_, which uses conda-forge by default, and create an
+environment with the compilers:
 
 .. code-block:: powershell
 
-  Invoke-Expression (New-Object System.Net.WebClient).DownloadString('https://get.scoop.sh')
+   conda create -n f2py python numpy meson ninja gcc gfortran
+   conda activate f2py
+   python -m numpy.f2py -c fib1.f -m fib1
+   python -c "import fib1, numpy as np; a = np.zeros(8); fib1.fib(a); print(a)"
 
-Now we will setup a ``conda`` environment.
+In a shell where MSVC is also active, ``meson`` picks ``cl`` first, so set
+``CC`` and ``FC`` as shown in :ref:`f2py-win-compilers`.
 
-.. code-block:: powershell
+The compiler runtime libraries, such as ``libgfortran-5.dll``, are installed
+into the environment's ``Library\bin`` directory. conda-forge's Python
+registers that directory for DLL loading, so the module imports inside the
+environment without :func:`os.add_dll_directory`. Elsewhere, it needs those
+libraries made available as described in :ref:`f2py-win-dlls`.
 
-	scoop install miniconda3
-	# For conda activate / deactivate in powershell
-	conda install -n root -c pscondaenvs pscondaenvs
-	Powershell -c Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-	conda init powershell
-	# Open a new shell for the rest
-
-``conda`` pulls packages from ``msys2``, however, the UX is sufficiently different enough to warrant a separate discussion.
-
-
+.. _conda-forge: https://conda-forge.org/docs/maintainer/infrastructure/#compilers-supplied-by-conda-forge
+.. _Miniforge: https://conda-forge.org/download/

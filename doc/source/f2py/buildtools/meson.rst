@@ -30,6 +30,14 @@ examples from :ref:`f2py-getting-started` section:
 
 .. literalinclude:: ../code/meson.build
 
+.. note::
+
+   ``meson`` refuses absolute include paths that point into the project
+   directory, which is where the NumPy and ``f2py`` headers are when the
+   virtual environment is created inside the project, e.g. as ``.venv``. The
+   example therefore passes them to ``include_directories`` relative to the
+   project with ``fs.relative_to``, which needs ``meson>=1.3.0``.
+
 At this point the build will complete, but the import will fail:
 
 .. code-block:: bash
@@ -56,9 +64,10 @@ to lowercase the original Fortran file with say:
 
 .. code-block:: bash
 
-   tr "[:upper:]" "[:lower:]" < fib1.f > fib1.f
+   tr "[:upper:]" "[:lower:]" < fib1.f > fib1_lower.f
+   mv fib1_lower.f fib1.f
    python -m numpy.f2py fib1.f -m fib2
-   meson --wipe builddir
+   meson setup --wipe builddir
    meson compile -C builddir
    cd builddir
    python -c 'import fib2'
@@ -69,7 +78,7 @@ possible. The easiest way to solve this is to let ``f2py`` deal with it:
 .. code-block:: bash
 
    python -m numpy.f2py fib1.f -m fib2 --lower
-   meson --wipe builddir
+   meson setup --wipe builddir
    meson compile -C builddir
    cd builddir
    python -c 'import fib2'
@@ -104,6 +113,32 @@ This can be compiled and run as before.
     cd builddir
     python -c "import numpy as np; import fibby; a = np.zeros(9); fibby.fib(a); print (a)"
     # [ 0.  1.  1.  2.  3.  5.  8. 13. 21.]
+
+Wrappers from a signature file
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To use a signature file edited as in :ref:`f2py-getting-started` (``fib2.pyf``
+from "The smart way"), generate the wrappers from the ``.pyf`` file alone. The
+signature file names the module, so ``-m`` is not needed, and the Fortran
+sources go to ``extension_module`` to be compiled:
+
+.. literalinclude:: ../code/meson_pyf.build
+
+.. code-block:: bash
+
+    rm -rf builddir
+    meson setup builddir
+    meson compile -C builddir
+    cd builddir
+    python -c "import fib2; print(fib2.fib(9))"
+    # [ 0.  1.  1.  2.  3.  5.  8. 13. 21.]
+
+.. versionchanged:: 2.6.0
+
+   ``f2py`` ignores ``-m`` and any Fortran sources passed together with a
+   signature file when it only generates wrappers. Earlier versions built a
+   second module from them that silently replaced the wrappers described by
+   the signature file.
 
 Salient points
 ===============

@@ -56,9 +56,11 @@ scalar argument.
        is used.
 
    * ``intent(inout)`` scalar arguments are assumed to be array objects in
-     order to have *in situ* changes be effective. It is recommended to use
-     arrays with proper type but also other types work. :ref:`Read more about
-     the intent attribute <f2py-attributes>`.
+     order to have *in situ* changes be effective. The new value is stored in
+     the first element of the array, cast to its dtype as in an array
+     assignment, and a read-only array raises ``ValueError``. Other objects,
+     such as Python scalars, are accepted but not modified. :ref:`Read more
+     about the intent attribute <f2py-attributes>`.
 
 Consider the following Fortran 77 code:
 
@@ -169,9 +171,21 @@ In Python:
   :language: python
 
 In the above example F2PY was able to guess accurately the signature
-of the call-back function. However, sometimes F2PY cannot establish the
-appropriate signature; in these cases the signature of the call-back
-function must be explicitly defined in the signature file.
+of the call-back function from the way the routine calls it. A call-back
+argument that the routine never calls takes no arguments, unless the routine
+passes it to another routine in the same source whose matching argument
+already has a signature. The passed argument reuses that signature, and
+``f2py -h`` writes a ``use`` rename such as ``local=>dummy``. Otherwise the
+call-back is a function of its declared type, or a subroutine if it has no
+type. An interface block or a signature in a signature file is kept as
+written. However, sometimes F2PY cannot establish the appropriate signature;
+in these cases the signature of the call-back function must be explicitly
+defined in the signature file.
+argument that the routine never calls, for example one that it only passes on
+to another routine, is assumed to take no arguments; it is a function of its
+declared type, or a subroutine if it has no type. However, sometimes F2PY
+cannot establish the appropriate signature; in these cases the signature of
+the call-back function must be explicitly defined in the signature file.
 
 To facilitate this, signature files may contain special modules (the names of
 these modules contain the special ``__user__`` sub-string) that define the
@@ -244,12 +258,54 @@ In Python:
 .. literalinclude:: ./code/results/extcallback_session.dat
   :language: python
 
+In ``pfromf.f1()`` the Fortran code of ``f2`` runs without the Python wrapper
+of ``f2``, as it would for any Fortran routine that calls ``fpy`` without
+declaring it ``intent(callback)``. Such calls pass their Fortran arguments to
+the Python function following the same :ref:`rules <f2py-callback-arguments>`
+as calls made through the wrapper, with ``fpy_extra_args`` taken from the
+module attribute of that name. For backward compatibility, a Python function
+that can be called with these extra arguments alone, for instance because all
+of its parameters have default values, receives only the extra arguments.
+Declaring ``fpy`` ``intent(callback)`` in every routine that calls it gives all
+of them the full argument list, and an error raised by the Python function then
+stops the Fortran routine at once instead of letting it run to completion.
+
 .. note::
 
    When using modified Fortran code via ``callstatement`` or other directives,
    the wrapped Python function must be called as a callback, otherwise only the
    bare Fortran routine will be used. For more details, see
    https://github.com/numpy/numpy/issues/26681#issuecomment-2466460943
+
+.. _f2py-callback-arguments:
+
+Call-back functions returning complex values
+--------------------------------------------
+
+Fortran compilers do not agree on how a ``COMPLEX`` function returns its
+result. GNU Fortran (without ``-ff2c``) and LLVM Flang return it by value, the
+way C returns a complex value, while Intel Fortran, NVIDIA HPC Fortran, AMD
+AOCC Flang and ``gfortran -ff2c`` pass the address of the result as a hidden
+first argument. The call-back functions that F2PY generates for ``COMPLEX``
+functions return the result by value unless the generated C code is compiled
+with ``-DF2PY_CB_RETURNCOMPLEX=0``. The ``meson`` backend of ``f2py -c`` adds
+this flag for the Intel and NVIDIA compilers. In any other build that uses a
+compiler with a hidden first argument, add the flag to the C compiler flags,
+for example with ``-DF2PY_CB_RETURNCOMPLEX=0`` or through ``CFLAGS``.
+
+Call-backs the Fortran code does not call
+------------------------------------------
+
+An ``external`` argument that the routine never calls is still a callback.
+If the routine only passes it to another routine in the same sources, F2PY
+gives it the signature of that call, so ``cb(1)`` takes one integer. Each
+routine keeps its own callback. An ``external`` with no call anywhere is a
+function of its declared type, or a subroutine when it has no type, and it
+takes no arguments. ``f2py -h`` writes that signature, and the arguments can
+be filled in there. An interface block, or a signature file that already
+describes the callback, is left as written. The C function F2PY generates
+for an ``intent(callback)`` external is exported from the extension, so
+Fortran in a separate shared library can call it by name.
 
 Resolving arguments to call-back functions
 ------------------------------------------
@@ -287,14 +343,36 @@ evaluates the call-back argument ``gun``:
 * If ``p <= m < n + p`` then ``gun(a_1, ..., a_q, e_1, ..., e_p)`` is called,
   and here ``q=m-p``.
 * If ``p > m`` then ``gun(e_1, ..., e_m)`` is called.
+* If ``gun`` also takes ``*args``, it accepts any number of positional
+  arguments and ``gun(a_1, ..., a_n, e_1, ..., e_p)`` is called.
 * If ``n + p`` is less than the number of required arguments to ``gun`` then an
   exception is raised.
+
+If the function ``gun`` returns ``l`` objects as a tuple, then the following
+rules are applied:
+If ``gun`` also takes ``*args``, then ``m`` is unbounded and
+``gun(a_1, ..., a_n, e_1, ..., e_p)`` is called.
+
+``gun`` can be any Python callable. For a bound method, or an instance of a
+class that defines ``__call__``, ``m`` does not count ``self``. If ``m`` cannot
+be determined, as for built-in functions, all ``n + p`` arguments are passed.
 
 If the function ``gun`` may return any number of objects as a tuple; then the
 following rules are applied:
 
 * If ``k < l``, then ``y_{k + 1}, ..., y_l`` are ignored.
-* If ``k > l``, then only ``x_1, ..., x_l`` are set.
+* If ``k > l``, then only ``x_1, ..., x_l`` are set. If the call-back is a
+  Fortran function, ``x_1`` is its result, and a ``RuntimeWarning`` is issued
+  when ``gun`` returns no value.
+
+.. note::
+
+   A returned tuple is always unpacked into ``x_1, ..., x_k``, even when
+   ``k == 1``. To return a sequence as a single value, for example an array,
+   return a list or a NumPy array instead of a tuple:
+   ``return [y_1, y_2, y_3]`` sets ``x_1`` from the whole sequence, whereas
+   ``return y_1, y_2, y_3`` returns three objects, so ``x_1`` is set from
+   ``y_1`` alone.
 
 
 Common blocks
@@ -342,6 +420,16 @@ In Python:
 .. literalinclude:: ./code/results/moddata_session.dat
   :language: python
 
+Variables and parameters that a module accesses with ``use`` from another
+module wrapped in the same extension are attributes of the using module too,
+following ``only`` lists, renames and ``private`` statements.
+
+Assigning to a name that F2PY did not wrap, such as a misspelled variable or
+one that is missing from the signature file, stores the value as a Python
+attribute of the ``fortran`` object, and the Fortran code never sees it. The
+same holds for common blocks. Generate the wrapper with ``--strict-setattr`` to
+make such assignments raise ``AttributeError`` instead.
+
 
 Allocatable arrays
 ===================
@@ -358,4 +446,95 @@ and wrap it using ``f2py -c -m allocarr allocarr.f90``.
 In Python:
 
 .. literalinclude:: ./code/results/allocarr_session.dat
+  :language: python
+
+.. _Allocatable array arguments:
+
+Allocatable array arguments
+---------------------------
+
+Procedures with allocatable array dummy arguments, and functions returning an
+allocatable array, are wrapped as well. Fortran requires such an argument to
+be associated with an allocatable array, so the generated wrapper calls the
+procedure with a local allocatable array and maps the argument by its intent:
+
+* ``intent(out)``: the argument is removed from the Python signature and
+  returned as a new Fortran-contiguous array with the shape allocated by the
+  procedure, or as ``None`` if the procedure leaves it unallocated. An
+  allocatable function result is returned in the same way.
+* ``intent(in)`` or no ``intent``: the input is copied into an allocated
+  array before the call.
+* ``intent(inout)``: the input is copied in and the values are written back
+  to the input array after the call. A ``ValueError`` is raised if the
+  procedure deallocates the array or changes its shape. An argument that is
+  ``intent(in,out)`` for F2PY is returned as a new array instead, so it may
+  be reallocated.
+
+Consider the following Fortran code:
+
+.. literalinclude:: ./code/allocarg.f90
+  :language: fortran
+
+and wrap it using ``f2py -c -m allocarg allocarg.f90``.
+
+In Python:
+
+.. literalinclude:: ./code/results/allocarg_session.dat
+  :language: python
+
+Modules from precompiled libraries
+==================================
+
+F2PY does not need to compile a Fortran module to wrap its data and
+procedures. When the module is part of a library that was built without F2PY,
+describe the module in a signature file and build the extension module from
+that signature file. F2PY then compiles only its wrappers, which ``use`` the
+module, so the Fortran compiler needs the module file (``.mod``) written when
+the library was built, and the extension module is linked to the library. The
+wrappers access the module variables of the library itself, so the library's
+procedures and Python see the same data.
+
+Consider the following module:
+
+.. literalinclude:: ./code/store.f90
+  :language: fortran
+
+compiled into the library ``libstore.a`` in the directory ``../store``, for
+example with ``gfortran -fPIC -c store.f90``, which also writes ``store.mod``,
+and ``ar rcs libstore.a store.o``. The signature file can be written by hand,
+or generated from the module source with ``f2py -m pystore -h store.pyf
+store.f90``:
+
+.. literalinclude:: ./code/store.pyf
+  :language: fortran
+
+Build the extension module from the signature file alone, pointing ``-I`` at
+the directory with ``store.mod`` and linking the library::
+
+  f2py -c store.pyf -I../store -L../store -lstore
+
+Module files are specific to the compiler that wrote them, and F2PY does not
+read them itself, so use the same Fortran compiler for the library and for
+F2PY. Do not also pass ``store.f90`` to ``f2py -c``: that would compile a second
+copy of the module, with its own variables, into the extension module. A shared
+library works the same way, but must also be found when the extension module
+is imported, for example through ``LD_LIBRARY_PATH`` on Linux.
+
+In Python:
+
+.. literalinclude:: ./code/results/store_session.dat
+  :language: python
+
+F2PY does not wrap variables that a module accesses from another module by use
+association. To make such a variable an attribute of the using module, declare
+it in an F2PY directive (see :doc:`signature-file`), which the Fortran compiler
+ignores:
+
+.. literalinclude:: ./code/scaling.f90
+  :language: fortran
+
+Wrapped with ``f2py -c -m pyscaling scaling.f90 -I../store -L../store
+-lstore``, this gives:
+
+.. literalinclude:: ./code/results/scaling_session.dat
   :language: python

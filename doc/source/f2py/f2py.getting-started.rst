@@ -44,6 +44,47 @@ Depending on the situation, these steps can be carried out in a single composite
 command or step-by-step; in which case some steps can be omitted or combined
 with others.
 
+The quick way
+=============
+
+For new Fortran code, explicit argument intents let F2PY expose an array
+result directly.
+Save this free-form example as ``fib_modern.f90``:
+
+.. literalinclude:: ../../../numpy/f2py/tests/src/isofenv/gh23633_modern.f90
+   :language: fortran
+   :caption: fib_modern.f90
+
+The intrinsic module ``iso_fortran_env`` supplies ``real64``, a real
+kind with 64-bit storage.
+The array ``a`` is an output argument and ``n`` is an input argument.
+Compile the source into an extension module:
+
+.. code-block:: bash
+
+  python -m numpy.f2py -c fib_modern.f90 -m fib_modern
+
+Python receives the output array as the return value.
+No preallocated input array or custom type-mapping file is needed:
+
+.. code-block:: pycon
+
+  >>> import numpy as np
+  >>> import fib_modern
+  >>> values = fib_modern.fib(8)
+  >>> values.tolist()
+  [0.0, 1.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0]
+  >>> values.dtype == np.dtype("float64")
+  True
+  >>> fib_modern.fib(6).tolist()
+  [0.0, 1.0, 1.0, 2.0, 3.0, 5.0]
+
+Named kinds can also be imported under a local name, for example
+``use iso_fortran_env, only: dp => real64`` with ``real(dp)``
+declarations.
+The declared kind determines the array dtype; the argument intents
+determine which Python inputs and return values the wrapper exposes.
+
 Below, we describe three typical approaches of using F2PY with Fortran 77. These
 can be read in order of increasing effort, but also cater to different access
 levels depending on whether the Fortran code can be freely modified.
@@ -62,8 +103,8 @@ illustration, save it as ``fib1.f``:
   Some errors may pass silently (or as warnings) and need to be verified by the
   user.
 
-The quick way
-==============
+The quick way for fixed-form code
+=================================
 
 The quickest way to wrap the Fortran subroutine ``FIB`` for use in Python is to
 run
@@ -100,10 +141,10 @@ Fortran subroutine ``FIB`` is accessible via ``fib1.fib``::
   ----------
   a : input rank-1 array('d') with bounds (n)
 
-  Other parameters
+  Other Parameters
   ----------------
   n : input int, optional
-      Default: len(a)
+      Default: shape(a, 0)
 
   >>> a = np.zeros(8, 'd')
   >>> fib1.fib(a)
@@ -115,22 +156,33 @@ Fortran subroutine ``FIB`` is accessible via ``fib1.fib``::
   * Note that F2PY recognized that the second argument ``n`` is the
     dimension of the first array argument ``a``. Since by default all
     arguments are input-only arguments, F2PY concludes that ``n`` can
-    be optional with the default value ``len(a)``.
+    be optional with the default value ``shape(a, 0)``.
+    The expression ``shape(a, 0)`` is the length of the first dimension
+    of ``a``.
 
-  * One can use different values for optional ``n``::
+  * To fill a prefix of an array, pass a view of that prefix::
 
       >>> a1 = np.zeros(8, 'd')
-      >>> fib1.fib(a1, 6)
+      >>> fib1.fib(a1[:6])
       >>> print(a1)
-      [ 0.  1.  1.  2.  3.  5.  0.  0.]
+      [0. 1. 1. 2. 3. 5. 0. 0.]
 
-    but an exception is raised when it is incompatible with the input
-    array ``a``::
+    The optional ``n`` argument must match the first dimension of the
+    array passed to the wrapper.
+    Supplying ``n=6`` with an eight-element array does not select its
+    first six elements.
+    An incompatible size raises an exception because F2PY checks the
+    relationship between the dimension and the array shape.
+    be optional with the default value ``shape(a, 0)``, the length of
+    ``a``.
 
-      >>> fib1.fib(a, 10)
+  * ``n`` can still be passed explicitly, but an exception is raised when
+    it does not match the shape of the input array ``a``::
+
+      >>> fib1.fib(a, 6)
       Traceback (most recent call last):
         File "<stdin>", line 1, in <module>
-      fib.error: (len(a)>=n) failed for 1st keyword n: fib:n=10
+      fib1.error: (shape(a, 0) == n) failed for 1st keyword n: fib:n=6
       >>>
 
     F2PY implements basic compatibility checks between related

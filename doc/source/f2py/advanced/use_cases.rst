@@ -43,18 +43,32 @@ Usage in Python:
   :language: python
 
 
+.. _f2py-kind-specifiers:
+
 Dealing with KIND specifiers
 ============================
 
-Currently, F2PY can handle only ``<type spec>(kind=<kindselector>)``
-declarations where ``<kindselector>`` is a numeric integer (e.g. 1, 2,
-4,...), but not a function call ``KIND(..)`` or any other
-expression. F2PY needs to know what would be the corresponding C type
-and a general solution for that would be too complicated to implement.
+F2PY needs to know the C type that corresponds to the kind of each
+variable. It understands integer literals such as ``real(8)``, the kind
+constants of ``iso_c_binding``, the ``int8``, ``int16``, ``int32``,
+``int64``, ``real32`` and ``real64`` constants of ``iso_fortran_env``, and
+many named constants defined with ``kind``, ``selected_int_kind`` or
+``selected_real_kind``, and a kind renamed on ``USE``, such as
+``use iso_fortran_env, only: dp => real64``. ``selected_real_kind`` is
+evaluated for the compiler named by ``FC``: a precision below 4 is kind 2
+when that compiler has IEEE binary16, and kind 4 otherwise. When F2PY cannot
+determine a kind, it uses the default C type of that Fortran type (``float``
+for ``real``, ``int`` for ``integer``) and prints a message such as::
 
-However, F2PY provides a hook to overcome this difficulty, namely,
-users can define their own <Fortran type> to <C type> maps. For
-example, if Fortran 90 code contains::
+    getctype: "real(kind='dp')" is mapped to C "float" (to override define {'real': {'dp': "<C typespec>"}} in /path/to/.f2py_f2cmap file).
+
+The wrapper then passes data of the wrong size, which gives wrong results or
+crashes. This happens, for example, for a kind expression written in the
+declaration itself, such as ``real(kind(1.0d0))``.
+
+For these cases, F2PY provides a hook: users can define their own
+<Fortran type> to <C type> maps. For example, if Fortran 90 code
+contains::
 
     REAL(kind=KIND(0.0D0)) ...
 
@@ -90,23 +104,52 @@ and the corresponding <C type>. The <C type> can be one of the following::
     int
     long
     long_long
+    npy_intp
     unsigned
+    size_t
+    ptrdiff_t
+    intptr_t
+    intmax_t
+    int_fast8_t
+    int_fast16_t
+    int_fast32_t
+    int_fast64_t
+    bool
     complex_float
     complex_double
     complex_long_double
     string
+
+``long`` is 32 bits wide on Windows and 64 bits wide on most other 64-bit
+platforms, so use it only for kinds that are interoperable with C ``long``,
+such as ``c_long`` from ``iso_c_binding``. Use ``signed_char``, ``short``,
+``int`` and ``long_long`` for integers of 1, 2, 4 and 8 bytes, and
+``npy_intp`` for integers as wide as ``size_t``.
+
+An empty ``<selector_expr>`` maps declarations without a kind. Compiler
+options such as ``-fdefault-integer-8`` change the size of default ``integer``
+and ``logical`` variables without F2PY knowing, so when building with them use
+a map such as::
+
+    {'integer': {'': 'long_long'}, 'logical': {'': 'long_long'}}
+
+F2PY maps ``c_size_t``, ``c_ptrdiff_t``, ``c_intptr_t``, ``c_intmax_t``, the
+``c_int_fast*_t`` kinds and ``c_bool`` to the C types of those names. The C
+implementation chooses the width. LLVM flang can report a different width for
+``c_int_fast16_t`` and ``c_int_fast32_t`` than those C types have; with that
+compiler, use ``c_int16_t`` and ``c_int32_t``.
 
 For example, for a Fortran file ``func1.f`` containing:
 
 .. literalinclude:: ./../code/f2cmap_demo.f
     :language: fortran
 
-In order to convert ``int64`` and ``real64`` to valid ``C`` data types,
-a ``.f2py_f2cmap`` file with the following content can be created in the current directory:
+the ``int64`` and ``real64`` kinds can be mapped to ``C`` data types with a
+``.f2py_f2cmap`` file with the following content in the current directory:
 
 .. code-block:: python
 
-  dict(real=dict(real64='double'), integer=dict(int64='long long'))
+  dict(real=dict(real64='double'), integer=dict(int64='long_long'))
 
 and create the module as usual. F2PY checks if a ``.f2py_f2cmap`` file is present
 in the current directory and will use it to map ``KIND`` specifiers to ``C`` data types.
@@ -123,6 +166,30 @@ Alternatively, the mapping file can be saved with any other name, for example
   f2py -c func1.f -m func1 --f2cmap mapfile.txt
 
 For more information, see F2Py source code ``numpy/f2py/capi_maps.py``.
+
+Signature files and the f2cmap file
+-----------------------------------
+
+A signature file and an f2cmap file do different jobs, and one cannot replace
+the other:
+
+* A :doc:`signature file <../signature-file>` describes what is wrapped and
+  how it looks from Python: the routines, their arguments and attributes such
+  as ``intent``, ``optional``, ``depend`` and ``check``, and the signatures of
+  call-back arguments.
+* The f2cmap file only tells F2PY which C type stands for a Fortran type and
+  kind. It applies to all the files F2PY reads in that run, Fortran sources
+  and signature files alike.
+
+A signature file written by ``f2py -h`` contains the kinds F2PY resolved from
+the sources. A hand-written signature file that uses a kind name, such as
+``real(kind=wp)``, without defining it leaves F2PY unable to map the kind, so
+either add the name to the f2cmap file (``{'real': {'wp': 'double'}}``) or
+write the kind as a literal, such as ``real(kind=8)``, in the signature file.
+
+F2PY reads the f2cmap file when it generates the wrappers, by default from
+the directory it runs in. Build systems usually run ``f2py`` in the build
+directory, so pass the file there with ``--f2cmap`` and its full path.
 
 .. _Character strings:
 
@@ -173,3 +240,64 @@ argument ``n``, after wrapping with F2PY, in Python:
 
 .. include:: ./../code/results/asterisk2_session.dat
   :literal:
+
+.. _f2py-interrupting:
+
+Interrupting long-running Fortran code
+======================================
+
+When a signal such as ``SIGINT`` (sent by Ctrl-C) arrives, Python only records
+it; the Python-level handler, which for ``SIGINT`` raises `KeyboardInterrupt`
+by default, runs once the main thread executes Python code again (see
+:mod:`signal`). While an F2PY wrapped routine runs, control stays in compiled
+code, so Ctrl-C takes effect only after the routine returns, and a routine
+that never returns cannot be interrupted at all.
+
+Interrupting the routine from a signal handler is not an option: replacing
+handlers temporarily is not thread safe, and the Fortran standard does not
+allow transfers of control, such as C's ``longjmp``, that bypass the normal
+return of a Fortran procedure (Fortran 2018, 15.6.3). Instead, F2PY generated
+extension modules provide the C function::
+
+    int f2py_check_signals(void);
+
+which long-running Fortran code can call through a ``bind(c)`` interface at
+points where it can stop cleanly. It runs the pending Python signal handlers
+and returns a nonzero value if one of them raised an exception, or if a Python
+exception is already pending. The Fortran code should then return, and the
+wrapper raises the exception instead of returning the output arguments. For
+example, consider the Fortran file ``interrupt.f90``:
+
+.. literalinclude:: ./../code/interrupt.f90
+  :language: fortran
+
+Compile it with ``f2py -c interrupt.f90 -m interrupt`` and then in Python:
+
+.. code-block:: python
+
+    >>> import numpy as np
+    >>> import interrupt
+    >>> x = np.zeros(1000)
+    >>> x[-1] = 1
+    >>> interrupt.relax(x, 10**9)  # press Ctrl-C while this runs
+    Traceback (most recent call last):
+      ...
+    KeyboardInterrupt
+
+Since ``x`` is ``intent(inout)``, it keeps the sweeps completed before the
+interruption.
+
+``f2py_check_signals`` can also be called from routines declared
+``threadsafe``; it then reacquires the GIL for the duration of the call, so
+call it at a coarse granularity, for example once per outer iteration. Python
+runs signal handlers only in its main thread, so calls from other threads do
+not run them, and in threads that Python does not know about, such as OpenMP
+worker threads, the call returns zero without taking the GIL.
+
+.. note::
+
+   Fortran code that cannot be changed to call ``f2py_check_signals`` can only
+   be stopped by ending the process that runs it, for example by running it in
+   a child process, or by calling ``signal.signal(signal.SIGINT,
+   signal.SIG_DFL)`` beforehand so that Ctrl-C terminates Python immediately,
+   without any cleanup.

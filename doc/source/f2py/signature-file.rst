@@ -21,7 +21,8 @@ library is built.
   Currently, F2PY may fail with some valid Fortran constructs. If this happens,
   you can check the `NumPy GitHub issue tracker
   <https://github.com/numpy/numpy/issues>`_ for possible workarounds or
-  work-in-progress ideas.
+  work-in-progress ideas. :ref:`f2py-support` lists the constructs that F2PY
+  is known to handle.
 
 In general, the contents of the signature files are case-sensitive. When
 scanning Fortran codes to generate a signature file, F2PY lowers all cases
@@ -147,6 +148,9 @@ and
   specifications. In such cases ``integer*<negintlen>`` represents
   unsigned C integers;
 
+* a ``<kind>`` that F2PY cannot map to a C type needs an entry in the f2cmap
+  file, see :ref:`f2py-kind-specifiers`;
+
 If an argument has no ``<argument type declaration>``, its type is
 determined by applying ``implicit`` rules to its name.
 
@@ -178,7 +182,12 @@ Use statements
 
      <rename_list> := <local_name> => <use_name> [ , <rename_list> ]
 
-* Currently F2PY uses ``use`` statements only for linking call-back modules and
+* A ``use`` statement in a Fortran 90 module makes the variables and
+  parameters it accesses from another module in the same ``python module``
+  block attributes of the using module too, following ``ONLY`` lists, renames
+  and ``PRIVATE`` statements.
+
+* F2PY also uses ``use`` statements for linking call-back modules and
   ``external`` arguments (call-back functions). See :ref:`Call-back arguments`.
 
 Common block statements
@@ -244,7 +253,10 @@ Other statements
 
       ::
 
-        implicit real (a-h,o-z,$_), integer (i-m)
+        implicit real (a-h,o-z,$_), integer (i-n)
+
+      An ``implicit`` statement applies to the block that contains it
+      and to the blocks nested in that block.
 
   + ``entry`` statements
       ::
@@ -252,7 +264,9 @@ Other statements
         entry <entry name> [([<arguments>])]
 
       F2PY generates wrappers for all entry names using the signature
-      of the routine block.
+      of the routine block. In a function block, the result of an entry
+      is the variable named after the entry, so its type comes from the
+      declaration of that name or from the implicit rules.
 
       .. note::
 
@@ -289,6 +303,12 @@ In addition, F2PY introduces the following statements:
   corresponding prototype::
 
     extern <return type> FUNC_F(<routine name>,<ROUTINE NAME>)(<callprotoargument>);
+
+  Without ``callprotoargument``, F2PY derives the prototype from the arguments
+  that ``callstatement`` passes to ``(*f2py_func)``, provided each one is a
+  variable of the signature, its address ``&<name>``, or a call-back function.
+  Otherwise F2PY declares an empty parameter list, which C23 compilers read as
+  ``(void)``; give ``callprotoargument`` in that case.
 
 ``fortranname [<actual Fortran/C routine name>]``
   F2PY allows for the use of an arbitrary ``<routine name>`` for a given
@@ -349,6 +369,41 @@ The following attributes can be used by F2PY.
      automatically by F2PY.
    * For an optional array argument, all its dimensions must be bounded.
 
+``absent``
+  The corresponding argument is a Fortran ``OPTIONAL`` dummy. When the
+  Python caller omits it or passes ``None``, f2py calls the Fortran
+  procedure with that actual absent, so ``present()`` is false. A passed
+  value is forwarded as usual.
+
+  ``absent`` is set automatically when f2py reads a Fortran ``OPTIONAL``
+  attribute or ``OPTIONAL`` statement from Fortran source. It is not set
+  by the f2py ``optional`` keyword in a signature file, by an ``intent``
+  list, by an ``<init_expr>`` default, or by ``check``. A signature file
+  can name it by hand::
+
+    real, optional, absent, intent(in) :: x
+
+  Omitting the actual requires an explicit Fortran interface. f2py builds
+  that interface for module procedures and for external procedures that
+  already have one.
+
+  Some kinds cannot be omitted. A callback, a character array, an
+  allocatable or pointer dummy, a ``value`` dummy, an ``intent(c)``
+  dummy, and an F77 external with no explicit interface are in that
+  set. When Fortran source set ``absent`` on one of those kinds, f2py
+  drops ``absent``, prints a build message, and keeps the previous
+  call. The message names the routine, the argument, and the reason.
+  When a signature file or an f2py directive writes ``absent`` on one
+  of those kinds, f2py raises ``F2PYError`` and names the same facts.
+
+  An explicit init expression, including one from a directive or a
+  signature file, also drops ``absent`` and keeps that default. f2py
+  prints a build message in that case too.
+
+  A pure ``intent(out)`` argument is still allocated and passed, so
+  ``present()`` stays true: it is a return value, not a caller-supplied
+  input.
+
 ``required``
   The corresponding argument with this attribute is considered mandatory. This
   is the default. ``required`` should only be specified if there is a need to
@@ -361,7 +416,8 @@ The following attributes can be used by F2PY.
 
 ``dimension(<arrayspec>)``
   The corresponding variable is considered as an array with dimensions given in
-  ``<arrayspec>``.
+  ``<arrayspec>``. The dimension bounds may use the Fortran exponentiation
+  operator ``**``, which F2PY translates to ``pow`` in the generated C code.
 
 ``intent(<intentspec>)``
   This specifies the "intention" of the corresponding argument. ``<intentspec>``
@@ -482,6 +538,10 @@ The following attributes can be used by F2PY.
       of the F2PY generated extension module where it can be set as a module
       attribute by a user.
 
+      Several routines of a module may declare the same external
+      ``intent(callback)``. They share one external function, so their
+      signatures of the call-back must agree.
+
   * ``aux``
       Defines an auxiliary C variable in the F2PY generated wrapper function.
       Useful to save parameter values so that they can be accessed in
@@ -541,7 +601,9 @@ The following attributes can be used by F2PY.
 
 ``allocatable``
   The corresponding variable is a Fortran 90 allocatable array defined as
-  Fortran 90 module data.
+  Fortran 90 module data, an allocatable array dummy argument, or an
+  allocatable array function result. See :ref:`Allocatable array arguments`
+  for how allocatable arguments are passed.
 
 .. _external:
 
@@ -569,7 +631,7 @@ The following attributes can be used by F2PY.
 
     subroutine cb_sub(a,n)
         real dimension(n) :: a
-        integer optional,check(len(a)>=n),depend(a) :: n=len(a)
+        integer optional,check(shape(a, 0) == n),depend(a) :: n=shape(a, 0)
     end subroutine cb_sub
     function cb_fun(e_4_e) result (r)
         integer :: e_4_e

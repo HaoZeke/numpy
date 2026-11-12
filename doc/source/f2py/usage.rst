@@ -57,13 +57,32 @@ To construct an extension module, use
 The constructed extension module is saved as ``<modulename>module.c`` to the
 current directory.
 
-Here ``<fortran files>`` may also contain signature files. Among other options
-(see below), the following options can be used in this mode:
+Here ``<fortran files>`` may also contain a signature file. The wrappers are
+then generated from the signature file alone, as when building with ``-c``: the
+module name is read from the signature file, so ``-m`` is ignored, and Fortran
+sources are not scanned. For example, to generate the wrappers for the edited
+signature file ``fib2.pyf`` from :ref:`f2py-getting-started`, run
+
+.. code-block:: sh
+
+  f2py fib2.pyf
+
+and compile ``fib2module.c`` together with the Fortran sources, as shown in
+:ref:`f2py-meson`.
+
+.. versionchanged:: 2.6.0
+   ``-m`` and Fortran sources passed with a signature file are ignored.
+   Previously they produced a second module that replaced the one described
+   by the signature file.
+
+Among other options (see below), the following options can be used in this
+mode:
 
 ``--debug-capi``
   Adds debugging hooks to the extension module. When using this extension
   module, various diagnostic information about the wrapper is written to the
   standard output, for example, the values of variables, the steps taken, etc.
+  See :ref:`f2py-debugging`.
 
 ``-include'<includefile>'``
   Add a CPP ``#include`` statement to the extension module source.
@@ -92,6 +111,16 @@ Here ``<fortran files>`` may also contain signature files. Among other options
   fortran code you are wrapping for thread safety issues before passing
   ``--freethreading-compatible``, as ``f2py`` does not analyze fortran code for
   thread safety issues.
+
+``--[no-]strict-setattr``
+  Make the ``fortran`` objects that wrap Fortran 90 modules and common blocks
+  raise ``AttributeError`` on assignment to a name that is not a wrapped
+  Fortran variable. The default is ``--no-strict-setattr``, which stores such a
+  value as a Python attribute of the object that the Fortran code never sees,
+  for example when a variable name is misspelled or missing from the signature
+  file.
+
+  .. versionadded:: 2.6.0
 
 ``--include-paths "<path1><pathsep><path2>..."``
   Search include files from given directories.
@@ -134,22 +163,45 @@ Among other options (see below) and options described for previous modes, the fo
    .. versionchanged:: 2.5.0
       The ``distutils`` backend has been removed.
 
+   .. versionchanged:: 2.6.0
+      ``--backend`` defaults to ``meson``. ``--backend distutils`` selects
+      meson and reports that the distutils backend was removed. ``--opt`` is
+      forwarded to the Fortran compilers as ``--f77flags`` and ``--f90flags``.
+      The other options of the removed backend (``--fcompiler``,
+      ``--compiler``, ``--f77exec``, ``--f90exec``, ``--help-fcompiler``,
+      ``--arch``, ``--noopt``, ``--noarch`` and ``--link-<resource>``) are
+      ignored, with a message that names the replacement. See
+      :ref:`f2py-meson-distutils`.
+
+``f2py -c`` links the extension with the Fortran compiler, so that compiler's
+runtime is on the link line. LLVM flang does not add its runtime when the C
+compiler performs the link, so the generated ``meson.build`` also links
+``FortranRuntime``, ``FortranDecimal`` and ``libm`` for that compiler. A
+module that prints or uses character intrinsics then imports.
+
+``-D`` and ``-U`` are passed to both the C compiler and the Fortran compiler.
+That covers the macros below, such as ``-DF2PY_REPORT_ON_ARRAY_COPY=1``, and
+macros that select branches in preprocessed Fortran.
+
 Common build flags:
 
 ``--backend <backend_type>``
-  Legacy option, only ``meson`` is supported.
+  ``meson`` is the backend, and the default. ``distutils`` selects meson and
+  reports that the distutils backend was removed.
 ``--f77flags=<string>``
   Specify F77 compiler flags
 ``--f90flags=<string>``
   Specify F90 compiler flags
 ``--debug``
-  Compile with debugging information
+  Compile with debugging information. This selects the meson ``debug`` build
+  type. ``--opt=<flags>`` is not a debug switch: those flags are appended to
+  ``--f77flags`` and ``--f90flags``.
 ``-l<libname>``
   Use the library ``<libname>`` when linking.
 ``-D<macro>[=<defn=1>]``
   Define macro ``<macro>`` as ``<defn>``.
 ``-U<macro>``
-  Define macro ``<macro>``
+  Undefine macro ``<macro>``
 ``-I<dir>``
   Append directory ``<dir>`` to the list of directories searched for include
   files.
@@ -163,6 +215,30 @@ Common build flags:
   processing. Example: ``--dep lapack --dep scalapack`` This will identify
   "lapack" and "scalapack" as dependencies and remove them from argv, leaving a
   dependencies list containing ["lapack", "scalapack"].
+
+  .. versionadded:: 2.6.0
+
+  Keyword arguments for meson's ``dependency()`` can be appended in brackets,
+  written in meson syntax: ``--dep "mpi[language: 'fortran']"`` becomes
+  ``dependency('mpi', language: 'fortran')``. Meson resolves dependencies which
+  exist for several languages, like MPI or OpenMP, for C unless
+  ``language: 'fortran'`` is given, so Fortran code calling MPI needs it.
+
+``--cross-file <filename>``
+  Pass ``<filename>`` to ``meson setup`` as a `cross file
+  <https://mesonbuild.com/Cross-compilation.html>`__, to build the extension
+  module for another machine. This may be passed multiple times; later files
+  override earlier ones. The module is built for the Python running ``f2py``
+  unless the cross file sets ``python`` in its ``[binaries]`` section.
+
+  .. versionadded:: 2.6.0
+
+``--native-file <filename>``
+  Pass ``<filename>`` to ``meson setup`` as a `native file
+  <https://mesonbuild.com/Native-environments.html>`__. This may be passed
+  multiple times; later files override earlier ones.
+
+  .. versionadded:: 2.6.0
 
 .. note::
   
@@ -229,7 +305,8 @@ Other options
   All F2PY generated files are created in ``<dirname>``. Default is
   ``tempfile.mkdtemp()``.
 ``--f2cmap <filename>``
-  Load Fortran-to-C ``KIND`` specifications from the given file.
+  Load Fortran-to-C ``KIND`` specifications from the given file, see
+  :ref:`f2py-kind-specifiers`.
 ``--quiet``
   Run quietly.
 ``--verbose``

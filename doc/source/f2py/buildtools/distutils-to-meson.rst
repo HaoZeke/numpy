@@ -58,8 +58,8 @@ This will not win any awards, but can be a reasonable starting point.
 
   python -m numpy.f2py -c fib.f90 -m fib
 
-This is the only option. There used to be a ``distutils`` backend but it was
-removed in NumPy2.5.0.
+``meson`` is the backend. ``--backend distutils`` selects meson and reports
+that the distutils backend was removed in NumPy 2.5.0.
 
 1.2.3 Pass a compiler name
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -68,7 +68,14 @@ removed in NumPy2.5.0.
 
   FC=gfortran python -m numpy.f2py -c fib.f90 -m fib
 
-Native files can also be used.
+`Native files <https://mesonbuild.com/Native-environments.html>`__ can also be
+used, by passing ``--native-file``. Cross compilation works the same way, with
+a `cross file <https://mesonbuild.com/Cross-compilation.html>`__ passed by
+``--cross-file``:
+
+.. code-block:: bash
+
+  python -m numpy.f2py -c fib.f90 -m fib --cross-file aarch64-linux.ini
 
 Similarly, ``CC`` can be used in both cases to set the ``C`` compiler. Since the
 environment variables are generally pretty common across both, so a small
@@ -115,7 +122,28 @@ sample is included below.
 
 This maps to ``dependency("lapack")`` and so can be used for a wide variety
 of dependencies. They can be `customized further <https://mesonbuild.com/Dependencies.html>`_
-to use CMake or other systems to resolve dependencies.
+by appending keyword arguments for ``dependency()`` in brackets, e.g.
+``[method: 'cmake']`` to use CMake to resolve the dependency. Meson resolves
+dependencies which exist for several languages, like MPI, for C unless told
+otherwise, so Fortran code calling MPI needs:
+
+.. code-block:: bash
+
+  python -m numpy.f2py -c hello_mpi.f90 -m hello_mpi --dep "mpi[language: 'fortran']"
+
+
+Compiler wrappers can also provide the Fortran MPI headers and link options.
+Select the wrapper with ``FC`` when compiling a source file such as
+``hello_mpi.f90`` that imports the MPI Fortran module:
+
+.. code-block:: bash
+
+  FC=mpifort python -m numpy.f2py -c hello_mpi.f90 -m hello_mpi
+
+The generated extension uses the Fortran compiler for linking, so the
+selected wrapper supplies its libraries during both compilation and
+linking. The same rule applies to site wrappers such as ``FC=ftn``.
+The compiler wrapper and MPI libraries must belong to the same installation.
 
 1.2.5 Libraries
 ^^^^^^^^^^^^^^^
@@ -125,6 +153,25 @@ to use CMake or other systems to resolve dependencies.
 .. code-block:: bash
 
   python -m numpy.f2py -c fib.f90 -m fib -lmylib -L/path/to/mylib
+
+1.2.6 Removed options
+^^^^^^^^^^^^^^^^^^^^^
+
+An option that only the ``distutils`` backend understood no longer changes
+the build on its own. ``f2py`` keeps going and names the replacement:
+
+* ``--backend distutils`` selects meson and says that the distutils backend
+  was removed.
+* ``--fcompiler``, ``--f77exec``, ``--f90exec`` and ``--help-fcompiler`` are
+  ignored. Set the ``FC`` environment variable, see
+  `1.2.3 Pass a compiler name`_.
+* ``--compiler`` is ignored. Set the ``CC`` environment variable.
+* ``--opt=<flags>`` is forwarded as ``--f77flags`` and ``--f90flags``, which
+  is how a flag such as ``-fopenmp`` reaches the Fortran compilers.
+  ``--arch``, ``--noopt`` and ``--noarch`` are ignored; pass those flags with
+  ``--f77flags`` or ``--f90flags``.
+* ``--link-<resource>`` and ``--help-link`` are ignored. Declare the
+  dependency with ``--dep``, see `1.2.4 Dependencies`_.
 
 1.3 Customizing builds
 ~~~~~~~~~~~~~~~~~~~~~~
