@@ -964,11 +964,19 @@ def test_npd_f90flags():
 @pytest.mark.slow
 def test_npd_opt(capfd, hello_world_f90, monkeypatch):
     """
-    CLI :: -c --opt
+    CLI :: -c --opt= is forwarded to the Fortran compilers
     """
-    # gh-30804
-    check_meson_ignores(capfd, hello_world_f90, monkeypatch, "--opt=-fopenmp",
-                        ", pass compiler flags with --f77flags or --f90flags")
+    ipath = Path(hello_world_f90)
+    odir = "optbld"
+    monkeypatch.setattr(
+        sys, "argv",
+        f"f2py --backend meson --build-dir {odir} -m blah {ipath} -c --opt=-fopenmp".split(),
+    )
+    with util.switchdir(ipath.parent):
+        compiler_check_f2pycli()
+        out, _ = capfd.readouterr()
+        assert "--opt=-fopenmp cannot be used with meson" not in out
+        assert "'-fopenmp'" in Path(odir, "meson.build").read_text()
 
 
 @pytest.mark.slow

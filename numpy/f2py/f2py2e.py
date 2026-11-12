@@ -654,7 +654,13 @@ def run_compile():
     distutils_flags = [_m for _m in sys.argv[1:] if reg_distutils_flags.match(_m)]
     sys.argv = [_m for _m in sys.argv if _m not in (fc_flags + distutils_flags)]
     for s in distutils_flags:
-        if s.startswith(('--opt=', '--arch=')):
+        # --opt= is forwarded. The other removed distutils flags are not.
+        if s.startswith('--opt='):
+            value = s.split('=', 1)[1]
+            fc_flags.append('--f90flags=' + value)
+            fc_flags.append('--f77flags=' + value)
+            continue
+        if s.startswith('--arch='):
             hint = ", pass compiler flags with --f77flags or --f90flags"
         elif s.startswith(('--f77exec=', '--f90exec=')):
             hint = ", set compiler with the FC environment variable"

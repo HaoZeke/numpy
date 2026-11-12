@@ -143,9 +143,9 @@ The compiler wrapper and MPI libraries must belong to the same installation.
 1.2.6 OpenMP
 ^^^^^^^^^^^^
 
-The ``distutils`` options ``--opt``, ``--arch``, ``--noopt`` and ``--noarch``
-are ignored by the ``meson`` backend, so OpenMP flags passed with them are
-lost. Use ``meson``'s OpenMP dependency, which adds the compile and link flags:
+``--opt=`` is forwarded to the Fortran compilers. ``--arch``, ``--noopt`` and
+``--noarch`` are ignored. OpenMP can be requested with ``--opt=-fopenmp``, or
+with ``meson``'s OpenMP dependency, which adds the compile and link flags:
 
 .. code-block:: bash
 
