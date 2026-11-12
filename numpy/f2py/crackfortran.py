@@ -2048,7 +2048,8 @@ def get_usedict(block):
     return usedict
 
 
-# Named kinds of the intrinsic modules that the kind maps know by name
+# Named kinds of the intrinsic modules that the kind maps know by name.
+# Their values are processor dependent, so capi_maps maps them by name.
 _intrinsic_kinds = {
     'iso_c_binding': isoc_kindmap,
     'iso_fortran_env': isof_kindmap,
@@ -2067,11 +2068,11 @@ def get_useparameters(block, param_map=None):
         usename = usename.lower()
         if usename in _intrinsic_kinds and usename not in f90modulevars:
             # A kind imported under a local name (dp => real64) is stored
-            # as the intrinsic name.
+            # as the intrinsic name, in the source case and in lowercase.
             for local, name in mapping.get('map', {}).items():
-                local, name = local.lower(), name.lower()
-                if local != name and name in _intrinsic_kinds[usename]:
-                    param_map[local] = name
+                name_l = name.lower()
+                if local.lower() != name_l and name_l in _intrinsic_kinds[usename]:
+                    param_map[local] = param_map[local.lower()] = name_l
             continue
         if usename not in f90modulevars:
             outmess(f'get_useparameters: no module {usename} info used by '
@@ -2081,9 +2082,12 @@ def get_useparameters(block, param_map=None):
         params = get_parameters(mvars)
         if not params:
             continue
-        # XXX: apply mapping
-        if mapping:
-            errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
+        # Only-lists are not enforced: a scope keeps one use record per
+        # module, so they could hide names that another use statement of
+        # the same module imports.
+        for local, name in renames.items():
+            if name in params:
+                params[local] = params[local.lower()] = params[name]
         for k, v in list(params.items()):
             if k in param_map:
                 outmess(f'get_useparameters: overriding parameter {k!r} with'
