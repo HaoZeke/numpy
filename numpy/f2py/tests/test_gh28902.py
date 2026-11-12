@@ -38,7 +38,14 @@ def test_fortran_mpi_imports():
             module_name="gh28902_mpi",
         )
     except RuntimeError as exc:
-        if "Dependency" in str(exc) and "mpi" in str(exc):
-            pytest.skip("Meson found no Fortran MPI")
+        message = str(exc)
+        # OpenMPI's mpif.h is generated for gfortran. flang rejects its
+        # REAL128 kinds, and a missing MPI install cannot build this.
+        if (
+            "Dependency" in message and "mpi" in message
+            or "not a supported type" in message
+            or "mpif.h" in message
+        ):
+            pytest.skip("Fortran MPI headers are not usable with this compiler")
         raise
     assert hasattr(module, "rank_of")
