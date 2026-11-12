@@ -40,7 +40,8 @@ class present in ``util.py``.
 
 .. literalinclude:: ../../../numpy/f2py/tests/util.py
    :language: python
-   :lines:  327-336
+   :start-at: class F2PyTest:
+   :end-before: @property
    :linenos:
 
 This class many helper functions for parsing and compiling test source files. Its child 
@@ -89,3 +90,25 @@ A test can be implemented as follows::
 We override the ``sources`` data member to provide the source file. The source files
 are compiled and subroutines are attached to module data member when the class object
 is created. The ``test_module`` function calls the subroutines and tests their results.
+
+C unit tests
+============
+
+``numpy/f2py/src/fortranobject.c`` is the C runtime compiled into every F2PY
+extension module. Its unit tests are written in C with `cmocka`_ in
+``src/fortranobject/test_fortranobject.c``. ``test_fortranobject.py`` compiles
+them with the ``meson`` backend, the same way as an F2PY generated module,
+runs them in a subprocess and reports each C test as a ``pytest`` test.
+
+cmocka is optional and the tests are skipped when ``meson`` cannot find it.
+It is available as ``libcmocka-dev`` on Debian and Ubuntu, and as ``cmocka``
+on conda-forge and Homebrew. To run only the C unit tests::
+
+	spin test -m full numpy/f2py/tests/test_fortranobject.py
+
+To add a test, write a function ``static void test_name(void **state)`` that
+uses the cmocka assertions and add ``cmocka_unit_test(test_name)`` to the
+table in ``run()``. The tests run with NumPy imported and the GIL held, so
+they can call the Python and NumPy C-API directly.
+
+.. _cmocka: https://cmocka.org
