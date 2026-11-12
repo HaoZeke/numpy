@@ -1349,6 +1349,24 @@ check_rules = [
 #################### Build C/API module #######################
 
 
+def _placeholder_fixed_wrapper(path):
+    """Write a fixed-form program unit instead of an empty file.
+
+    An empty ``.f`` file is not a program unit. LFortran 0.69 stops
+    with an internal error on it. The real wrappers overwrite this
+    file when there is something to wrap.
+    """
+    stem = Path(path).stem
+    ident = ''.join(ch if ch.isalnum() else '_' for ch in stem).strip('_')[:24]
+    # A Fortran name cannot start with '_' or a digit.
+    name = f'f2pykeep_{ident or "wrap"}'
+    Path(path).write_text(
+        'C     f2py placeholder\n'
+        f'      subroutine {name}\n'
+        '      end\n'
+    )
+
+
 def buildmodule(m, um):
     """
     Return
@@ -1398,11 +1416,13 @@ def buildmodule(m, um):
                     outmess(f'    Maybe empty "{m_name}-f2pywrappers2.f90"\n')
                     Path(f'{b_path}/{m_name}-f2pywrappers2.f90').touch()
                     outmess(f'    Maybe empty "{m_name}-f2pywrappers.f"\n')
-                    Path(f'{b_path}/{m_name}-f2pywrappers.f').touch()
+                    _placeholder_fixed_wrapper(
+                        f'{b_path}/{m_name}-f2pywrappers.f')
                 else:
                     # only f77 wrappers
                     outmess(f'    Maybe empty "{m_name}-f2pywrappers.f"\n')
-                    Path(f'{b_path}/{m_name}-f2pywrappers.f').touch()
+                    _placeholder_fixed_wrapper(
+                        f'{b_path}/{m_name}-f2pywrappers.f')
             api, wrap = buildapi(nb)
             if wrap:
                 if isf90:

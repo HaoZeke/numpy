@@ -1035,3 +1035,15 @@ def test_npd_linker():
     """
     # TODO: populate
     pass
+
+
+def test_empty_fixed_wrapper_is_a_program_unit(tmp_path):
+    # An empty .f file is not a program unit. LFortran 0.69 reports an
+    # internal error on it, and a name that starts with '_' is invalid.
+    from numpy.f2py.rules import _placeholder_fixed_wrapper
+
+    path = tmp_path / "_mod-f2pywrappers.f"
+    _placeholder_fixed_wrapper(path)
+    line = path.read_text().splitlines()[1].strip()
+    assert line.startswith("subroutine f2pykeep_")
+    assert "subroutine _" not in line
