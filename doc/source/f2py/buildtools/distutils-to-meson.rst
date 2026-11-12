@@ -68,7 +68,14 @@ removed in NumPy2.5.0.
 
   FC=gfortran python -m numpy.f2py -c fib.f90 -m fib
 
-Native files can also be used.
+`Native files <https://mesonbuild.com/Native-environments.html>`__ can also be
+used, by passing ``--native-file``. Cross compilation works the same way, with
+a `cross file <https://mesonbuild.com/Cross-compilation.html>`__ passed by
+``--cross-file``:
+
+.. code-block:: bash
+
+  python -m numpy.f2py -c fib.f90 -m fib --cross-file aarch64-linux.ini
 
 Similarly, ``CC`` can be used in both cases to set the ``C`` compiler. Since the
 environment variables are generally pretty common across both, so a small

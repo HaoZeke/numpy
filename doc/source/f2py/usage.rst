@@ -183,6 +183,22 @@ Common build flags:
   "lapack" and "scalapack" as dependencies and remove them from argv, leaving a
   dependencies list containing ["lapack", "scalapack"].
 
+``--cross-file <filename>``
+  Pass ``<filename>`` to ``meson setup`` as a `cross file
+  <https://mesonbuild.com/Cross-compilation.html>`__, to build the extension
+  module for another machine. This may be passed multiple times; later files
+  override earlier ones. The module is built for the Python running ``f2py``
+  unless the cross file sets ``python`` in its ``[binaries]`` section.
+
+  .. versionadded:: 2.6.0
+
+``--native-file <filename>``
+  Pass ``<filename>`` to ``meson setup`` as a `native file
+  <https://mesonbuild.com/Native-environments.html>`__. This may be passed
+  multiple times; later files override earlier ones.
+
+  .. versionadded:: 2.6.0
+
 .. note::
   
   The ``f2py -c`` option must be applied either to an existing ``.pyf`` file

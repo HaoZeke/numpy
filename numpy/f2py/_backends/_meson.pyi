@@ -55,6 +55,8 @@ class MesonTemplate:
 
 class MesonBackend(Backend):
     dependencies: list[str]
+    cross_files: list[str]
+    native_files: list[str]
     meson_build_dir: L["bdir"]
     build_type: L["debug", "release"]
 
