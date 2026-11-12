@@ -92,6 +92,46 @@ def useiso_fortran_env(rout):
             return True
     return useisof
 
+
+def _interface_block(saved, name):
+    """The explicit interface that declares ``name``, if the routine saved one."""
+    if not saved:
+        return None
+    lines = saved.splitlines()
+    needle = name.lower()
+    i = 0
+    while i < len(lines):
+        if lines[i].strip().lower().startswith("interface"):
+            block = [lines[i].strip()]
+            i += 1
+            while i < len(lines) and not lines[i].strip().lower().startswith(
+                    "end interface"):
+                block.append(lines[i].strip())
+                i += 1
+            if i < len(lines):
+                block.append(lines[i].strip())
+            if any(needle in line.lower() for line in block):
+                return block
+        i += 1
+    return None
+
+
+def _declare_external(add, rout, name):
+    """Declare a procedure dummy on a wrapper.
+
+    A bare ``external`` has no result type. ifx rejects passing that
+    dummy to a procedure whose explicit interface returns ``complex``
+    (gh-7577). The wrapper repeats the saved interface. A callback with
+    no saved interface stays a plain external.
+    """
+    block = _interface_block(rout.get("saved_interface", ""), name)
+    if not block:
+        add(f"external {name}")
+        return
+    for line in block:
+        add(line)
+
+
 def createfuncwrapper(rout, signature=0):
     assert isfunction(rout)
 
@@ -174,7 +214,7 @@ def createfuncwrapper(rout, signature=0):
     dumped_args = []
     for a in args:
         if isexternal(vars[a]):
-            add(f'external {a}')
+            _declare_external(add, rout, a)
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
@@ -276,7 +316,7 @@ def createsubrwrapper(rout, signature=0):
     dumped_args = []
     for a in args:
         if isexternal(vars[a]):
-            add(f'external {a}')
+            _declare_external(add, rout, a)
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:

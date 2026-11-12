@@ -1,0 +1,6 @@
+Complex callbacks keep their explicit interface in the wrapper
+--------------------------------------------------------------
+The wrapper for a module function passed a ``complex`` callback
+through as a bare ``external``. ifx rejected that call because the
+dummy procedure's interface returns ``complex``. The wrapper now
+repeats the saved interface.
