@@ -342,7 +342,9 @@ class TestForwardedCallbackSignatures:
         f2py2e.run_main(arguments)
         generated = (tmp_path / f"{module}module.c").read_text()
         callback_arguments = re.findall(
-            r"create_cb_arglist\([^,\n]+,[^,\n]+,\s*(\d+),\s*(\d+),",
+            # The trampoline also calls create_cb_arglist (gh-18385). Count
+            # the caller wrappers, one per callback.
+            r"create_cb_arglist\([^,\n]*_cb\.capi,[^,\n]+,\s*(\d+),\s*(\d+),",
             generated,
         )
         expected_callbacks = 1 if selected else 8
