@@ -557,6 +557,61 @@ class TestGH30352Cases:
         var = mod[0]["body"][0]["vars"]["X"]
         assert var["kindselector"] == {"kind": "real64"}
         assert capi_maps.getctype(var) == "complex_double"
+class TestUseAssociation:
+    # gh-3562: module data accessed by USE belongs to the using module too
+    def test_use_associated_vars(self, tmp_path, monkeypatch):
+        fpath = tmp_path / "gh3562.f90"
+        fpath.write_text(textwrap.dedent("""\
+            module chained
+                use test2
+            end module chained
+
+            module test
+                implicit none
+                integer, parameter :: a = 1
+                integer, private :: hidden = 7
+                type :: point
+                    integer :: x
+                end type point
+                type(point) :: origin
+            contains
+                function twice(x)
+                    integer :: x, twice
+                    twice = 2*x
+                end function twice
+            end module test
+
+            module other
+                integer, parameter :: a = 2
+            end module other
+
+            module test2
+                use test
+                integer, parameter :: b = 2
+            end module test2
+
+            module clash
+                use test
+                use other
+            end module clash
+
+            module quiet
+                use test
+                use other, only: c => a
+                private :: test
+            end module quiet
+            """))
+        monkeypatch.setattr(crackfortran, "f77modulename", "gh3562")
+        mod = crackfortran.crackfortran([str(fpath)])
+        modvars = {m["name"]: m["vars"] for m in mod[0]["body"][0]["body"]}
+        assert set(modvars["test2"]) == {"a", "b"}
+        assert modvars["test2"]["a"]["="] == "1"
+        assert set(modvars["chained"]) == {"a", "b"}
+        # different entities named a: ambiguous, so not exposed
+        assert "a" not in modvars["clash"]
+        # F2018 8.6.1: a module name in an access statement sets the default
+        assert "a" not in modvars["quiet"]
+        assert modvars["quiet"]["c"]["="] == "2"
 
 
 class TestStringLiteralDepend:

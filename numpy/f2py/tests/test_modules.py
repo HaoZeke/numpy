@@ -192,3 +192,25 @@ def test_gh25777_allocatable_no_assumed_shape_warning(capfd):
     f90mod_rules.buildhooks(blocks[0])
     out, err = capfd.readouterr()
     assert "assumed shape array" not in out + err
+class TestUseAssociatedData(util.F2PyTest):
+    # The using module is listed first: meson orders the Fortran compilation,
+    # so the wrapper must not depend on the order of the sources either.
+    sources = [
+        util.getpath("tests", "src", "modules", "gh3562", "using.f90"),
+        util.getpath("tests", "src", "modules", "gh3562", "used.f90"),
+    ]
+
+    def test_gh3562(self):
+        assert self.module.test2.a == 1
+        assert self.module.test2.b == 2
+        assert self.module.renamed.alias == 1
+
+    def test_only_and_private(self):
+        assert not hasattr(self.module.test2, "hidden")
+        assert not hasattr(self.module.renamed, "a")
+        assert not hasattr(self.module.renamed, "counter")
+        assert not hasattr(self.module.restricted, "a")
+
+    def test_variable_shares_storage(self):
+        self.module.restricted.counter = 9
+        assert self.module.test.counter == 9
