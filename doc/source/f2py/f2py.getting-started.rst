@@ -141,7 +141,7 @@ Fortran subroutine ``FIB`` is accessible via ``fib1.fib``::
   ----------
   a : input rank-1 array('d') with bounds (n)
 
-  Other parameters
+  Other Parameters
   ----------------
   n : input int, optional
       Default: shape(a, 0)
@@ -173,6 +173,20 @@ Fortran subroutine ``FIB`` is accessible via ``fib1.fib``::
     first six elements.
     An incompatible size raises an exception because F2PY checks the
     relationship between the dimension and the array shape.
+    be optional with the default value ``shape(a, 0)``, the length of
+    ``a``.
+
+  * ``n`` can still be passed explicitly, but an exception is raised when
+    it does not match the shape of the input array ``a``::
+
+      >>> fib1.fib(a, 6)
+      Traceback (most recent call last):
+        File "<stdin>", line 1, in <module>
+      fib1.error: (shape(a, 0) == n) failed for 1st keyword n: fib:n=6
+      >>>
+
+    F2PY implements basic compatibility checks between related
+    arguments in order to avoid unexpected crashes.
 
   * When a NumPy array that is :term:`Fortran <Fortran order>`
     :term:`contiguous` and has a ``dtype`` corresponding to a presumed Fortran

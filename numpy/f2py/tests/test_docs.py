@@ -98,3 +98,15 @@ class TestDocGlue(util.F2PyTest):
         out = self.module.dfilter2d(np.asarray(a, order=order))
         assert_array_equal(out, expected)
         assert out.flags.f_contiguous
+class TestDocGettingStarted(util.F2PyTest):
+    sources = [_path('fib1.f')]
+
+    def test_fib1_size_argument(self):
+        fib = self.module.fib
+        assert fib.__doc__.startswith('fib(a,[n])\n')
+        assert '    Default: shape(a, 0)\n' in fib.__doc__
+        a = np.zeros(8, 'd')
+        fib(a)
+        assert_array_equal(a, [0, 1, 1, 2, 3, 5, 8, 13])
+        with pytest.raises(Exception, match=r'\(shape\(a, 0\) == n\) failed'):
+            fib(a, 6)

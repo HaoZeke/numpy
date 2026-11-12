@@ -584,7 +584,7 @@ The following attributes can be used by F2PY.
 
     subroutine cb_sub(a,n)
         real dimension(n) :: a
-        integer optional,check(len(a)>=n),depend(a) :: n=len(a)
+        integer optional,check(shape(a, 0) == n),depend(a) :: n=shape(a, 0)
     end subroutine cb_sub
     function cb_fun(e_4_e) result (r)
         integer :: e_4_e
