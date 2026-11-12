@@ -1,5 +1,6 @@
 import copy
 import json
+import errno
 import os
 import pickle
 import platform
@@ -7,6 +8,7 @@ import subprocess
 import shutil
 import sys
 import warnings
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -467,6 +469,27 @@ cf2py intent(out) k
     assert mod.which() == 1
     with pytest.raises(RuntimeError, match="already in use"):
         util.build_code(code.format(2), module_name=name)
+def test_gh25447(monkeypatch, tmp_path):
+    # Compiler checks must survive a probe directory that cannot be removed,
+    # as on Windows while another process still holds meson.build open
+    unlink = os.unlink
+    busy = []
+
+    def busy_unlink(path, *args, **kwargs):
+        if os.path.basename(path) == "meson.build":
+            busy.append(path)
+            raise PermissionError(errno.EACCES, "File in use", path)
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(os, "unlink", busy_unlink)
+    checker = util.CompilerChecker()
+    checker.check_compilers()
+
+    assert busy
+    assert (checker.has_c, checker.has_f77, checker.has_f90) == (
+        util.has_c_compiler(), util.has_f77_compiler(), util.has_f90_compiler()
+    )
 
 
 @pytest.mark.slow
