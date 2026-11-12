@@ -153,6 +153,7 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
         Py_DECREF(fp);
         return NULL;
     }
+    fp->strict_setattr = 0;
     fp->len = 0;
     while (defs[fp->len].name != NULL) {
         fp->len++;
@@ -198,6 +199,16 @@ fail:
 }
 
 PyObject *
+PyFortranObject_NewStrict(FortranDataDef *defs, f2py_void_func init)
+{ /* like PyFortranObject_New, but only names in defs can be set */
+    PyObject *fp = PyFortranObject_New(defs, init);
+    if (fp != NULL) {
+        ((PyFortranObject *)fp)->strict_setattr = 1;
+    }
+    return fp;
+}
+
+PyObject *
 PyFortranObject_NewAsAttr(FortranDataDef *defs)
 { /* used for calling F90 module routines */
     PyFortranObject *fp = NULL;
@@ -212,6 +223,7 @@ PyFortranObject_NewAsAttr(FortranDataDef *defs)
     }
     fp->len = 1;
     fp->defs = defs;
+    fp->strict_setattr = 0;
     PyObject *name;
     if (defs->rank == -1) {
       name = PyUnicode_FromFormat("function %s", defs->name);
@@ -675,6 +687,15 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
         else
             return (fp->defs[i].func == NULL ? -1 : 0);
         return 0; /* successful */
+    }
+    if (fp->strict_setattr) {
+        PyObject *str = PyUnicode_FromString(name);
+        if (str == NULL) {
+            return -1;
+        }
+        int rv = PyObject_GenericSetAttr((PyObject *)fp, str, v);
+        Py_DECREF(str);
+        return rv;
     }
     if (fp->dict == NULL) {
         fp->dict = PyDict_New();

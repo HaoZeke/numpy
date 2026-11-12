@@ -86,6 +86,7 @@ typedef struct {
      * Kept off dict so __dict__ and dir() do not show it. */
     PyObject *pickle_kind;
     PyObject *pickle_name;
+    int strict_setattr;   /* Reject setting names that are not in defs */
 } PyFortranObject;
 
 #define PyFortran_Check(op) (Py_TYPE(op) == &PyFortran_Type)
@@ -96,6 +97,8 @@ extern int
 F2PyDict_SetItemString(PyObject *dict, char *name, PyObject *obj);
 extern PyObject *
 PyFortranObject_New(FortranDataDef *defs, f2py_void_func init);
+extern PyObject *
+PyFortranObject_NewStrict(FortranDataDef *defs, f2py_void_func init);
 extern PyObject *
 PyFortranObject_NewAsAttr(FortranDataDef *defs);
 /* Record the extension import name and qualname on a routine object. */

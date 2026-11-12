@@ -394,6 +394,12 @@ Variables and parameters that a module accesses with ``use`` from another
 module wrapped in the same extension are attributes of the using module too,
 following ``only`` lists, renames and ``private`` statements.
 
+Assigning to a name that F2PY did not wrap, such as a misspelled variable or
+one that is missing from the signature file, stores the value as a Python
+attribute of the ``fortran`` object, and the Fortran code never sees it. The
+same holds for common blocks. Generate the wrapper with ``--strict-setattr`` to
+make such assignments raise ``AttributeError`` instead.
+
 
 Allocatable arrays
 ===================

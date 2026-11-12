@@ -114,6 +114,12 @@ Options:
                    --no-freethreading-compatible, as f2py does not analyze
                    fortran code for thread safety issues.
 
+  --[no-]strict-setattr    Make the objects that wrap Fortran 90 modules and
+                   COMMON blocks raise AttributeError on assignment to a name
+                   that is not a wrapped Fortran variable, instead of storing
+                   it as a Python attribute that Fortran never sees. The
+                   default is --no-strict-setattr.
+
   --include-paths <path1><pathsep><path2>...
                   Search include files from the given directories.
 
@@ -208,6 +214,7 @@ def scaninputline(inputline):
     dolatexdoc = 0
     dorestdoc = 0
     wrapfuncs = 1
+    strictsetattr = 0
     buildpath = '.'
     include_paths, freethreading_compatible, inputline = get_newer_options(inputline)
     signsfile, modulename = None, None
@@ -247,6 +254,10 @@ def scaninputline(inputline):
             wrapfuncs = 1
         elif l == '--no-wrap-functions':
             wrapfuncs = 0
+        elif l == '--strict-setattr':
+            strictsetattr = 1
+        elif l == '--no-strict-setattr':
+            strictsetattr = 0
         elif l == '--short-latex':
             options['shortlatex'] = 1
         elif l == '--coutput':
@@ -336,6 +347,7 @@ def scaninputline(inputline):
     options['dolatexdoc'] = dolatexdoc
     options['dorestdoc'] = dorestdoc
     options['wrapfuncs'] = wrapfuncs
+    options['strict_setattr'] = strictsetattr
     options['buildpath'] = buildpath
     options['include_paths'] = include_paths
     options['requires_gil'] = not freethreading_compatible
@@ -381,6 +393,7 @@ def callcrackfortran(files, options):
             mod['gil_used'] = 'Py_MOD_GIL_USED'
         else:
             mod['gil_used'] = 'Py_MOD_GIL_NOT_USED'
+        mod['strict_setattr'] = options['strict_setattr']
     return postlist
 
 
@@ -716,7 +729,7 @@ def run_compile():
         build_dir = tempfile.mkdtemp()
 
     _reg2 = re.compile(
-        r'--((no-|)(wrap-functions|lower|freethreading-compatible|latex-doc)|debug-capi|quiet|skip-empty-wrappers)|-include')
+        r'--((no-|)(wrap-functions|lower|freethreading-compatible|latex-doc|strict-setattr)|debug-capi|quiet|skip-empty-wrappers)|-include')
     f2py_flags = [_m for _m in sys.argv[1:] if _reg2.match(_m)]
     sys.argv = [_m for _m in sys.argv if _m not in f2py_flags]
     f2py_flags2 = []

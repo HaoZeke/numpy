@@ -164,6 +164,9 @@ def buildhooks(pymod):
         s[0] = f'{s[0]}\n{line}'
 
     usenames = getuseblocks(pymod)
+    new_fortran_object = ('PyFortranObject_NewStrict'
+                          if pymod.get('strict_setattr')
+                          else 'PyFortranObject_New')
     for m in findf90modules(pymod):
         sargs, fargs, efargs, modobjs, notvars, onlyvars = [], [], [], [], [
             m['name']], []
@@ -329,7 +332,7 @@ def buildhooks(pymod):
         ret['initf90modhooks'] = [
             '\t{',
             ('\t\tPyObject *tmp = '
-            f'PyFortranObject_New(f2py_{m_name}_def,f2py_init_{m_name});'),
+            f'{new_fortran_object}(f2py_{m_name}_def,f2py_init_{m_name});'),
             '\t\tif (tmp == NULL) return -1;',
             ('\t\tif (PyFortranObject_SetDataKind(tmp, '
              f'"{data_kind}", "{m_name}") < 0) {{'),

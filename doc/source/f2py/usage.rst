@@ -112,6 +112,16 @@ mode:
   ``--freethreading-compatible``, as ``f2py`` does not analyze fortran code for
   thread safety issues.
 
+``--[no-]strict-setattr``
+  Make the ``fortran`` objects that wrap Fortran 90 modules and common blocks
+  raise ``AttributeError`` on assignment to a name that is not a wrapped
+  Fortran variable. The default is ``--no-strict-setattr``, which stores such a
+  value as a Python attribute of the object that the Fortran code never sees,
+  for example when a variable name is misspelled or missing from the signature
+  file.
+
+  .. versionadded:: 2.6.0
+
 ``--include-paths "<path1><pathsep><path2>..."``
   Search include files from given directories.
 
