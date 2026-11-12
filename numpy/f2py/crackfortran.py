@@ -2148,10 +2148,12 @@ def postcrack(block, args=None, tab=''):
             elif e in mvars and not isexternal(mvars[e]):
                 interface['vars'][e] = mvars[e]
             elif (e in mvars and isexternal(mvars[e])
-                  and e not in provided):
+                  and e not in provided
+                  and not userisdefined):
                 # Typed external with no interface and no call that would
                 # reveal the argument list. Still a callback; use the
                 # declared return type and no arguments (gh-28605).
+                # A signature file already has the __user__ module.
                 var = copy.deepcopy(mvars[e])
                 attrs = [a for a in (var.get('attrspec') or [])
                          if a != 'external']
