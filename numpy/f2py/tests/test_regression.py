@@ -4,6 +4,7 @@ import pickle
 import platform
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -876,3 +877,175 @@ class TestPickleFortranRoutine(util.F2PyTest):
             ),
         ):
             pickle.dumps(obj)
+# Fortran helpers multiply by this factor. See gh24394.f90.
+_GH24394_FACTOR = 2
+# Value that stays exact through both the integer and real converters.
+_GH24394_SCALAR = 2
+# Second element. It must differ from the scalar so a wrong pick is visible.
+_GH24394_IGNORED = 9
+# Nonzero imaginary part. A zero part is the quiet complex case.
+_GH24394_IMAG = 3
+# 5/2 truncates to 2, so an integer converter drops a fractional part.
+_GH24394_FRACTION_NUM = 5
+_GH24394_FRACTION_DEN = 2
+
+_GH24394_ROUTINES = ("double_it", "double_int", "double_i8")
+_GH24394_INT_ROUTINES = ("double_int", "double_i8")
+
+_GH24394_COMPLEX_WARNING = (
+    r"f2py scalar argument got a complex value with a nonzero "
+    r"imaginary part; dropping it is deprecated \(gh-24394\)"
+)
+_GH24394_TRUNC_WARNING = (
+    r"f2py scalar argument got a non-integer float for an integer "
+    r"argument; truncating it is deprecated \(gh-24394\)"
+)
+
+
+def _gh24394_sequence_warning(length):
+    return (
+        rf"f2py scalar argument got a sequence of length {length}; "
+        r"only the first element is used, which is deprecated \(gh-24394\)"
+    )
+
+
+def _gh24394_number(routine, value):
+    if routine == "double_it":
+        return float(value)
+    return value
+
+
+def _gh24394_fraction():
+    return _GH24394_FRACTION_NUM / _GH24394_FRACTION_DEN
+
+
+@pytest.mark.slow
+class TestScalarConversionDeprecation(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "regression", "gh24394.f90")]
+
+    def _call(self, routine):
+        return getattr(self.module, routine)
+
+    def _expected(self, routine):
+        return _gh24394_number(routine, _GH24394_SCALAR) * _GH24394_FACTOR
+
+    def _quiet_values(self, routine):
+        scalar = _gh24394_number(routine, _GH24394_SCALAR)
+        return (
+            scalar,
+            complex(scalar, 0),
+            [scalar],
+            np.array([scalar]),
+            [[scalar]],
+        )
+
+    def _lossy_sequences(self, routine):
+        scalar = _gh24394_number(routine, _GH24394_SCALAR)
+        ignored = _gh24394_number(routine, _GH24394_IGNORED)
+        pair = [scalar, ignored]
+        return (pair, (scalar, ignored), np.array(pair), [pair])
+
+    @pytest.mark.parametrize("routine", _GH24394_ROUTINES)
+    def test_quiet_values(self, routine):
+        fn = self._call(routine)
+        expected = self._expected(routine)
+        for value in self._quiet_values(routine):
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                result = fn(value)
+            assert result == expected
+
+    @pytest.mark.parametrize("routine", _GH24394_ROUTINES)
+    def test_nonzero_imaginary_part(self, routine):
+        fn = self._call(routine)
+        value = complex(
+            _gh24394_number(routine, _GH24394_SCALAR),
+            _GH24394_IMAG,
+        )
+        with pytest.warns(DeprecationWarning, match=_GH24394_COMPLEX_WARNING):
+            result = fn(value)
+        assert result == self._expected(routine)
+
+    @pytest.mark.parametrize("routine", _GH24394_ROUTINES)
+    def test_long_sequences(self, routine):
+        fn = self._call(routine)
+        expected = self._expected(routine)
+        sequences = self._lossy_sequences(routine)
+        # Every lossy row warns about the inner pair, whose length is two.
+        warned = _gh24394_sequence_warning(len(sequences[0]))
+        for value in sequences:
+            with pytest.warns(DeprecationWarning, match=warned):
+                result = fn(value)
+            assert result == expected
+
+    @pytest.mark.parametrize("routine", _GH24394_ROUTINES)
+    def test_long_sequence_as_error(self, routine):
+        fn = self._call(routine)
+        scalar = _gh24394_number(routine, _GH24394_SCALAR)
+        ignored = _gh24394_number(routine, _GH24394_IGNORED)
+        warned = _gh24394_sequence_warning(len((scalar, ignored)))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(DeprecationWarning, match=warned):
+                fn([scalar, ignored])
+
+    @pytest.mark.parametrize("routine", _GH24394_ROUTINES)
+    def test_empty_sequence(self, routine):
+        fn = self._call(routine)
+        with pytest.raises(IndexError):
+            fn([])
+
+    @pytest.mark.parametrize("routine", _GH24394_INT_ROUTINES)
+    def test_integral_float_is_quiet(self, routine):
+        fn = self._call(routine)
+        value = float(_GH24394_SCALAR)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = fn(value)
+        assert result == self._expected(routine)
+
+    @pytest.mark.parametrize("routine", _GH24394_INT_ROUTINES)
+    def test_nonintegral_float(self, routine):
+        fn = self._call(routine)
+        value = _gh24394_fraction()
+        expected = self._expected(routine)
+        cases = (
+            value,
+            np.float64(value),
+            [value],
+            complex(value, 0),
+        )
+        for item in cases:
+            with pytest.warns(
+                DeprecationWarning, match=_GH24394_TRUNC_WARNING
+            ) as recorded:
+                result = fn(item)
+            assert len(recorded) == 1
+            assert result == expected
+
+    @pytest.mark.parametrize("routine", _GH24394_INT_ROUTINES)
+    def test_nonintegral_float_as_error(self, routine):
+        fn = self._call(routine)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(
+                DeprecationWarning, match=_GH24394_TRUNC_WARNING
+            ):
+                fn(_gh24394_fraction())
+
+    def test_real_argument_keeps_fraction(self):
+        fn = self._call("double_it")
+        value = _gh24394_fraction()
+        expected = value * _GH24394_FACTOR
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = fn(value)
+        assert result == expected
+
+    @pytest.mark.parametrize("routine", _GH24394_INT_ROUTINES)
+    @pytest.mark.parametrize("value", (float("nan"), float("inf")))
+    def test_nonfinite_float_warns(self, routine, value):
+        fn = self._call(routine)
+        with pytest.warns(DeprecationWarning, match=_GH24394_TRUNC_WARNING):
+            with pytest.raises((ValueError, OverflowError)):
+                fn(value)
