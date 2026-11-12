@@ -64,6 +64,17 @@ class TestPublicPrivate:
         assert set(tt['b_']['attrspec']) == {'public', 'bind(c)'}
         assert set(tt['c']['attrspec']) == {'public'}
 
+    def test_access_type_not_variable(self):
+        # gh-21160
+        fpath = util.getpath("tests", "src", "crackfortran", "accesstype.f90")
+        mod = crackfortran.crackfortran([str(fpath)])
+        tt = mod[0]['vars']
+        assert not any('typespec' in tt[n] for n in ('a', 'b_', 'c'))
+        pyf = crackfortran.crack2fortran(mod)
+        declared = {line.split('::')[-1].strip()
+                    for line in pyf.splitlines() if '::' in line}
+        assert declared.isdisjoint({'a', 'b_', 'c'})
+
     def test_nowrap_private_procedures(self, tmp_path):
         fpath = util.getpath("tests", "src", "crackfortran", "gh23879.f90")
         mod = crackfortran.crackfortran([str(fpath)])

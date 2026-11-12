@@ -215,6 +215,21 @@ def test_gen_pyf_stdout(capfd, hello_world_f90, monkeypatch):
         assert "function hi() ! in " in out
 
 
+@pytest.mark.parametrize("fpath", [("crackfortran", "accesstype.f90"),
+                                   ("regression", "mod_derived_types.f90")])
+def test_gen_pyf_stdout_derived_types(capfd, monkeypatch, tmp_path, fpath):
+    """Ensures that only the signature file is dumped to stdout for sources
+    defining derived types, gh-21160
+    CLI :: -h stdout --quiet
+    """
+    ipath = util.getpath("tests", "src", *fpath)
+    monkeypatch.setattr(sys, "argv", f'f2py -h stdout --quiet {ipath}'.split())
+    with util.switchdir(tmp_path):
+        f2pycli()
+        out, _ = capfd.readouterr()
+        assert out.startswith("!    -*- f90 -*-")
+
+
 def test_gen_pyf_no_overwrite(capfd, hello_world_f90, monkeypatch):
     """Ensures that the CLI refuses to overwrite signature files
     CLI :: -h without --overwrite-signature
