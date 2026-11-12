@@ -1,0 +1,6 @@
+``f2py`` accepts the usual C spellings in a kind map
+----------------------------------------------------
+A ``.f2py_f2cmap`` entry such as ``'short int'``, ``'long long int'``,
+``'signed char'``, ``'long double'``, or ``'int64_t'`` used to be
+ignored. Those names are the C types f2py already converts, so the map
+now uses that converter.

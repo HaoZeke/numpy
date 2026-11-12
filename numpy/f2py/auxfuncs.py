@@ -957,6 +957,49 @@ def getuseblocks(pymod):
                 all_uses.extend([x for x in modblock.get("use").keys() if "__" not in x])
     return all_uses
 
+# Spellings that name a C type f2py already knows. The generated
+# wrappers use the canonical name, which has a converter (gh-25229).
+_C_TYPE_ALIASES = {
+    'short int': 'short',
+    'signed short': 'short',
+    'signed short int': 'short',
+    'long int': 'long',
+    'signed long': 'long',
+    'signed long int': 'long',
+    'long long': 'long_long',
+    'long long int': 'long_long',
+    'signed long long': 'long_long',
+    'signed long long int': 'long_long',
+    'long double': 'long_double',
+    'signed char': 'signed_char',
+    'unsigned char': 'unsigned_char',
+    'unsigned short': 'unsigned_short',
+    'unsigned short int': 'unsigned_short',
+    'int8_t': 'signed_char',
+    'int16_t': 'short',
+    'int32_t': 'int',
+    'int64_t': 'long_long',
+    'int_least8_t': 'signed_char',
+    'int_least16_t': 'short',
+    'int_least32_t': 'int',
+    'int_least64_t': 'long_long',
+    'uint8_t': 'unsigned_char',
+    'uint16_t': 'unsigned_short',
+    'uint32_t': 'unsigned',
+}
+
+
+def _canonical_ctype(name, known):
+    """Map a C type spelling onto a name in ``known``."""
+    key = " ".join(str(name).lower().split())
+    if key in known:
+        return key
+    alias = _C_TYPE_ALIASES.get(key)
+    if alias in known:
+        return alias
+    return key
+
+
 def process_f2cmap_dict(f2cmap_all, new_map, c2py_map, verbose=False):
     """
     Update the Fortran-to-C type mapping dictionary with new mappings and
@@ -1007,6 +1050,7 @@ def process_f2cmap_dict(f2cmap_all, new_map, c2py_map, verbose=False):
             f2cmap_all[k] = {}
 
         for k1, v1 in d1.items():
+            v1 = _canonical_ctype(v1, c2py_map)
             if v1 in c2py_map:
                 if k1 in f2cmap_all[k]:
                     outmess(
