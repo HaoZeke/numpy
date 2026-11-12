@@ -21,7 +21,8 @@ library is built.
   Currently, F2PY may fail with some valid Fortran constructs. If this happens,
   you can check the `NumPy GitHub issue tracker
   <https://github.com/numpy/numpy/issues>`_ for possible workarounds or
-  work-in-progress ideas.
+  work-in-progress ideas. :ref:`f2py-support` lists the constructs that F2PY
+  is known to handle.
 
 In general, the contents of the signature files are case-sensitive. When
 scanning Fortran codes to generate a signature file, F2PY lowers all cases
@@ -146,6 +147,9 @@ and
 * ``<intlen>`` may be negative integer for ``integer`` type
   specifications. In such cases ``integer*<negintlen>`` represents
   unsigned C integers;
+
+* a ``<kind>`` that F2PY cannot map to a C type needs an entry in the f2cmap
+  file, see :ref:`f2py-kind-specifiers`;
 
 If an argument has no ``<argument type declaration>``, its type is
 determined by applying ``implicit`` rules to its name.

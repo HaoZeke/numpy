@@ -64,6 +64,7 @@ Here ``<fortran files>`` may also contain signature files. Among other options
   Adds debugging hooks to the extension module. When using this extension
   module, various diagnostic information about the wrapper is written to the
   standard output, for example, the values of variables, the steps taken, etc.
+  See :ref:`f2py-debugging`.
 
 ``-include'<includefile>'``
   Add a CPP ``#include`` statement to the extension module source.
@@ -229,7 +230,8 @@ Other options
   All F2PY generated files are created in ``<dirname>``. Default is
   ``tempfile.mkdtemp()``.
 ``--f2cmap <filename>``
-  Load Fortran-to-C ``KIND`` specifications from the given file.
+  Load Fortran-to-C ``KIND`` specifications from the given file, see
+  :ref:`f2py-kind-specifiers`.
 ``--quiet``
   Run quietly.
 ``--verbose``

@@ -26,7 +26,8 @@ from Python.
    Fortran 77 is essentially feature complete, and an increasing amount of
    Modern Fortran is supported within F2PY. Most ``iso_c_binding`` interfaces
    can be compiled to native extension modules automatically with ``f2py``.
-   Bug reports welcome!
+   See :ref:`f2py-support` for the features of each Fortran standard that
+   F2PY supports. Bug reports welcome!
 
 F2PY can be used either as a command line tool ``f2py`` or as a Python
 module ``numpy.f2py``. While we try to provide the command line tool as part
