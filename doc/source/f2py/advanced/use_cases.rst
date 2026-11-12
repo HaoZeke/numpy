@@ -43,18 +43,31 @@ Usage in Python:
   :language: python
 
 
+.. _f2py-kind-specifiers:
+
 Dealing with KIND specifiers
 ============================
 
-Currently, F2PY can handle only ``<type spec>(kind=<kindselector>)``
-declarations where ``<kindselector>`` is a numeric integer (e.g. 1, 2,
-4,...), but not a function call ``KIND(..)`` or any other
-expression. F2PY needs to know what would be the corresponding C type
-and a general solution for that would be too complicated to implement.
+F2PY needs to know the C type that corresponds to the kind of each
+variable. It understands integer literals such as ``real(8)``, the kind
+constants of ``iso_c_binding``, the ``int8``, ``int16``, ``int32``,
+``int64``, ``real32`` and ``real64`` constants of ``iso_fortran_env``, and
+many named constants defined with ``kind``, ``selected_int_kind`` or
+``selected_real_kind``. When it cannot determine a kind, it uses the default C
+type of that Fortran type (``float`` for ``real``, ``int`` for ``integer``)
+and prints a message such as::
 
-However, F2PY provides a hook to overcome this difficulty, namely,
-users can define their own <Fortran type> to <C type> maps. For
-example, if Fortran 90 code contains::
+    getctype: "real(kind='dp')" is mapped to C "float" (to override define {'real': {'dp': "<C typespec>"}} in /path/to/.f2py_f2cmap file).
+
+The wrapper then passes data of the wrong size, which gives wrong results or
+crashes. This happens, for example, for a kind expression written in the
+declaration itself, such as ``real(kind(1.0d0))``, and for a kind constant
+imported under another name, such as
+``use iso_fortran_env, only: dp => real64``.
+
+For these cases, F2PY provides a hook: users can define their own
+<Fortran type> to <C type> maps. For example, if Fortran 90 code
+contains::
 
     REAL(kind=KIND(0.0D0)) ...
 
@@ -101,12 +114,12 @@ For example, for a Fortran file ``func1.f`` containing:
 .. literalinclude:: ./../code/f2cmap_demo.f
     :language: fortran
 
-In order to convert ``int64`` and ``real64`` to valid ``C`` data types,
-a ``.f2py_f2cmap`` file with the following content can be created in the current directory:
+the ``int64`` and ``real64`` kinds can be mapped to ``C`` data types with a
+``.f2py_f2cmap`` file with the following content in the current directory:
 
 .. code-block:: python
 
-  dict(real=dict(real64='double'), integer=dict(int64='long long'))
+  dict(real=dict(real64='double'), integer=dict(int64='long_long'))
 
 and create the module as usual. F2PY checks if a ``.f2py_f2cmap`` file is present
 in the current directory and will use it to map ``KIND`` specifiers to ``C`` data types.
@@ -123,6 +136,30 @@ Alternatively, the mapping file can be saved with any other name, for example
   f2py -c func1.f -m func1 --f2cmap mapfile.txt
 
 For more information, see F2Py source code ``numpy/f2py/capi_maps.py``.
+
+Signature files and the f2cmap file
+-----------------------------------
+
+A signature file and an f2cmap file do different jobs, and one cannot replace
+the other:
+
+* A :doc:`signature file <../signature-file>` describes what is wrapped and
+  how it looks from Python: the routines, their arguments and attributes such
+  as ``intent``, ``optional``, ``depend`` and ``check``, and the signatures of
+  call-back arguments.
+* The f2cmap file only tells F2PY which C type stands for a Fortran type and
+  kind. It applies to all the files F2PY reads in that run, Fortran sources
+  and signature files alike.
+
+A signature file written by ``f2py -h`` contains the kinds F2PY resolved from
+the sources. A hand-written signature file that uses a kind name, such as
+``real(kind=wp)``, without defining it leaves F2PY unable to map the kind, so
+either add the name to the f2cmap file (``{'real': {'wp': 'double'}}``) or
+write the kind as a literal, such as ``real(kind=8)``, in the signature file.
+
+F2PY reads the f2cmap file when it generates the wrappers, by default from
+the directory it runs in. Build systems usually run ``f2py`` in the build
+directory, so pass the file there with ``--f2cmap`` and its full path.
 
 .. _Character strings:
 
