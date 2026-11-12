@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 import numpy as np
@@ -87,6 +89,10 @@ class TestF90Allocatable(util.F2PyTest):
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(
+    "flang" in os.environ.get("FC", "").lower(),
+    reason="flang 20 cannot lower VOLATILE dummy arguments",
+)
 class TestF2003Features(util.F2PyTest):
     sources = [_source("f2003_features.f90")]
 
