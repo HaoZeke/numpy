@@ -145,6 +145,40 @@ jobs:
         PYTHONOPTIMIZE: 2
         PYTHONSAFEPATH: 1
 
+  f2py_flang:
+    # The full job covers f2py with gfortran. This job is the same
+    # tests with LLVM flang 20.
+    needs: [smoke_test]
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        submodules: recursive
+        fetch-tags: true
+        persist-credentials: false
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: '3.12'
+    - name: Install flang 20
+      timeout-minutes: ${{ fromJSON(env.APT_TIMEOUT_MINUTES) }}
+      run: |
+        set -xe
+        sudo apt-get update
+        sudo apt-get install -y flang-20 libflang-20-dev
+        sudo ln -sfn /usr/bin/flang-new-20 /usr/local/bin/flang-new
+        flang-new --version
+    - name: Install build and test dependencies
+      run: |
+        pip install --group dev-cli --group test-extending
+    - name: Build NumPy
+      run: |
+        spin build -- -Dallow-noblas=true -Dcpu-baseline=none -Dcpu-dispatch=none
+    - name: Run f2py tests
+      env:
+        FC: flang-new
+      run: |
+        spin test -m full -- numpy/f2py/tests --timeout=600 --durations=10
+
   armhf_test:
     # Tests NumPy on 32-bit ARM hard-float (armhf) via compatibility mode
     # running on aarch64 (ARM 64-bit) GitHub runners.
