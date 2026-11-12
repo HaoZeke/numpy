@@ -282,9 +282,7 @@ class TestDimSpec(util.F2PyTest):
         ! the value of n is computed in f2py wrapper
         !f2py intent(out) n
         integer, dimension({dimspec}), intent(in) :: a
-        if (a({first}).gt.0) then
-          ! print*, "a=", a
-        endif
+        ! a is empty for some n (e.g. 2:n with n=1), so it must not be indexed
       end subroutine
     """)
 
@@ -297,12 +295,7 @@ class TestDimSpec(util.F2PyTest):
 
     code = ""
     for count, dimspec in enumerate(all_dimspecs):
-        lst = [(d.split(":")[0] if ":" in d else "1") for d in dimspec.split(',')]
-        code += code_template.format(
-            count=count,
-            dimspec=dimspec,
-            first=", ".join(lst),
-        )
+        code += code_template.format(count=count, dimspec=dimspec)
 
     @pytest.mark.parametrize("dimspec", all_dimspecs)
     def test_array_size(self, dimspec):
