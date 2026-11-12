@@ -750,6 +750,14 @@ def run_compile():
             value = flag.split('=', 1)[1]
             fc_flags.append('--f90flags=' + value)
             fc_flags.append('--f77flags=' + value)
+            continue
+        if flag.startswith('--arch='):
+            hint = ", pass compiler flags with --f77flags or --f90flags"
+        elif flag.startswith(('--f77exec=', '--f90exec=')):
+            hint = ", set compiler with the FC environment variable"
+        else:
+            hint = ""
+        outmess(f"{flag} cannot be used with meson and is ignored{hint}\n")
 
     del_list = []
     for s in flib_flags:
