@@ -142,7 +142,7 @@ f2py_cb_start_clock();
         /* The calling routine does not declare the call-back. For backward
            compatibility, functions callable with the extra arguments alone
            get only those. */
-        if (!create_cb_arglist(cb->capi,capi_xa,#maxnofargs#,#nofoptargs#,1,&cb->nofargs,&cb->args_capi,\"failed in processing argument list for call-back #argname#.\")) {
+        if (!create_cb_arglist(cb->capi,capi_xa,#maxnofargs#,#nofoptargs#,1,&cb->nofargs,&cb->args_capi,\"failed in processing argument list for call-back #argname#\")) {
             Py_XDECREF(capi_xa);
             goto capi_fail;
         }

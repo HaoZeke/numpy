@@ -493,10 +493,10 @@ class TestStringOutCallback(util.F2PyTest):
 
     def test_string_out_not_bytes(self, capfd):
         err = getattr(self.module, f"_{self.module_name}_error")
-        with pytest.raises(err, match="string object expected"):
+        # gh-5098 reports the received object and does not print it.
+        with pytest.raises(err, match="bytes object expected, got 5-str"):
             self.module.string_out(lambda: "hello")
-        assert (f"{self.module_name}.error is related to hello\n"
-                in capfd.readouterr().err)
+        assert capfd.readouterr().err == ""
 
 
 @pytest.mark.slow
