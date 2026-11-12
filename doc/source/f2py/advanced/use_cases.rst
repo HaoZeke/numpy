@@ -53,17 +53,18 @@ variable. It understands integer literals such as ``real(8)``, the kind
 constants of ``iso_c_binding``, the ``int8``, ``int16``, ``int32``,
 ``int64``, ``real32`` and ``real64`` constants of ``iso_fortran_env``, and
 many named constants defined with ``kind``, ``selected_int_kind`` or
-``selected_real_kind``. When it cannot determine a kind, it uses the default C
-type of that Fortran type (``float`` for ``real``, ``int`` for ``integer``)
-and prints a message such as::
+``selected_real_kind``, and a kind renamed on ``USE``, such as
+``use iso_fortran_env, only: dp => real64``. ``selected_real_kind`` is
+evaluated for the compiler named by ``FC``: a precision below 4 is kind 2
+when that compiler has IEEE binary16, and kind 4 otherwise. When F2PY cannot
+determine a kind, it uses the default C type of that Fortran type (``float``
+for ``real``, ``int`` for ``integer``) and prints a message such as::
 
     getctype: "real(kind='dp')" is mapped to C "float" (to override define {'real': {'dp': "<C typespec>"}} in /path/to/.f2py_f2cmap file).
 
 The wrapper then passes data of the wrong size, which gives wrong results or
 crashes. This happens, for example, for a kind expression written in the
-declaration itself, such as ``real(kind(1.0d0))``, and for a kind constant
-imported under another name, such as
-``use iso_fortran_env, only: dp => real64``.
+declaration itself, such as ``real(kind(1.0d0))``.
 
 For these cases, F2PY provides a hook: users can define their own
 <Fortran type> to <C type> maps. For example, if Fortran 90 code
@@ -132,10 +133,11 @@ a map such as::
 
     {'integer': {'': 'long_long'}, 'logical': {'': 'long_long'}}
 
-The sizes of ``c_int_fast16_t`` and ``c_int_fast32_t`` from ``iso_c_binding``
-differ between compilers on the same platform. F2PY maps them to ``short`` and
-``int``; when the compiler makes them wider, as GFortran does on 64-bit glibc
-systems, map them to ``long_long``.
+F2PY maps ``c_size_t``, ``c_ptrdiff_t``, ``c_intptr_t``, ``c_intmax_t``, the
+``c_int_fast*_t`` kinds and ``c_bool`` to the C types of those names. The C
+implementation chooses the width. LLVM flang can report a different width for
+``c_int_fast16_t`` and ``c_int_fast32_t`` than those C types have; with that
+compiler, use ``c_int16_t`` and ``c_int32_t``.
 
 For example, for a Fortran file ``func1.f`` containing:
 

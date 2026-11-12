@@ -291,7 +291,21 @@ functions return the result by value unless the generated C code is compiled
 with ``-DF2PY_CB_RETURNCOMPLEX=0``. The ``meson`` backend of ``f2py -c`` adds
 this flag for the Intel and NVIDIA compilers. In any other build that uses a
 compiler with a hidden first argument, add the flag to the C compiler flags,
-for example through the ``CFLAGS`` environment variable.
+for example with ``-DF2PY_CB_RETURNCOMPLEX=0`` or through ``CFLAGS``.
+
+Call-backs the Fortran code does not call
+------------------------------------------
+
+An ``external`` argument that the routine never calls is still a callback.
+If the routine only passes it to another routine in the same sources, F2PY
+gives it the signature of that call, so ``cb(1)`` takes one integer. Each
+routine keeps its own callback. An ``external`` with no call anywhere is a
+function of its declared type, or a subroutine when it has no type, and it
+takes no arguments. ``f2py -h`` writes that signature, and the arguments can
+be filled in there. An interface block, or a signature file that already
+describes the callback, is left as written. The C function F2PY generates
+for an ``intent(callback)`` external is exported from the extension, so
+Fortran in a separate shared library can call it by name.
 
 Resolving arguments to call-back functions
 ------------------------------------------

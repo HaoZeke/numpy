@@ -136,13 +136,15 @@ Fortran 90 and 95
        ``None`` deallocates it, see :doc:`python-usage`.
      - ``test_modules.py``, ``test_language_support.py``
    * - Module ``PARAMETER`` constants
-     - Partial
-     - Exposed as module attributes. With LLVM ``flang`` the values are wrong,
-       see `Compilers`_.
-     - ``test_regression.py``
+     - Yes
+     - Exposed as module attributes. The value is copied into a ``SAVE``
+       variable before C reads it, so it is correct with LLVM flang as well
+       as gfortran.
+     - ``test_modules.py``, ``test_regression.py``
    * - ``USE`` association, ``PUBLIC`` and ``PRIVATE``
      - Yes
-     - Private entities are not wrapped.
+     - Public entities brought in by ``USE`` are exposed on the using module.
+       ``ONLY``, renames and ``PRIVATE`` are respected.
      - ``test_modules.py``, ``test_crackfortran.py``
    * - ``INTENT(IN)``, ``INTENT(OUT)`` and ``INTENT(INOUT)``
      - Yes
@@ -155,26 +157,30 @@ Fortran 90 and 95
      - ``test_assumed_shape.py``
    * - Kind type parameters
      - Partial
-     - Literal kinds and many named constants work. Kinds that F2PY cannot
-       evaluate are mapped to the default C type unless they are given in an
-       f2cmap file, see :ref:`f2py-kind-specifiers`.
-     - ``test_kind.py``, ``test_parameter.py``, ``test_f2cmap.py``
+     - Literal kinds, the sized ``iso_c_binding`` kinds, and many named
+       constants work, including a kind renamed on ``USE``.
+       ``selected_real_kind`` follows the Fortran compiler F2PY will use:
+       a precision below 4 is kind 2 when that compiler has IEEE binary16.
+       A kind F2PY cannot evaluate is mapped to the default C type unless it
+       is given in an f2cmap file, see :ref:`f2py-kind-specifiers`.
+     - ``test_kind.py``, ``test_parameter.py``, ``test_f2cmap.py``,
+       ``test_isoc.py``, ``test_isof.py``
    * - Extended precision (``REAL(10)``, ``REAL(16)``)
      - Partial
-     - ``complex(c_long_double_complex)`` arrays work, but scalar ``REAL(10)``
-       and ``REAL(16)`` arguments crash or give wrong results on x86-64 Linux
-       (`gh-9727`_).
-     - ``test_isoc.py``
+     - A scalar ``REAL(16)`` result is read as IEEE binary128 when that is the
+       format the compiler uses, and returned as a Python float. It is not
+       exposed as a 16-byte NumPy dtype.
+     - ``test_regression.py``, ``test_isoc.py``
    * - ``CHARACTER(LEN=n)``
      - Yes
      -
      - ``test_character.py``, ``test_string.py``
    * - ``OPTIONAL`` dummy arguments
-     - Partial
-     - Optional in Python, but an omitted argument is still passed to Fortran
-       with a default value, so ``PRESENT()`` returns ``.TRUE.``
-       (`gh-4013`_).
-     - ``test_character.py``
+     - Yes
+     - An omitted argument or ``None`` is left absent, so ``PRESENT()`` is
+       false. A signature file keeps the old default unless it also says
+       ``absent``.
+     - ``test_optional_absent.py``, ``test_character.py``
    * - Functions with a ``RESULT`` clause
      - Yes
      -
@@ -196,12 +202,10 @@ Fortran 90 and 95
        arrays crash, and the corresponding test is skipped.
      - ``test_language_support.py``, ``test_character.py``
    * - Internal procedures (``CONTAINS`` in a procedure)
-     - Partial
-     - The host procedure is wrapped and its internal procedures are not
-       exposed. If the host needs a Fortran wrapper, for example because it
-       has assumed-shape arguments, the generated wrapper does not compile
-       (`gh-20103`_).
-     - ``test_language_support.py``
+     - Yes
+     - The host procedure is wrapped. Its internal procedures are not exposed,
+       and they are not copied into the Fortran wrapper.
+     - ``test_language_support.py``, ``test_regression.py``
    * - Generic interfaces, defined operators and defined assignment
      - Partial
      - Each specific procedure is wrapped under its own name; the generic name
@@ -233,8 +237,11 @@ Fortran 2003
      - Tests
    * - ``ISO_C_BINDING`` kinds
      - Yes
-     -
-     - ``test_isoc.py``
+     - Includes the sized kinds ``C_SIZE_T``, ``C_PTRDIFF_T``, ``C_INTPTR_T``,
+       ``C_INTMAX_T``, ``C_INT_FAST8_T`` through ``C_INT_FAST64_T`` and
+       ``C_BOOL``, mapped to the C types of those names. A kind renamed on
+       ``USE`` is followed.
+     - ``test_isoc.py``, ``test_isof.py``
    * - ``BIND(C)`` procedures, including ``BIND(C, NAME=...)``
      - Yes
      -
@@ -274,7 +281,9 @@ Fortran 2003
      - ``test_language_support.py``
    * - ``ASYNCHRONOUS`` and ``VOLATILE`` attributes
      - Yes
-     -
+     - gfortran accepts them. flang 20 cannot lower a ``VOLATILE`` dummy in a
+       procedure interface, so a module that declares one does not compile
+       with that compiler.
      - ``test_language_support.py``
    * - Deferred-length character (``CHARACTER(LEN=:)``)
      - No
@@ -308,9 +317,8 @@ Fortran 2008
    * - ``ISO_FORTRAN_ENV`` kind constants
      - Partial
      - ``INT8``, ``INT16``, ``INT32``, ``INT64``, ``REAL32`` and ``REAL64``
-       are recognized when imported under their own names. Renamed imports
-       such as ``dp => real64`` are not (`gh-30352`_), and ``REAL128`` is not
-       mapped.
+       are recognized, including when renamed on ``USE`` (``dp => real64``).
+       ``REAL128`` is not mapped to its own C type.
      - ``test_isof.py``, ``test_f2cmap.py``
    * - ``CONTIGUOUS`` attribute
      - Yes
@@ -370,26 +378,19 @@ Compilers
 =========
 
 NumPy's continuous integration runs the F2PY test suite with ``gfortran``.
-With recent LLVM ``flang`` releases and the meson backend, the following
-problems are known:
+``f2py -c`` also builds with LLVM flang. The generated build links the
+extension with the Fortran compiler, and for LLVM flang it adds
+``FortranRuntime``, ``FortranDecimal`` and ``libm``. Wrapped code that prints
+or uses character intrinsics then imports.
 
-* Extension modules are linked without the ``flang`` runtime library, so
-  wrapped code that calls into it, for example for input and output, fails to
-  import with an ``undefined symbol: _Fortran...`` error (`gh-30260`_,
-  `gh-32148`_).
-* Module ``PARAMETER`` constants read from Python have wrong values
-  (`gh-22511`_).
-* F2PY evaluates ``selected_real_kind`` itself, following the kinds of
-  ``gfortran``. LLVM ``flang`` returns its half-precision kind for a precision
-  of 3 or less, which F2PY maps to the wrong C type (`gh-30260`_).
+Module ``PARAMETER`` values are copied to ``SAVE`` variables before C reads
+them, so they are correct with flang. ``selected_real_kind`` is evaluated for
+the compiler named by ``FC``, as described under kind type parameters above.
+
+flang 20 cannot compile a procedure whose interface declares a ``VOLATILE``
+dummy argument. The Fortran 2003 tests that contain one are skipped when
+``FC`` names flang.
 
 .. _`NumPy issue tracker`: https://github.com/numpy/numpy/issues?q=is%3Aissue+is%3Aopen+label%3A%22component%3A+numpy.f2py%22
-.. _`gh-4013`: https://github.com/numpy/numpy/issues/4013
-.. _`gh-9727`: https://github.com/numpy/numpy/issues/9727
 .. _`gh-19157`: https://github.com/numpy/numpy/issues/19157
-.. _`gh-20103`: https://github.com/numpy/numpy/issues/20103
 .. _`gh-21160`: https://github.com/numpy/numpy/issues/21160
-.. _`gh-22511`: https://github.com/numpy/numpy/issues/22511
-.. _`gh-30260`: https://github.com/numpy/numpy/issues/30260
-.. _`gh-30352`: https://github.com/numpy/numpy/issues/30352
-.. _`gh-32148`: https://github.com/numpy/numpy/issues/32148

@@ -80,12 +80,11 @@ received, the checks it made and the Fortran routine it called:
 To see when F2PY copies an array argument, for example because the array is
 not Fortran-contiguous or has another data type, define the
 ``F2PY_REPORT_ON_ARRAY_COPY`` macro to the array size above which copies are
-reported. Meson reads compiler flags from the ``CFLAGS``, ``FFLAGS`` and
-``LDFLAGS`` environment variables when it sets up the build:
+reported. ``-D`` and ``-U`` are passed to the C and Fortran compilers:
 
 .. code-block:: sh
 
-    CFLAGS="-DF2PY_REPORT_ON_ARRAY_COPY=1" python -m numpy.f2py -c fib1.f -m fib1
+    python -m numpy.f2py -c fib1.f -m fib1 -DF2PY_REPORT_ON_ARRAY_COPY=1
 
 .. code-block:: python
 
@@ -94,11 +93,8 @@ reported. Meson reads compiler flags from the ``CFLAGS``, ``FFLAGS`` and
     >>> fib1.fib(np.ones(8, 'i'))
     copied an array: size=8, elsize=8
 
-.. note::
-
-   The meson backend does not pass the ``-D`` command line options on to the
-   compiler (`gh-28648`_), and it ignores ``--debug`` (`gh-30353`_), so set
-   such flags through the environment variables instead.
+``--debug`` selects a meson debug build. ``CFLAGS``, ``FFLAGS`` and
+``LDFLAGS`` are still read by meson and can be used for the same flags.
 
 Debug the compiled code
 =======================
@@ -144,8 +140,10 @@ Common problems
    wrapped routines to ``f2py -c``, also when building from a signature file.
 
 ``ImportError: ... undefined symbol: _Fortran...``
-   The runtime library of LLVM ``flang`` is missing, see the
-   :ref:`known problems with LLVM flang <f2py-compilers>`.
+   The extension was linked without the LLVM flang runtime. ``f2py -c`` adds
+   ``FortranRuntime``, ``FortranDecimal`` and ``libm`` when the Fortran
+   compiler is LLVM flang. A ``meson.build`` written by hand has to do the
+   same when it links the extension with the C compiler.
 
 Results are wrong, but there is no error
    Look for ``getctype`` messages: a kind that F2PY could not map passes data
@@ -155,6 +153,3 @@ Results are wrong, but there is no error
    passed as a copy, so changes made by Fortran are not visible in Python
    unless the argument is ``intent(out)`` or ``intent(inout)``, see
    :ref:`f2py-getting-started`.
-
-.. _`gh-28648`: https://github.com/numpy/numpy/issues/28648
-.. _`gh-30353`: https://github.com/numpy/numpy/issues/30353

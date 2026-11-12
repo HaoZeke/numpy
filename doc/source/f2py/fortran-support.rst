@@ -154,7 +154,13 @@ F2PY translates a kind to a C type in these cases:
   the procedure or its module imports with ``USE``. The used module has to be
   among the files given to F2PY;
 * the kinds of the ``iso_c_binding`` and ``iso_fortran_env`` intrinsic
-  modules.
+  modules, including a kind renamed on ``USE`` (``dp => real64``,
+  ``dp => c_double``) and the sized ``iso_c_binding`` integers
+  ``c_size_t``, ``c_ptrdiff_t``, ``c_intptr_t``, ``c_intmax_t``,
+  ``c_int_fast8_t`` through ``c_int_fast64_t``, and ``c_bool``;
+* ``selected_real_kind`` for the compiler named by ``FC``. A precision
+  below 4 is kind 2 when that compiler has IEEE binary16, and kind 4
+  otherwise.
 
 F2PY does not resolve a kind expression written in the declaration itself,
 such as ``real(kind=kind(0.0d0))``, nor a named constant declared in the module

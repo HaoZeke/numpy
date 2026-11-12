@@ -3,8 +3,10 @@
 
 The meson backend of ``f2py -c`` now links the extension with the Fortran compiler.
 The Fortran compiler adds its own runtime libraries and run paths.
-A module built with LLVM Flang now imports.
-The undefined ``_Fortran*`` symbols are gone.
+LLVM flang does not do that when the link is performed by the C compiler, so
+the generated ``meson.build`` also links ``FortranRuntime``, ``FortranDecimal``
+and ``libm`` for that compiler. A module that prints or uses character
+intrinsics now imports. The undefined ``_Fortran*`` symbols are gone.
 On macOS the GCC runtime libraries, including ``libgomp``, are found without an edit to the module's run paths.
 
 The extension modules use default symbol visibility again.
@@ -15,8 +17,11 @@ The OpenMP routines in ``omp_lib`` are such procedures.
 The link failed with ``hidden symbol `omp_get_num_threads' isn't defined``.
 
 ``--debug`` again selects the meson ``debug`` build type.
-The ``numpy.distutils`` options ``--opt``, ``--arch``, ``--noopt``, ``--noarch``, ``--f77exec``, ``--f90exec`` and ``--help-fcompiler`` do nothing under meson.
-``f2py -c`` now prints that each of those options is ignored.
+``--opt=<flags>`` is passed on to the Fortran compilers as ``--f77flags`` and
+``--f90flags``, which is how ``-fopenmp`` reaches them.
+The other ``numpy.distutils`` options ``--arch``, ``--noopt``, ``--noarch``,
+``--f77exec``, ``--f90exec`` and ``--help-fcompiler`` are ignored, and
+``f2py -c`` prints a message that names the replacement.
 
 The meson build of ``f2py -c`` also compiles ``fortranobject.c`` as a static library with hidden visibility.
 The extension links that library with ``link_with``.

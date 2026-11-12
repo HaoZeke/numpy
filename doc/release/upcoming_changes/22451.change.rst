@@ -1,8 +1,9 @@
-``f2py`` reuses a call-back signature when an ``external`` is passed on
------------------------------------------------------------------------
-A routine that does not call an ``external`` argument, but passes it to
-another routine in the same source, now gives that argument the callee's
-signature. The generated signature file renames it with ``use``, for example
-``use fun1__user__routines, myfun2=>myfun1``. A call-back with no call and no
-such callee still has no arguments. An interface block or an edited signature
-file is left as written.
+``f2py`` infers a call-back signature from the call that uses it
+-----------------------------------------------------------------
+A routine that does not call an ``external`` argument, but passes it on,
+now gives that argument the signature of the call. A callback invoked as
+``cb(1)`` takes one integer, and each routine keeps its own callback.
+A callback with no call anywhere still has no arguments: it is a function
+of its declared type, or a subroutine if it has no type. An interface
+block, or a signature file that already describes the callback, is left
+as written.

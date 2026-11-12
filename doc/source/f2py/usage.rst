@@ -164,20 +164,38 @@ Among other options (see below) and options described for previous modes, the fo
       The ``distutils`` backend has been removed.
 
    .. versionchanged:: 2.6.0
-      Options of the removed backend, such as ``--fcompiler``, ``--opt`` or
-      ``--link-<resource>``, are rejected with an error instead of being
-      ignored. See :ref:`f2py-meson-distutils` for their replacements.
+      ``--backend`` defaults to ``meson``. ``--backend distutils`` selects
+      meson and reports that the distutils backend was removed. ``--opt`` is
+      forwarded to the Fortran compilers as ``--f77flags`` and ``--f90flags``.
+      The other options of the removed backend (``--fcompiler``,
+      ``--compiler``, ``--f77exec``, ``--f90exec``, ``--help-fcompiler``,
+      ``--arch``, ``--noopt``, ``--noarch`` and ``--link-<resource>``) are
+      ignored, with a message that names the replacement. See
+      :ref:`f2py-meson-distutils`.
+
+``f2py -c`` links the extension with the Fortran compiler, so that compiler's
+runtime is on the link line. LLVM flang does not add its runtime when the C
+compiler performs the link, so the generated ``meson.build`` also links
+``FortranRuntime``, ``FortranDecimal`` and ``libm`` for that compiler. A
+module that prints or uses character intrinsics then imports.
+
+``-D`` and ``-U`` are passed to both the C compiler and the Fortran compiler.
+That covers the macros below, such as ``-DF2PY_REPORT_ON_ARRAY_COPY=1``, and
+macros that select branches in preprocessed Fortran.
 
 Common build flags:
 
 ``--backend <backend_type>``
-  Legacy option, only ``meson`` is supported.
+  ``meson`` is the backend, and the default. ``distutils`` selects meson and
+  reports that the distutils backend was removed.
 ``--f77flags=<string>``
   Specify F77 compiler flags
 ``--f90flags=<string>``
   Specify F90 compiler flags
 ``--debug``
-  Compile with debugging information
+  Compile with debugging information. This selects the meson ``debug`` build
+  type. ``--opt=<flags>`` is not a debug switch: those flags are appended to
+  ``--f77flags`` and ``--f90flags``.
 ``-l<libname>``
   Use the library ``<libname>`` when linking.
 ``-D<macro>[=<defn=1>]``

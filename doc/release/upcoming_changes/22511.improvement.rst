@@ -1,0 +1,7 @@
+``f2py`` copies module parameters before reading them
+-----------------------------------------------------
+Module ``PARAMETER`` constants are copied into ``SAVE`` variables in the
+generated initialization routine, and those copies are what Python reads.
+LLVM flang keeps a parameter in a temporary that is gone by the time C
+reads it, so the value used to be zero. A parameter brought in by ``USE``
+is copied the same way.

@@ -15,6 +15,8 @@ F2PY reads more ``use`` statements and kinds
   Those entities used to be treated as single precision complex.
 * A kind renamed on import now resolves to the intrinsic name.
   The forms are ``use iso_fortran_env, only: dp => real64`` and ``use iso_c_binding, only: dp => c_double``.
+  A parameter renamed from another module wrapped in the same extension
+  resolves the same way.
   ``real(dp)`` used to map to C ``float``.
   The Fortran wrappers of module procedures then failed to compile.
 * F2PY now matches kind names in any case.

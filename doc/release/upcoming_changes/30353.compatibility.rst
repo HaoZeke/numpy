@@ -1,5 +1,5 @@
 ``f2py`` no longer builds with the ``distutils`` backend
--------------------------------------------------------
+--------------------------------------------------------
 ``--backend distutils`` selects the meson backend and says that the distutils backend was removed.
 ``--opt`` is forwarded to the Fortran compilers as ``--f77flags`` and ``--f90flags`` (needed for flags such as ``-fopenmp``).
 The other build options that only the removed backend understood (``--fcompiler``, ``--compiler``, ``--f77exec``, ``--f90exec``, ``--help-fcompiler``, ``--arch``, ``--noopt``, ``--noarch``, ``--link-<resource>``) are ignored, with a message naming the replacement.

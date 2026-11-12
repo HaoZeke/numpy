@@ -58,8 +58,8 @@ This will not win any awards, but can be a reasonable starting point.
 
   python -m numpy.f2py -c fib.f90 -m fib
 
-This is the only option. There used to be a ``distutils`` backend but it was
-removed in NumPy2.5.0.
+``meson`` is the backend. ``--backend distutils`` selects meson and reports
+that the distutils backend was removed in NumPy 2.5.0.
 
 1.2.3 Pass a compiler name
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -157,17 +157,21 @@ The compiler wrapper and MPI libraries must belong to the same installation.
 1.2.6 Removed options
 ^^^^^^^^^^^^^^^^^^^^^
 
-``f2py`` exits with an error when it is passed an option that only the
-``distutils`` backend understood. Use these instead:
+An option that only the ``distutils`` backend understood no longer changes
+the build on its own. ``f2py`` keeps going and names the replacement:
 
-* ``--backend distutils``: drop it, ``meson`` is the only backend.
-* ``--fcompiler``, ``--f77exec``, ``--f90exec`` and ``--help-fcompiler``: set
-  the ``FC`` environment variable, see `1.2.3 Pass a compiler name`_.
-* ``--compiler``: set the ``CC`` environment variable.
-* ``--opt``, ``--arch``, ``--noopt`` and ``--noarch``: pass the compiler flags
-  with ``--f77flags`` or ``--f90flags``.
-* ``--link-<resource>`` and ``--help-link``: declare the dependency with
-  ``--dep``, see `1.2.4 Dependencies`_.
+* ``--backend distutils`` selects meson and says that the distutils backend
+  was removed.
+* ``--fcompiler``, ``--f77exec``, ``--f90exec`` and ``--help-fcompiler`` are
+  ignored. Set the ``FC`` environment variable, see
+  `1.2.3 Pass a compiler name`_.
+* ``--compiler`` is ignored. Set the ``CC`` environment variable.
+* ``--opt=<flags>`` is forwarded as ``--f77flags`` and ``--f90flags``, which
+  is how a flag such as ``-fopenmp`` reaches the Fortran compilers.
+  ``--arch``, ``--noopt`` and ``--noarch`` are ignored; pass those flags with
+  ``--f77flags`` or ``--f90flags``.
+* ``--link-<resource>`` and ``--help-link`` are ignored. Declare the
+  dependency with ``--dep``, see `1.2.4 Dependencies`_.
 
 1.3 Customizing builds
 ~~~~~~~~~~~~~~~~~~~~~~
