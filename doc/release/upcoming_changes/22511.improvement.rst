@@ -1,0 +1,3 @@
+Copy module parameters into saved locals
+----------------------------------------
+Flang materializes PARAMETER values as stack temporaries. The init wrapper stored that address, so Python later read freed memory (gh-22511).
