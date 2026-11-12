@@ -287,6 +287,8 @@ evaluates the call-back argument ``gun``:
 * If ``p <= m < n + p`` then ``gun(a_1, ..., a_q, e_1, ..., e_p)`` is called,
   and here ``q=m-p``.
 * If ``p > m`` then ``gun(e_1, ..., e_m)`` is called.
+* If ``gun`` also takes ``*args``, it accepts any number of positional
+  arguments and ``gun(a_1, ..., a_n, e_1, ..., e_p)`` is called.
 * If ``n + p`` is less than the number of required arguments to ``gun`` then an
   exception is raised.
 

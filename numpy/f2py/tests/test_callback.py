@@ -289,6 +289,74 @@ class TestGH25211(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestGH16357(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh16357.f90")]
+
+    @pytest.mark.parametrize("extra_args", [(), (3,), (3, 4)])
+    def test_varargs(self, extra_args):
+        received = []
+
+        def fun(*args):
+            received.append(args)
+
+        self.module.gh16357(fun, 1, 2, fun_extra_args=extra_args)
+        assert received == [(1, 2, *extra_args)]
+
+    @pytest.mark.parametrize("extra_args", [(), (3,), (3, 4)])
+    def test_positional_and_varargs(self, extra_args):
+        received = []
+
+        def fun(a, *args):
+            received.append((a, args))
+
+        self.module.gh16357(fun, 1, 2, fun_extra_args=extra_args)
+        assert received == [(1, (2, *extra_args))]
+
+    def test_defaults_and_varargs(self):
+        received = []
+
+        def fun(a, b=5, c=6, *args):
+            received.append((a, b, c, args))
+
+        self.module.gh16357(fun, 1, 2, fun_extra_args=(3, 4))
+        assert received == [(1, 2, 3, (4,))]
+
+    def test_method_varargs(self):
+        received = []
+
+        class A:
+            def method(self, a, *args):
+                received.append((a, args))
+
+        self.module.gh16357(A().method, 1, 2, fun_extra_args=(3,))
+        assert received == [(1, (2, 3))]
+
+    def test_method_varargs_only(self):
+        received = []
+
+        class A:
+            def method(*args):
+                received.append(args[1:])
+
+        self.module.gh16357(A().method, 1, 2, fun_extra_args=(3,))
+        assert received == [(1, 2, 3)]
+
+    def test_varargs_and_varkeywords(self):
+        received = []
+
+        def fun(*args, **kwargs):
+            received.append((args, kwargs))
+
+        self.module.gh16357(fun, 1, 2, fun_extra_args=(3,))
+        assert received == [((1, 2, 3), {})]
+
+    def test_varargs_too_few_arguments(self):
+        error = getattr(self.module, f"_{self.module.__name__}_error")
+        with pytest.raises(error):
+            self.module.gh16357(lambda a, b, c, *args: None, 1, 2)
+
+
+@pytest.mark.slow
 @pytest.mark.xfail(condition=(platform.system().lower() == 'darwin'),
                    run=False,
                    reason="Callback aborts cause CI failures on macOS")
