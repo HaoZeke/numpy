@@ -13,6 +13,23 @@ add_project_arguments(
   cc.get_supported_arguments( '-fno-strict-aliasing'), language : 'c'
 )
 
+# LFortran disables implicit typing and implicit interfaces, and it
+# does not add the trailing underscore the C wrappers call. A module
+# procedure is not emitted into the object file unless compilation is
+# separate. .f files are fixed form. List-directed output omits the
+# standard leading space unless asked.
+_fc_cmd = ' '.join(fc.cmd_array())
+if fc.get_id() == 'lfortran' or 'lfortran' in _fc_cmd
+  add_project_arguments(
+    '--implicit-typing',
+    '--implicit-interface',
+    '--mangle-underscore-external',
+    '--fixed-form-infer',
+    '--separate-compilation',
+    '--print-leading-space',
+    language : 'fortran')
+endif
+
 py = import('python').find_installation('''${python}''', pure: false)
 py_dep = py.dependency()
 
