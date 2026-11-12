@@ -180,7 +180,7 @@ def test_generation_flags_are_not_backend_source_files(
     assert build[4] == [str(include_dir)]
     assert build[9][build[9].index("--f2cmap") + 1] == mapping
     assert "#include <stdbool.h>" in generated["sharedmodule.c"].decode()
-    assert "sharedmodule.rst" in generated
+    assert "sharedmodule.rest" in generated
     assert "sharedmodule.tex" in generated
     assert "\\documentclass" not in generated["sharedmodule.tex"].decode()
     for output in (main_output, compile_output):
