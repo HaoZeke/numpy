@@ -3,6 +3,7 @@ import os
 import pickle
 import platform
 import subprocess
+import shutil
 import sys
 import warnings
 from pathlib import Path
@@ -1049,3 +1050,19 @@ class TestScalarConversionDeprecation(util.F2PyTest):
         with pytest.warns(DeprecationWarning, match=_GH24394_TRUNC_WARNING):
             with pytest.raises((ValueError, OverflowError)):
                 fn(value)
+@pytest.mark.slow
+def test_gh25159_mpi_compiler_wrapper(monkeypatch):
+    wrapper = (os.environ.get("MPIFC") or os.environ.get("MPIF90")
+               or shutil.which("mpifort") or shutil.which("mpif90"))
+    if wrapper is None:
+        pytest.skip("No MPI Fortran compiler wrapper available")
+    monkeypatch.setenv("FC", wrapper)
+    module = util.build_module(
+        [util.getpath("tests", "src", "regression", "gh25159.f90")],
+    )
+    (major, minor, expected_major, expected_minor, initialized,
+     initialized_status, version_status, success) = module.mpi_wrapper_info()
+    assert (major, minor) == (expected_major, expected_minor)
+    assert not initialized
+    assert initialized_status == success
+    assert version_status == success
