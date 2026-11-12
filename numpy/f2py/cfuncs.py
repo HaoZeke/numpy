@@ -710,25 +710,25 @@ fprintf(stderr, "try_pyarr_from_string(str='%s', len=%d, obj=%p)\\n",
         PyArrayObject *arr = (PyArrayObject *)obj;
         assert(ISCONTIGUOUS(arr));
         if (F2PY_IS_UNICODE_ARRAY(arr)) {
-            /* Fill a bytes copy that is cast back into obj below */
-            arr = tmp = bytes_array_from_unicode_array(arr);
+            /* str is copied into a dtype('S') copy that is cast back */
+            tmp = bytes_array_from_unicode_array(arr);
             if (tmp == NULL) goto capi_fail;
         }
-        string buf = PyArray_DATA(arr);
+        PyArrayObject *dst = (tmp == NULL ? arr : tmp);
+        string buf = PyArray_DATA(dst);
         npy_intp n = len;
         if (n == -1) {
             /* Assuming null-terminated str. */
             n = strlen(str);
         }
-        if (n > PyArray_NBYTES(arr)) {
-            n = PyArray_NBYTES(arr);
+        if (n > PyArray_NBYTES(dst)) {
+            n = PyArray_NBYTES(dst);
         }
         STRINGCOPYN(buf, str, n);
         if (tmp != NULL) {
-            if (PyArray_CopyInto((PyArrayObject *)obj, tmp) < 0) {
-                goto capi_fail;
-            }
-            Py_DECREF(tmp);
+            int status = PyArray_CopyInto(arr, tmp);
+            Py_CLEAR(tmp);
+            if (status < 0) goto capi_fail;
         }
         return 1;
     }
@@ -774,9 +774,9 @@ fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
             goto capi_fail;
         }
         if (F2PY_IS_UNICODE_ARRAY(arr)) {
-            arr = bytes_array_from_unicode_array(arr);
-            if (arr == NULL) goto capi_fail;
-            tmp = (PyObject *)arr;
+            tmp = (PyObject *)bytes_array_from_unicode_array(arr);
+            if (tmp == NULL) goto capi_fail;
+            arr = (PyArrayObject *)tmp;
         }
         n = PyArray_NBYTES(arr);
         buf = PyArray_DATA(arr);
@@ -867,11 +867,29 @@ character_from_pyobj(character* v, PyObject *obj, const char *errmess) {
             *v = PyArray_BYTES(arr)[0];
             return 1;
         } else if (F2PY_IS_UNICODE_ARRAY(arr)) {
-            PyArrayObject* tmp = bytes_array_from_unicode_array(arr);
+            /* First code point, in the dtype's byte order. A later
+             * non-ASCII code point must not reject the value. */
+            PyObject* tmp;
+            if (PyArray_SIZE(arr) > 0) {
+                npy_ucs4 c;
+                memcpy(&c, PyArray_BYTES(arr), sizeof(c));
+                if (!PyArray_ISNBO(PyArray_DESCR(arr)->byteorder)) {
+                    c = ((c & 0x000000FFu) << 24) |
+                        ((c & 0x0000FF00u) << 8) |
+                        ((c & 0x00FF0000u) >> 8) |
+                        ((c & 0xFF000000u) >> 24);
+                }
+                tmp = PyUnicode_FromOrdinal((int)c);
+            }
+            else {
+                tmp = PyUnicode_FromStringAndSize(NULL, 0);
+            }
             if (tmp != NULL) {
-                *v = (PyArray_NBYTES(tmp) > 0 ? PyArray_BYTES(tmp)[0] : '\\0');
+                if (character_from_pyobj(v, tmp, errmess)) {
+                    Py_DECREF(tmp);
+                    return 1;
+                }
                 Py_DECREF(tmp);
-                return 1;
             }
         }
     } else if (PySequence_Check(obj)) {
