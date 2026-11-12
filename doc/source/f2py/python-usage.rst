@@ -322,6 +322,15 @@ evaluates the call-back argument ``gun``:
 
 If the function ``gun`` returns ``l`` objects as a tuple, then the following
 rules are applied:
+If ``gun`` also takes ``*args``, then ``m`` is unbounded and
+``gun(a_1, ..., a_n, e_1, ..., e_p)`` is called.
+
+``gun`` can be any Python callable. For a bound method, or an instance of a
+class that defines ``__call__``, ``m`` does not count ``self``. If ``m`` cannot
+be determined, as for built-in functions, all ``n + p`` arguments are passed.
+
+If the function ``gun`` may return any number of objects as a tuple; then the
+following rules are applied:
 
 * If ``k < l``, then ``y_{k + 1}, ..., y_l`` are ignored.
 * If ``k > l``, then only ``x_1, ..., x_l`` are set.

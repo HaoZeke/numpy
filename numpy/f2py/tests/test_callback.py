@@ -1,3 +1,4 @@
+import functools
 import math
 import platform
 import subprocess
@@ -8,6 +9,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -1019,3 +1021,88 @@ class TestNamedCallbackGH31248(util.F2PyTest):
         finally:
             del self.module.on_step
         assert seen == [1]
+@pytest.mark.slow
+class TestCallbackArity(util.F2PyTest):
+    # call_two(fun) returns fun(1, 2)
+    sources = [util.getpath("tests", "src", "callback", "arity.f90")]
+
+    def test_varargs(self):
+        # gh-16357
+        calls = []
+
+        def fun(*args):
+            calls.append(args)
+            return 0
+
+        class A:
+            def meth(self, a, *args):
+                calls.append((a, *args))
+                return 0
+
+        for cb in [fun, A().meth]:
+            self.module.call_two(cb)
+            self.module.call_two(cb, fun_extra_args=(7,))
+        assert calls == [(1, 2), (1, 2, 7)] * 2
+
+    def test_varargs_too_many_required(self):
+        def fun(a, b, c, *args):
+            return 0
+
+        err = getattr(self.module, f"_{self.module.__name__}_error")
+        with pytest.raises(err, match="call-back fun"):
+            self.module.call_two(fun)
+
+    def test_bound_method(self):
+        # gh-3423
+        class A:
+            offset = 10
+
+            def meth(self, a):
+                return self.offset + a
+
+        assert self.module.call_two(A().meth) == 11
+
+    def test_callable_instance(self):
+        # gh-3423
+        calls = []
+
+        class First:
+            def __call__(self, a):
+                calls.append((a,))
+                return 0
+
+        class Extra:
+            def __call__(self, a, e):
+                calls.append((a, e))
+                return 0
+
+        class Wrapper:
+            def __call__(self, *args):
+                calls.append(args)
+                return 0
+
+        class Cached:
+            @functools.cache  # noqa: B019
+            def __call__(self, a, b):
+                calls.append((a, b))
+                return 0
+
+        self.module.call_two(First())
+        self.module.call_two(Extra(), fun_extra_args=(7,))
+        self.module.call_two(Wrapper())
+        self.module.call_two(Cached())
+        assert calls == [(1,), (1, 7), (1, 2), (1, 2)]
+
+    def test_callable_instance_too_many_required(self):
+        class A:
+            def __call__(self, a, b, c):
+                return 0
+
+        err = getattr(self.module, f"_{self.module.__name__}_error")
+        with pytest.raises(err, match="call-back fun"):
+            self.module.call_two(A())
+
+    def test_mock(self):
+        fun = mock.Mock(return_value=0)
+        self.module.call_two(fun)
+        fun.assert_called_once_with(1, 2)
