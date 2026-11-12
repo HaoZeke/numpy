@@ -596,12 +596,15 @@ subroutinepattern = re.compile(beforethisafter % (
     r'[a-z\s]*?', 'subroutine', 'subroutine', '.*'), re.I), 'begin'
 # modulepattern=re.compile(beforethisafter%('[a-z\s]*?','module','module','.*'),re.I),'begin'
 #
-groupbegins77 = r'program|block\s*data'
+# Fixed form still accepts the F90 constructs whose END spellings are
+# in groupends. Without them, ENDMODULE and ENDINTERFACE pop whatever
+# group is open (gh-32360). ``type`` stays free-form only: ``TYPE *,``
+# is a fixed-form I/O statement, not a derived type.
+groupbegins77 = (r'program|block\s*data|module(?!\s*procedure)|'
+                 r'python\s*module|(abstract|)\s*interface')
 beginpattern77 = re.compile(
     beforethisafter % ('', groupbegins77, groupbegins77, '.*'), re.I), 'begin'
-groupbegins90 = groupbegins77 + \
-    r'|module(?!\s*procedure)|python\s*module|(abstract|)\s*interface|'\
-    r'type(?!\s*\()'
+groupbegins90 = groupbegins77 + r'|type(?!\s*\()'
 beginpattern90 = re.compile(
     beforethisafter % ('', groupbegins90, groupbegins90, '.*'), re.I), 'begin'
 groupends = (r'end|endprogram|endblockdata|endmodule|endpythonmodule|'
@@ -711,6 +714,23 @@ def _simplifyargs(argsline):
 crackline_re_1 = re.compile(r'\s*(?P<result>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bind_1 = re.compile(r'\s*(?P<bind>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bindlang = re.compile(r'\s*bind\(\s*(?P<lang>[^,]+)\s*,\s*name\s*=\s*"(?P<lang_name>[^"]+)"\s*\)', re.I)
+
+def _end_kind(keyword):
+    """Block kind named by ``endmodule`` / ``endfunction`` / similar.
+
+    A bare ``end`` returns None and closes whatever group is open.
+    """
+    key = re.sub(r'\s+', '', keyword.lower())
+    return {
+        'endprogram': 'program',
+        'endblockdata': 'block data',
+        'endmodule': 'module',
+        'endpythonmodule': 'python module',
+        'endinterface': 'interface',
+        'endsubroutine': 'subroutine',
+        'endfunction': 'function',
+    }.get(key)
+
 
 def crackline(line, reset=0):
     """
@@ -828,9 +848,22 @@ def crackline(line, reset=0):
             groupcounter = groupcounter - 1
             if skipblocksuntil <= groupcounter:
                 return
+        # ``endmodule`` does not match ``\bmodule\b``, so the begin-pattern
+        # check below never sees it. A named END closes only that kind
+        # of group (gh-32360).
+        ended = _end_kind(m.group('this'))
+        current = groupname.get(groupcounter)
+        if ended == 'interface' and current == 'abstract interface':
+            ended = current
         if groupcounter <= 0:
+            if ended:
+                outmess(f'crackline: ignoring {m.group("this")} with no open group.\n')
+                return
             raise Exception(f'crackline: groupcounter(={groupcounter}) is nonpositive. '
                             'Check the blocks.')
+        if ended and ended != current:
+            outmess(f'crackline: ignoring {m.group("this")} inside {current}.\n')
+            return
         m1 = beginpattern[0].match(line)
         if (m1) and (not m1.group('this') == groupname[groupcounter]):
             raise Exception(f'crackline: End group {m1.group("this")!r} '

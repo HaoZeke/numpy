@@ -1,0 +1,8 @@
+      SUBROUTINE RUN(F)
+      INTERFACE
+      SUBROUTINE F(X)
+      REAL X
+      END SUBROUTINE
+      END INTERFACE
+      CALL F(1.0)
+      END

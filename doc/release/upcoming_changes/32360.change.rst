@@ -1,0 +1,7 @@
+``f2py`` accepts ``MODULE`` and ``INTERFACE`` in fixed-form source
+------------------------------------------------------------------
+A fixed-form file was parsed as strict Fortran 77, so ``MODULE`` and
+``INTERFACE`` did not open a group, while ``ENDMODULE`` and
+``ENDINTERFACE`` still closed one. A module's procedure was then left
+at the top level and the wrapper was not built. Those statements now
+open and close their own groups. ``TYPE *,`` remains an I/O statement.
