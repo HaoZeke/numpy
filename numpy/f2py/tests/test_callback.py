@@ -962,3 +962,60 @@ class TestSelectedForwardedCallbackArguments(util.F2PyTest):
         assert self.module.fun2(0.0, callback) == 1
         assert received == [1]
         assert not hasattr(self.module, "fun1")
+@pytest.mark.slow
+class TestForwardedCallbackGH31248(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh31248_arg.f90"),
+               util.getpath("tests", "src", "callback", "gh31248_arg.pyf")]
+    module_name = "gh31248_arg"
+
+    def test_arguments(self):
+        seen = []
+        self.module.solve(3, lambda step, x: seen.append((step, x)))
+        assert seen == [(1, 0.5), (2, 0.25), (3, 0.125)]
+
+    def test_exception_abandons_fortran_call(self):
+        seen = []
+
+        def monitor(step, x):
+            seen.append(step)
+            raise RuntimeError("stop")
+
+        with pytest.raises(RuntimeError, match="stop"):
+            self.module.solve(3, monitor)
+        assert seen == [1]
+
+
+@pytest.mark.slow
+class TestNamedCallbackGH31248(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh31248_named.f90"),
+               util.getpath("tests", "src", "callback", "gh31248_named.pyf")]
+    module_name = "gh31248_named"
+
+    def test_undefined(self):
+        with pytest.raises(Exception, match="Callback on_step not defined"):
+            self.module.run(3)
+
+    def test_arguments(self):
+        seen = []
+        self.module.on_step = lambda step, x: seen.append((step, x))
+        try:
+            self.module.run(3)
+            self.module.report(7, 1.5)
+        finally:
+            del self.module.on_step
+        assert seen == [(1, 0.5), (2, 0.25), (3, 0.125), (7, 1.5)]
+
+    def test_exception_abandons_fortran_call(self):
+        seen = []
+
+        def on_step(step, x):
+            seen.append(step)
+            raise RuntimeError("stop")
+
+        self.module.on_step = on_step
+        try:
+            with pytest.raises(RuntimeError, match="stop"):
+                self.module.run(3)
+        finally:
+            del self.module.on_step
+        assert seen == [1]

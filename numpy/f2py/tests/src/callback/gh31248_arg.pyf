@@ -1,0 +1,18 @@
+python module gh31248_arg__user__routines
+    interface
+        subroutine monitor(step, x)
+            integer intent(in) :: step
+            double precision intent(in) :: x
+        end subroutine monitor
+    end interface
+end python module gh31248_arg__user__routines
+
+python module gh31248_arg
+    interface
+        subroutine solve(n, monitor)
+            use gh31248_arg__user__routines
+            integer intent(in) :: n
+            external monitor
+        end subroutine solve
+    end interface
+end python module gh31248_arg
