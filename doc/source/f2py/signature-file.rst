@@ -369,6 +369,41 @@ The following attributes can be used by F2PY.
      automatically by F2PY.
    * For an optional array argument, all its dimensions must be bounded.
 
+``absent``
+  The corresponding argument is a Fortran ``OPTIONAL`` dummy. When the
+  Python caller omits it or passes ``None``, f2py calls the Fortran
+  procedure with that actual absent, so ``present()`` is false. A passed
+  value is forwarded as usual.
+
+  ``absent`` is set automatically when f2py reads a Fortran ``OPTIONAL``
+  attribute or ``OPTIONAL`` statement from Fortran source. It is not set
+  by the f2py ``optional`` keyword in a signature file, by an ``intent``
+  list, by an ``<init_expr>`` default, or by ``check``. A signature file
+  can name it by hand::
+
+    real, optional, absent, intent(in) :: x
+
+  Omitting the actual requires an explicit Fortran interface. f2py builds
+  that interface for module procedures and for external procedures that
+  already have one.
+
+  Some kinds cannot be omitted. A callback, a character array, an
+  allocatable or pointer dummy, a ``value`` dummy, an ``intent(c)``
+  dummy, and an F77 external with no explicit interface are in that
+  set. When Fortran source set ``absent`` on one of those kinds, f2py
+  drops ``absent``, prints a build message, and keeps the previous
+  call. The message names the routine, the argument, and the reason.
+  When a signature file or an f2py directive writes ``absent`` on one
+  of those kinds, f2py raises ``F2PYError`` and names the same facts.
+
+  An explicit init expression, including one from a directive or a
+  signature file, also drops ``absent`` and keeps that default. f2py
+  prints a build message in that case too.
+
+  A pure ``intent(out)`` argument is still allocated and passed, so
+  ``present()`` stays true: it is a return value, not a caller-supplied
+  input.
+
 ``required``
   The corresponding argument with this attribute is considered mandatory. This
   is the default. ``required`` should only be specified if there is a need to
