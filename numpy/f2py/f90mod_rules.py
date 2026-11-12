@@ -260,6 +260,7 @@ def buildhooks(pymod):
                 fadd(f'end subroutine {fargs[-1]}')
             else:
                 fargs.append(n)
+                mfargs.append(n)
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
                 iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
