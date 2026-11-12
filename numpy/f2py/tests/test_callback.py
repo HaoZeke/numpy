@@ -635,7 +635,6 @@ class TestGH28605Signature:
         cbs = {m["name"]: m["body"][0]["body"][0]
                for m in mod if "__user__" in m["name"]}
         for module, block, name in [("tcb", "function", "p"),
-                                    ("scb", "subroutine", "s")]:
                                     ("scb", "subroutine", "s"),
                                     ("forward", "function", "g")]:
             cb = cbs[f"{module}__user__routines"]
