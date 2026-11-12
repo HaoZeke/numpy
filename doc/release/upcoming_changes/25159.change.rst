@@ -1,0 +1,5 @@
+``f2py`` links extensions with the Fortran compiler
+---------------------------------------------------
+The extension was linked with the C compiler. ifx then could not find
+its own runtime libraries (``libifcore`` and ``libimf``), so the module
+failed to build. The link is now done by the Fortran compiler.
