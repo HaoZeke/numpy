@@ -18,9 +18,22 @@ def _meson_identifier(prefix: str, value: str, index: int) -> str:
     return f"{prefix}_{index}_{safe_value}"
 
 
-def _is_openmp_flag(flag: str) -> bool:
-    token = flag.strip("'\"")
-    return token in {"-qopenmp", "-fopenmp", "-fiopenmp", "-openmp"}
+def _openmp_link_flags(flags: list[str]) -> list[str]:
+    """OpenMP flags that also select the runtime at link time.
+
+    flang's ``-fopenmp`` link line requests ``libomp``, which is a
+    different runtime from the compile-only flag existing tests pass.
+    Intel ``-qopenmp`` must be on the link line (gh-27163).
+    """
+    fc = os.environ.get("FC", "")
+    selected = []
+    for flag in flags:
+        token = flag.strip("'\"")
+        if token in {"-qopenmp", "-fiopenmp", "-openmp"}:
+            selected.append(flag)
+        elif token == "-fopenmp" and "flang" not in fc:
+            selected.append(flag)
+    return selected
 
 
 class MesonTemplate:
@@ -144,7 +157,7 @@ class MesonTemplate:
         # -qopenmp/-fopenmp select the OpenMP runtime at link time.
         # Leaving them as compile-only flags drops omp_set_num_threads
         # (gh-27163). --allow-shlib-undefined hides that until import.
-        link = [flag for flag in self.fortran_args if _is_openmp_flag(flag)]
+        link = _openmp_link_flags(self.fortran_args)
         if link:
             self.substitutions["link_args"] = (
                 f"{self.indent}link_args: [{', '.join(link)}],"

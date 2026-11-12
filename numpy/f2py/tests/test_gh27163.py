@@ -1,3 +1,4 @@
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -34,7 +35,16 @@ def test_openmp_flag_is_a_link_argument():
     assert "link_args:" not in _meson([])
 
 
+def _gfortran_openmp():
+    fc = os.environ.get("FC", "gfortran")
+    return "flang" not in fc and "ifx" not in fc
+
+
 @pytest.mark.slow
+@pytest.mark.skipif(
+    not _gfortran_openmp(),
+    reason="this check uses gfortran -fopenmp; flang's -fopenmp link line needs libomp",
+)
 class TestGfortranOpenmpLink(util.F2PyTest):
     # -fopenmp has to be on the link line. -lgomp is not passed.
     sources = [util.getpath("tests", "src", "regression", "gh27163.f90")]
