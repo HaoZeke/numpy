@@ -100,9 +100,9 @@ typedefs['character'] = """typedef char character;"""
 cppmacros['CFUNCSMESS'] = """
 #ifdef DEBUGCFUNCS
 #define CFUNCSMESS(mess) fprintf(stderr,\"debug-capi:\"mess);
-#define CFUNCSMESSPY(mess,obj) CFUNCSMESS(mess) \\
-    PyObject_Print((PyObject *)obj,stderr,Py_PRINT_RAW);\\
-    fprintf(stderr,\"\\n\");
+#define CFUNCSMESSPY(mess,obj) \\
+    if ((obj) == NULL) fprintf(stderr,\"debug-capi:\"mess\"<nil>\\n\");\\
+    else PySys_FormatStderr(\"debug-capi:\"mess\"%S\\n\",(PyObject *)(obj));
 #else
 #define CFUNCSMESS(mess)
 #define CFUNCSMESSPY(mess,obj)
@@ -230,9 +230,8 @@ cppmacros['SWAP'] = """
 # NPY_ARRAY_C_CONTIGUOUS)'
 cppmacros['PRINTPYOBJERR'] = """
 #define PRINTPYOBJERR(obj)\\
-    fprintf(stderr,\"#modulename#.error is related to \");\\
-    PyObject_Print((PyObject *)obj,stderr,Py_PRINT_RAW);\\
-    fprintf(stderr,\"\\n\");
+    if ((obj) == NULL) fprintf(stderr,\"#modulename#.error is related to <nil>\\n\");\\
+    else PySys_FormatStderr(\"#modulename#.error is related to %S\\n\",(PyObject *)(obj));
 """
 cppmacros['MINMAX'] = """
 #ifndef max
@@ -452,7 +451,7 @@ cppmacros['GETSTRFROMPYTUPLE'] = """
             goto capi_fail;\\
         if (PyBytes_Check(rv_cb_str)) {\\
             str[len-1]='\\0';\\
-            STRINGCOPYN((str),PyBytes_AS_STRING((PyBytesObject*)rv_cb_str),(len));\\
+            STRINGCOPYN((str),PyBytes_AsString(rv_cb_str),(len));\\
         } else {\\
             PRINTPYOBJERR(rv_cb_str);\\
             PyErr_SetString(#modulename#_error,\"string object expected\");\\
@@ -802,8 +801,8 @@ fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
             }
         }
         if (tmp == NULL) goto capi_fail;
-        n = PyBytes_GET_SIZE(tmp);
-        buf = PyBytes_AS_STRING(tmp);
+        n = PyBytes_Size(tmp);
+        buf = PyBytes_AsString(tmp);
     }
     if (*len == -1) {
         /* TODO: change the type of `len` so that we can remove this */
@@ -852,12 +851,12 @@ static int
 character_from_pyobj(character* v, PyObject *obj, const char *errmess) {
     if (PyBytes_Check(obj)) {
         /* empty bytes has trailing null, so dereferencing is always safe */
-        *v = PyBytes_AS_STRING(obj)[0];
+        *v = PyBytes_AsString(obj)[0];
         return 1;
     } else if (PyUnicode_Check(obj)) {
         PyObject* tmp = PyUnicode_AsASCIIString(obj);
         if (tmp != NULL) {
-            *v = PyBytes_AS_STRING(tmp)[0];
+            *v = PyBytes_AsString(tmp)[0];
             Py_DECREF(tmp);
             return 1;
         }
@@ -1238,11 +1237,9 @@ needs['complex_double_from_pyobj'] = ['complex_double', 'npy_math.h']
 cfuncs['complex_double_from_pyobj'] = """
 static int
 complex_double_from_pyobj(complex_double* v, PyObject *obj, const char *errmess) {
-    Py_complex c;
     if (PyComplex_Check(obj)) {
-        c = PyComplex_AsCComplex(obj);
-        npy_csetreal(&v->_npy, c.real);
-        npy_csetimag(&v->_npy, c.imag);
+        npy_csetreal(&v->_npy, PyComplex_RealAsDouble(obj));
+        npy_csetimag(&v->_npy, PyComplex_ImagAsDouble(obj));
         return 1;
     }
     if (PyArray_IsScalar(obj, ComplexFloating)) {
@@ -1397,12 +1394,14 @@ cfuncs[
 
 
 needs['create_cb_arglist'] = ['CFUNCSMESS', 'PRINTPYOBJERR', 'MINMAX']
-# create the list of arguments to be used when calling back to python
+# create the list of arguments to be used when calling back to python;
+# with keepdefaults, a fun that can be called with the extra arguments alone
+# gets only those and its remaining parameters keep their default values
 cfuncs['create_cb_arglist'] = """
 static int
-create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
-                  const int nofoptargs, int *nofargs, PyTupleObject **args,
-                  const char *errmess)
+create_cb_arglist(PyObject* fun, PyObject* xa , const int maxnofargs,
+                  const int nofoptargs, const int keepdefaults, int *nofargs,
+                  PyObject **args, const char *errmess)
 {
     PyObject *tmp = NULL;
     PyObject *tmp_fun = NULL;
@@ -1523,6 +1522,10 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
     /* Calculate the size of call-backs argument list */
     siz = varargs ? maxnofargs+ext : MIN(maxnofargs+ext,tot);
     *nofargs = MAX(0,siz-ext);
+    if (keepdefaults && tot-opt <= ext) {
+        siz = ext;
+        *nofargs = 0;
+    }
 
 #ifdef DEBUGCFUNCS
     fprintf(stderr,
@@ -1541,16 +1544,18 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
     }
 
     /* Initialize argument list */
-    *args = (PyTupleObject *)PyTuple_New(siz);
+    *args = PyTuple_New(siz);
+    if (*args == NULL)
+        goto capi_fail;
     for (i=0;i<*nofargs;i++) {
         Py_INCREF(Py_None);
-        PyTuple_SET_ITEM((PyObject *)(*args),i,Py_None);
+        PyTuple_SetItem(*args,i,Py_None);
     }
     if (xa != NULL)
         for (i=(*nofargs);i<siz;i++) {
             tmp = PyTuple_GetItem((PyObject *)xa,i-(*nofargs));
             Py_INCREF(tmp);
-            PyTuple_SET_ITEM(*args,i,tmp);
+            PyTuple_SetItem(*args,i,tmp);
         }
     CFUNCSMESS(\"create_cb_arglist-end\\n\");
     Py_DECREF(tmp_fun);

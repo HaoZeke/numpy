@@ -1,3 +1,4 @@
+import collections
 import textwrap
 
 import pytest
@@ -313,6 +314,17 @@ class TestCharacter(util.F2PyTest):
         else:
             raise SystemError(f'{f.__name__} should have failed on int value')
 
+    def test_input_unicode_array(self):
+        f = getattr(self.module, self.fprefix + '_input')
+
+        # Only the first code point of a unicode array is converted
+        assert_equal(f(np.array('ab')), ord('a'))
+        assert_equal(f(np.array(['a\u00e9'])), ord('a'))
+        assert_equal(f(np.array([], dtype='U1')), 0)
+        a = np.frombuffer(b'\0' + np.array('c').tobytes(), dtype='U1', offset=1)
+        assert not a.flags.aligned
+        assert_equal(f(a), ord('c'))
+
     @pytest.mark.parametrize("dtype", ['c', 'S1', 'U1'])
     def test_array_input(self, dtype):
         f = getattr(self.module, self.fprefix + '_array_input')
@@ -576,6 +588,19 @@ class TestMiscCharacter(util.F2PyTest):
             r = f(x)
             for k, v in expected.items():
                 assert_equal(getattr(r, k), v)
+
+    @pytest.mark.parametrize("x, dtype", [
+        ([b'1', b'22', b'333'], 'S3'),
+        (('a', b'bc'), 'S2'),
+        (collections.UserList(['ab', 'cde']), 'S3'),
+        (['ab', 1], 'S2'),
+    ])
+    def test_gh4519_sequence(self, x, dtype):
+        # Assumed length is the longest str/bytes item of the sequence
+        f = getattr(self.module, self.fprefix + '_gh4519')
+        r = f(x)
+        assert_equal(r.dtype, np.dtype(dtype))
+        assert_array_equal(r, np.array(x, dtype=dtype))
 
     def test_gh3425(self):
         # Test returning a copy of assumed length string

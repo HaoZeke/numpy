@@ -189,6 +189,10 @@ extern \"C\" {
 /* Unconditionally included */
 #include <Python.h>
 #include <numpy/npy_os.h>
+/* Python.h does not include these for the Limited API 3.11 and newer */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 """ + gentitle("See f2py2e/cfuncs.py: includes") + """
 #includes#
@@ -908,7 +912,7 @@ arg_rules = [
         'latexdocstropt': {isintent_nothide: '\\item[]{{}\\verb@#varname#_extra_args := () input tuple@{}} --- Extra arguments for call-back function {{}\\verb@#varname#@{}}.'},
         'decl': ['    #cbname#_t #varname#_cb = { Py_None, NULL, 0 };',
                  '    #cbname#_t *#varname#_cb_ptr = &#varname#_cb;',
-                 '    PyTupleObject *#varname#_xa_capi = NULL;',
+                 '    PyObject *#varname#_xa_capi = NULL;',
                  {l_not(isintent_callback):
                   '    #cbname#_typedef #varname#_cptr;'}
                  ],
@@ -939,17 +943,21 @@ if (#varname#_cb.capi==Py_None) {
       if (PyObject_HasAttrString(#modulename#_module,\"#varname#_extra_args\")) {
         PyObject* capi_tmp = PyObject_GetAttrString(#modulename#_module,\"#varname#_extra_args\");
         if (capi_tmp) {
-          #varname#_xa_capi = (PyTupleObject *)PySequence_Tuple(capi_tmp);
+          #varname#_xa_capi = PySequence_Tuple(capi_tmp);
           Py_DECREF(capi_tmp);
         }
         else {
-          #varname#_xa_capi = (PyTupleObject *)Py_BuildValue(\"()\");
+          #varname#_xa_capi = Py_BuildValue(\"()\");
         }
         if (#varname#_xa_capi==NULL) {
+          Py_DECREF(#varname#_cb.capi);
           PyErr_SetString(#modulename#_error,\"Failed to convert #modulename#.#varname#_extra_args to tuple.\\n\");
           return NULL;
         }
       }
+    }
+    else {
+      Py_INCREF(#varname#_xa_capi);
     }
   }
   if (#varname#_cb.capi==NULL) {
@@ -957,9 +965,13 @@ if (#varname#_cb.capi==Py_None) {
     return NULL;
   }
 }
+else {
+  Py_INCREF(#varname#_cb.capi);
+  Py_XINCREF(#varname#_xa_capi);
+}
 """},
             """\
-    if (create_cb_arglist(#varname#_cb.capi,#varname#_xa_capi,#maxnofargs#,#nofoptargs#,&#varname#_cb.nofargs,&#varname#_cb.args_capi,\"failed in processing argument list for call-back #varname#.\")) {
+    if (create_cb_arglist(#varname#_cb.capi,#varname#_xa_capi,#maxnofargs#,#nofoptargs#,0,&#varname#_cb.nofargs,&#varname#_cb.args_capi,\"failed in processing argument list for call-back #varname#.\")) {
 """,
             {debugcapi: ["""\
         fprintf(stderr,\"debug-capi:Assuming %d arguments; at most #maxnofargs#(-#nofoptargs#) is expected.\\n\",#varname#_cb.nofargs);
@@ -969,12 +981,16 @@ if (#varname#_cb.capi==Py_None) {
         CFUNCSMESS(\"Saving callback variables for `#varname#`.\\n\");
         #varname#_cb_ptr = swap_active_#cbname#(#varname#_cb_ptr);""",
         ],
-        'cleanupfrompyobj':
-        """\
+        'cleanupfrompyobj': [  # note that this list will be reversed
+            {isintent_callback: """\
+    Py_DECREF(#varname#_cb.capi);
+    Py_XDECREF(#varname#_xa_capi);"""},
+            """\
         CFUNCSMESS(\"Restoring callback variables for `#varname#`.\\n\");
         #varname#_cb_ptr = swap_active_#cbname#(#varname#_cb_ptr);
         Py_DECREF(#varname#_cb.args_capi);
     }""",
+        ],
         'need': ['SWAP', 'create_cb_arglist'],
         '_check': isexternal,
         '_depend': ''
@@ -1266,7 +1282,8 @@ if (#varname#_cb.capi==Py_None) {
         f2py_success = (PyArray_ResolveWritebackIfCopy(capi_#varname#_as_array) >= 0);
         if (f2py_success) { /* return written-back-to inplace array #varname# */
         Py_INCREF(#varname#_capi);
-        Py_SETREF(capi_#varname#_as_array, (PyArrayObject*)#varname#_capi);"""},
+        Py_DECREF(capi_#varname#_as_array);
+        capi_#varname#_as_array = (PyArrayObject*)#varname#_capi;"""},
             ],
         'closepyobjfrom': {isintent_inplace: '    } /*if (f2py_success) of #varname# pyobjfrom*/'},
         'cleanupfrompyobj': [  # note that this list will be reversed
@@ -1274,9 +1291,9 @@ if (#varname#_cb.capi==Py_None) {
              '/* if (capi_#varname#_as_array == NULL) ... else of #varname# */'),
             {l_not(l_or(isintent_out, isintent_hide)): """\
     if((PyObject *)capi_#varname#_as_array!=#varname#_capi) {
-        Py_XDECREF(capi_#varname#_as_array); }"""},
+        Py_XDECREF((PyObject *)capi_#varname#_as_array); }"""},
             {l_and(isintent_hide, l_not(isintent_out))
-                   : """        Py_XDECREF(capi_#varname#_as_array);"""},
+                   : """        Py_XDECREF((PyObject *)capi_#varname#_as_array);"""},
             {hasinitvalue: '    }  /*if (f2py_success) of #varname# init*/'},
         ],
         '_check': isarray,
