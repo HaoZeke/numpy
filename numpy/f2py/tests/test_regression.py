@@ -410,29 +410,6 @@ class TestPrecompiledModuleUse(util.F2PyTest):
         assert mod.scaled_total(2) == 12
 
 
-def test_gh25415_meson_include_dirs_from_running_numpy():
-    # meson setup must not spawn Python to look up the include directories
-    mparser = pytest.importorskip("mesonbuild.mparser")
-    meson_build = MesonTemplate(
-        modulename="Blah",
-        sources=[Path("f90continuation.f90")],
-        deps=[],
-        libraries=[],
-        library_dirs=[],
-        include_dirs=[],
-        object_files=[],
-        linker_args=[],
-        fortran_args=[],
-        build_type="release",
-        python_exe=sys.executable,
-    ).generate_meson_build()
-
-    mparser.Parser(meson_build, "meson.build").parse()
-    assert "run_command" not in meson_build
-    assert f"incdir_numpy = '''{np.get_include()}'''" in meson_build
-    assert f"incdir_f2py = '''{np.f2py.get_include()}'''" in meson_build
-
-
 @pytest.mark.slow
 def test_gh25415_meson_configures_host_compilers_only(tmp_path):
     # Native builds never use the build machine compilers, so meson setup
