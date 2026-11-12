@@ -35,7 +35,9 @@ python module {module_name}
         {{
             PyObject *value = PyUnicode_FromString("Hello from the user code");
             if (!value) return NULL;
-            if (PyModule_AddObjectRef(m, "foo", value) < 0) return NULL;
+            int status = PyModule_AddObjectRef(m, "foo", value);
+            Py_DECREF(value);
+            if (status < 0) return NULL;
         }}
         '''
     end interface
