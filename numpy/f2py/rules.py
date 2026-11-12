@@ -737,7 +737,7 @@ rout_rules = [
         'return': {l_or(iscomplexfunction, islong_doublefunction):
                    ',#name#_return_value_capi',
                    l_not(l_or(iscomplexfunction, islong_doublefunction,
-                              isintent_hide)): ',#name#_return_value'},
+                              isintent_hide)): ',#rcast##name#_return_value'},
         '_check': l_and(isfunction, l_not(isstringfunction), l_not(isfunction_wrap))
     }, {  # String function # in use for --no-wrap
         'declfortranroutine': 'extern void #F_FUNC#(#fortranname#,#FORTRANNAME#)(#callprotoargument#);',
@@ -824,7 +824,7 @@ aux_rules = [
         '_check': l_and(isscalar, l_not(iscomplex)),
     },
     {
-        'return': ',#varname#',
+        'return': ',#varrcast##varname#',
         'docstrout': '#pydocsignout#',
         'docreturn': '#outvarname#,',
         'returnformat': '#varrformat#',
@@ -1034,10 +1034,12 @@ else {
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#);'},
         'callfortran': {l_or(isintent_c, isattr_value): '#varname#,', l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
         # gh-9727: long double is not a PyObject. Build one and let
-        # Py_BuildValue("N", ...) steal it.
+        # Py_BuildValue("N", ...) steal it. Other kinds use the
+        # width-dependent cast (gh-25229).
         'return': {l_and(isintent_out, islong_double):
                    ',pyobj_from_long_double1(#varname#)',
-                   l_and(isintent_out, l_not(islong_double)): ',#varname#'},
+                   l_and(isintent_out, l_not(islong_double)):
+                   ',#varrcast##varname#'},
         'need': {l_and(isintent_out, islong_double): 'pyobj_from_long_double1'},
         '_check': l_and(isscalar, l_not(iscomplex))
     }, {

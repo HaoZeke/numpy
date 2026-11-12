@@ -10,9 +10,10 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
+import string
 import sys
 
-from . import __version__
+from . import __version__, _isocbind
 
 f2py_version = __version__.version
 
@@ -269,6 +270,10 @@ cppmacros['len..'] = """
 """
 cppmacros['pyobj_from_char1'] = r"""
 #define pyobj_from_char1(v) (PyLong_FromLong(v))
+"""
+needs['pyobj_from_signed_char1'] = ['signed_char']
+cppmacros['pyobj_from_signed_char1'] = r"""
+#define pyobj_from_signed_char1(v) (PyLong_FromLong(v))
 """
 cppmacros['pyobj_from_short1'] = r"""
 #define pyobj_from_short1(v) (PyLong_FromLong(v))
@@ -1551,6 +1556,85 @@ static int try_pyarr_from_complex_double(PyObject* obj,complex_double* v) {
     return try_pyarr_from_typenum(obj, NPY_CDOUBLE, v);
 }
 """
+
+# Helpers for the C types in _isocbind.isoc_int_types.  Values pass through
+# long_long; the <stdint.h> limits are named after the type (C11 7.20.2,
+# 7.20.3) and checked only for types narrower than long long.
+_isoc_signed_from_pyobj = string.Template("""
+static int
+${ctype}_from_pyobj(${ctype}* v, PyObject *obj, const char *errmess)
+{
+    long_long i = 0;
+    if (!long_long_from_pyobj(&i, obj, errmess)) {
+        return 0;
+    }
+#if ${limit}_MIN > LLONG_MIN || ${limit}_MAX < LLONG_MAX
+    if (i < ${limit}_MIN || i > ${limit}_MAX) {
+        PyErr_SetString(PyExc_OverflowError, errmess);
+        return 0;
+    }
+#endif
+    *v = (${ctype})i;
+    return 1;
+}
+""")
+_isoc_unsigned_from_pyobj = string.Template("""
+static int
+${ctype}_from_pyobj(${ctype}* v, PyObject *obj, const char *errmess)
+{
+    long_long i = 0;
+    if (!long_long_from_pyobj(&i, obj, errmess)) {
+        return 0;
+    }
+    if (i < 0) {
+        PyErr_SetString(PyExc_OverflowError, errmess);
+        return 0;
+    }
+#if ${limit}_MAX < LLONG_MAX
+    if (i > ${limit}_MAX) {
+        PyErr_SetString(PyExc_OverflowError, errmess);
+        return 0;
+    }
+#endif
+    *v = (${ctype})i;
+    return 1;
+}
+""")
+for _ctype, (_signed, _) in _isocbind.isoc_int_types.items():
+    if _signed:
+        _from_pyobj = _isoc_signed_from_pyobj
+        _pyobj = 'PyLong_FromLongLong((long long)(v))'
+    else:
+        _from_pyobj = _isoc_unsigned_from_pyobj
+        _pyobj = 'PyLong_FromUnsignedLongLong((unsigned long long)(v))'
+    needs[f'{_ctype}_from_pyobj'] = ['long_long_from_pyobj']
+    cfuncs[f'{_ctype}_from_pyobj'] = _from_pyobj.substitute(
+        ctype=_ctype, limit=_ctype.removesuffix('_t').upper())
+    cppmacros[f'pyobj_from_{_ctype}1'] = (
+        f'#define pyobj_from_{_ctype}1(v) ({_pyobj})')
+    needs[f'try_pyarr_from_{_ctype}'] = [
+        f'pyobj_from_{_ctype}1', 'TRYPYARRAYTEMPLATE']
+    cfuncs[f'try_pyarr_from_{_ctype}'] = (
+        f'static int try_pyarr_from_{_ctype}(PyObject* obj,{_ctype}* v) {{\n'
+        f"    TRYPYARRAYTEMPLATE({_ctype},'\\0');\n}}\n")
+
+cppmacros['pyobj_from_bool1'] = """
+#define pyobj_from_bool1(v) (PyLong_FromLong(v))"""
+cfuncs['bool_from_pyobj'] = """
+static int
+bool_from_pyobj(bool* v, PyObject *obj, const char *errmess)
+{
+    int b = PyObject_IsTrue(obj);
+    if (b < 0) {
+        return 0;
+    }
+    *v = b;
+    return 1;
+}
+"""
+needs['try_pyarr_from_bool'] = ['pyobj_from_bool1', 'TRYPYARRAYTEMPLATE']
+cfuncs[
+    'try_pyarr_from_bool'] = 'static int try_pyarr_from_bool(PyObject* obj,bool* v) {\n    TRYPYARRAYTEMPLATE(bool,\'?\');\n}\n'
 
 
 needs['create_cb_arglist'] = ['CFUNCSMESS', 'PRINTPYOBJERR', 'MINMAX']

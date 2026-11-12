@@ -15,7 +15,12 @@ import os
 import re
 
 from . import cb_rules
-from ._isocbind import iso_c2py_map, iso_c_binding_map, isoc_c2pycode_map
+from ._isocbind import (
+    iso_c2py_map,
+    iso_c_binding_map,
+    isoc_c2pycode_map,
+    isoc_int_types,
+)
 from ._isofenv import iso_fortran_env_map
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
@@ -132,6 +137,20 @@ f2cmap_all = {'real': {'': 'float', '4': 'float', '8': 'double',
 # Add ISO_C handling
 c2pycode_map.update(isoc_c2pycode_map)
 c2py_map.update(iso_c2py_map)
+# Py_BuildValue has no conversion for these types, so their values are
+# passed as the type its format expects
+c2buildvalue_cast_map = {}
+for _ctype, (_signed, _) in isoc_int_types.items():
+    if _signed:
+        c2capi_map[_ctype] = f'F2PY_INT_TYPENUM({_ctype})'
+        c2buildvalue_map[_ctype] = 'L'
+        c2buildvalue_cast_map[_ctype] = '(long long)'
+    else:
+        c2capi_map[_ctype] = f'F2PY_UINT_TYPENUM({_ctype})'
+        c2buildvalue_map[_ctype] = 'K'
+        c2buildvalue_cast_map[_ctype] = '(unsigned long long)'
+c2capi_map['bool'] = 'F2PY_BOOL_TYPENUM(bool)'
+c2buildvalue_map['bool'] = 'i'
 f2cmap_all, _ = process_f2cmap_dict(f2cmap_all, iso_c_binding_map, c2py_map)
 f2cmap_all, _ = process_f2cmap_dict(f2cmap_all, iso_fortran_env_map, c2py_map)
 # End ISO_C handling
@@ -184,6 +203,9 @@ cformat_map = {'double': '%g',
                'string': '\\"%s\\"',
                'character': "'%c'",
                }
+cformat_map.update({ctype: f'%{conv}'
+                    for ctype, (_, conv) in isoc_int_types.items()})
+cformat_map['bool'] = '%d'
 
 # Auxiliary functions
 
@@ -487,7 +509,7 @@ def sign2map(a, var):
     varname,ctype,atype
     init,init.r,init.i,pytype
     vardebuginfo,vardebugshowvalue,varshowvalue
-    varrformat
+    varrformat,varrcast
 
     intent
     """
@@ -517,6 +539,7 @@ def sign2map(a, var):
         ret['varrformat'] = c2buildvalue_map[ret['ctype']]
     else:
         ret['varrformat'] = 'O'
+    ret['varrcast'] = c2buildvalue_cast_map.get(ret['ctype'], '')
     ret['init'], ret['showinit'] = getinit(a, var)
     if hasinitvalue(var) and iscomplex(var) and not isarray(var):
         ret['init.r'], ret['init.i'] = markoutercomma(
@@ -595,7 +618,7 @@ def sign2map(a, var):
 def routsign2map(rout):
     """
     name,NAME,begintitle,endtitle
-    rname,ctype,rformat
+    rname,ctype,rformat,rcast
     routdebugshowvalue
     """
     global lcb_map
@@ -657,6 +680,7 @@ def routsign2map(rout):
         else:
             ret['rformat'] = 'O'
             errmess(f"routsign2map: no c2buildvalue key for type {ret['ctype']!r}\n")
+        ret['rcast'] = c2buildvalue_cast_map.get(ret['ctype'], '')
         if debugcapi(rout):
             if ret['ctype'] in cformat_map:
                 ret['routdebugshowvalue'] = ("debug-capi:"

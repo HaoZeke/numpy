@@ -105,6 +105,15 @@ and the corresponding <C type>. The <C type> can be one of the following::
     long_long
     npy_intp
     unsigned
+    size_t
+    ptrdiff_t
+    intptr_t
+    intmax_t
+    int_fast8_t
+    int_fast16_t
+    int_fast32_t
+    int_fast64_t
+    bool
     complex_float
     complex_double
     complex_long_double
