@@ -57,8 +57,26 @@ To construct an extension module, use
 The constructed extension module is saved as ``<modulename>module.c`` to the
 current directory.
 
-Here ``<fortran files>`` may also contain signature files. Among other options
-(see below), the following options can be used in this mode:
+Here ``<fortran files>`` may also contain a signature file. The wrappers are
+then generated from the signature file alone, as when building with ``-c``: the
+module name is read from the signature file, so ``-m`` is ignored, and Fortran
+sources are not scanned. For example, to generate the wrappers for the edited
+signature file ``fib2.pyf`` from :ref:`f2py-getting-started`, run
+
+.. code-block:: sh
+
+  f2py fib2.pyf
+
+and compile ``fib2module.c`` together with the Fortran sources, as shown in
+:ref:`f2py-meson`.
+
+.. versionchanged:: 2.6.0
+   ``-m`` and Fortran sources passed with a signature file are ignored.
+   Previously they produced a second module that replaced the one described
+   by the signature file.
+
+Among other options (see below), the following options can be used in this
+mode:
 
 ``--debug-capi``
   Adds debugging hooks to the extension module. When using this extension
