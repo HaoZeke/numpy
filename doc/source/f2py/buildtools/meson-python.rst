@@ -80,8 +80,10 @@ Two entries matter here:
 The ``meson.build`` file does four things:
 
 1. Uses ``dependency('numpy')`` to locate NumPy headers, and a
-   ``declare_dependency`` to add the F2PY include directory (for
-   ``fortranobject.h``).
+   ``declare_dependency`` to pass the F2PY include directory (for
+   ``fortranobject.h``) as an ``-I`` flag.
+   The flag, unlike ``include_directories``, also works when the virtual
+   environment is inside the project directory.
 2. Runs ``f2py`` via ``custom_target`` to generate the C wrapper sources.
 3. Compiles the generated C code together with the Fortran source into a Python
    extension module using ``py.extension_module``.
