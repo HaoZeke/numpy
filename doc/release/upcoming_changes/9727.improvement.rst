@@ -1,0 +1,3 @@
+Return real(kind=16) as a Python float
+--------------------------------------
+Py_BuildValue was given a raw long double under format "O", which segfaults. Read the IEEE binary128 bytes instead (gh-9727).
