@@ -18,6 +18,19 @@ def _meson_identifier(prefix: str, value: str, index: int) -> str:
     return f"{prefix}_{index}_{safe_value}"
 
 
+def _dependency_call(dep: str) -> str:
+    """Meson call for one ``--dep`` value.
+
+    Plain ``mpi`` is the C dependency. It does not link
+    ``mpi_comm_rank_`` (gh-28902). A Fortran extension needs the
+    Fortran MPI bindings.
+    """
+    name = dep.strip()
+    if name == "mpi":
+        return "dependency('mpi', language: 'fortran')"
+    return f"dependency('{name}')"
+
+
 class MesonTemplate:
     """Template meson build file generation class."""
 
@@ -94,7 +107,7 @@ class MesonTemplate:
 
     def deps_substitution(self) -> None:
         self.substitutions["dep_list"] = f",\n{self.indent}".join(
-            [f"{self.indent}dependency('{dep}')," for dep in self.deps]
+            [f"{self.indent}{_dependency_call(dep)}," for dep in self.deps]
         )
 
     def libraries_substitution(self) -> None:

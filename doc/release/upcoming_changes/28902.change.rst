@@ -1,0 +1,5 @@
+``f2py --dep mpi`` links the Fortran MPI library
+------------------------------------------------
+``--dep mpi`` asked Meson for the C MPI dependency. A Fortran
+``mpi_comm_rank`` then stayed undefined at import. The dependency is
+now the Fortran MPI library.
