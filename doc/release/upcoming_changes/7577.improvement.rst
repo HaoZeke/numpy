@@ -1,0 +1,3 @@
+Build callbacks for interface dummy procedures
+----------------------------------------------
+An explicit interface dummy was not recorded as external, so its callback typedef was missing, and gfortran COMPLEX returns were read with the hidden-pointer ABI (gh-7577).
