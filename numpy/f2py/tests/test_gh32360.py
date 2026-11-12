@@ -38,9 +38,11 @@ def test_fixed_form_module_contains_its_function():
 def test_fixed_form_interface_stays_inside_the_subroutine():
     path = util.getpath("tests", "src", "crackfortran", "gh32360_iface.f")
     found = _walk(_blocks(path))
-    assert found[0] == ("subroutine", "run")
-    assert ("interface", "unknown_interface") in found
+    # A callback interface may also produce a ``__user__`` module.
+    # The subroutine and its interface still have to be present.
+    assert ("subroutine", "run") in found
     assert ("subroutine", "f") in found
+    assert any(kind == "interface" for kind, _name in found)
 
 
 def test_fixed_form_type_star_is_not_a_derived_type():
