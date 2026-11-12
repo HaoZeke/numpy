@@ -373,8 +373,6 @@ def callcrackfortran(files, options):
             mod['gil_used'] = 'Py_MOD_GIL_USED'
         else:
             mod['gil_used'] = 'Py_MOD_GIL_NOT_USED'
-    # gh-26718 Reset global
-    crackfortran.f77modulename = ''
     return postlist
 
 
@@ -447,16 +445,23 @@ def run_main(comline_list):
         :language: python
 
     """
+    return _run_generation(comline_list)[0]
+
+
+def _run_generation(comline_list, *, compile_mode=False):
+    """Generate sources and return their inputs without retaining run settings."""
     saved = [(module, name, copy.deepcopy(getattr(module, name)))
              for module, names in _RUN_SETTINGS for name in names]
     try:
-        return _run_main(comline_list)
+        return _generate_sources(comline_list, compile_mode=compile_mode)
     finally:
         for module, name, value in saved:
             setattr(module, name, value)
 
 
-# A generation call owns its command-line settings and restores caller configuration.
+# The settings of the other modules of f2py that a run takes from its
+# command line.  run_main leaves them as it found them, since code that uses
+# those modules itself, crackfortran above all, relies on them (gh-26718).
 _RUN_SETTINGS = (
     (crackfortran, ('strictf77', 'sourcecodeform', 'quiet', 'verbose',
                     'tabchar', 'pyffilename', 'f77modulename',
@@ -469,32 +474,43 @@ _RUN_SETTINGS = (
 )
 
 
-def _run_main(comline_list):
+def _parse_generation_input(comline_list, *, compile_mode=False):
+    """Resolve wrapper inputs independently of the requested build backend."""
+    parser = make_f2py_compile_parser()
+    args, comline_list = parser.parse_known_args(comline_list)
+    pyf_files, _ = filter_files("", "[.]pyf([.]src|)", comline_list)
+    signature = '-h' in comline_list
+    module_name = args.module_name
+    if pyf_files and not signature:
+        module_name = validate_modulename(pyf_files, module_name)
+    elif module_name:
+        comline_list += ['-m', module_name]
+    if compile_mode and not pyf_files:
+        if not any(flag in comline_list for flag in ('--lower', '--no-lower')):
+            outmess('Using meson backend\nWill pass --lower to f2py\n'
+                    'See https://numpy.org/doc/stable/f2py/buildtools/meson.html\n')
+            comline_list = ['--lower', *comline_list]
+        else:
+            outmess('Using meson backend\n')
+    files, options = scaninputline(comline_list)
+    if pyf_files and not signature:
+        generation_files = [path for path in files if path in pyf_files]
+        files = generation_files + [path for path in files if path not in pyf_files]
+    else:
+        generation_files = files
+    return files, generation_files, options, module_name
+
+
+def _generate_sources(comline_list, *, compile_mode=False):
     crackfortran.reset_global_f2py_vars()
     f2pydir = os.path.dirname(os.path.abspath(cfuncs.__file__))
     fobjhsrc = os.path.join(f2pydir, 'src', 'fortranobject.h')
     fobjcsrc = os.path.join(f2pydir, 'src', 'fortranobject.c')
-    # gh-22819 -- begin
-    parser = make_f2py_compile_parser()
-    args, comline_list = parser.parse_known_args(comline_list)
-    pyf_files, _ = filter_files("", "[.]pyf([.]src|)", comline_list)
-    # Checks that no existing modulename is defined in a pyf file
-    # TODO: Remove all this when scaninputline is replaced
-    if args.module_name:
-        if "-h" in comline_list:
-            modname = (
-                args.module_name
-            )  # Directly use from args when -h is present
-        else:
-            modname = validate_modulename(
-                pyf_files, args.module_name
-            )  # Validate modname when -h is not present
-        comline_list += ['-m', modname]  # needed for the rest of scaninputline
-    # gh-22819 -- end
-    files, options = scaninputline(comline_list)
+    files, generation_files, options, extension_name = _parse_generation_input(
+        comline_list, compile_mode=compile_mode)
     auxfuncs.options = options
     capi_maps.load_f2cmap_file(options['f2cmap_file'])
-    postlist = callcrackfortran(files, options)
+    postlist = callcrackfortran(generation_files, options)
     isusedby = {}
     for plist in postlist:
         if 'use' in plist:
@@ -516,7 +532,7 @@ def _run_main(comline_list):
             outmess(
                 'Stopping. Edit the signature file and then run f2py on the signature file: ')
             outmess(f"{os.path.basename(sys.argv[0])} {options['signsfile']}\n")
-        return
+        return None, files, options, extension_name
     for plist in postlist:
         if plist['block'] != 'python module':
             if 'python module' not in options:
@@ -532,7 +548,11 @@ def _run_main(comline_list):
 
     for mn in ret.keys():
         dict_append(ret[mn], {'csrc': fobjcsrc, 'h': fobjhsrc})
-    return ret
+    return ret, files, options, extension_name
+
+
+def _run_main(comline_list):
+    return _generate_sources(comline_list)[0]
 
 
 def filter_files(prefix, suffix, files, remove_prefix=None):
@@ -631,6 +651,8 @@ def run_compile():
 
     i = sys.argv.index('-c')
     del sys.argv[i]
+    generation_verbosity = [arg for arg in sys.argv[1:]
+                            if arg in ('--quiet', '--verbose')]
 
     remove_build_dir = 0
     try:
@@ -715,9 +737,6 @@ def run_compile():
         del sys.argv[i + 1], sys.argv[i]
         sources = sys.argv[1:]
 
-    pyf_files, _sources = filter_files("", "[.]pyf([.]src|)", sources)
-    sources = pyf_files + _sources
-    modulename = validate_modulename(pyf_files, modulename)
     extra_objects, sources = filter_files('', '[.](o|a|so|dylib)', sources)
     library_dirs, sources = filter_files('-L', '', sources, remove_prefix=1)
     libraries, sources = filter_files('-l', '', sources, remove_prefix=1)
@@ -732,17 +751,14 @@ def run_compile():
         else:
             print('Invalid use of -D:', name_value)
 
-    # Construct wrappers / signatures / things
-    if backend_key == 'meson':
-        if not pyf_files:
-            outmess('Using meson backend\nWill pass --lower to f2py\nSee https://numpy.org/doc/stable/f2py/buildtools/meson.html\n')
-            f2py_flags.append('--lower')
-            run_main(f" {' '.join(f2py_flags)} -m {modulename} {' '.join(sources)}".split())
-        else:
-            run_main(f" {' '.join(f2py_flags)} {' '.join(pyf_files)}".split())
-
-    # Order matters here, includes are needed for run_main above
-    include_dirs, _, sources = get_newer_options(sources)
+    generation_flags = [flag for flag in f2py_flags if flag != '--quiet']
+    generation_flags.extend(generation_verbosity)
+    _, sources, generation_options, modulename = _run_generation(
+        [*generation_flags, '-m', modulename, *sources], compile_mode=True)
+    include_dirs = generation_options['include_paths']
+    if generation_options['do-lower'] and not any(
+            flag in f2py_flags for flag in ('--lower', '--no-lower')):
+        f2py_flags.append('--lower')
     # Now use the builder
     builder = build_backend(
         modulename,
@@ -773,10 +789,11 @@ def validate_modulename(pyf_files, modulename='untitled'):
         pyff = pyf_files[0]
         pyf_modname = auxfuncs.get_f2py_modulename(pyff)
         if modulename != pyf_modname:
-            outmess(
-                f"Ignoring -m {modulename}.\n"
-                f"{pyff} defines {pyf_modname} to be the modulename.\n"
-            )
+            if modulename is not None:
+                outmess(
+                    f"Ignoring -m {modulename}.\n"
+                    f"{pyff} defines {pyf_modname} to be the modulename.\n"
+                )
             modulename = pyf_modname
     return modulename
 

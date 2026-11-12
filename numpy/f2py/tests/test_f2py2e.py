@@ -333,6 +333,27 @@ def test_f2py_only(capfd, retreal_f77, monkeypatch):
             assert f'Constructing wrapper function "{rkey}"' in out
 
 
+def test_run_keeps_settings(hello_world_f90, monkeypatch):
+    """Ensures that a run leaves the settings of crackfortran as they were
+
+    A run without -h left crackfortran keeping the case of names, and one
+    with only: cracking those routines only, for the code of the process
+    that cracks sources itself afterwards
+    CLI :: only:
+    """
+    ipath = Path(hello_world_f90)
+    before = (crackfortran.dolowercase, list(crackfortran.onlyfuncs),
+              dict(auxfuncs.options))
+    monkeypatch.setattr(sys, "argv",
+                        f'f2py {ipath} -m hi --quiet only: hi'.split())
+    with util.switchdir(ipath.parent):
+        f2pycli()
+    assert (crackfortran.dolowercase, crackfortran.onlyfuncs,
+            auxfuncs.options) == before
+    fpath = util.getpath("tests", "src", "crackfortran", "publicmod.f90")
+    assert "seta" in crackfortran.crackfortran([str(fpath)])[0]["vars"]
+
+
 def test_file_processing_switch(capfd, hello_world_f90, retreal_f77,
                                 monkeypatch):
     """Tests that it is possible to return to file processing mode
