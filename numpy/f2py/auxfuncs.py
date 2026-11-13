@@ -309,10 +309,20 @@ def issubroutine(rout):
     return 'block' in rout and 'subroutine' == rout['block']
 
 
+def iselemental(rout):
+    """An elemental procedure cannot be passed as an actual argument."""
+    prefix = rout.get('prefix') or ''
+    if not isinstance(prefix, str):
+        prefix = ' '.join(prefix)
+    return 'elemental' in prefix.lower().split()
+
+
 def issubroutine_wrap(rout):
     if isintent_c(rout):
         return 0
-    return issubroutine(rout) and hasassumedshape(rout)
+    # A non-elemental wrapper is required. gfortran rejects an elemental
+    # non-intrinsic procedure as an actual argument of f2pyinit.
+    return issubroutine(rout) and (hasassumedshape(rout) or iselemental(rout))
 
 def isattr_value(var):
     return 'value' in var.get('attrspec', [])
