@@ -97,17 +97,58 @@ def createfuncwrapper(rout, signature=0):
 
     extra_args = []
     vars = rout['vars']
-    for a in rout['args']:
-        v = rout['vars'][a]
-        for i, d in enumerate(v.get('dimension', [])):
-            if d == ':':
-                dn = f'f2py_{a}_d{i}'
-                dv = {'typespec': 'integer', 'intent': ['hide']}
-                dv['='] = f'shape({a}, {i})'
-                extra_args.append(dn)
-                vars[dn] = dv
-                v['dimension'][i] = dn
-    rout['args'].extend(extra_args)
+    name = rout['name']
+
+    def _assumed_dims(arg):
+        created = []
+        var = vars[arg]
+        for i, d in enumerate(var.get('dimension') or []):
+            if str(d).strip() != ':':
+                continue
+            dn = f'f2py_{arg}_d{i}'
+            # shape(<func>) pastes <func>_Dims, which is not declared.
+            # The renamed result array is <func>f2pywrap. Prefer the input
+            # array, whose Dims are already filled.
+            if arg == name:
+                shape_name = f'{name}f2pywrap'
+                for b in rout['args']:
+                    if b == arg:
+                        continue
+                    # Dimensions may already have been rewritten to f2py_*_d*.
+                    bdims = (vars.get(b) or {}).get('dimension') or []
+                    if any(str(item).strip() == ':' or str(item).startswith('f2py_')
+                           for item in bdims):
+                        shape_name = b
+                        break
+            else:
+                shape_name = arg
+            vars[dn] = {
+                'typespec': 'integer',
+                'intent': ['hide'],
+                '=': f'shape({shape_name}, {i})',
+            }
+            var['dimension'][i] = dn
+            created.append(dn)
+        return created
+
+    result_is_assumed = name in rout['args'] and any(
+        str(d).strip() == ':'
+        for d in (vars.get(name) or {}).get('dimension') or [])
+    if result_is_assumed:
+        inputs = [a for a in rout['args'] if a != name]
+        input_hidden = []
+        for arg in inputs:
+            input_hidden.extend(_assumed_dims(arg))
+        result_hidden = _assumed_dims(name)
+        # Input Dims, then the result extent, then the result array.
+        # Slice-assign so the second wrapper built for the module
+        # interface sees the same argument list.
+        rout['args'][:] = inputs + result_hidden + [name] + input_hidden
+        extra_args = input_hidden + result_hidden
+    else:
+        for arg in list(rout['args']):
+            extra_args.extend(_assumed_dims(arg))
+        rout['args'].extend(extra_args)
     need_interface = bool(extra_args)
 
     ret = ['']
@@ -121,9 +162,7 @@ def createfuncwrapper(rout, signature=0):
 
     if newname not in vars:
         vars[newname] = vars[name]
-        args = [newname] + rout['args'][1:]
-    else:
-        args = [newname] + rout['args']
+    args = [newname if a == name else a for a in rout['args']]
 
     l_tmpl = var2fixfortran(vars, name, '@@@NAME@@@', f90mode)
     if l_tmpl[:13] == 'character*(*)':
@@ -170,7 +209,7 @@ def createfuncwrapper(rout, signature=0):
             if line.lstrip().startswith('use ') and '__user__' not in line:
                 add(line)
 
-    args = args[1:]
+    args = [a for a in args if a != newname]
     dumped_args = []
     for a in args:
         if isexternal(vars[a]):
