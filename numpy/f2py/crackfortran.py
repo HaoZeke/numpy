@@ -934,7 +934,16 @@ def appenddecl(decl, decl2, force=1):
             pass
         elif k in ['intent', 'check', 'dimension', 'optional',
                    'required', 'depend']:
-            errmess(f'appenddecl: "{k}" not implemented.\n')
+            # These used to be dropped with "not implemented", including
+            # Cf2py intent(out) on the documented callback (gh-15934).
+            incoming = decl2[k]
+            current = decl.get(k)
+            if not current:
+                decl[k] = copy.copy(incoming) if isinstance(incoming, list) else incoming
+            elif isinstance(current, list) and isinstance(incoming, list):
+                for item in incoming:
+                    if item not in current:
+                        current.append(item)
         else:
             raise Exception('appenddecl: Unknown variable definition key: ' +
                             str(k))
