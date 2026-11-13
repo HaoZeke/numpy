@@ -238,14 +238,18 @@ def test_module_parameter_address_is_saved(tmp_path, monkeypatch):
     # refer to a SAVE local, not that temporary.
     src = util.getpath("tests", "src", "regression", "assignOnlyModule.f90")
     monkeypatch.chdir(tmp_path)
+    from numpy.f2py import crackfortran
     from numpy.f2py.f2py2e import run_main
-    run_main(["--lower", str(src), "-m", "amod"])
-    text = (tmp_path / "amod-f2pywrappers2.f90").read_text()
-    assert "integer, save :: f2py_param_n_max" in text
-    assert "f2py_param_n_max = n_max" in text
-    assert "f2py_param_i_max = i_max" in text
-    assert "f2py_param_j_max = j_max" in text
-    assert "f2py_param_xref" not in text
+    try:
+        run_main(["--lower", str(src), "-m", "amod"])
+        text = (tmp_path / "amod-f2pywrappers2.f90").read_text()
+        assert "integer, save :: f2py_param_n_max" in text
+        assert "f2py_param_n_max = n_max" in text
+        assert "f2py_param_i_max = i_max" in text
+        assert "f2py_param_j_max = j_max" in text
+        assert "f2py_param_xref" not in text
+    finally:
+        crackfortran.reset_global_f2py_vars()
 
 
 def _wrap_f90(funcwrappers2):
