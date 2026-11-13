@@ -813,6 +813,33 @@ get_elsize(PyObject *obj) {
   return -1;
 }
 
+/*
+ * gh-29929 stopped intent(inplace) from rewriting array memory when the
+ * dtype or contiguity does not already match. Tell callers (gh-30809).
+ */
+static int
+f2py_warn_intent_inplace(void)
+{
+    static PyObject *warning_type = NULL;
+
+    if (warning_type == NULL) {
+        PyObject *mod = PyImport_ImportModule("numpy.exceptions");
+        if (mod == NULL) {
+            return -1;
+        }
+        warning_type = PyObject_GetAttrString(mod, "VisibleDeprecationWarning");
+        Py_DECREF(mod);
+        if (warning_type == NULL) {
+            return -1;
+        }
+    }
+    return PyErr_WarnEx(
+        warning_type,
+        "intent(inplace) may copy when the dtype or contiguity does not match; "
+        "pass an array of the expected dtype, or migrate this wrapper to intent(in, out)",
+        1);
+}
+
 extern PyArrayObject *
 ndarray_from_pyobj(const int type_num,
                    const int elsize_,
@@ -876,6 +903,9 @@ ndarray_from_pyobj(const int type_num,
      */
     PyArrayObject *arr = NULL;
     int elsize = (elsize_ < 0 ? get_elsize(obj) : elsize_);
+    if ((intent & F2PY_INTENT_INPLACE) && f2py_warn_intent_inplace() < 0) {
+        return NULL;
+    }
     if (elsize < 0) {
       void *tp_name = GET_TP_NAME(obj);
       if (errmess == NULL) {

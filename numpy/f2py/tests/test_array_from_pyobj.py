@@ -10,7 +10,12 @@ from numpy._core._type_aliases import c_names_dict as _c_names_dict
 
 from . import util
 
-pytestmark = pytest.mark.slow
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.filterwarnings(
+        "ignore:intent\\(inplace\\).*:numpy.exceptions.VisibleDeprecationWarning"
+    ),
+]
 
 wrap = None
 

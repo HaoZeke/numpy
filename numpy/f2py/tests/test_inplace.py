@@ -2,6 +2,7 @@
 import pytest
 
 import numpy as np
+from numpy.exceptions import VisibleDeprecationWarning
 from numpy.f2py.tests import util
 from numpy.testing import assert_array_equal
 
@@ -23,8 +24,9 @@ class TestInplace(util.F2PyTest):
 
         ffunc = getattr(self.module, func)
         if not a.flags.writeable:
-            with pytest.raises(ValueError, match="WRITEBACKIFCOPY base is read-only"):
-                ffunc(k)
+            with pytest.warns(VisibleDeprecationWarning, match="intent.inplace"):
+                with pytest.raises(ValueError, match="WRITEBACKIFCOPY base is read-only"):
+                    ffunc(k)
             return
 
         ref_k = k
@@ -32,11 +34,12 @@ class TestInplace(util.F2PyTest):
         exp_k = k ** 2
         exp_a = a.copy()
         exp_a[view or ()] = exp_k
-        if func == "inplace_out":
-            kout, copy = ffunc(k)
-            assert kout is k
-        else:
-            copy = ffunc(k)
+        with pytest.warns(VisibleDeprecationWarning, match="intent.inplace"):
+            if func == "inplace_out":
+                kout, copy = ffunc(k)
+                assert kout is k
+            else:
+                copy = ffunc(k)
         assert_array_equal(copy, exp_copy)
         assert k is ref_k
         assert np.allclose(k, exp_k)
@@ -45,5 +48,6 @@ class TestInplace(util.F2PyTest):
     @pytest.mark.parametrize("func", ["inplace", "inplace_out"])
     def test_inplace_error(self, func):
         ffunc = getattr(self.module, func)
-        with pytest.raises(ValueError, match="input.*not compatible"):
-            ffunc(np.array([1 + 1j]))
+        with pytest.warns(VisibleDeprecationWarning, match="intent.inplace"):
+            with pytest.raises(ValueError, match="input.*not compatible"):
+                ffunc(np.array([1 + 1j]))
