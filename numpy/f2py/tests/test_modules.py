@@ -92,6 +92,26 @@ end submodule
 
 
 @pytest.mark.slow
+class TestInterfaceOnlyModule(util.F2PyTest):
+    # The interface copy of a module has no routine. It still has to
+    # import, and a later submodule implementation of the same name
+    # must not be dropped.
+    suffix = ".f90"
+    code = """
+module parent
+  interface
+    subroutine s(n)
+      integer, intent(out) :: n
+    end subroutine
+  end interface
+end module
+"""
+
+    def test_import_exposes_module(self):
+        assert hasattr(self.module, "parent")
+
+
+@pytest.mark.slow
 class TestModuleDocString(util.F2PyTest):
     sources = [util.getpath("tests", "src", "modules", "module_data_docstring.f90")]
 

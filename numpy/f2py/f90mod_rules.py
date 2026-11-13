@@ -96,7 +96,16 @@ def buildhooks(pymod):
         s[0] = f'{s[0]}\n{line}'
 
     usenames = getuseblocks(pymod)
-    for m in findf90modules(pymod):
+    modules = findf90modules(pymod)
+    # A submodule puts the procedure on one copy of the ancestor and
+    # leaves another copy that is only the interface. Keep the interface
+    # copy when it is the only one, so an interface-only module is still
+    # exposed.
+    implemented = set()
+    for m in modules:
+        if hasbody(m) and any(isroutine(b) for b in m['body']):
+            implemented.add(m['name'])
+    for m in modules:
         sargs, fargs, efargs, modobjs, notvars, onlyvars = [], [], [], [], [
             m['name']], []
         sargsp = []
@@ -113,7 +122,9 @@ def buildhooks(pymod):
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
         has_routine = hasbody(m) and any(isroutine(b) for b in m['body'])
-        if len(onlyvars) == 0 and not has_routine:
+        if len(onlyvars) == 0 and not has_routine and (
+                m['name'] in implemented
+                or (len(notvars) == 1 and m['name'] in notvars)):
             outmess(f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n")
             continue
 
