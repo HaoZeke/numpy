@@ -334,8 +334,9 @@ class StatsMethods(Benchmark):
 
 
 class TransposeCopy(Benchmark):
-    # Element counts. The tiled path starts above 8 MiB (1e6 float64 is
-    # just under that, 1e7 and 1e8 are over it).
+    # Element counts. A unit-stride transpose is blocked from 1 MiB
+    # (1e6 float32 is 4 MiB, 1e6 float64 is 8 MiB). 1e3 and 1e5 stay
+    # on the strided loop. Other strides tile only past 8 MiB.
     params = [10**3, 10**4, 10**5, 10**6, 10**7, 10**8]
     param_names = ['size']
 

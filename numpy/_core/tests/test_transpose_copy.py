@@ -1,4 +1,4 @@
-"""C-order to Fortran-order copies above the tiled-transpose threshold."""
+"""C-order to Fortran-order copies, including the blocked transpose."""
 import numpy as np
 from numpy.testing import assert_array_equal
 import pytest
@@ -8,15 +8,20 @@ SMALL = ((4, 6), (3, 4, 5))
 
 
 def _large_shape(dtype, ndim):
+    """A shape just past 8 MiB, so the scalar-tile path is actually taken."""
     item = np.dtype(dtype).itemsize
     count = (8 << 20) // item + 64
     if ndim == 2:
-        n = int(np.sqrt(count))
-        return (n, count // n)
-    n = int(round(count ** (1 / 3)))
-    n = max(n, 2)
+        n = max(int(np.sqrt(count)), 2)
+        m = max((count + n - 1) // n, 2)
+        while n * m * item <= (8 << 20):
+            m += 1
+        return (n, m)
+    n = max(int(round(count ** (1 / 3))), 2)
     m = n
     p = max(count // (n * m), 2)
+    while n * m * p * item <= (8 << 20):
+        p += 1
     return (n, m, p)
 
 
@@ -89,6 +94,31 @@ def test_cast_and_object_and_unaligned_stay_on_the_generic_path():
     unaligned = np.ndarray(src.shape, dtype=np.float64, buffer=buf, offset=1)
     unaligned[...] = np.arange(unaligned.size, dtype=np.float64).reshape(src.shape)
     assert_array_equal(np.asfortranarray(unaligned), unaligned)
+
+
+@pytest.mark.parametrize("dtype,shape", [
+    # Between 1 MiB and 8 MiB: blocked copy, not a multiple of the tile.
+    (np.float64, (400, 401)),
+    (np.float32, (600, 600)),
+    (np.int8, (1200, 1200)),
+    # 8 MiB float64 stays under the 16 MiB AVX2 cutoff.
+    (np.float64, (1000, 1000)),
+    # Past 16 MiB, and not a multiple of the 8-wide register tile.
+    (np.float64, (2001, 1100)),
+    # 16-byte items use the scalar tile of 8 past 8 MiB.
+    (np.complex128, (800, 800)),
+])
+def test_unit_stride_transpose_sizes(dtype, shape):
+    src = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
+    assert src.nbytes >= (1 << 20)
+    assert_array_equal(np.asfortranarray(src), src)
+    assert src.copy(order="F").flags.f_contiguous
+    assert_array_equal(src.copy(order="F"), src)
+    assert_array_equal(src.T.copy(), src.T)
+    # Reversed rows keep a contiguous column axis, so the blocked path
+    # still runs, with a negative stride on the other axis.
+    rev = src[::-1, :]
+    assert_array_equal(np.asfortranarray(rev), rev)
 
 
 def test_small_slice_and_zero_size():
