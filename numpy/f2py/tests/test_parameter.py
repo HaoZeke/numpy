@@ -1,6 +1,7 @@
 import pytest
 
 import numpy as np
+from numpy.f2py import crackfortran
 
 from . import util
 
@@ -119,3 +120,66 @@ class TestParameters(util.F2PyTest):
     def test_constant_array_delims(self):
         x = self.module.foo_array_delims()
         assert x == 9
+
+
+def test_real_literal_parameter_is_value(tmp_path):
+    # 1.0d0 is the number 1, so int() of it is 1. kind() still reports
+    # the width, and precision() still reports 15 digits.
+    src = tmp_path / "real_literal.f90"
+    src.write_text(
+        "subroutine s(a, b)\n"
+        "  real, parameter :: x = 1.0d0\n"
+        "  real, parameter :: y = 1.0e0\n"
+        "  integer, parameter :: n = int(x)\n"
+        "  integer, parameter :: m = int(y)\n"
+        "  real a(n)\n"
+        "  real b(m)\n"
+        "end subroutine\n"
+    )
+    block = crackfortran.crackfortran([str(src)])[0]
+    assert block['vars']['a']['dimension'] == ['1']
+    assert block['vars']['b']['dimension'] == ['1']
+    src2 = tmp_path / "real_literal_kind.f90"
+    src2.write_text(
+        "subroutine s(a, b)\n"
+        "  integer, parameter :: dp = kind(1.0d0)\n"
+        "  integer, parameter :: ep = kind(1.0e0)\n"
+        "  integer, parameter :: srk = selected_real_kind(precision(1.0d0))\n"
+        "  real(dp) a(srk)\n"
+        "  real(ep) b(ep)\n"
+        "end subroutine\n"
+    )
+    block = crackfortran.crackfortran([str(src2)])[0]
+    assert block['vars']['a']['dimension'] == ['8']
+    assert block['vars']['a']['kindselector']['kind'] == '8'
+    assert block['vars']['b']['dimension'] == ['4']
+    assert block['vars']['b']['kindselector']['kind'] == '4'
+
+
+@pytest.mark.slow
+class TestRealLiteralKind(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+subroutine from_d(a)
+  real, parameter :: x = 1.0d0
+  integer, parameter :: n = int(x)
+  real a(n)
+  a = 1.0
+end subroutine
+
+subroutine from_e(a)
+  real, parameter :: x = 1.0e0
+  integer, parameter :: n = int(x)
+  real a(n)
+  a = 1.0
+end subroutine
+"""
+
+    def test_size_follows_value_not_kind(self):
+        for fn in (self.module.from_d, self.module.from_e):
+            one = np.ones(1, dtype=np.float32)
+            fn(one)
+            assert one[0] == np.float32(1.0)
+            eight = np.ones(8, dtype=np.float32)
+            with pytest.raises(ValueError):
+                fn(eight)

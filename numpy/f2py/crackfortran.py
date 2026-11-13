@@ -2489,6 +2489,70 @@ def _kind_func(string):
     return 'kind(' + string + ')'
 
 
+def _precision_func(value):
+    """Decimal digits of a Fortran real literal.
+
+    A d-exponent marks double precision (15). Other real literals are
+    default real (6). ``kind()`` is what reports the storage width.
+    """
+    if isinstance(value, str):
+        text = value
+        if len(text) >= 2 and text[0] in "'\"" and text[-1] == text[0]:
+            text = text[1:-1]
+        if real16pattern.match(text):
+            return 15
+    return 6
+
+
+_precision_call = re.compile(
+    r'\bprecision\s*\(\s*(?P<value>[^)]*)\s*\)', re.I)
+
+
+def _quote_precision_literals(expr):
+    """Keep the Fortran spelling of a literal passed to precision()."""
+    def repl(match):
+        val = match.group('value').strip()
+        if real16pattern.fullmatch(val) or real8pattern.fullmatch(val):
+            return f'precision("{val}")'
+        return match.group(0)
+    return _precision_call.sub(repl, expr)
+
+
+def _rewrite_d_exponents(expr):
+    """Turn Fortran d-exponents into Python e-exponents, outside quotes.
+
+    ``1.0d0`` is the number 1.0, not the kind width 8. Quoted text is
+    left alone so ``kind("1.0d0")`` still sees the double marker.
+    """
+    out = []
+    i = 0
+    n = len(expr)
+    while i < n:
+        c = expr[i]
+        if c in "'\"":
+            j = i + 1
+            while j < n:
+                if expr[j] == c:
+                    if j + 1 < n and expr[j + 1] == c:
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(expr[i:j])
+            i = j
+            continue
+        matched = real16pattern.match(expr, i)
+        if matched:
+            literal = expr[matched.start():matched.end()]
+            out.append(literal.lower().replace('d', 'e'))
+            i = matched.end()
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
 def _selected_int_kind_func(r):
     # XXX: This should be processor dependent
     m = 10 ** r
@@ -2527,6 +2591,7 @@ def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
     for name, func in [('kind', _kind_func),
+                       ('precision', _precision_func),
                        ('selected_int_kind', _selected_int_kind_func),
                        ('selected_real_kind', _selected_real_kind_func), ]:
         if name not in g_params:
@@ -2601,12 +2666,12 @@ def get_parameters(vars, global_params={}):
                         for s in vars[n]['attrspec']
                        if s.startswith('dimension')] or [None])[0]
 
-            # Handle _dp for gh-6624
-            # Also fixes gh-20460
-            if real16pattern.search(v):
-                v = 8
-            elif real8pattern.search(v):
-                v = 4
+            # A d/e literal is a numeric value. Replacing the whole
+            # expression with the kind width made int(1.0d0) evaluate
+            # to 8. Quote precision() first so a double literal still
+            # reports 15 digits, then rewrite d-exponents for eval.
+            v = _quote_precision_literals(v)
+            v = _rewrite_d_exponents(v)
             try:
                 params[n] = param_eval(v, g_params, params, dimspec=dimspec)
             except Exception as msg:
