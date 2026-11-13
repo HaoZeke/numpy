@@ -710,7 +710,10 @@ def _simplifyargs(argsline):
 
 crackline_re_1 = re.compile(r'\s*(?P<result>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bind_1 = re.compile(r'\s*(?P<bind>\b[a-z]+\w*\b)\s*=.*', re.I)
-crackline_bindlang = re.compile(r'\s*bind\(\s*(?P<lang>[^,]+)\s*,\s*name\s*=\s*"(?P<lang_name>[^"]+)"\s*\)', re.I)
+crackline_bindlang = re.compile(
+    r"""\s*bind\(\s*(?P<lang>[^,]+)\s*,\s*name\s*=\s*(?P<quote>['"])(?P<lang_name>.*?)(?P=quote)\s*\)""",
+    re.I)
+crackline_bindlang_noname = re.compile(r'\s*bind\(\s*(?P<lang>[^),]+)\s*\)', re.I)
 
 def crackline(line, reset=0):
     """
@@ -1171,11 +1174,14 @@ def analyzeline(m, case, line):
             # name is fortran name
             if bindcline:
                 bindcdat = re.search(crackline_bindlang, bindcline)
+                if bindcdat is None:
+                    bindcdat = re.search(crackline_bindlang_noname, bindcline)
                 if bindcdat:
                     groupcache[groupcounter]['bindlang'] = {name: {}}
                     groupcache[groupcounter]['bindlang'][name]["lang"] = bindcdat.group('lang')
-                    if bindcdat.group('lang_name'):
-                        groupcache[groupcounter]['bindlang'][name]["name"] = bindcdat.group('lang_name')
+                    cname = bindcdat.groupdict().get('lang_name')
+                    if cname:
+                        groupcache[groupcounter]['bindlang'][name]["name"] = cname
             try:
                 groupcache[groupcounter]['vars'][name] = appenddecl(
                     groupcache[groupcounter]['vars'][name], groupcache[groupcounter - 2]['vars'][''])
@@ -3567,6 +3573,32 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
 post_processing_hooks = []
 
 
+def _apply_bindc(block, in_module=False):
+    """Call a free bind(c) routine by its C symbol, not the Fortran mangled name."""
+    if isinstance(block, list):
+        for item in block:
+            _apply_bindc(item, in_module)
+        return
+    if not isinstance(block, dict):
+        return
+    in_module = in_module or block.get('block') == 'module'
+    for child in block.get('body') or []:
+        _apply_bindc(child, in_module)
+    if in_module or block.get('block') not in ('function', 'subroutine'):
+        return
+    spec = (block.get('bindlang') or {}).get(block.get('name') or '', {})
+    if not spec or str(spec.get('lang', '')).strip().lower() != 'c':
+        return
+    # A module procedure is reached through `use`, which already sees bind(c).
+    # A free routine is called from C, so the binding name is the symbol.
+    cname = spec.get('name') or block['name'].lower()
+    enh = block.setdefault('f2pyenhancements', {})
+    enh.setdefault('fortranname', cname)
+    intent = block.setdefault('intent', [])
+    if 'c' not in intent:
+        intent.append('c')
+
+
 def crackfortran(files):
     global usermodules, post_processing_hooks
 
@@ -3581,6 +3613,8 @@ def crackfortran(files):
         postlist = traverse(postlist, hook)
     outmess('Post-processing (stage 2)...\n', 0)
     postlist = postcrack2(postlist)
+    for block in usermodules + postlist:
+        _apply_bindc(block)
     return usermodules + postlist
 
 
