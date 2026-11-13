@@ -600,12 +600,13 @@ groupbegins77 = r'program|block\s*data'
 beginpattern77 = re.compile(
     beforethisafter % ('', groupbegins77, groupbegins77, '.*'), re.I), 'begin'
 groupbegins90 = groupbegins77 + \
-    r'|module(?!\s*procedure)|python\s*module|(abstract|)\s*interface|'\
+    r'|submodule|module(?!\s*(?:procedure|subroutine|function))|'\
+    r'python\s*module|(abstract|)\s*interface|'\
     r'type(?!\s*\()'
 beginpattern90 = re.compile(
     beforethisafter % ('', groupbegins90, groupbegins90, '.*'), re.I), 'begin'
-groupends = (r'end|endprogram|endblockdata|endmodule|endpythonmodule|'
-             r'endinterface|endsubroutine|endfunction')
+groupends = (r'end|endprogram|endblockdata|endmodule|endsubmodule|'
+             r'endpythonmodule|endinterface|endsubroutine|endfunction')
 endpattern = re.compile(
     beforethisafter % ('', groupends, groupends, '.*'), re.I), 'end'
 # block, the Fortran 2008 construct needs special handling in the rest of the file
@@ -1054,6 +1055,19 @@ def analyzeline(m, case, line):
             result = None
         else:
             name, args, result, bindcline = _resolvenameargspattern(m.group('after'))
+        if block == 'submodule':
+            # submodule (ancestor[:parent]) child
+            # Procedures belong to the ancestor. Record them on that
+            # module so the wrapper can `use` it. Each submodule is one
+            # copy of the ancestor; the module hook is emitted once.
+            sm = re.match(
+                r'\s*\(\s*(?P<parent>\w+)',
+                m.group('after') or '', re.I)
+            if sm:
+                name = sm.group('parent')
+                args = []
+                result = None
+            block = 'module'
         if name is None:
             if block == 'block data':
                 name = '_BLOCK_DATA_'

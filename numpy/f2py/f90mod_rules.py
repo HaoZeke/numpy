@@ -79,6 +79,41 @@ fgetdims2_sa = """\
       call f2pysetdata(d,allocated(d))"""
 
 
+def _coalesce_modules(modules):
+    """One block per module name.
+
+    Each submodule is stored under its parent name. Emitting a separate
+    ``f2py_<name>_def`` and ``f2pyinit<name>`` for every copy redefines
+    those symbols. Fold the copies first and keep one hook.
+    """
+    order = []
+    folded = {}
+    for module in modules:
+        name = module.get('name')
+        if name not in folded:
+            copy = dict(module)
+            copy['body'] = []
+            copy['vars'] = dict(module.get('vars') or {})
+            folded[name] = {'module': copy, 'routines': {}}
+            order.append(name)
+        dest = folded[name]
+        for key, value in (module.get('vars') or {}).items():
+            dest['module']['vars'].setdefault(key, value)
+        for block in module.get('body') or []:
+            if isroutine(block):
+                routine = block.get('name')
+                previous = dest['routines'].get(routine)
+                if previous is None or len(block.get('args') or []) > len(
+                        previous.get('args') or []):
+                    dest['routines'][routine] = block
+                continue
+            dest['module']['body'].append(block)
+    for name in order:
+        dest = folded[name]
+        dest['module']['body'].extend(dest['routines'].values())
+    return [folded[name]['module'] for name in order]
+
+
 def buildhooks(pymod):
     from . import rules
     ret = {'f90modhooks': [], 'initf90modhooks': [], 'body': [],
@@ -96,7 +131,7 @@ def buildhooks(pymod):
         s[0] = f'{s[0]}\n{line}'
 
     usenames = getuseblocks(pymod)
-    for m in findf90modules(pymod):
+    for m in _coalesce_modules(findf90modules(pymod)):
         sargs, fargs, efargs, modobjs, notvars, onlyvars = [], [], [], [], [
             m['name']], []
         sargsp = []
