@@ -168,6 +168,54 @@ For more control, use a `Meson native file
 
    python -m build --wheel -Csetup-args="--native-file=native.ini"
 
+Large automatic arrays
+======================
+
+An automatic array is a local explicit-shape array whose bounds are not
+compile-time constants, for example ``real :: a(n)`` or
+``real :: tmp(nvec, ndim)``. Where that storage comes from depends on the
+compiler. A multi-megabyte temporary inside a routine that is also an OpenMP
+region, such as ``drc3jj_vec`` in py3nj (about 13 MB for the ``wigner3j``
+test), overflows the usual 8 MB process stack on compilers that keep the
+array there.
+
+``gfortran`` moves an automatic array to the heap when it is larger than
+``-fmax-stack-var-size``. The default limit is 32 KiB, so the 13 MB array
+runs with no extra flag. A 16 MB automatic array compiled by gfortran 13
+also runs under an 8 MB stack.
+
+``ifx`` keeps these arrays on the stack (``-no-heap-arrays`` is the default).
+``-heap-arrays`` allocates them on the heap. On the same ``wigner3j`` call
+(``n = 10000``), the default build segfaults with an 8 MB stack, and
+``FFLAGS=-heap-arrays`` passes. With the stack limit raised so the default
+build finishes, seven timed repeats after one warmup average 0.0289 s on
+the stack and 0.0364 s with ``-heap-arrays``, about 26% slower.
+
+``flang`` 20 puts the automatic array on the stack. ``-fno-stack-arrays`` is
+already the default and only redirects compiler-generated temporaries, not
+this array; ``-fstack-arrays`` keeps it on the stack as well. The hidden
+option ``-fdynamic-heap-array`` tells the ``memory-allocation-opt`` pass to
+allocate every runtime-sized array on the heap. flang 20.1.2 does not accept
+it as a bare driver flag. Pass it through LLVM's option parser:
+
+.. code-block:: bash
+
+   FFLAGS="-mllvm -fdynamic-heap-array"
+
+``-mmlir -fdynamic-heap-array`` is accepted by the same driver and has the
+same effect. The option ``-mllvm -fstack-array-size=<n>`` reads as a
+per-array element limit. Yet flang 20.1.2 still puts a 2,000,000-element
+array on the stack. This release has no usable limit. The ``wigner3j``
+test passes on an 8 MB stack with ``-mllvm -fdynamic-heap-array``.
+
+``OMP_STACKSIZE`` sizes the stacks of OpenMP worker threads. It does not
+enlarge the stack of the thread that entered the routine. For ``drc3jj_vec``
+the large array is created before the parallel region, so
+``OMP_STACKSIZE=64M`` and ``128M`` still segfault under an 8 MB ``ulimit -s``.
+Without a rebuild, raise the process stack with ``ulimit -s`` (in KiB).
+Raise ``OMP_STACKSIZE`` too when the large array lives inside the parallel
+region.
+
 Adding dependencies (BLAS, LAPACK, etc.)
 ========================================
 
