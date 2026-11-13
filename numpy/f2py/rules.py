@@ -111,6 +111,7 @@ from .auxfuncs import (
     isrequired,
     isscalar,
     issigned_long_longarray,
+    isalloc_deferred_char_result,
     isstring,
     isstringarray,
     isstringfunction,
@@ -1077,6 +1078,39 @@ if (#varname#_cb.capi==Py_None) {
         '_check': iscomplex,
         '_depend': ''
     },
+    # Allocatable character(len=:) function result.
+    # The callee allocates. Length is an 8-byte integer passed by pointer,
+    # after the other arguments, same as gfortran's hidden string length.
+    {
+        'decl': ['    char *f2py_#varname#_ptr = NULL;',
+                 '    size_t f2py_#varname#_len = 0;',
+                 '    #ctype# #varname# = NULL;'],
+        'callfortran': '&f2py_#varname#_ptr,',
+        'callfortranappend': '&f2py_#varname#_len,',
+        'frompyobj': '    f2py_#varname#_ptr = NULL;\n    f2py_#varname#_len = 0;',
+        'pyobjfrom': """\
+    if (f2py_#varname#_ptr == NULL || f2py_#varname#_len == 0) {
+        #varname# = (char *)malloc(1);
+        if (#varname# != NULL) #varname#[0] = '\\0';
+    } else {
+        #varname# = (char *)malloc(f2py_#varname#_len + 1);
+        if (#varname# != NULL) {
+            memcpy(#varname#, f2py_#varname#_ptr, f2py_#varname#_len);
+            #varname#[f2py_#varname#_len] = '\\0';
+        }
+    }
+    free(f2py_#varname#_ptr);
+    f2py_#varname#_ptr = NULL;
+    if (#varname# == NULL) {
+        PyErr_NoMemory();
+        f2py_success = 0;
+    }
+""",
+        'cleanupfrompyobj': '    STRINGFREE(#varname#);',
+        'return': ',#varname#',
+        'need': ['STRINGFREE'],
+        '_check': isalloc_deferred_char_result,
+    },
     # String
     {  # Common
         'decl': ['    #ctype# #varname# = NULL;',
@@ -1095,7 +1129,7 @@ if (#varname#_cb.capi==Py_None) {
         'return': {isintent_out: ',#varname#'},
         'need': ['len..',
                  {l_and(isintent_out, l_not(isintent_c)): 'STRINGPADN'}],
-        '_check': isstring
+        '_check': l_and(isstring, l_not(isalloc_deferred_char_result))
     }, {  # Common
         'frompyobj': [(
             """\
@@ -1113,7 +1147,7 @@ if (#varname#_cb.capi==Py_None) {
     }  /*if (f2py_success) of #varname#*/""",
         'need': ['#ctype#_from_pyobj', 'len..', 'STRINGFREE',
                  {l_not(isintent_c): 'STRINGPADN'}],
-        '_check': isstring,
+        '_check': l_and(isstring, l_not(isalloc_deferred_char_result)),
         '_depend': ''
     }, {  # Not hidden
         'argformat': {isrequired: 'O'},

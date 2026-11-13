@@ -399,6 +399,25 @@ def iscomplexfunction_warn(rout):
     return 0
 
 
+def isalloc_deferred_char_result(var):
+    """Scalar allocatable ``character(len=:)`` returned by a function.
+
+    gfortran passes that result as ``char **`` plus a pointer to the
+    length, and the callee allocates the buffer. A fixed buffer has the
+    wrong length when the result is longer or shorter than the input.
+    """
+    if not isinstance(var, dict) or not isstring(var) or isarray(var):
+        return False
+    if 'allocatable' not in var.get('attrspec', []):
+        return False
+    intent = var.get('intent') or []
+    if 'out' not in intent or 'in' in intent:
+        return False
+    sel = var.get('charselector') or {}
+    length = str(sel.get('*', sel.get('len', ''))).strip()
+    return length in (':', '(:)')
+
+
 def isstringfunction(rout):
     if not isfunction(rout):
         return 0
@@ -734,6 +753,12 @@ def getcallprotoargument(rout, cb_map={}):
     for n in rout['args']:
         var = rout['vars'][n]
         if isintent_callback(var):
+            continue
+        if isalloc_deferred_char_result(var):
+            # Callee allocates. Pointer to the buffer, and the length
+            # is written through a pointer rather than passed by value.
+            arg_types.append('char**')
+            arg_types2.append('size_t*')
             continue
         if n in cb_map:
             ctype = cb_map[n] + '_typedef'

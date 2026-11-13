@@ -71,7 +71,18 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
     elif 'kind' in selector:
         vardef = f"{vardef}(kind={selector['kind']})"
 
-    vardef = f'{vardef} {fa}'
+    # A deferred-length allocatable character is a descriptor. The
+    # wrapper local has to be allocatable, or the declaration is rejected
+    # and the call uses a fixed buffer.
+    attrs = vars[a].get('attrspec') or []
+    if 'allocatable' in attrs and '(len=:)' in vardef:
+        extra = 'allocatable'
+        intent = vars[a].get('intent') or []
+        if 'out' in intent and 'in' not in intent:
+            extra += ', intent(out)'
+        vardef = f'{vardef}, {extra} :: {fa}'
+    else:
+        vardef = f'{vardef} {fa}'
     if 'dimension' in vars[a]:
         vardef = f"{vardef}({','.join(vars[a]['dimension'])})"
     return vardef
