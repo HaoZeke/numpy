@@ -2020,9 +2020,80 @@ def get_useparameters(block, param_map=None):
     return param_map
 
 
+_INTRINSIC_KIND = {
+    'real32': '4', 'real64': '8', 'real128': '16',
+    'int8': '1', 'int16': '2', 'int32': '4', 'int64': '8',
+    'c_float': '4', 'c_double': '8', 'c_int': '4',
+    'c_int8_t': '1', 'c_int16_t': '2', 'c_int32_t': '4', 'c_int64_t': '8',
+}
+
+
+def _register_kind_modules(block):
+    if isinstance(block, list):
+        for item in block:
+            _register_kind_modules(item)
+        return
+    if not isinstance(block, dict):
+        return
+    if block.get('block') == 'module' and block.get('name'):
+        f90modulevars.setdefault(block['name'], block.get('vars') or {})
+    for child in block.get('body') or []:
+        _register_kind_modules(child)
+
+
+def _resolved_kind(name, seen=None):
+    """Integer kind for a name defined by a used module.
+
+    ``dp = real64`` and ``dp = selected_real_kind(15)`` both become 8.
+    An interface body that only imports ``dp`` can then say ``real(kind=8)``.
+    """
+    key = str(name).strip().lower()
+    if key.isdigit():
+        return key
+    if key in _INTRINSIC_KIND:
+        return _INTRINSIC_KIND[key]
+    if seen is None:
+        seen = set()
+    if key in seen:
+        return None
+    seen.add(key)
+    for vars in f90modulevars.values():
+        var = None
+        for n, value in (vars or {}).items():
+            if str(n).lower() == key and isinstance(value, dict):
+                var = value
+                break
+        if not var or '=' not in var:
+            continue
+        value = var['=']
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        if not isinstance(value, str):
+            continue
+        # get_parameters stores a string result with repr quotes.
+        raw = value.strip()
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+            raw = raw[1:-1]
+        folded = _resolved_kind(raw, seen)
+        if folded:
+            return folded
+        try:
+            ev = eval(value, {
+                'selected_real_kind': _selected_real_kind_func,
+                'selected_int_kind': _selected_int_kind_func,
+            }, {})
+        except Exception:
+            ev = None
+        if isinstance(ev, int) and not isinstance(ev, bool):
+            return str(ev)
+    return None
+
+
 def postcrack2(block, tab='', param_map=None):
     global f90modulevars
 
+    if isinstance(block, list) and param_map is None:
+        _register_kind_modules(block)
     if not f90modulevars:
         return block
     if isinstance(block, list):
@@ -2045,6 +2116,9 @@ def postcrack2(block, tab='', param_map=None):
                     val = kind['kind']
                     if val in param_map:
                         kind['kind'] = param_map[val]
+                    resolved = _resolved_kind(kind['kind'])
+                    if resolved:
+                        kind['kind'] = resolved
     new_body = [postcrack2(b, tab=tab + '\t', param_map=param_map)
                 for b in block['body']]
     block['body'] = new_body
