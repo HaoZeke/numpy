@@ -584,7 +584,7 @@ beforethisafter = r'\s*(?P<before>%s(?=\s*(\b(%s)\b)))'\
     r'\s*(?P<this>(\b(%s)\b))'\
     r'\s*(?P<after>%s)\s*\Z'
 ##
-fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|byte'
+fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|class(?=\s*\(\s*(?:\*|\w+)\s*\))|type(?=\s*\([\w\s,=(*)]*\))|byte'
 typespattern = re.compile(
     beforethisafter % ('', fortrantypes, fortrantypes, '.*'), re.I), 'type'
 typespattern4implicit = re.compile(beforethisafter % (
@@ -601,7 +601,7 @@ beginpattern77 = re.compile(
     beforethisafter % ('', groupbegins77, groupbegins77, '.*'), re.I), 'begin'
 groupbegins90 = groupbegins77 + \
     r'|module(?!\s*procedure)|python\s*module|(abstract|)\s*interface|'\
-    r'type(?!\s*\()'
+    r'type(?!\s*(?:\(|is\b))'
 beginpattern90 = re.compile(
     beforethisafter % ('', groupbegins90, groupbegins90, '.*'), re.I), 'begin'
 groupends = (r'end|endprogram|endblockdata|endmodule|endpythonmodule|'
@@ -1597,7 +1597,7 @@ def cracktypespec0(typespec, ll):
     d = m1.groupdict()
     for k in list(d.keys()):
         d[k] = unmarkouterparen(d[k])
-    if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type']:
+    if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type', 'class']:
         selector = d['this']
         ll = d['after']
     i = ll.find('::')
@@ -1902,6 +1902,15 @@ def cracktypespec(typespec, selector):
                 typename = typename.group('name')
             else:
                 outmess(f'cracktypespec: no typename found in {typespec + selector}\n')
+        elif typespec == 'class':
+            # class(*) is unlimited polymorphic. class(name) is an
+            # extensible type. Neither has a C mapping.
+            if re.match(r'\s*\(\s*\*\s*\)', selector or '', re.I):
+                typename = '*'
+            else:
+                matched = re.match(
+                    r'\s*\(\s*(?P<name>\w+)\s*\)', selector or '', re.I)
+                typename = matched.group('name') if matched else None
         else:
             outmess(f'cracktypespec: no selector used for {repr(selector)}\n')
     return kindselect, charselect, typename
@@ -2066,6 +2075,15 @@ def postcrack(block, args=None, tab=''):
         for g in block:
             setmesstext(g)
             g = postcrack(g, tab=tab + '\t')
+            class_args = _unsupported_class_arg(g) if isinstance(g, dict) else []
+            if class_args:
+                shown = ', '.join(
+                    f'{name} ({_class_decl(g["vars"][name])})'
+                    for name in class_args)
+                errmess(
+                    f'analyzebody: routine "{g.get("name")}" has unsupported '
+                    f'polymorphic argument {shown}. Skipping.\n')
+                continue
             # sort user routines to appear first
             if 'name' in g and '__user__' in g['name']:
                 uret.append(g)
@@ -2266,6 +2284,29 @@ def analyzecommon(block):
     return block
 
 
+def _unsupported_class_arg(block):
+    """Return argument names declared class(*) or class(name)."""
+    if block.get('block') not in ('function', 'subroutine'):
+        return []
+    vars_ = block.get('vars', {})
+    names = list(block.get('args') or [])
+    if block.get('block') == 'function':
+        names.append(block.get('result') or block.get('name'))
+    found = []
+    for name in names:
+        var = vars_.get(name, {})
+        if var.get('typespec') == 'class' and name not in found:
+            found.append(name)
+    return found
+
+
+def _class_decl(var):
+    kind = var.get('typename') or '*'
+    if kind == '*':
+        return 'class(*)'
+    return f'class({kind})'
+
+
 def analyzebody(block, args, tab=''):
     global usermodules, skipfuncs, onlyfuncs, f90modulevars
 
@@ -2289,6 +2330,19 @@ def analyzebody(block, args, tab=''):
             if b['name'] in maybe_private.keys():
                 skipfuncs.append(b['name'])
             if b['name'] in skipfuncs:
+                continue
+            class_args = _unsupported_class_arg(b)
+            if class_args:
+                # Same treatment as other types with no C mapping: do not
+                # emit a wrapper. Implicit typing would otherwise make
+                # class(*) a real and the call would segfault.
+                shown = ', '.join(
+                    f'{name} ({_class_decl(b["vars"][name])})'
+                    for name in class_args)
+                errmess(
+                    f'analyzebody: routine "{b["name"]}" has unsupported '
+                    f'polymorphic argument {shown}. Skipping.\n')
+                skipfuncs.append(b['name'])
                 continue
             if onlyfuncs and b['name'] not in onlyfuncs:
                 continue
