@@ -3581,7 +3581,76 @@ def crackfortran(files):
         postlist = traverse(postlist, hook)
     outmess('Post-processing (stage 2)...\n', 0)
     postlist = postcrack2(postlist)
-    return usermodules + postlist
+    blocks = usermodules + postlist
+    _drop_optional_intrinsic_derived(blocks)
+    return blocks
+
+
+_INTRINSIC_SPEC = {'integer', 'real', 'logical', 'complex', 'character'}
+
+
+def _intrinsic_only_types(blocks):
+    """Typenames whose components are all intrinsic scalars or arrays."""
+    found = {}
+
+    def walk(block):
+        if isinstance(block, list):
+            for item in block:
+                walk(item)
+            return
+        if not isinstance(block, dict):
+            return
+        if block.get('block') == 'type':
+            ok = True
+            comps = []
+            for var in (block.get('vars') or {}).values():
+                if not isinstance(var, dict):
+                    ok = False
+                    continue
+                ts = var.get('typespec')
+                if ts not in _INTRINSIC_SPEC:
+                    ok = False
+                else:
+                    comps.append(ts)
+            if ok and comps:
+                found[str(block.get('name')).lower()] = comps
+        for child in block.get('body') or []:
+            walk(child)
+
+    walk(blocks)
+    return found
+
+
+def _drop_optional_intrinsic_derived(blocks):
+    """An optional `err` of a simple derived type is left absent.
+
+    The procedure stays callable. A required derived-type argument is
+    not removed here.
+    """
+    types = _intrinsic_only_types(blocks)
+
+    def walk(block):
+        if isinstance(block, list):
+            for item in block:
+                walk(item)
+            return
+        if not isinstance(block, dict):
+            return
+        if block.get('block') in ('function', 'subroutine'):
+            kept = []
+            for arg in block.get('args') or []:
+                var = (block.get('vars') or {}).get(arg) or {}
+                attrs = var.get('attrspec') or []
+                tname = str(var.get('typename') or '').lower()
+                if (var.get('typespec') == 'type' and 'optional' in attrs
+                        and tname in types):
+                    continue
+                kept.append(arg)
+            block['args'] = kept
+        for child in block.get('body') or []:
+            walk(child)
+
+    walk(blocks)
 
 
 def crack2fortran(block):

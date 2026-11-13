@@ -25,6 +25,19 @@ from .crackfortran import undo_rmbadname, undo_rmbadname1
 options = {}
 
 
+def _unmapped_arg(rout):
+    """Name of a derived-type argument or result, which has no C mapping."""
+    names = list(rout.get('args') or [])
+    if rout.get('block') == 'function':
+        names.append(rout.get('result') or rout.get('name'))
+    variables = rout.get('vars') or {}
+    for name in names:
+        var = variables.get(name) or {}
+        if isinstance(var, dict) and var.get('typespec') == 'type':
+            return name
+    return None
+
+
 def findf90modules(m):
     if ismodule(m):
         return [m]
@@ -197,6 +210,11 @@ def buildhooks(pymod):
                 if not isroutine(b):
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b['block']} {b_name}\n")
+                    continue
+                bad = _unmapped_arg(b)
+                if bad:
+                    outmess(f"\t\t\tSkipping routine {b_name!r}: "
+                            f"argument {bad!r} has no C mapping.\n")
                     continue
                 modobjs.append(f"{b_name}()")
                 b['modulename'] = m_name
