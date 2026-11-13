@@ -107,3 +107,19 @@ class TestFReturnReal(TestReturnReal):
     @pytest.mark.parametrize("name", ["t0", "t4", "t8", "td", "s0", "s4", "s8", "sd"])
     def test_all_f90(self, name):
         self.check_function(getattr(self.module.f90_return_real, name), name)
+
+
+@pytest.mark.slow
+class TestFreeFunctionKind(util.F2PyTest):
+    # gh-19767: a function that is not in a module must keep the kind from
+    # the function statement, including when the result has another name.
+    suffix = ".f90"
+    code = """
+real(kind=8) function mysqrt(x) result(r)
+  real(kind=8), intent(in) :: x
+  r = x * x
+end function mysqrt
+"""
+
+    def test_kind_result(self):
+        assert self.module.mysqrt(3.5) == 12.25

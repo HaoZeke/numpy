@@ -2972,46 +2972,61 @@ def analyzevars(block):
         if n == block['name']:  # n is block name
             if 'note' in vars[n]:
                 block['note'] = vars[n]['note']
-            if block['block'] == 'function':
-                if 'result' in block and block['result'] in vars:
-                    vars[n] = appenddecl(vars[n], vars[block['result']])
-                if 'prefix' in block:
-                    pr = block['prefix']
-                    pr1 = pr.replace('pure', '')
-                    ispure = (not pr == pr1)
-                    pr = pr1.replace('recursive', '')
-                    isrec = (not pr == pr1)
-                    m = typespattern[0].match(pr)
-                    if m:
-                        typespec, selector, attr, edecl = cracktypespec0(
-                            m.group('this'), m.group('after'))
-                        kindselect, charselect, typename = cracktypespec(
-                            typespec, selector)
-                        vars[n]['typespec'] = typespec
-                        try:
-                            if block['result']:
-                                vars[block['result']]['typespec'] = typespec
-                        except Exception:
-                            pass
-                        if kindselect:
-                            if 'kind' in kindselect:
-                                try:
-                                    kindselect['kind'] = eval(
-                                        kindselect['kind'], {}, params)
-                                except Exception:
-                                    pass
-                            vars[n]['kindselector'] = kindselect
-                        if charselect:
-                            vars[n]['charselector'] = charselect
-                        if typename:
-                            vars[n]['typename'] = typename
-                        if ispure:
-                            vars[n] = setattrspec(vars[n], 'pure')
-                        if isrec:
-                            vars[n] = setattrspec(vars[n], 'recursive')
-                    else:
-                        outmess(
-                            f"analyzevars: prefix ({repr(block['prefix'])}) were not used\n")
+
+    # A typed function statement (``real(kind=8) function f() result(r)``)
+    # is the result's declaration. It used to be applied only when the
+    # function name was already a key in vars, so a result variable kept
+    # the implicit type and the F77 wrapper called a default-real function
+    # (gh-19767).
+    if block.get('block') == 'function' and 'prefix' in block:
+        pr = block['prefix']
+        pr1 = pr.replace('pure', '')
+        ispure = (not pr == pr1)
+        pr = pr1.replace('recursive', '')
+        isrec = (not pr == pr1)
+        m = typespattern[0].match(pr)
+        if m:
+            typespec, selector, attr, edecl = cracktypespec0(
+                m.group('this'), m.group('after'))
+            kindselect, charselect, typename = cracktypespec(
+                typespec, selector)
+            if kindselect and 'kind' in kindselect:
+                try:
+                    kindselect['kind'] = eval(kindselect['kind'], {}, params)
+                except Exception:
+                    pass
+            result = block.get('result')
+            if result and result not in vars:
+                vars[result] = {}
+            name = block['name']
+            if name not in vars:
+                if result and result in vars:
+                    vars[name] = appenddecl({}, vars[result])
+                else:
+                    vars[name] = {}
+            elif result and result in vars:
+                vars[name] = appenddecl(vars[name], vars[result])
+            for t in dict.fromkeys([name] + ([result] if result else [])):
+                if t not in vars:
+                    continue
+                # Keep an explicit kind or length. A name that only has an
+                # implicit typespec takes the function statement instead.
+                if vars[t].get('kindselector') or vars[t].get('charselector'):
+                    continue
+                vars[t]['typespec'] = typespec
+                if kindselect:
+                    vars[t]['kindselector'] = copy.copy(kindselect)
+                if charselect:
+                    vars[t]['charselector'] = copy.copy(charselect)
+                if typename:
+                    vars[t]['typename'] = typename
+            if ispure and name in vars:
+                vars[name] = setattrspec(vars[name], 'pure')
+            if isrec and name in vars:
+                vars[name] = setattrspec(vars[name], 'recursive')
+        elif pr.strip():
+            outmess(
+                f"analyzevars: prefix ({block['prefix']!r}) were not used\n")
     if block['block'] not in ['module', 'pythonmodule', 'python module', 'block data']:
         if 'commonvars' in block:
             neededvars = copy.copy(block['args'] + block['commonvars'])
