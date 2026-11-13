@@ -3371,23 +3371,35 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
             argsl.append(block['result'])
     # An interface body that names a nested procedure after one of its
     # dummy arguments is legal to gfortran and rejected by flang
-    # ("'f' is already declared in this scoping unit"). Print the
-    # nested procedure under another name and associate the dummy
-    # with procedure().
+    # ("'f' is already declared in this scoping unit"). The conflicting
+    # procedure is often nested inside an interface block. Print it
+    # under another name and associate the dummy with procedure().
+    def _rename_conflicting_iface(children, argnames, renames):
+        if not isinstance(children, list):
+            return children
+        printed = []
+        for child in children:
+            if not isinstance(child, dict):
+                printed.append(child)
+                continue
+            kind = child.get('block')
+            if kind in ('function', 'subroutine') and child.get('name') in argnames:
+                child = copy.deepcopy(child)
+                renamed = f"f2py_iface_{child['name']}"
+                renames[child['name']] = renamed
+                child['name'] = renamed
+            elif (kind in ('interface', 'abstract interface')
+                    and isinstance(child.get('body'), list)):
+                child = copy.copy(child)
+                child['body'] = _rename_conflicting_iface(
+                    child['body'], argnames, renames)
+            printed.append(child)
+        return printed
+
     body_src = block['body']
     iface_renames = {}
     if as_interface and isinstance(body_src, list) and argsl:
-        printed = []
-        for child in body_src:
-            if (isinstance(child, dict)
-                    and child.get('block') in ('function', 'subroutine')
-                    and child.get('name') in argsl):
-                child = copy.deepcopy(child)
-                renamed = f"f2py_iface_{child['name']}"
-                iface_renames[child['name']] = renamed
-                child['name'] = renamed
-            printed.append(child)
-        body_src = printed
+        body_src = _rename_conflicting_iface(body_src, set(argsl), iface_renames)
     iface_block = block
     if iface_renames:
         iface_block = copy.copy(block)
