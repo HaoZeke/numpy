@@ -1203,6 +1203,20 @@ def analyzeline(m, case, line):
                 typespec, selector, attr, edecl = cracktypespec0(
                     t.group('this'), t.group('after'))
                 updatevars(typespec, selector, attr, edecl)
+                # `logical function f() result(close)` types `close`.
+                # The name starts with `c`, so implicit rules would
+                # make the wrapper result a real.
+                result_name = groupcache[groupcounter].get('result')
+                if result_name and result_name != name:
+                    src = groupcache[groupcounter]['vars'].get(name) or {}
+                    dest = groupcache[groupcounter]['vars'].setdefault(
+                        result_name, {})
+                    if 'typespec' not in dest and src.get('typespec'):
+                        dest['typespec'] = src['typespec']
+                        if ('kindselector' in src
+                                and 'kindselector' not in dest):
+                            dest['kindselector'] = copy.copy(
+                                src['kindselector'])
 
         if case in ['call', 'callfun']:
             grouplist[groupcounter - 1].append(groupcache[groupcounter])
