@@ -2130,7 +2130,7 @@ def postcrack(block, args=None, tab=''):
           function return values
           determine expression types if in argument list
     """
-    global usermodules, onlyfunctions
+    global usermodules, onlyfunctions, f90modulevars
 
     if isinstance(block, list):
         gret = []
@@ -2216,6 +2216,9 @@ def postcrack(block, args=None, tab=''):
             usermodules.append(mblock)
     if useblock:
         block['use'] = useblock
+    if isinstance(block, dict) and block.get('block') == 'module' and block.get('name'):
+        # Later submodules in this crack look the parent up by name.
+        f90modulevars[block['name']] = block.get('vars') or {}
     return block
 
 
@@ -2724,6 +2727,28 @@ def _eval_scalar(value, params):
     return value
 
 
+def _parent_module_parameters(block, params):
+    """Parameters of the module a submodule implements.
+
+    The procedure's ``parent_block`` is the submodule, so ``y(length)``
+    still names the parent's parameter. The generated C then uses that
+    undeclared name.
+    """
+    host = block
+    seen = set()
+    while isinstance(host, dict) and id(host) not in seen:
+        seen.add(id(host))
+        pname = host.get('_parent_module')
+        if pname:
+            for key, mvars in f90modulevars.items():
+                if str(key).lower() == str(pname).lower():
+                    for k, v in get_parameters(mvars).items():
+                        params.setdefault(k, v)
+                    break
+        host = host.get('parent_block')
+    return params
+
+
 def analyzevars(block):
     """
     Sets correct dimension information for each variable/parameter
@@ -2757,6 +2782,7 @@ def analyzevars(block):
             svars.append(n)
 
     params = get_parameters(vars, get_useparameters(block))
+    params = _parent_module_parameters(block, params)
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
     dep_matches = {}
