@@ -72,14 +72,18 @@ _SKIPS = (
     ("test_callback.py::TestF90Callback::test_gh17797", "duplicate-callback"),
 )
 
-_XFAILS = (
-    (
-        "test_kind.py::TestKind::test_int",
-        "LFortran has no integer kind for 19 decimal digits, so "
-        "selected_int_kind(19) is -1. f2py's static kind table uses "
-        "gfortran's 16.",
-    ),
+_XFAILS = ()
+
+# Integer kind 16 covers 19 decimal digits. When LFortran has it,
+# selected_int_kind(19) matches f2py's gfortran table and the test
+# passes. Without it, the request is rejected with -1.
+_INT_KIND_XFAIL = (
+    "test_kind.py::TestKind::test_int",
+    "LFortran has no integer kind for 19 decimal digits, so "
+    "selected_int_kind(19) is -1. f2py's static kind table uses "
+    "gfortran's 16.",
 )
+_int_kind_disagrees = None
 
 # Kind 10 is x87 extended precision. When LFortran has it,
 # selected_real_kind(16) matches f2py's gfortran table and the test
@@ -513,6 +517,23 @@ def _probe_gaps():
     return found
 
 
+def _selected_int_kind_disagrees():
+    global _int_kind_disagrees
+    if _int_kind_disagrees is not None:
+        return _int_kind_disagrees
+    from numpy.f2py.crackfortran import _selected_int_kind_func
+    expected = int(_selected_int_kind_func(19))
+    sources = {"p.f90": (
+        "program p\n"
+        "implicit none\n"
+        f"if (selected_int_kind(19) /= {expected}) error stop\n"
+        "end program\n"
+    )}
+    _int_kind_disagrees = not _probe_one(
+        _compiler(), sources, _DRIVER, "run")
+    return _int_kind_disagrees
+
+
 def _selected_real_kind_disagrees():
     global _real_kind_disagrees
     if _real_kind_disagrees is not None:
@@ -540,11 +561,14 @@ def pytest_collection_modifyitems(config, items):
         return
     if not _GAP_OK:
         _GAP_OK.update(_probe_gaps())
+    int_xfail = _selected_int_kind_disagrees()
     real_xfail = _selected_real_kind_disagrees()
     for item in items:
         for key, reason in _XFAILS:
             if _matches(item.nodeid, key):
                 item.add_marker(pytest.mark.xfail(reason=reason))
+        if int_xfail and _matches(item.nodeid, _INT_KIND_XFAIL[0]):
+            item.add_marker(pytest.mark.xfail(reason=_INT_KIND_XFAIL[1]))
         if real_xfail and _matches(item.nodeid, _REAL_KIND_XFAIL[0]):
             item.add_marker(pytest.mark.xfail(reason=_REAL_KIND_XFAIL[1]))
         for key, gap in _SKIPS:
