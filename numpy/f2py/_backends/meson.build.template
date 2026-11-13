@@ -12,6 +12,12 @@ cc = meson.get_compiler('c')
 add_project_arguments(
   cc.get_supported_arguments( '-fno-strict-aliasing'), language : 'c'
 )
+# Free-form source past column 132, and fixed-form past column 72, is
+# common in generated wrappers and in real codes. Accept those lines.
+add_project_arguments(
+  fc.get_supported_arguments('-ffree-line-length-none', '-ffixed-line-length-none'),
+  language : 'fortran'
+)
 
 py = import('python').find_installation('''${python}''', pure: false)
 py_dep = py.dependency()
