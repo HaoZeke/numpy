@@ -210,24 +210,40 @@ class MesonBackend(Backend):
         self._move_exec_to_root(self.build_dir)
 
 
+def _same_file(src, dst):
+    """True when *src* and *dst* name the same filesystem object."""
+    try:
+        return os.path.samefile(src, dst)
+    except OSError:
+        return False
+
+
 def _prepare_sources(mname, sources, bdir):
     extended_sources = sources.copy()
-    Path(bdir).mkdir(parents=True, exist_ok=True)
-    # Copy sources
+    bdir = Path(bdir)
+    bdir.mkdir(parents=True, exist_ok=True)
+    # --build-dir may already be the directory that holds the sources
+    # (gh-29762). Copying a file onto itself raises SameFileError.
     for source in sources:
-        if Path(source).exists() and Path(source).is_file():
-            shutil.copy(source, bdir)
+        src = Path(source)
+        if src.is_file() and not _same_file(src, bdir / src.name):
+            shutil.copy(src, bdir)
     generated_sources = [
         Path(f"{mname}module.c"),
         Path(f"{mname}-f2pywrappers2.f90"),
         Path(f"{mname}-f2pywrappers.f"),
     ]
-    bdir = Path(bdir)
     for generated_source in generated_sources:
-        if generated_source.exists():
-            shutil.copy(generated_source, bdir / generated_source.name)
-            extended_sources.append(generated_source.name)
+        if not generated_source.is_file():
+            continue
+        dest = bdir / generated_source.name
+        # When the build directory is the cwd, the generated file is
+        # already in place. Unlinking it after a same-file copy deletes
+        # the only copy and the meson build then has nothing to compile.
+        if not _same_file(generated_source, dest):
+            shutil.copy(generated_source, dest)
             generated_source.unlink()
+        extended_sources.append(generated_source.name)
     extended_sources = [
         Path(source).name
         for source in extended_sources
@@ -236,11 +252,13 @@ def _prepare_sources(mname, sources, bdir):
     return extended_sources
 
 def _prepare_objects(mname, objects, bdir):
-    Path(bdir).mkdir(parents=True, exist_ok=True)
-    # Copy objects
+    bdir = Path(bdir)
+    bdir.mkdir(parents=True, exist_ok=True)
+    # Copy objects, skipping a library that already lives in bdir.
     for obj in objects:
-        if Path(obj).exists() and Path(obj).is_file():
-            shutil.copy(obj, bdir)
+        src = Path(obj)
+        if src.is_file() and not _same_file(src, bdir / src.name):
+            shutil.copy(src, bdir)
 
 def _get_flags(fc_flags):
     flag_values = []

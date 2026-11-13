@@ -2,6 +2,8 @@ import textwrap
 
 import pytest
 
+from numpy.f2py._backends._meson import _prepare_objects, _prepare_sources
+
 from . import util
 
 
@@ -101,3 +103,60 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+class TestBuildDirIsSourceDir:
+    # gh-29762: --build-dir equal to the source directory must not raise
+    # SameFileError, and must not delete generated sources that already
+    # live in that directory.
+    def test_prepare_sources_keeps_files(self, tmp_path, monkeypatch):
+        # f2py writes the generated sources into the cwd, which is the
+        # build directory in this case.
+        monkeypatch.chdir(tmp_path)
+        src = tmp_path / "addone.f90"
+        src.write_text("subroutine addone\nend subroutine\n")
+        generated = tmp_path / "addmodule.c"
+        generated.write_text("int x;\n")
+        library = tmp_path / "lib.a"
+        library.write_bytes(b"archive")
+        names = _prepare_sources(
+            "add", [str(src), str(tmp_path / "skip.pyf")], tmp_path)
+        _prepare_objects("add", [str(library)], tmp_path)
+        assert src.read_text().startswith("subroutine")
+        assert generated.read_text() == "int x;\n"
+        assert library.read_bytes() == b"archive"
+        assert "addone.f90" in names
+        assert "addmodule.c" in names
+        assert "skip.pyf" not in names
+
+    def test_prepare_sources_still_copies(self, tmp_path, monkeypatch):
+        src_dir = tmp_path / "src"
+        build_dir = tmp_path / "build"
+        src_dir.mkdir()
+        monkeypatch.chdir(src_dir)
+        source = src_dir / "addone.f90"
+        source.write_text("subroutine addone\nend subroutine\n")
+        generated = src_dir / "addmodule.c"
+        generated.write_text("int x;\n")
+        names = _prepare_sources("add", [str(source)], build_dir)
+        assert (build_dir / "addone.f90").read_text() == source.read_text()
+        assert (build_dir / "addmodule.c").read_text() == "int x;\n"
+        assert not generated.exists()
+        assert names == ["addone.f90", "addmodule.c"]
+
+
+@pytest.mark.slow
+class TestBuildDirIsSourceDirCompile(util.F2PyTest):
+    # gh-29762
+    suffix = ".f90"
+    code = """
+subroutine addone(x, y)
+  integer, intent(in) :: x
+  integer, intent(out) :: y
+  y = x + 1
+end subroutine addone
+"""
+    options = ["--build-dir", util.get_module_dir()]
+
+    def test_compiles_in_source_directory(self):
+        assert self.module.addone(3) == 4
