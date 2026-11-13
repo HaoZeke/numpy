@@ -957,6 +957,39 @@ real16pattern = re.compile(
     r'([-+]?(?:\d+(?:\.\d*)?|\d*\.\d+))[dD]((?:[-+]?\d+)?)')
 real8pattern = re.compile(
     r'([-+]?((?:\d+(?:\.\d*)?|\d*\.\d+))[eE]((?:[-+]?\d+)?)|(\d+\.\d*))')
+_parameter_kind_call = re.compile(
+    r'\bkind\s*\(\s*(?P<value>.*?)\s*\)', re.I)
+
+
+def _d_exponent_to_e(expr):
+    """Rewrite Fortran d-exponents to Python e-exponents, outside quotes."""
+    out = []
+    i = 0
+    n = len(expr)
+    while i < n:
+        c = expr[i]
+        if c in "'\"":
+            j = i + 1
+            while j < n:
+                if expr[j] == c:
+                    if j + 1 < n and expr[j + 1] == c:
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(expr[i:j])
+            i = j
+            continue
+        matched = real16pattern.match(expr, i)
+        if matched:
+            literal = expr[matched.start():matched.end()]
+            out.append(literal.lower().replace('d', 'e'))
+            i = matched.end()
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
 
 _intentcallbackpattern = re.compile(r'intent\s*\(.*?\bcallback\b', re.I)
 
@@ -1329,18 +1362,21 @@ def analyzeline(m, case, line):
                 outmess(f'analyzeline: Overwriting the value of parameter "{k}" '
                         f'("{edecl[k]["="]}") with "{initexpr}".\n')
             t = determineexprtype(initexpr, params)
-            if t:
-                if t.get('typespec') == 'real':
-                    tt = list(initexpr)
-                    for m in real16pattern.finditer(initexpr):
-                        tt[m.start():m.end()] = list(
-                            initexpr[m.start():m.end()].lower().replace('d', 'e'))
-                    initexpr = ''.join(tt)
-                elif t.get('typespec') == 'complex':
-                    initexpr = initexpr[1:].lower().replace('d', 'e').\
-                        replace(',', '+1j*(')
+            if t and t.get('typespec') == 'complex':
+                initexpr = initexpr[1:].lower().replace('d', 'e').\
+                    replace(',', '+1j*(')
+            else:
+                # Quote kind() first so KIND(0.0D0) stays a width of 8.
+                # Other d-exponents are values, so 1.0d0 evaluates as 1.0.
+                initexpr = _parameter_kind_call.sub(
+                    lambda m: 'kind("' + m.group('value') + '")', initexpr)
+                initexpr = _d_exponent_to_e(initexpr)
             try:
-                v = eval(initexpr, {}, params)
+                v = eval(initexpr, {
+                    'kind': _kind_func,
+                    'selected_int_kind': _selected_int_kind_func,
+                    'selected_real_kind': _selected_real_kind_func,
+                }, params)
             except (SyntaxError, NameError, TypeError) as msg:
                 errmess(f'analyzeline: Failed to evaluate {initexpr!r}. '
                         f'Ignoring: {msg}\n')

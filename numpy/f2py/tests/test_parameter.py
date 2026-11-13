@@ -1,6 +1,7 @@
 import pytest
 
 import numpy as np
+from numpy.f2py import crackfortran
 
 from . import util
 
@@ -119,3 +120,38 @@ class TestParameters(util.F2PyTest):
     def test_constant_array_delims(self):
         x = self.module.foo_array_delims()
         assert x == 9
+
+
+def test_parameter_statement_kind(tmp_path):
+    # LAPACK writes PARAMETER (DP = KIND(0.0D0)). The width is 8.
+    src = tmp_path / "pk.f"
+    src.write_text(
+        "      subroutine s(a)\n"
+        "      integer dp\n"
+        "      parameter (dp = kind(0.0d0))\n"
+        "      real*8 a(dp)\n"
+        "      end\n"
+    )
+    block = crackfortran.crackfortran([str(src)])[0]
+    assert block['vars']['a']['dimension'] == ['8']
+
+
+@pytest.mark.slow
+class TestParameterStatementKind(util.F2PyTest):
+    suffix = ".f"
+    code = """
+      subroutine s(a)
+      integer dp
+      parameter (dp = kind(0.0d0))
+      real*8 a(dp)
+      a(1) = 1
+      end
+"""
+
+    def test_kind_width_is_bound(self):
+        eight = np.ones(8, dtype=np.float64)
+        self.module.s(eight)
+        assert eight[0] == 1.0
+        one = np.ones(1, dtype=np.float64)
+        with pytest.raises(ValueError):
+            self.module.s(one)
