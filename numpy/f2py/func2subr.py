@@ -174,6 +174,11 @@ def createfuncwrapper(rout, signature=0):
     dumped_args = []
     for a in args:
         if isexternal(vars[a]):
+            # ifx rejects an untyped EXTERNAL actual when the dummy has
+            # an explicit interface (error #6633). State the type too.
+            decl = var2fixfortran(vars, a, f90mode=f90mode)
+            if decl:
+                add(decl)
             add(f'external {a}')
             dumped_args.append(a)
     for a in args:
@@ -276,6 +281,9 @@ def createsubrwrapper(rout, signature=0):
     dumped_args = []
     for a in args:
         if isexternal(vars[a]):
+            decl = var2fixfortran(vars, a, f90mode=f90mode)
+            if decl:
+                add(decl)
             add(f'external {a}')
             dumped_args.append(a)
     for a in args:

@@ -217,6 +217,19 @@ class TestF90Callback(util.F2PyTest):
         assert r == 123 + 1 + 2 + 3
 
 
+def test_external_callback_declares_type(tmp_path, monkeypatch):
+    # ifx error #6633: an untyped EXTERNAL actual does not match a
+    # dummy that has an explicit interface. The wrapper has to state
+    # the result type itself.
+    src = util.getpath("tests", "src", "callback", "gh17797.f90")
+    monkeypatch.chdir(tmp_path)
+    from numpy.f2py.f2py2e import run_main
+    run_main([str(src), "-m", "cbtyped"])
+    text = (tmp_path / "cbtyped-f2pywrappers2.f90").read_text()
+    assert "integer(kind=8) f" in text
+    assert "external f" in text
+
+
 @pytest.mark.slow
 class TestGH18335(util.F2PyTest):
     """The reproduction of the reported issue requires specific input that
