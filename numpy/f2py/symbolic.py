@@ -146,6 +146,19 @@ def _pairs_add(d, k, v):
             del d[k]
 
 
+def _wider_kind(kind1, kind2):
+    """Kind of a sum or product.
+
+    Named kinds such as ``int32`` are strings. ``max`` applies only
+    when both kinds are integers.
+    """
+    if isinstance(kind1, int) and isinstance(kind2, int):
+        return max(kind1, kind2)
+    if kind1 == kind2 or not isinstance(kind1, int):
+        return kind1
+    return kind2
+
+
 class ExprWarning(UserWarning):
     pass
 
@@ -280,8 +293,11 @@ class Expr:
         if self.op in (Op.INTEGER, Op.REAL):
             precedence = (Precedence.SUM if self.data[0] < 0
                           else Precedence.ATOM)
-            r = str(self.data[0]) + (f'_{self.data[1]}'
-                                     if self.data[1] != 4 else '')
+            # C has no Fortran kind suffix. `2_int32` is the number 2.
+            if self.data[1] != 4 and language is not Language.C:
+                r = f'{self.data[0]}_{self.data[1]}'
+            else:
+                r = str(self.data[0])
         elif self.op is Op.COMPLEX:
             r = ', '.join(item.tostring(Precedence.TUPLE, language=language)
                           for item in self.data)
@@ -431,7 +447,7 @@ class Expr:
                 if self.op in (Op.INTEGER, Op.REAL):
                     return as_number(
                         self.data[0] + other.data[0],
-                        max(self.data[1], other.data[1]))
+                        _wider_kind(self.data[1], other.data[1]))
                 if self.op is Op.COMPLEX:
                     r1, i1 = self.data
                     r2, i2 = other.data
@@ -471,7 +487,7 @@ class Expr:
             if self.op is other.op:
                 if self.op in (Op.INTEGER, Op.REAL):
                     return as_number(self.data[0] * other.data[0],
-                                     max(self.data[1], other.data[1]))
+                                     _wider_kind(self.data[1], other.data[1]))
                 elif self.op is Op.COMPLEX:
                     r1, i1 = self.data
                     r2, i2 = other.data
