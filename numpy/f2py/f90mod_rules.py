@@ -25,6 +25,34 @@ from .crackfortran import undo_rmbadname, undo_rmbadname1
 options = {}
 
 
+def _no_ctype(var):
+    """True when a variable has no C mapping (a derived type)."""
+    if not isinstance(var, dict):
+        return False
+    if var.get('typespec') == 'type':
+        return True
+    return capi_maps.getctype(var) == 'void' and 'typespec' in var
+
+
+def _derived_arg(rout):
+    """Name of an argument or result that has no C mapping, or None."""
+    variables = rout.get('vars') or {}
+    names = list(rout.get('args') or [])
+    if rout.get('block') == 'function':
+        names.append(rout.get('result') or rout.get('name'))
+    for name in names:
+        var = variables.get(name) or {}
+        if not isinstance(var, dict) or not var:
+            return name
+        if isexternal(var):
+            continue
+        if var.get('typespec') == 'type':
+            return name
+        if var.get('typespec') and capi_maps.getctype(var) == 'void':
+            return name
+    return None
+
+
 def findf90modules(m):
     if ismodule(m):
         return [m]
@@ -109,6 +137,10 @@ def buildhooks(pymod):
             var = m['vars'][n]
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
+                if _no_ctype(var):
+                    outmess(f"\t\t\tSkipping variable {n!r} of module {m['name']!r}: "
+                            "no C type for a derived type.\n")
+                    continue
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
@@ -197,6 +229,11 @@ def buildhooks(pymod):
                 if not isroutine(b):
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b['block']} {b_name}\n")
+                    continue
+                bad = _derived_arg(b)
+                if bad:
+                    outmess(f"\t\t\tSkipping routine {b_name!r}: "
+                            f"argument {bad!r} has no C mapping.\n")
                     continue
                 modobjs.append(f"{b_name}()")
                 b['modulename'] = m_name
