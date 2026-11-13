@@ -143,7 +143,6 @@ import codecs
 import copy
 import fileinput
 import os
-import platform
 import re
 import string
 import sys
@@ -2490,37 +2489,15 @@ def _kind_func(string):
 
 
 def _selected_int_kind_func(r):
-    # XXX: This should be processor dependent
-    m = 10 ** r
-    if m <= 2 ** 8:
-        return 1
-    if m <= 2 ** 16:
-        return 2
-    if m <= 2 ** 32:
-        return 4
-    if m <= 2 ** 63:
-        return 8
-    if m <= 2 ** 128:
-        return 16
-    return -1
+    # Processor-dependent. Probes FC when it is set; otherwise gfortran's
+    # kind numbers. See numpy/f2py/_kind.py.
+    from . import _kind
+    return _kind.selected_int_kind(r)
 
 
 def _selected_real_kind_func(p, r=0, radix=0):
-    # XXX: This should be processor dependent
-    # This is only verified for 0 <= p <= 20, possibly good for p <= 33 and above
-    if p < 7:
-        return 4
-    if p < 16:
-        return 8
-    machine = platform.machine().lower()
-    if machine.startswith(('aarch64', 'alpha', 'arm64', 'loongarch', 'mips', 'power', 'ppc', 'riscv', 's390x', 'sparc')):
-        if p <= 33:
-            return 16
-    elif p < 19:
-        return 10
-    elif p <= 33:
-        return 16
-    return -1
+    from . import _kind
+    return _kind.selected_real_kind(p, r, radix)
 
 
 def get_parameters(vars, global_params={}):

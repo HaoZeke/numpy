@@ -232,10 +232,26 @@ def getctype(var):
                         ctype = f2cmap[str(var['kindselector']['kind'])]
                     except KeyError:
                         kind = var['kindselector']['kind']
-                        errmess(f'getctype: "{typespec}({kind=})" is mapped to C '
-                                f'"{ctype}" (to override define {{{typespec!r}: '
-                                f'{{{kind!r}: "<C typespec>"}}}} '
-                                f'in {os.getcwd()}/.f2py_f2cmap file).\n')
+                        # Kind integers are not portable. When the static
+                        # gfortran map misses, use the compiler's storage
+                        # size (kind 10 is 16 bytes on gfortran; kind 2 is
+                        # half precision on flang).
+                        from . import _kind
+                        alt = _kind.ctype_from_kind(typespec, kind)
+                        if alt:
+                            ctype = alt
+                        else:
+                            traits = _kind.kind_traits(typespec, kind)
+                            note = ''
+                            if traits:
+                                note = (
+                                    f' Compiler storage is {traits["storage"]} bits'
+                                    f' (decimal precision {traits.get("precision", "n/a")}).'
+                                )
+                            errmess(f'getctype: "{typespec}({kind=})" is mapped to C '
+                                    f'"{ctype}" (to override define {{{typespec!r}: '
+                                    f'{{{kind!r}: "<C typespec>"}}}} '
+                                    f'in {os.getcwd()}/.f2py_f2cmap file).{note}\n')
     elif not isexternal(var):
         errmess(f'getctype: No C-type found in "{var}", assuming void.\n')
     return ctype
