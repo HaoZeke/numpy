@@ -584,7 +584,7 @@ beforethisafter = r'\s*(?P<before>%s(?=\s*(\b(%s)\b)))'\
     r'\s*(?P<this>(\b(%s)\b))'\
     r'\s*(?P<after>%s)\s*\Z'
 ##
-fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|byte'
+fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|procedure(?=\s*\(\s*\w+\s*\))|byte'
 typespattern = re.compile(
     beforethisafter % ('', fortrantypes, fortrantypes, '.*'), re.I), 'type'
 typespattern4implicit = re.compile(beforethisafter % (
@@ -1597,7 +1597,7 @@ def cracktypespec0(typespec, ll):
     d = m1.groupdict()
     for k in list(d.keys()):
         d[k] = unmarkouterparen(d[k])
-    if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type']:
+    if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type', 'procedure']:
         selector = d['this']
         ll = d['after']
     i = ll.find('::')
@@ -1673,6 +1673,32 @@ def markinnerspaces(line):
     return fragment
 
 
+def _find_procedure_interface(iface_name):
+    """Return a parsed abstract-interface procedure named iface_name."""
+    target = str(iface_name).lower()
+    for level in range(groupcounter, -1, -1):
+        pools = [
+            groupcache.get(level, {}).get('body') or [],
+            grouplist.get(level) or [],
+        ]
+        for body in pools:
+            for item in body:
+                if not isinstance(item, dict):
+                    continue
+                block = str(item.get('block') or '')
+                if block == 'interface' or block.endswith(' interface'):
+                    candidates = item.get('body') or []
+                elif item.get('block') in ('subroutine', 'function'):
+                    candidates = [item]
+                else:
+                    continue
+                for proc in candidates:
+                    if (isinstance(proc, dict)
+                            and str(proc.get('name', '')).lower() == target):
+                        return proc
+    return None
+
+
 def updatevars(typespec, selector, attrspec, entitydecl):
     """
     Returns last_name, the variable name without special chars, parenthesis
@@ -1684,6 +1710,12 @@ def updatevars(typespec, selector, attrspec, entitydecl):
     global groupcache, groupcounter
 
     last_name = None
+    # procedure(iface) is a dummy procedure with iface's signature.
+    if typespec == 'procedure':
+        if not attrspec:
+            attrspec = 'external'
+        elif isinstance(attrspec, str) and not re.search(r'\bexternal\b', attrspec, re.I):
+            attrspec = attrspec + ',external'
     kindselect, charselect, typename = cracktypespec(typespec, selector)
     # Clean up outer commas, whitespace and undesired chars from attrspec
     if attrspec:
@@ -1844,6 +1876,32 @@ def updatevars(typespec, selector, attrspec, entitydecl):
             if not edecl[k]:
                 del edecl[k]
         groupcache[groupcounter]['vars'][ename] = edecl
+        if (typespec == 'procedure' and typename
+                and ename in groupcache[groupcounter].get('args', [])):
+            found = _find_procedure_interface(typename)
+            if found:
+                if 'externals' not in groupcache[groupcounter]:
+                    groupcache[groupcounter]['externals'] = []
+                if ename not in groupcache[groupcounter]['externals']:
+                    groupcache[groupcounter]['externals'].append(ename)
+                if 'interfaced' not in groupcache[groupcounter]:
+                    groupcache[groupcounter]['interfaced'] = []
+                if ename not in groupcache[groupcounter]['interfaced']:
+                    groupcache[groupcounter]['interfaced'].append(ename)
+                copied = copy.deepcopy(found)
+                copied['name'] = ename
+                if copied.get('result') == found.get('name'):
+                    copied['result'] = ename
+                    copied_vars = copied.get('vars') or {}
+                    orig = found.get('name')
+                    if orig in copied_vars and ename not in copied_vars:
+                        copied_vars[ename] = copied_vars.pop(orig)
+                grouplist.setdefault(groupcounter, []).append({
+                    'block': 'interface',
+                    'name': 'unknown_interface',
+                    'vars': {},
+                    'body': [copied],
+                })
         if 'varnames' in groupcache[groupcounter]:
             groupcache[groupcounter]['varnames'].append(ename)
         last_name = ename
@@ -1896,7 +1954,7 @@ def cracktypespec(typespec, selector):
                     del charselect[k]
             for k, i in list(charselect.items()):
                 charselect[k] = rmbadname1(i)
-        elif typespec == 'type':
+        elif typespec in ('type', 'procedure'):
             typename = re.match(r'\s*\(\s*(?P<name>\w+)\s*\)', selector, re.I)
             if typename:
                 typename = typename.group('name')
