@@ -1,3 +1,5 @@
+import numpy.f2py.crackfortran as crackfortran
+import numpy.f2py.func2subr as func2subr
 import pytest
 
 from numpy import array
@@ -53,3 +55,26 @@ class TestFReturnInteger(TestReturnInteger):
     def test_all_f90(self, name):
         self.check_function(getattr(self.module.f90_return_integer, name),
                             name)
+
+
+def test_integer_array_result_has_interface(tmp_path):
+    src = tmp_path / "arr.f90"
+    src.write_text(
+        "function f(n) result(r)\n"
+        "  integer, intent(in) :: n\n"
+        "  integer, dimension(3) :: r\n"
+        "  r = n\n"
+        "end function\n"
+    )
+    rout = crackfortran.crackfortran([str(src)])[0]
+    _rout, wrapper = func2subr.assubr(rout)
+    assert "interface" in wrapper
+    assert "integer (3)" not in wrapper
+
+
+@pytest.mark.slow
+class TestIntegerArrayResult(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "return_integer", "arr.f90")]
+
+    def test_values(self):
+        assert list(self.module.f(7)) == [7, 7, 7]

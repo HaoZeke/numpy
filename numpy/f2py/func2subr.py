@@ -126,7 +126,9 @@ def createfuncwrapper(rout, signature=0):
         args = [newname] + rout['args']
 
     l_tmpl = var2fixfortran(vars, name, '@@@NAME@@@', f90mode)
-    if l_tmpl[:13] == 'character*(*)':
+    # An array result keeps its bounds. Rewriting character*(*) here
+    # would turn `character*(*) name(3)` into `character*10`.
+    if l_tmpl[:13] == 'character*(*)' and 'dimension' not in vars.get(name, {}):
         if f90mode:
             l_tmpl = 'character(len=10)' + l_tmpl[13:]
         else:
@@ -161,7 +163,7 @@ def createfuncwrapper(rout, signature=0):
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
-        if not need_interface:
+        if not need_interface and 'dimension' not in vars.get(name, {}):
             add(f'external {fortranname}')
             rl = l_tmpl.replace('@@@NAME@@@', '') + ' ' + fortranname
 
@@ -196,6 +198,18 @@ def createfuncwrapper(rout, signature=0):
     add(l1)
     if rl is not None:
         add(rl)
+    elif not need_interface and not f90mode and 'dimension' in vars.get(name, {}):
+        # `external` plus a dimension is rejected, and `integer (3) f`
+        # is a kind, not an array. An explicit interface keeps the bounds.
+        call_args = [a for a in args if a not in extra_args]
+        add('interface')
+        add(f'function {fortranname}({", ".join(call_args)}) result(r)')
+        for a in call_args:
+            if a in vars and not isexternal(vars[a]):
+                add(var2fixfortran(vars, a, f90mode=f90mode))
+        add(var2fixfortran(vars, name, 'r', f90mode))
+        add('end function')
+        add('end interface')
 
     if need_interface:
         if f90mode:
