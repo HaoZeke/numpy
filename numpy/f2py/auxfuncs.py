@@ -283,6 +283,22 @@ def isallocatable(var):
     return 'attrspec' in var and 'allocatable' in var['attrspec']
 
 
+def isalloc_deferred_char(var):
+    """Scalar ``character(len=:)`` allocatable.
+
+    gfortran passes that dummy as ``char **`` plus a pointer to the
+    length. A fixed buffer and a length by value is the wrong ABI and
+    the call segfaults when Fortran allocates.
+    """
+    if not isallocatable(var) or isarray(var):
+        return False
+    if var.get('typespec') != 'character':
+        return False
+    sel = var.get('charselector') or {}
+    length = str(sel.get('*', sel.get('len', ''))).strip()
+    return length in (':', '(:)')
+
+
 def ismutable(var):
     return not ('dimension' not in var or isstring(var))
 
@@ -738,6 +754,11 @@ def getcallprotoargument(rout, cb_map={}):
         if n in cb_map:
             ctype = cb_map[n] + '_typedef'
         else:
+            if isalloc_deferred_char(var):
+                # char ** and size_t *: Fortran updates both on allocate.
+                arg_types.append('char **')
+                arg_types2.append('size_t *')
+                continue
             ctype = getctype(var)
             if l_and(isintent_c, l_or(isscalar, iscomplex))(var):
                 pass

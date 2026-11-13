@@ -74,6 +74,7 @@ from .auxfuncs import (
     hasinitvalue,
     hasnote,
     hasresultnote,
+    isalloc_deferred_char,
     isarray,
     isarrayofstrings,
     isattr_value,
@@ -1081,9 +1082,15 @@ if (#varname#_cb.capi==Py_None) {
     {  # Common
         'decl': ['    #ctype# #varname# = NULL;',
                  '    int slen(#varname#);',
-                 '    PyObject *#varname#_capi = Py_None;'],
-        'callfortran': '#varname#,',
-        'callfortranappend': 'slen(#varname#),',
+                 '    PyObject *#varname#_capi = Py_None;',
+                 {isalloc_deferred_char:
+                  '    char *f2py_#varname#_ptr = NULL;\n'
+                  '    size_t f2py_#varname#_len = 0;'},
+                 ],
+        'callfortran': {isalloc_deferred_char: '&f2py_#varname#_ptr,',
+                        l_not(isalloc_deferred_char): '#varname#,'},
+        'callfortranappend': {isalloc_deferred_char: '&f2py_#varname#_len,',
+                              l_not(isalloc_deferred_char): 'slen(#varname#),'},
         'pyobjfrom': [
             {debugcapi:
              '    fprintf(stderr,'
@@ -1107,10 +1114,26 @@ if (#varname#_cb.capi==Py_None) {
             # The trailing null value for Fortran is blank.
             {l_not(isintent_c):
              "        STRINGPADN(#varname#, slen(#varname#), '\\0', ' ');"},
+            {isalloc_deferred_char: """\
+        f2py_#varname#_ptr = NULL;
+        f2py_#varname#_len = 0;
+        if (slen(#varname#) > 0) {
+            f2py_#varname#_ptr = (char *)malloc((size_t)slen(#varname#));
+            if (f2py_#varname#_ptr == NULL) {
+                PyErr_NoMemory();
+                f2py_success = 0;
+            } else {
+                memcpy(f2py_#varname#_ptr, #varname#, (size_t)slen(#varname#));
+                f2py_#varname#_len = (size_t)slen(#varname#);
+            }
+        }"""},
         ],
-        'cleanupfrompyobj': """\
+        'cleanupfrompyobj': [
+            {isalloc_deferred_char: '        free(f2py_#varname#_ptr);'},
+            """\
         STRINGFREE(#varname#);
     }  /*if (f2py_success) of #varname#*/""",
+        ],
         'need': ['#ctype#_from_pyobj', 'len..', 'STRINGFREE',
                  {l_not(isintent_c): 'STRINGPADN'}],
         '_check': isstring,
@@ -1121,15 +1144,36 @@ if (#varname#_cb.capi==Py_None) {
         'args_capi': {isrequired: ',&#varname#_capi'},
         'keys_capi': {isoptional: ',&#varname#_capi'},
         'pyobjfrom': [
-            {l_and(isintent_inout, l_not(isintent_c)):
+            {l_and(isintent_inout, l_not(isintent_c), l_not(isalloc_deferred_char)):
              "        STRINGPADN(#varname#, slen(#varname#), ' ', '\\0');"},
-            {isintent_inout: '''\
+            {l_and(isintent_inout, l_not(isalloc_deferred_char)): '''\
     f2py_success = try_pyarr_from_#ctype#(#varname#_capi, #varname#,
                                           slen(#varname#));
-    if (f2py_success) {'''}],
-        'closepyobjfrom': {isintent_inout: '    } /*if (f2py_success) of #varname# pyobjfrom*/'},
-        'need': {isintent_inout: 'try_pyarr_from_#ctype#',
-                 l_and(isintent_inout, l_not(isintent_c)): 'STRINGPADN'},
+    if (f2py_success) {'''},
+            {isalloc_deferred_char: '''\
+    if (f2py_#varname#_ptr == NULL || f2py_#varname#_len == 0) {
+        #varname#_capi = PyUnicode_FromStringAndSize("", 0);
+    } else {
+        #varname#_capi = PyUnicode_FromStringAndSize(
+            f2py_#varname#_ptr, (Py_ssize_t)f2py_#varname#_len);
+    }
+    if (#varname#_capi == NULL) {
+        f2py_success = 0;
+    } else {'''}],
+        'closepyobjfrom': {
+            l_and(isintent_inout, l_not(isalloc_deferred_char)):
+            '    } /*if (f2py_success) of #varname# pyobjfrom*/',
+            isalloc_deferred_char:
+            '    } /*if (f2py_success) of #varname# deferred character*/',
+        },
+        'need': {l_and(isintent_inout, l_not(isalloc_deferred_char)):
+                 'try_pyarr_from_#ctype#',
+                 l_and(isintent_inout, l_not(isintent_c), l_not(isalloc_deferred_char)):
+                 'STRINGPADN'},
+        'docreturn': {isalloc_deferred_char: '#outvarname#,'},
+        'docstrout': {isalloc_deferred_char: '#pydocsignout#'},
+        'returnformat': {isalloc_deferred_char: 'N'},
+        'return': {isalloc_deferred_char: ',#varname#_capi'},
         '_check': l_and(isstring, isintent_nothide)
     }, {  # Hidden
         '_check': l_and(isstring, isintent_hide)
