@@ -188,15 +188,25 @@ def test_meson_library_names_use_valid_identifiers():
 
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
+def _fixed_form_flag():
+    # The regression is that both option lists reach the compiler.
+    # gfortran and flang spell fixed form -ffixed-form; ifx spells it -fixed.
+    fc = os.path.basename(os.environ.get('FC', ''))
+    if fc in ('ifx', 'ifort'):
+        return '-fixed'
+    return '-ffixed-form'
+
+
 def test_gh25784():
     # Compile dubious file using passed flags
+    fixed = _fixed_form_flag()
     try:
         aa = util.build_module(
             [util.getpath("tests", "src", "regression", "f77fixedform.f95")],
             options=[
                 # Meson will collect and dedup these to pass to fortran_args:
-                "--f77flags='-ffixed-form -O2'",
-                "--f90flags=\"-ffixed-form -g\"",
+                f"--f77flags='{fixed} -O2'",
+                f'--f90flags="{fixed} -g"',
             ],
             module_name="Blah",
         )
