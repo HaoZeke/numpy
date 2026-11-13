@@ -188,20 +188,25 @@ def test_meson_library_names_use_valid_identifiers():
 
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
-def test_gh25784():
-    # Compile dubious file using passed flags
-    try:
-        aa = util.build_module(
-            [util.getpath("tests", "src", "regression", "f77fixedform.f95")],
-            options=[
-                # Meson will collect and dedup these to pass to fortran_args:
-                "--f77flags='-ffixed-form -O2'",
-                "--f90flags=\"-ffixed-form -g\"",
-            ],
-            module_name="Blah",
-        )
-    except ImportError as rerr:
-        assert "unknown_subroutine_" in str(rerr)
+def test_gh25784(tmp_path):
+    # The source is fixed-form with a .f95 name. ifx -fixed on a .f95
+    # file warns #10145 and writes no object, so copy it to .f, which
+    # gfortran, flang and ifx all compile as fixed-form. The flags still
+    # have to reach the compiler, and the subroutine has to be callable.
+    src = Path(util.getpath("tests", "src", "regression", "f77fixedform.f95"))
+    fixed = tmp_path / "f77fixedform.f"
+    fixed.write_text(src.read_text())
+    fc = os.path.basename(os.environ.get("FC", ""))
+    flag = "-fixed" if fc in ("ifx", "ifort") else "-ffixed-form"
+    mod = util.build_module(
+        [fixed],
+        options=[
+            f"--f77flags='{flag} -O2'",
+            f'--f90flags="{flag} -g"',
+        ],
+        module_name="Blah",
+    )
+    mod.mwe(np.float32(1.0))
 
 
 @pytest.mark.slow
