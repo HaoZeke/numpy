@@ -600,12 +600,13 @@ groupbegins77 = r'program|block\s*data'
 beginpattern77 = re.compile(
     beforethisafter % ('', groupbegins77, groupbegins77, '.*'), re.I), 'begin'
 groupbegins90 = groupbegins77 + \
-    r'|module(?!\s*procedure)|python\s*module|(abstract|)\s*interface|'\
+    r'|submodule|module(?!\s*(?:procedure|subroutine|function))|'\
+    r'python\s*module|(abstract|)\s*interface|'\
     r'type(?!\s*\()'
 beginpattern90 = re.compile(
     beforethisafter % ('', groupbegins90, groupbegins90, '.*'), re.I), 'begin'
-groupends = (r'end|endprogram|endblockdata|endmodule|endpythonmodule|'
-             r'endinterface|endsubroutine|endfunction')
+groupends = (r'end|endprogram|endblockdata|endmodule|endsubmodule|'
+             r'endpythonmodule|endinterface|endsubroutine|endfunction')
 endpattern = re.compile(
     beforethisafter % ('', groupends, groupends, '.*'), re.I), 'end'
 # block, the Fortran 2008 construct needs special handling in the rest of the file
@@ -1054,6 +1055,19 @@ def analyzeline(m, case, line):
             result = None
         else:
             name, args, result, bindcline = _resolvenameargspattern(m.group('after'))
+        from_submodule = False
+        if block == 'submodule':
+            # submodule (parent) child. Its procedures belong to parent,
+            # but its parameters are not public symbols of parent.
+            sm = re.match(
+                r'\s*\(\s*(?P<parent>\w+)',
+                m.group('after') or '', re.I)
+            if sm:
+                name = sm.group('parent')
+                args = []
+                result = None
+            from_submodule = True
+            block = 'module'
         if name is None:
             if block == 'block data':
                 name = '_BLOCK_DATA_'
@@ -1152,6 +1166,8 @@ def analyzeline(m, case, line):
         groupcache[groupcounter]['externals'] = []
         groupcache[groupcounter]['interfaced'] = []
         groupcache[groupcounter]['vars'] = {}
+        if from_submodule:
+            groupcache[groupcounter]['_from_submodule'] = True
         groupcache[groupcounter]['entry'] = {}
         # end of creation
         if block == 'type':

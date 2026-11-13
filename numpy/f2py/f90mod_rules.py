@@ -109,6 +109,11 @@ def buildhooks(pymod):
             var = m['vars'][n]
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
+                # Parameters of a submodule are not symbols of the parent.
+                # `use parent, only : prime` is not a legal import.
+                attrs = var.get('attrspec') or []
+                if m.get('_from_submodule') and 'parameter' in attrs:
+                    continue
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
