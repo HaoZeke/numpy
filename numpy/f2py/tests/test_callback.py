@@ -249,6 +249,20 @@ class TestGH25211(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestGH24284(util.F2PyTest):
+    """An EXTERNAL that is only forwarded must still use a real callback type.
+
+    ``parent`` never calls ``fun``; ``child`` does. Without a typedef for
+    the forwarded external, the generated C does not compile (gh-24284).
+    """
+    sources = [util.getpath("tests", "src", "callback", "gh24284.f")]
+
+    def test_forwarded_callback_compiles_and_runs(self):
+        assert self.module.parent(lambda: 4.0) == 4.0
+        assert self.module.child(lambda: 7.5) == 7.5
+
+
+@pytest.mark.slow
 @pytest.mark.xfail(condition=(platform.system().lower() == 'darwin'),
                    run=False,
                    reason="Callback aborts cause CI failures on macOS")
