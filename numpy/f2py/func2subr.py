@@ -92,11 +92,44 @@ def useiso_fortran_env(rout):
             return True
     return useisof
 
+def _allocatable_result(rout):
+    """Name of an allocatable array result, or None."""
+    name = rout.get('name')
+    var = (rout.get('vars') or {}).get(name) or {}
+    if 'allocatable' not in (var.get('attrspec') or []):
+        return None
+    if not var.get('dimension'):
+        return None
+    return name
+
+
 def createfuncwrapper(rout, signature=0):
     assert isfunction(rout)
 
     extra_args = []
     vars = rout['vars']
+    # An allocatable result has no size until the function returns.
+    # The wrapper mallocs that storage and hands the pointer back.
+    alloc_name = None if 'f2py_alloc_ptr' in vars else _allocatable_result(rout)
+    alloc_rank = 0
+    if alloc_name:
+        result = vars[alloc_name]
+        alloc_rank = len(result['dimension'])
+        result['dimension'] = ['1'] * alloc_rank
+        result['attrspec'] = [a for a in result.get('attrspec') or []
+                               if a != 'allocatable']
+        vars['f2py_alloc_ptr'] = {
+            'typespec': 'integer',
+            'kindselector': {'kind': '8'},
+            'intent': ['hide'],
+        }
+        for i in range(alloc_rank):
+            vars[f'f2py_alloc_d{i}'] = {
+                'typespec': 'integer',
+                'intent': ['hide'],
+            }
+        rout['args'].extend(
+            ['f2py_alloc_ptr'] + [f'f2py_alloc_d{i}' for i in range(alloc_rank)])
     for a in rout['args']:
         v = rout['vars'][a]
         for i, d in enumerate(v.get('dimension', [])):
@@ -151,13 +184,13 @@ def createfuncwrapper(rout, signature=0):
         add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
         if not signature:
             add(f"use {rout['modulename']}, only : {fortranname}")
-        if useisoc:
+        if useisoc or alloc_rank:
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
     else:
         add(f'subroutine f2pywrap{name} ({sargs})')
-        if useisoc:
+        if useisoc or alloc_rank:
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
@@ -206,9 +239,64 @@ def createfuncwrapper(rout, signature=0):
             add(rout['saved_interface'].lstrip())
             add('end interface')
 
-    sargs = ', '.join([a for a in args if a not in extra_args])
+    sargs = ', '.join([a for a in args if a not in extra_args
+                        and a != newname and not str(a).startswith('f2py_alloc_')])
 
-    if not signature:
+    if alloc_rank and not signature:
+        kind = (vars[name].get('kindselector') or {}).get('kind')
+        typed = vars[name]['typespec']
+        if kind:
+            typed = f'{typed}(kind={kind})'
+        ranks = ','.join(':' for _ in range(alloc_rank))
+        add('block')
+        add(f'{typed}, allocatable :: f2py_tmp({ranks})')
+        add(f'{typed}, pointer :: f2py_dst({ranks})')
+        add('type(c_ptr) :: f2py_cptr')
+        add('integer(c_size_t) :: f2py_bytes')
+        add('interface')
+        add('function f2py_malloc(n) bind(c, name="malloc")')
+        add('import :: c_ptr, c_size_t')
+        add('integer(c_size_t), value :: n')
+        add('type(c_ptr) :: f2py_malloc')
+        add('end function f2py_malloc')
+        add('end interface')
+        add(f'f2py_tmp = {fortranname}({sargs})')
+        for i in range(alloc_rank):
+            add(f'f2py_alloc_d{i} = size(f2py_tmp, {i + 1})')
+        add('f2py_bytes = int(size(f2py_tmp), c_size_t) * int(storage_size(f2py_tmp) / 8, c_size_t)')
+        add('if (f2py_bytes > 0) then')
+        add('f2py_cptr = f2py_malloc(f2py_bytes)')
+        add('call c_f_pointer(f2py_cptr, f2py_dst, shape(f2py_tmp))')
+        add('f2py_dst = f2py_tmp')
+        add('f2py_alloc_ptr = transfer(f2py_cptr, f2py_alloc_ptr)')
+        add('else')
+        add('f2py_alloc_ptr = 0')
+        add('end if')
+        add('end block')
+        dims = ' '.join(f'dims[{i}] = f2py_alloc_d{i};' for i in range(alloc_rank))
+        rout.setdefault('f2pyenhancements', {})
+        rout['f2pyenhancements']['callstatement'] = (
+            '(*f2py_func)(#callfortran#);\n'
+            '{\n'
+            f'    npy_intp dims[{alloc_rank}];\n'
+            '    npy_intp f2py_i, f2py_nb;\n'
+            '    int f2py_type;\n'
+            '    char *f2py_dst, *f2py_src;\n'
+            f'    {dims}\n'
+            f'    f2py_type = PyArray_TYPE(capi_{newname}_as_array);\n'
+            f'    f2py_nb = PyArray_ITEMSIZE(capi_{newname}_as_array);\n'
+            f'    for (f2py_i = 0; f2py_i < {alloc_rank}; ++f2py_i) f2py_nb *= dims[f2py_i];\n'
+            f'    Py_DECREF(capi_{newname}_as_array);\n'
+            f'    capi_{newname}_as_array = (PyArrayObject *)PyArray_New(&PyArray_Type, {alloc_rank}, dims, f2py_type, NULL, NULL, 0, NPY_ARRAY_F_CONTIGUOUS, NULL);\n'
+            '    if (f2py_alloc_ptr && f2py_nb > 0) {\n'
+            f'        f2py_dst = (char *)PyArray_DATA(capi_{newname}_as_array);\n'
+            '        f2py_src = (char *)f2py_alloc_ptr;\n'
+            '        for (f2py_i = 0; f2py_i < f2py_nb; ++f2py_i) f2py_dst[f2py_i] = f2py_src[f2py_i];\n'
+            '    }\n'
+            '    free((void *)f2py_alloc_ptr);\n'
+            '}'
+        )
+    elif not signature:
         if islogicalfunction(rout):
             add(f'{newname} = .not.(.not.{fortranname}({sargs}))')
         else:
