@@ -1669,6 +1669,69 @@ def buildapi(rout):
                 ['\\begin{description}'] + rd[k][1:] +\
                 ['\\end{description}']
 
+    allocs = (func2subr.deferred_state(rout).get('allocs') or [])
+    if allocs:
+        from .capi_maps import getctype
+        _npy = {
+            'char': 'NPY_BYTE',
+            'signed_char': 'NPY_BYTE',
+            'short': 'NPY_SHORT',
+            'int': 'NPY_INT',
+            'long': 'NPY_LONG',
+            'long_long': 'NPY_LONGLONG',
+            'float': 'NPY_FLOAT',
+            'double': 'NPY_DOUBLE',
+            'long_double': 'NPY_LONGDOUBLE',
+            'complex_float': 'NPY_CFLOAT',
+            'complex_double': 'NPY_CDOUBLE',
+            'complex_long_double': 'NPY_CLONGDOUBLE',
+        }
+        resets = ['f2py_deferred_reset();']
+        copies = []
+        for item in allocs:
+            slot = item['slot']
+            if item['char']:
+                copies.append(f'f2py_deferred_str{slot}')
+            else:
+                ctype = getctype(item['var'])
+                typenum = _npy.get(ctype, 'NPY_INT')
+                resets.append(f'f2py_deferred_set({slot}, {typenum});')
+                copies.append(f'f2py_deferred_num{slot}')
+        cfs = rd.get('callfortran') or ''
+        if isinstance(cfs, list):
+            cfs = ','.join(str(part) for part in cfs)
+        cfs = str(cfs).strip().strip(',')
+        extra = f', {cfs}' if cfs else ''
+        rd['callfortranroutine'] = (
+            '    ' + ' '.join(resets) + '\n'
+            f'    (*f2py_func)({", ".join(copies)}{extra});'
+        )
+        ret = rd.get('return') or ''
+        if isinstance(ret, list):
+            ret = ''.join(str(part) for part in ret)
+        body = str(ret).lstrip(',').strip().strip(',')
+        takes = ','.join(f'f2py_deferred_take({item["slot"]})' for item in allocs)
+        # Allocatable results are the earlier intent(out) arguments.
+        if body and takes:
+            rd['return'] = f',{takes},{body}'
+        elif takes:
+            rd['return'] = f',{takes}'
+        elif body:
+            rd['return'] = f',{body}'
+        fmt = rd.get('returnformat') or ''
+        if isinstance(fmt, list):
+            fmt = ''.join(str(part) for part in fmt)
+        rd['returnformat'] = f'{"N" * len(allocs)}{fmt}'
+        names = ', '.join(item['name'] for item in allocs)
+        doc = rd.get('docreturn') or ''
+        if isinstance(doc, list):
+            doc = ''
+        if str(doc).endswith(' = '):
+            rd['docreturn'] = f'{names}, {doc}'
+        else:
+            rd['docreturn'] = f'{names} = '
+        cfuncs.append_needs('f2pydeferredcopy')
+
     ar = applyrules(routine_rules, rd)
     if ismoduleroutine(rout):
         outmess(f"              {ar['docshort']}\n")
