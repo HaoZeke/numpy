@@ -112,7 +112,8 @@ def buildhooks(pymod):
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
-        if len(onlyvars) == 0 and len(notvars) == 1 and m['name'] in notvars:
+        has_routine = hasbody(m) and any(isroutine(b) for b in m['body'])
+        if len(onlyvars) == 0 and not has_routine:
             outmess(f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n")
             continue
 

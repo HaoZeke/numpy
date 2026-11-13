@@ -600,7 +600,8 @@ groupbegins77 = r'program|block\s*data'
 beginpattern77 = re.compile(
     beforethisafter % ('', groupbegins77, groupbegins77, '.*'), re.I), 'begin'
 groupbegins90 = groupbegins77 + \
-    r'|module(?!\s*procedure)|python\s*module|(abstract|)\s*interface|'\
+    r'|submodule|module(?!\s*(?:procedure|subroutine|function))|'\
+    r'python\s*module|(abstract|)\s*interface|'\
     r'type(?!\s*\()'
 beginpattern90 = re.compile(
     beforethisafter % ('', groupbegins90, groupbegins90, '.*'), re.I), 'begin'
@@ -1054,6 +1055,18 @@ def analyzeline(m, case, line):
             result = None
         else:
             name, args, result, bindcline = _resolvenameargspattern(m.group('after'))
+        if block == 'submodule':
+            # submodule (ancestor) name
+            # The procedure is part of the ancestor module: gfortran
+            # emits __ancestor_MOD_s, and the wrapper must `use ancestor`.
+            sm = re.match(
+                r'\s*\(\s*(?P<parent>\w+)\s*\)\s*(?P<child>\w+)?',
+                m.group('after') or '', re.I)
+            if sm:
+                name = sm.group('parent')
+                args = []
+                result = None
+            block = 'module'
         if name is None:
             if block == 'block data':
                 name = '_BLOCK_DATA_'

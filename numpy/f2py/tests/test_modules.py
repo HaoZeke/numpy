@@ -2,6 +2,8 @@ import textwrap
 
 import pytest
 
+from numpy.f2py import crackfortran
+
 from . import util
 
 
@@ -34,6 +36,59 @@ class TestModuleWithoutPublicEntities(util.F2PyTest):
     def test_gh26920(self):
         # if it compiles and can be loaded, things are fine
         pass
+
+
+def test_module_subroutine_is_not_a_nested_module(tmp_path):
+    src = tmp_path / "submod.f90"
+    src.write_text(
+        "module parent\n"
+        "  interface\n"
+        "    module subroutine s(n)\n"
+        "      integer, intent(out) :: n\n"
+        "    end subroutine\n"
+        "  end interface\n"
+        "end module\n"
+        "submodule (parent) child\n"
+        "contains\n"
+        "  module subroutine s(n)\n"
+        "    integer, intent(out) :: n\n"
+        "    n = 4\n"
+        "  end subroutine\n"
+        "end submodule\n"
+    )
+    blocks = crackfortran.crackfortran([str(src)])
+    modules = [b for b in blocks if b.get("block") == "module" and b.get("name") == "parent"]
+    routines = []
+    for mod in modules:
+        for body in mod.get("body", []):
+            if body.get("block") == "subroutine" and body.get("name") == "s":
+                routines.append(body)
+    assert routines
+
+
+@pytest.mark.slow
+class TestSubmoduleProcedure(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+module parent
+  interface
+    module subroutine s(n)
+      integer, intent(out) :: n
+    end subroutine
+  end interface
+end module
+
+submodule (parent) child
+contains
+  module subroutine s(n)
+    integer, intent(out) :: n
+    n = 4
+  end subroutine
+end submodule
+"""
+
+    def test_submodule_procedure(self):
+        assert self.module.parent.s() == 4
 
 
 @pytest.mark.slow
