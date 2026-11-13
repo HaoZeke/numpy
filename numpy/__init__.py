@@ -630,6 +630,16 @@ else:
         "exceptions", "lib", "ctypeslib", "testing", "typing",
         "f2py", "test", "rec", "char", "core", "strings",
     }
+    # gh-28016: some builds ship numpy without f2py. Star import reads
+    # __all__, so f2py must not be listed when the package is absent.
+    import importlib.util
+    try:
+        _f2py_spec = importlib.util.find_spec("numpy.f2py")
+    except ModuleNotFoundError:
+        _f2py_spec = None
+    if _f2py_spec is None:
+        __numpy_submodules__.discard("f2py")
+    del importlib, _f2py_spec
 
     # We build warning messages for former attributes
     _msg = (
@@ -734,7 +744,12 @@ else:
             import numpy.matlib as matlib
             return matlib
         elif attr == "f2py":
-            import numpy.f2py as f2py
+            try:
+                import numpy.f2py as f2py
+            except ModuleNotFoundError as exc:
+                raise AttributeError(
+                    "module 'numpy' has no attribute 'f2py'"
+                ) from exc
             return f2py
         elif attr == "typing":
             import numpy.typing as typing
