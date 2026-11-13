@@ -11,6 +11,7 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
 
+from .crackfortran import rename_bad_idents
 from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
@@ -63,7 +64,8 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
         else:
             vardef = f"{vardef}*{selector['*']}"
     elif 'len' in selector:
-        vardef = f"{vardef}(len={selector['len']}"
+        length = rename_bad_idents(selector['len'], keep=('len',))
+        vardef = f"{vardef}(len={length}"
         if 'kind' in selector:
             vardef = f"{vardef},kind={selector['kind']})"
         else:

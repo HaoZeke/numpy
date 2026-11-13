@@ -277,6 +277,29 @@ def rmbadname(names):
     return [rmbadname1(_m) for _m in names]
 
 
+def rename_bad_idents(expr, keep=()):
+    """Rename identifiers that are C/Python reserved words.
+
+    ``keep`` holds names that must stay, such as the Fortran intrinsic
+    ``len`` in a character length. Quoted text is left unchanged.
+    """
+    if not isinstance(expr, str) or expr in ('*', ':', '(*)'):
+        return expr
+    kept = {name.lower() for name in keep}
+    pieces = re.split(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")", expr)
+
+    def repl(match):
+        name = match.group(0)
+        if name.lower() in kept:
+            return name
+        return rmbadname1(name)
+
+    for index, piece in enumerate(pieces):
+        if index % 2 == 0:
+            pieces[index] = re.sub(r'\b[A-Za-z_]\w*\b', repl, piece)
+    return ''.join(pieces)
+
+
 def undo_rmbadname1(name):
     if name in invbadnames:
         errmess(f'undo_rmbadname1: Replacing "{name}" with "{invbadnames[name]}".\n')

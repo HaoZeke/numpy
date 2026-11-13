@@ -22,7 +22,7 @@ from ._isofenv import iso_fortran_env_map
 # As the needed functions cannot be determined by static inspection of the
 # code, it is safest to use import * pending a major refactoring of f2py.
 from .auxfuncs import *
-from .crackfortran import markoutercomma
+from .crackfortran import markoutercomma, rename_bad_idents
 
 __all__ = [
     'getctype', 'getstrlength', 'getarrdims', 'getpydocsign',
@@ -252,6 +252,9 @@ def f2cexpr(expr):
 
     """
     # TODO: support Fortran `len` function with optional kind parameter
+    # `capi_<name>_len` pastes the C spelling. Rename the dummy first so
+    # `len` itself is not turned into `len_bn` before it becomes f2py_slen.
+    expr = rename_bad_idents(expr, keep=('len',))
     expr = re.sub(r'\blen\b', 'f2py_slen', expr)
     return expr
 
