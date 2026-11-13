@@ -1192,7 +1192,13 @@ def analyzeline(m, case, line):
             except Exception:
                 pass
         if block == 'function':
-            t = typespattern[0].match(m.group('before') + ' ' + name)
+            # `elemental logical function is_ok` carries the type after
+            # the procedure prefix. Implicit typing would make `is_ok`
+            # an integer because the name starts with `i`.
+            prefix = re.sub(
+                r'\b(?:elemental|pure|impure|recursive|module)\b',
+                ' ', m.group('before') or '', flags=re.I)
+            t = typespattern[0].match(prefix + ' ' + name)
             if t:
                 typespec, selector, attr, edecl = cracktypespec0(
                     t.group('this'), t.group('after'))
