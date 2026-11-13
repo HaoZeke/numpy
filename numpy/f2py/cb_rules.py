@@ -510,6 +510,9 @@ cb_arg_rules = [
 
 ################## Build call-back module #############
 cb_map = {}
+# Callbacks whose arguments have no C mapping. The parent routine is
+# left out of the wrapper so the extension still builds.
+cb_skipped = set()
 
 
 def buildcallbacks(m):
@@ -530,6 +533,18 @@ def buildcallback(rout, um):
     args, depargs = getargs(rout)
     capi_maps.depargs = depargs
     var = rout['vars']
+    for a in args:
+        v = var.get(a) or {}
+        if not isinstance(v, dict):
+            continue
+        unmapped = v.get('typespec') == 'type' or (
+            v.get('typespec') and capi_maps.getctype(v) == 'void')
+        if unmapped:
+            cb_skipped.add(rout['name'])
+            errmess(
+                f"Skipping call-back {rout['name']!r}: argument {a!r} "
+                f"has no C mapping.\n")
+            return
     vrd = capi_maps.cb_routsign2map(rout, um)
     rd = dictappend({}, vrd)
     cb_map[um].append([rout['name'], rd['name']])

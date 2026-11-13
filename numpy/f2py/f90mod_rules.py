@@ -198,6 +198,14 @@ def buildhooks(pymod):
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b['block']} {b_name}\n")
                     continue
+                from . import cb_rules
+                skipped = cb_rules.cb_skipped
+                if b_name in skipped or any(
+                        ext in skipped for ext in (b.get('externals') or [])):
+                    outmess(
+                        f"\t\t\tSkipping routine {b_name!r}: "
+                        "call-back argument has no C mapping.\n")
+                    continue
                 modobjs.append(f"{b_name}()")
                 b['modulename'] = m_name
                 api, wrap = rules.buildapi(b)

@@ -368,6 +368,12 @@ def getpydocsign(a, var):
                 break
     init = ''
     ctype = getctype(var)
+    # External arguments are callbacks. Their C type stays void and the
+    # docstring is the call-back line below. Any other void type has no
+    # mapping and must not be indexed into c2pycode_map.
+    if not isexternal(var) and ctype not in c2pycode_map:
+        errmess(f'getpydocsign: no C mapping for "{a}" (ctype {ctype}).\n')
+        return '', ''
 
     if hasinitvalue(var):
         init, showinit = getinit(a, var)
