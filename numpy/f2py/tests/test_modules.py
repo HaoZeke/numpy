@@ -1,6 +1,9 @@
+import sys
 import textwrap
 
 import pytest
+
+from numpy.f2py._backends._meson import MesonTemplate, _macro_flags
 
 from . import util
 
@@ -101,3 +104,57 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+def test_define_macros_are_compiler_args():
+    # gh-28648
+    flags = _macro_flags([("NEW_MODEL_PARM", None), ("LEVEL", "2")], ["OLD"])
+    assert flags == ["-DNEW_MODEL_PARM", "-DLEVEL=2", "-UOLD"]
+    text = MesonTemplate(
+        modulename="model",
+        sources=[],
+        deps=[],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=flags,
+        c_args=flags,
+        build_type="release",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+    assert "'-DNEW_MODEL_PARM'" in text
+    assert "'-DLEVEL=2'" in text
+    assert "'-UOLD'" in text
+    assert "fortran_args:" in text
+    assert "c_args:" in text
+
+
+@pytest.mark.slow
+class TestDefineMacro(util.F2PyTest):
+    # gh-28648: -D must reach gfortran or the #ifdef routine is missing.
+    suffix = ".f90"
+    options = ["-DNEW_MODEL_PARM", "--f90flags=-cpp"]
+    code = """
+module model
+  implicit none
+contains
+  subroutine run_passive_model(x, y)
+    real(kind=8), intent(in) :: x
+    real(kind=8), intent(out) :: y
+    y = 20 * x
+  end subroutine run_passive_model
+#ifdef NEW_MODEL_PARM
+  subroutine run_active_model(x, y)
+    real(kind=8), intent(in) :: x
+    real(kind=8), intent(out) :: y
+    y = 10 * x
+  end subroutine run_active_model
+#endif
+end module model
+"""
+
+    def test_ifdef_subroutine(self):
+        assert self.module.model.run_passive_model(2.0) == 40.0
+        assert self.module.model.run_active_model(2.0) == 20.0

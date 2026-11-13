@@ -172,6 +172,7 @@ def test_meson_library_names_use_valid_identifiers():
         object_files=[],
         linker_args=[],
         fortran_args=[],
+        c_args=[],
         build_type="debug",
         python_exe=sys.executable,
     ).generate_meson_build()

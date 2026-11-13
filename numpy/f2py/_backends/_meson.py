@@ -18,6 +18,35 @@ def _meson_identifier(prefix: str, value: str, index: int) -> str:
     return f"{prefix}_{index}_{safe_value}"
 
 
+def _quote_arg(arg: str) -> str:
+    if arg.startswith("'") and arg.endswith("'"):
+        return arg
+    return f"'{arg}'"
+
+
+def _macro_flags(define_macros, undef_macros):
+    """Compiler -D/-U flags from f2py ``-Dname`` and ``-Uname``.
+
+    The meson backend used to record these and then drop them, so a
+    Fortran ``#ifdef`` never saw ``-D`` (gh-28648). The same flags are
+    passed to the C wrapper, which is what ``-DF2PY_REPORT_ATEXIT`` needs.
+    """
+    flags = []
+    for item in define_macros or []:
+        if isinstance(item, (tuple, list)):
+            name = item[0]
+            value = item[1] if len(item) > 1 else None
+        else:
+            name, value = item, None
+        if value is None:
+            flags.append(f"-D{name}")
+        else:
+            flags.append(f"-D{name}={value}")
+    for name in undef_macros or []:
+        flags.append(f"-U{name}")
+    return flags
+
+
 class MesonTemplate:
     """Template meson build file generation class."""
 
@@ -32,6 +61,7 @@ class MesonTemplate:
         object_files: list[Path],
         linker_args: list[str],
         fortran_args: list[str],
+        c_args: list[str],
         build_type: str,
         python_exe: str,
     ):
@@ -50,10 +80,8 @@ class MesonTemplate:
         self.substitutions = {}
         self.objects = object_files
         # Convert args to '' wrapped variant for meson
-        self.fortran_args = [
-            f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
-            for x in fortran_args
-        ]
+        self.fortran_args = [_quote_arg(x) for x in fortran_args]
+        self.c_args = [_quote_arg(x) for x in c_args]
         self.pipeline = [
             self.initialize_template,
             self.sources_substitution,
@@ -62,6 +90,7 @@ class MesonTemplate:
             self.include_substitution,
             self.libraries_substitution,
             self.fortran_args_substitution,
+            self.c_args_substitution,
         ]
         self.build_type = build_type
         self.python_exe = python_exe
@@ -137,6 +166,14 @@ class MesonTemplate:
         else:
             self.substitutions["fortran_args"] = ""
 
+    def c_args_substitution(self) -> None:
+        if self.c_args:
+            self.substitutions["c_args"] = (
+                f"{self.indent}c_args: [{', '.join(list(self.c_args))}],"
+            )
+        else:
+            self.substitutions["c_args"] = ""
+
     def generate_meson_build(self):
         for node in self.pipeline:
             node()
@@ -174,6 +211,7 @@ class MesonBackend(Backend):
 
     def write_meson_build(self, build_dir: Path) -> None:
         """Writes the meson build file at specified location"""
+        macros = _macro_flags(self.define_macros, self.undef_macros)
         meson_template = MesonTemplate(
             self.modulename,
             self.sources,
@@ -183,7 +221,8 @@ class MesonBackend(Backend):
             self.include_dirs,
             self.extra_objects,
             self.flib_flags,
-            self.fc_flags,
+            self.fc_flags + macros,
+            macros,
             self.build_type,
             sys.executable,
         )
