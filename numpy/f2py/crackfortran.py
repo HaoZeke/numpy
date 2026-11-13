@@ -2804,7 +2804,13 @@ def analyzevars(block):
                     if len(dl) == 2 and '*' in dl:  # e.g. dimension(5:*)
                         dl = ['*']
                         d = '*'
-                    if len(dl) == 1 and dl[0] != dim_char:
+                    elif len(dl) == 2 and not dl[1].strip():
+                        # dimension(0:) gives a lower bound and no upper
+                        # bound. An empty upper bound is not a size, so
+                        # record dimension(:) instead of "1 + ".
+                        dl = [':']
+                        d = ':'
+                    elif len(dl) == 1 and dl[0] != dim_char:
                         dl = ['1', dl[0]]
                     if len(dl) == 2:
                         d1, d2 = map(symbolic.Expr.parse, dl)
