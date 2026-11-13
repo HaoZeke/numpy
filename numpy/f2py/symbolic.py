@@ -1299,6 +1299,12 @@ class _Pair:
     def __repr__(self):
         return f'{type(self).__name__}({self.left}, {self.right})'
 
+    def tostring(self, parent_precedence=None, language=Language.Fortran):
+        right = self.right
+        if hasattr(right, 'tostring'):
+            right = right.tostring(language=language)
+        return f'{self.left}={right}'
+
 
 class _FromStringWorker:
 
@@ -1362,6 +1368,15 @@ class _FromStringWorker:
             expr2 = self.process(expr2)
             return as_ternary(oper, expr1, expr2)
 
+        # keyword argument. Checked before `<` so `mask=1<dim` is
+        # the keyword mask with value `1<dim`, not `(mask=1) < dim`.
+        # `==` stays a relational operator.
+        m = re.match(r'\A(\w[\w\d_]*)\s*=(?!=)(.*)\Z', r)
+        if m:
+            keyname, value = m.groups()
+            value = restore(value)
+            return _Pair(keyname, self.process(value))
+
         # relational expression
         if self.language is Language.Fortran:
             m = re.match(
@@ -1376,13 +1391,6 @@ class _FromStringWorker:
             left, right = self.process(restore((left, right)))
             rop = RelOp.fromstring(rop, language=self.language)
             return Expr(Op.RELATIONAL, (rop, left, right))
-
-        # keyword argument
-        m = re.match(r'\A(\w[\w\d_]*)\s*[=](.*)\Z', r)
-        if m:
-            keyname, value = m.groups()
-            value = restore(value)
-            return _Pair(keyname, self.process(value))
 
         # addition/subtraction operations
         operands = re.split(r'((?<!\d[edED])[+-])', r)
