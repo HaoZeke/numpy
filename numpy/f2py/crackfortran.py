@@ -181,6 +181,7 @@ beginpattern = ''
 currentfilename = ''
 expectbegin = 1
 f90modulevars = {}
+f90moduleuses = {}
 filepositiontext = ''
 gotnextfile = 1
 groupcache = None
@@ -199,7 +200,7 @@ usermodules = []
 
 def reset_global_f2py_vars():
     global groupcounter, grouplist, neededmodule, expectbegin
-    global skipblocksuntil, usermodules, f90modulevars, gotnextfile
+    global skipblocksuntil, usermodules, f90modulevars, f90moduleuses, gotnextfile
     global filepositiontext, currentfilename, skipfunctions, skipfuncs
     global onlyfuncs, include_paths, previous_context
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
@@ -225,6 +226,7 @@ def reset_global_f2py_vars():
     skipblocksuntil = -1
     usermodules = []
     f90modulevars = {}
+    f90moduleuses = {}
     gotnextfile = 1
     filepositiontext = ''
     currentfilename = ''
@@ -1990,6 +1992,37 @@ def get_usedict(block):
     return usedict
 
 
+def _integer_kind_parameters(usename, seen=None):
+    """Map a module's names onto integer parameter values.
+
+    ``dp = selected_real_kind(15)`` evaluates to 8. A module that
+    uses that name, directly or through another module, can then
+    declare ``real(kind=dp)`` with kind 8.
+    """
+    if seen is None:
+        seen = set()
+    key = str(usename).lower()
+    if key in seen:
+        return {}
+    seen = set(seen)
+    seen.add(key)
+    out = {}
+    for mod, mapping in (f90moduleuses.get(key) or {}).items():
+        remote = _integer_kind_parameters(mod, seen)
+        mmap = (mapping or {}).get('map') or {}
+        if mmap:
+            for local, src in mmap.items():
+                src_l = str(src).lower()
+                if src_l in remote:
+                    out[str(local).lower()] = remote[src_l]
+        elif not (mapping or {}).get('only'):
+            out.update(remote)
+    for name, value in get_parameters(f90modulevars.get(key) or {}).items():
+        if isinstance(value, int) and not isinstance(value, bool):
+            out[str(name).lower()] = str(value)
+    return out
+
+
 def get_useparameters(block, param_map=None):
     global f90modulevars
 
@@ -2000,21 +2033,34 @@ def get_useparameters(block, param_map=None):
         return param_map
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
+        remote = _integer_kind_parameters(usename)
+        mmap = (mapping or {}).get('map') or {}
+        if mmap:
+            for local, src in mmap.items():
+                src_l = str(src).lower()
+                if src_l in remote:
+                    param_map[str(local).lower()] = remote[src_l]
+        elif remote and not (mapping or {}).get('only'):
+            for name, value in remote.items():
+                param_map.setdefault(name, value)
         if usename not in f90modulevars:
-            outmess(f'get_useparameters: no module {usename} info used by '
-                    f'{block.get("name")}\n')
+            if not remote:
+                outmess(f'get_useparameters: no module {usename} info used by '
+                        f'{block.get("name")}\n')
             continue
         mvars = f90modulevars[usename]
         params = get_parameters(mvars)
         if not params:
             continue
-        # XXX: apply mapping
-        if mapping:
+        # A rename above already recorded the local name.
+        if mapping and not mmap:
             errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
         for k, v in list(params.items()):
             if k in param_map:
                 outmess(f'get_useparameters: overriding parameter {k!r} with'
                         f' value from module {usename!r}\n')
+            if isinstance(v, int) and not isinstance(v, bool):
+                v = str(v)
             param_map[k] = v
 
     return param_map
@@ -2032,8 +2078,10 @@ def postcrack2(block, tab='', param_map=None):
     setmesstext(block)
     outmess(f"{tab}Block: {block['name']}\n", 0)
 
-    if param_map is None:
-        param_map = get_useparameters(block)
+    # The python module f2py wraps sources in has no USE of its own.
+    # Each block still has to fold the kind parameters it uses.
+    param_map = get_useparameters(
+        block, {} if param_map is None else dict(param_map))
 
     if param_map is not None and 'vars' in block:
         vars = block['vars']
@@ -2058,7 +2106,7 @@ def postcrack(block, args=None, tab=''):
           function return values
           determine expression types if in argument list
     """
-    global usermodules, onlyfunctions
+    global usermodules, onlyfunctions, f90modulevars, f90moduleuses
 
     if isinstance(block, list):
         gret = []
@@ -2073,6 +2121,9 @@ def postcrack(block, args=None, tab=''):
                 gret.append(g)
         return uret + gret
     setmesstext(block)
+    if isinstance(block, dict) and block.get('block') == 'module':
+        f90modulevars[block['name']] = block.get('vars') or {}
+        f90moduleuses[block['name']] = block.get('use') or {}
     if not isinstance(block, dict) and 'block' not in block:
         raise Exception('postcrack: Expected block dictionary instead of ' +
                         str(block))
@@ -2085,6 +2136,9 @@ def postcrack(block, args=None, tab=''):
     if block.get('args'):
         args = block['args']
     block['body'] = analyzebody(block, args, tab=tab)
+    if block.get('block') == 'module':
+        f90modulevars[block['name']] = block.get('vars') or {}
+        f90moduleuses[block['name']] = block.get('use') or {}
 
     userisdefined = []
     if 'use' in block:
@@ -2267,7 +2321,7 @@ def analyzecommon(block):
 
 
 def analyzebody(block, args, tab=''):
-    global usermodules, skipfuncs, onlyfuncs, f90modulevars
+    global usermodules, skipfuncs, onlyfuncs, f90modulevars, f90moduleuses
 
     setmesstext(block)
 
@@ -2307,6 +2361,7 @@ def analyzebody(block, args, tab=''):
         else:
             if b['block'] == 'module':
                 f90modulevars[b['name']] = b['vars']
+                f90moduleuses[b['name']] = b.get('use') or {}
             body.append(b)
     return body
 
