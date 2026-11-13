@@ -267,7 +267,6 @@ def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
         out, _ = capfd.readouterr()
         assert "'distutils' backend was removed" in out
 
-@pytest.mark.xfail
 def test_f2py_skip(capfd, retreal_f77, monkeypatch):
     """Tests that functions can be skipped
     CLI :: skip:
@@ -285,7 +284,7 @@ def test_f2py_skip(capfd, retreal_f77, monkeypatch):
         out, err = capfd.readouterr()
         for skey in toskip.split():
             assert (
-                f'buildmodule: Could not found the body of interfaced routine "{skey}". Skipping.'
+                f'buildmodule: Could not find the body of interfaced routine "{skey}". Skipping.'
                 in err)
         for rkey in remaining.split():
             assert f'Constructing wrapper function "{rkey}"' in out
