@@ -2134,6 +2134,29 @@ def postcrack(block, args=None, tab=''):
                             del interfaced[interfaced.index(e)]
                             break
                 interface['body'].append(edef)
+            elif e in mvars and isexternal(mvars[e]):
+                # An EXTERNAL that the body never calls still has to be a
+                # callback. Without a signature the wrapper emits an
+                # undefined typedef. One argument of the same type is the
+                # usual Fortran external function. A call that already
+                # produced a signature must be left alone.
+                if any(isinstance(b, dict) and b.get('name') == e
+                       for b in interface['body']):
+                    continue
+                var = mvars[e]
+                ts = var.get('typespec')
+                if ts in ('real', 'integer', 'complex', 'logical',
+                          'double precision', 'doublecomplex'):
+                    cbvar = {'typespec': ts}
+                    if var.get('kindselector'):
+                        cbvar['kindselector'] = copy.deepcopy(var['kindselector'])
+                    interface['body'].append({
+                        'block': 'function',
+                        'name': e,
+                        'args': ['x'],
+                        'result': e,
+                        'vars': {'x': copy.deepcopy(cbvar), e: cbvar},
+                    })
             elif e in mvars and not isexternal(mvars[e]):
                 interface['vars'][e] = mvars[e]
         if interface['vars'] or interface['body']:
