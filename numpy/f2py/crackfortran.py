@@ -3690,17 +3690,29 @@ def character_backward_compatibility_hook(item, parents, result,
     key, value = item
 
     def fix_usage(varname, value):
-        value = re.sub(r'[*]\s*\b' + varname + r'\b', varname, value)
-        value = re.sub(r'\b' + varname + r'\b\s*[\[]\s*0\s*[\]]',
+        name = re.escape(varname)
+        value = re.sub(r'[*]\s*\b' + name + r'\b', varname, value)
+        value = re.sub(r'\b' + name + r'\b\s*[\[]\s*0\s*[\]]',
                        varname, value)
         return value
 
+    def nearest_vars():
+        for parent in reversed(parents):
+            if parent[0] == 'vars' and isinstance(parent[1], dict):
+                return parent[1]
+        return None
+
     if parent_key in ['dimension', 'check']:
-        assert parents[-3][0] == 'vars'
-        vars_dict = parents[-3][1]
+        # A character array constructor can leave ``check`` nested one
+        # level deeper than a direct variable entry. Skipping is wrong;
+        # aborting the whole module is worse.
+        vars_dict = nearest_vars()
+        if vars_dict is None:
+            return item
     elif key == '=':
-        assert parents[-2][0] == 'vars'
-        vars_dict = parents[-2][1]
+        vars_dict = nearest_vars()
+        if vars_dict is None:
+            return item
     else:
         vars_dict = None
 
