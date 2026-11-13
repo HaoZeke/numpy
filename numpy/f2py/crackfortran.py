@@ -611,7 +611,7 @@ endpattern = re.compile(
     beforethisafter % ('', groupends, groupends, '.*'), re.I), 'end'
 # block, the Fortran 2008 construct needs special handling in the rest of the file
 endifs = r'end\s*(if|do|where|select|while|forall|associate|'\
-         r'critical|enum|team)'
+         r'critical|enum|team|procedure)'
 endifpattern = re.compile(
     beforethisafter % (r'[\w]*?', endifs, endifs, '.*'), re.I), 'endif'
 #

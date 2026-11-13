@@ -39,6 +39,73 @@ def findf90modules(m):
     return ret
 
 
+def _attr_public(var):
+    attrs = (var or {}).get('attrspec') or []
+    if 'public' in attrs:
+        return True
+    if 'private' in attrs:
+        return False
+    return None
+
+
+def _operator_specifics(mod):
+    """Names bound only to `operator` or `assignment` are not public."""
+    names = set()
+    for item in mod.get('body') or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get('block') not in ('interface', 'abstract interface'):
+            continue
+        generic = str(item.get('name') or '')
+        low = generic.lower()
+        if not (low.startswith('operator') or low == 'assignment'):
+            continue
+        for spec in item.get('implementedby') or []:
+            names.add(spec)
+        for child in item.get('body') or []:
+            if isinstance(child, dict) and child.get('name'):
+                names.add(child['name'])
+    return names
+
+
+def _declared_public(mod, name):
+    state = _attr_public((mod.get('vars') or {}).get(name))
+    if state is not None:
+        return state
+    for item in mod.get('body') or []:
+        if (isinstance(item, dict) and item.get('name') == name
+                and item.get('block') in ('function', 'subroutine')):
+            return True
+    return None
+
+
+def _importable_routine(mod, routine, modules):
+    """False when `use <mod>, only : <name>` would name a private specific."""
+    enh = routine.get('f2pyenhancements') or {}
+    use_name = enh.get('fortranname') or routine.get('name')
+    if not use_name:
+        return False
+    low = str(use_name).lower()
+    if low.startswith('operator') or low == 'assignment':
+        return False
+    target = mod
+    if mod.get('_from_submodule'):
+        parents = [m for m in modules
+                   if m.get('name') == mod.get('name')
+                   and not m.get('_from_submodule')]
+        if not parents:
+            return False
+        target = parents[0]
+    if use_name in _operator_specifics(target):
+        explicit = _attr_public((target.get('vars') or {}).get(use_name))
+        if explicit is not True:
+            return False
+    state = _declared_public(target, use_name)
+    if state is None:
+        return False
+    return state
+
+
 fgetdims1 = f"""\
       external f2pysetdata
       logical ns
@@ -96,15 +163,19 @@ def buildhooks(pymod):
         s[0] = f'{s[0]}\n{line}'
 
     usenames = getuseblocks(pymod)
-    for m in findf90modules(pymod):
+    modules = findf90modules(pymod)
+    for m in modules:
         sargs, fargs, efargs, modobjs, notvars, onlyvars = [], [], [], [], [
             m['name']], []
         sargsp = []
         ifargs = []
         mfargs = []
+        importable = []
         if hasbody(m):
             for b in m['body']:
                 notvars.append(b['name'])
+                if isroutine(b) and _importable_routine(m, b, modules):
+                    importable.append(b)
         for n in m['vars'].keys():
             var = m['vars'][n]
 
@@ -117,7 +188,7 @@ def buildhooks(pymod):
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
-        if len(onlyvars) == 0 and len(notvars) == 1 and m['name'] in notvars:
+        if len(onlyvars) == 0 and not importable:
             outmess(f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n")
             continue
 
@@ -195,14 +266,10 @@ def buildhooks(pymod):
                 iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
         if onlyvars:
             dadd('\\end{description}')
-        if hasbody(m):
+        if importable:
             m_name = m['name']
-            for b in m['body']:
+            for b in importable:
                 b_name = b['name']
-                if not isroutine(b):
-                    outmess("f90mod_rules.buildhooks:"
-                            f" skipping {b['block']} {b_name}\n")
-                    continue
                 modobjs.append(f"{b_name}()")
                 b['modulename'] = m_name
                 api, wrap = rules.buildapi(b)
