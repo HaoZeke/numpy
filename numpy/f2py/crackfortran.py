@@ -3408,6 +3408,9 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     vars = vars2fortran(
         iface_block, iface_block['vars'], argsl, tab + tabchar,
         as_interface=as_interface)
+    if iface_renames:
+        for arg, renamed in iface_renames.items():
+            body += f"{tab + tabchar}procedure({renamed}) :: {arg}"
     mess = ''
     if 'from' in block and not as_interface:
         mess = f"! in {block['from']}"
@@ -3500,9 +3503,10 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
                     errmess(
                         f'vars2fortran: Warning: cross-dependence between variables "{a}" and "{d}\"\n')
         if 'externals' in block and a in block['externals']:
-            renamed = block.get('_iface_renames', {}).get(a)
-            if renamed:
-                ret = f'{ret}{tab}procedure({renamed}) :: {a}'
+            # The procedure() statement is emitted after the interface
+            # body that defines the new name. gfortran rejects it if
+            # it appears first ("interface must be explicit").
+            if a in block.get('_iface_renames', {}):
                 continue
             if isintent_callback(vars[a]):
                 ret = f'{ret}{tab}intent(callback) {a}'
