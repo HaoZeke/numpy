@@ -30,8 +30,8 @@ from numpy.testing import IS_IOS, IS_WASM, temppath
 #
 
 def check_language(lang, code_snippet=None):
-    if sys.platform == "win32":
-        pytest.skip("No Fortran tests on Windows (Issue #25134)", allow_module_level=True)
+    # gh-25134: skip when the compiler probe fails, including on Windows.
+    # Do not skip every Windows run before asking meson.
     tmpdir = tempfile.mkdtemp()
     try:
         meson_file = os.path.join(tmpdir, "meson.build")
