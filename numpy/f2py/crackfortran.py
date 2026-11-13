@@ -3506,10 +3506,25 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         elif 'charselector' in vars[a]:
             selector = vars[a]['charselector']
         if '*' in selector:
-            if selector['*'] in ['*', ':']:
-                vardef = f"{vardef}*({selector['*']})"
+            star = selector['*']
+            # ``real*8, intent(in)`` is not Fortran: the star selector
+            # ends the type name, so a following comma is an invalid
+            # character. The interface saved for the wrapper has to be
+            # compiled (gh-13553). ``real(kind=8), intent(in)`` is valid.
+            if as_interface:
+                if vardef == 'character':
+                    if star in ['*', ':', '(*)']:
+                        vardef = f'{vardef}(len=*)'
+                    else:
+                        vardef = f'{vardef}(len={star})'
+                elif star in ['*', ':']:
+                    vardef = f'{vardef}(kind=*)'
+                else:
+                    vardef = f'{vardef}(kind={star})'
+            elif star in ['*', ':']:
+                vardef = f"{vardef}*({star})"
             else:
-                vardef = f"{vardef}*{selector['*']}"
+                vardef = f"{vardef}*{star}"
         elif 'len' in selector:
             vardef = f"{vardef}(len={selector['len']}"
             if 'kind' in selector:
@@ -3520,8 +3535,18 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             vardef = f"{vardef}(kind={selector['kind']})"
         c = ' '
         if 'attrspec' in vars[a]:
-            attr = [l for l in vars[a]['attrspec']
-                    if l not in ['external']]
+            # required/check/depend/note are f2py signature words. On the
+            # pyf path they are still sitting in attrspec when the wrapper
+            # interface is rendered (gh-13553).
+            def _keep_attr(a, as_interface=as_interface):
+                if a == 'external':
+                    return False
+                if as_interface:
+                    head = a.split('(', 1)[0].strip().lower()
+                    if head in ('required', 'check', 'depend', 'note'):
+                        return False
+                return True
+            attr = [l for l in vars[a]['attrspec'] if _keep_attr(l)]
             if as_interface and 'intent(in)' in attr and 'intent(out)' in attr:
                 # In Fortran, intent(in, out) are conflicting while
                 # intent(in, out) can be specified only via
@@ -3540,10 +3565,12 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             if lst:
                 vardef = f"{vardef}{c}intent({','.join(lst)})"
             c = ','
-        if 'check' in vars[a]:
+        # check and depend are f2py directives. A compiled interface
+        # rejects them (gh-13553).
+        if 'check' in vars[a] and not as_interface:
             vardef = f"{vardef}{c}check({','.join(vars[a]['check'])})"
             c = ','
-        if 'depend' in vars[a]:
+        if 'depend' in vars[a] and not as_interface:
             vardef = f"{vardef}{c}depend({','.join(vars[a]['depend'])})"
             c = ','
         if '=' in vars[a]:

@@ -1,5 +1,6 @@
 import os
 import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -317,3 +318,65 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+_TRAPZ_F90 = """
+function trapz(x, y) result(r)
+  real*8, dimension(:), intent(in) :: x
+  real*8, dimension(size(x)), intent(in) :: y
+  real*8 :: r
+  integer :: n
+  n = size(x)
+  r = sum((y(2:n) + y(1:n-1)) * (x(2:n) - x(1:n-1))) / 2
+end function trapz
+"""
+
+
+def test_interface_realstar_is_kind():
+    # gh-13553: a compiled interface cannot use real*8 before a comma,
+    # and check/depend/required are f2py words.
+    from numpy.f2py.crackfortran import vars2fortran
+    block = {"name": "trapz", "block": "function", "body": [], "externals": []}
+    vars = {
+        "x": {
+            "typespec": "real",
+            "kindselector": {"*": "8"},
+            "attrspec": ["required"],
+            "intent": ["in"],
+            "dimension": [":"],
+        },
+        "y": {
+            "typespec": "real",
+            "kindselector": {"*": "8"},
+            "attrspec": ["check(shape(y, 0) == size(x))", "depend(x)"],
+            "intent": ["in"],
+            "dimension": ["size(x)"],
+            "check": ["shape(y, 0) == size(x)"],
+            "depend": ["x"],
+        },
+    }
+    block["vars"] = vars
+    text = vars2fortran(block, vars, ["x", "y"], as_interface=True).lower()
+    compact = text.replace(" ", "")
+    assert "real*8" not in compact
+    assert "kind=8" in compact
+    assert "check(" not in text
+    assert "depend(" not in text
+    assert "required" not in text
+
+
+@pytest.mark.slow
+def test_pyf_then_compile_assumed_shape(tmp_path):
+    # gh-13553: building the .pyf that f2py just wrote used to fail in gfortran.
+    src = tmp_path / "trapz.f90"
+    src.write_text(_TRAPZ_F90)
+    pyf = tmp_path / "trapz.pyf"
+    subprocess.check_call(
+        [sys.executable, "-m", "numpy.f2py", str(src), "-m", "trapzmod", "-h", str(pyf)],
+        cwd=tmp_path,
+    )
+    mod = util.build_module([str(pyf), str(src)], module_name="trapzmod")
+    x = np.array([0.0, 1.0, 3.0])
+    y = np.array([0.0, 1.0, 1.0])
+    # (1+0)*(1-0)/2 + (1+1)*(3-1)/2 = 0.5 + 2
+    assert mod.trapz(x, y) == 2.5
