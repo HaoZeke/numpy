@@ -365,11 +365,33 @@ class Expr:
                 r = f'{numer} / {denom}'
                 precedence = Precedence.PRODUCT
             else:
-                args = [arg.tostring(Precedence.TUPLE, language=language)
-                        for arg in args]
-                args += [k + '=' + v.tostring(Precedence.NONE)
-                         for k, v in kwargs.items()]
-                r = f'{name}({", ".join(args)})'
+                # Fortran `merge(tsource, fsource, mask=cond)` is the
+                # C ternary `(cond?tsource:fsource)`. A keyword value
+                # must use the same language, or `1<dim` becomes `1 .lt. dim`.
+                fname = (name.tostring(language=language)
+                         if hasattr(name, 'tostring') else str(name))
+                tsource = fsource = cond = None
+                if language is Language.C and str(fname).lower() == 'merge':
+                    cond = kwargs.get('mask')
+                    if cond is None and len(args) >= 3:
+                        tsource, fsource, cond = args[0], args[1], args[2]
+                    elif cond is not None and len(args) >= 2:
+                        tsource, fsource = args[0], args[1]
+                    else:
+                        cond = None
+                if cond is not None and tsource is not None:
+                    c = cond.tostring(Precedence.TUPLE, language=language)
+                    a = tsource.tostring(Precedence.TUPLE, language=language)
+                    b = fsource.tostring(Precedence.TUPLE, language=language)
+                    r = f'({c}?{a}:{b})'
+                else:
+                    rendered = [arg.tostring(Precedence.TUPLE,
+                                             language=language)
+                                for arg in args]
+                    rendered += [k + '=' + v.tostring(Precedence.NONE,
+                                                      language=language)
+                                 for k, v in kwargs.items()]
+                    r = f'{name}({", ".join(rendered)})'
                 precedence = Precedence.ATOM
         elif self.op is Op.INDEXING:
             name = self.data[0]

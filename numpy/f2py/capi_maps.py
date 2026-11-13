@@ -23,6 +23,19 @@ from ._isofenv import iso_fortran_env_map
 # code, it is safest to use import * pending a major refactoring of f2py.
 from .auxfuncs import *
 from .crackfortran import markoutercomma
+from .symbolic import Expr, Language
+
+
+def _fortran_merge_to_c(expr):
+    """Turn a Fortran ``merge(...)`` bound into a C ternary."""
+    if not isinstance(expr, str) or 'merge' not in expr.lower():
+        return expr
+    try:
+        parsed = Expr.parse(expr, language=Language.Fortran)
+    except Exception:
+        return expr
+    rendered = parsed.tostring(language=Language.C)
+    return rendered if 'merge' not in rendered.lower() else expr
 
 __all__ = [
     'getctype', 'getstrlength', 'getarrdims', 'getpydocsign',
@@ -320,6 +333,7 @@ def getarrdims(a, var, verbose=0):
         for d in dim:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
+                d = _fortran_merge_to_c(d)
                 ret['setdims'] = f"{ret['setdims']}#varname#_Dims[{i}]={d},"
         if ret['setdims']:
             ret['setdims'] = ret['setdims'][:-1]

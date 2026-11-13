@@ -2809,7 +2809,16 @@ def analyzevars(block):
                     if len(dl) == 2:
                         d1, d2 = map(symbolic.Expr.parse, dl)
                         dsize = d2 - d1 + 1
-                        d = dsize.tostring(language=symbolic.Language.C)
+                        # Fortran wrappers need `merge(...)`. The C
+                        # wrapper needs the ternary form of that call.
+                        d_c = dsize.tostring(language=symbolic.Language.C)
+                        d_f = dsize.tostring(language=symbolic.Language.Fortran)
+                        # A Fortran `merge` must stay `merge` in the
+                        # Fortran wrapper. Its C form is the ternary.
+                        name = dsize.data[0] if dsize.op is symbolic.Op.APPLY else None
+                        fname = (name.tostring() if hasattr(name, 'tostring')
+                                 else str(name or ''))
+                        d = d_f if str(fname).lower() == 'merge' else d_c
                         # find variables v that define d as a linear
                         # function, `d == a * v + b`, and store
                         # coefficients a and b for further analysis.
