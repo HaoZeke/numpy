@@ -2680,7 +2680,20 @@ def analyzevars(block):
         if n not in args:
             svars.append(n)
 
-    params = get_parameters(vars, get_useparameters(block))
+    # A contained procedure sees the host's parameters. `real :: y(n)`
+    # with `integer, parameter :: n = 4` is a dimension of 4. Leaving
+    # the name `n` in the C wrapper does not compile.
+    params = {}
+    seen_parents = set()
+    parent = block.get('parent_block')
+    chain = []
+    while isinstance(parent, dict) and id(parent) not in seen_parents:
+        seen_parents.add(id(parent))
+        chain.append(parent)
+        parent = parent.get('parent_block')
+    for parent in reversed(chain):
+        params = get_parameters(parent.get('vars') or {}, params)
+    params = get_parameters(vars, get_useparameters(block, params))
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
     dep_matches = {}
