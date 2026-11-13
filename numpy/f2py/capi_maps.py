@@ -583,6 +583,22 @@ def sign2map(a, var):
     return ret
 
 
+def _callback_for_external(ext):
+    """Return the generated callback name for an EXTERNAL of this name.
+
+    Callbacks are recorded as ``[fortran_name, generated_name]`` while
+    each ``__user__`` module is built. A routine that only forwards the
+    external never gets its own entry; the call site that defined the
+    signature lives on another routine.
+    """
+    want = ext.lower()
+    for pairs in cb_rules.cb_map.values():
+        for orig, cbname in pairs:
+            if orig.lower() == want:
+                return cbname
+    return None
+
+
 def routsign2map(rout):
     """
     name,NAME,begintitle,endtitle
@@ -625,9 +641,25 @@ def routsign2map(rout):
                                 break
                     lcb_map[ln] = un[1]
     elif rout.get('externals'):
-        externals = rout['externals']
-        errmess(f"routsign2map: Confused: function {ret['name']} has externals "
-                f'{externals!r} but no "use" statement.\n')
+        # An EXTERNAL dummy that this routine does not call still needs
+        # the callback typedef. Another routine in the same source may
+        # have been the one that called it (gh-24284: DIVA passes DIVAF
+        # through, DIVAA is what actually calls it). Without this, the
+        # wrapper emits `DIVAF_t` and the C file does not compile.
+        missing = []
+        for ext in rout['externals']:
+            cbname = _callback_for_external(ext)
+            if cbname:
+                lcb_map[ext] = cbname
+                lcb_map[ext.lower()] = cbname
+                for key in rout.get('vars', {}):
+                    if key.lower() == ext.lower():
+                        lcb_map[key] = cbname
+            else:
+                missing.append(ext)
+        if missing:
+            errmess(f"routsign2map: Confused: function {ret['name']} has externals "
+                    f'{missing!r} but no "use" statement.\n')
     ret['callprotoargument'] = getcallprotoargument(rout, lcb_map) or ''
     if isfunction(rout):
         if 'result' in rout:
