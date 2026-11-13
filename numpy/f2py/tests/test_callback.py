@@ -223,11 +223,17 @@ def test_external_callback_declares_type(tmp_path, monkeypatch):
     # the result type itself.
     src = util.getpath("tests", "src", "callback", "gh17797.f90")
     monkeypatch.chdir(tmp_path)
+    from numpy.f2py import crackfortran
     from numpy.f2py.f2py2e import run_main
-    run_main([str(src), "-m", "cbtyped"])
-    text = (tmp_path / "cbtyped-f2pywrappers2.f90").read_text()
-    assert "integer(kind=8) f" in text
-    assert "external f" in text
+    try:
+        run_main([str(src), "-m", "cbtyped"])
+        text = (tmp_path / "cbtyped-f2pywrappers2.f90").read_text()
+        assert "integer(kind=8) f" in text
+        assert "external f" in text
+    finally:
+        # run_main leaves dolowercase off. Later crackfortran tests
+        # expect the default, which lowercases names.
+        crackfortran.reset_global_f2py_vars()
 
 
 @pytest.mark.slow
