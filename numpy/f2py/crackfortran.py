@@ -824,6 +824,12 @@ def crackline(line, reset=0):
             outmess(f'crackline:{groupcounter}: No pattern for line\n')
         return
     elif pat[1] == 'end':
+        # `end = n` and `end(i) = n` assign to a variable named end.
+        # The bare end keyword does not start an assignment.
+        after = (m.group('after') or '').lstrip()
+        this = (m.group('this') or '').lower()
+        if this == 'end' and after[:1] in ('=', '('):
+            return
         if 0 <= skipblocksuntil < groupcounter:
             groupcounter = groupcounter - 1
             if skipblocksuntil <= groupcounter:
