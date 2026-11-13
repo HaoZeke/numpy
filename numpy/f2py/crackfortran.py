@@ -1453,6 +1453,12 @@ def analyzeline(m, case, line):
                     # Ignoring since data statements are irrelevant for
                     # wrapping.
                     continue
+                # data d(1) / 1 / names an element of d, not a new variable.
+                # Recording "d(1)" makes the signature emit a bogus optional
+                # with no typespec (gh-7189). The Fortran DATA statement
+                # still initializes the base object.
+                if re.fullmatch(r'[A-Za-z]\w*\s*\(.*\)', v):
+                    continue
                 if '!' in l[1]:
                     # Fixes gh-24746 pyf generation
                     # XXX: This essentially ignores the value for generating the pyf which is fine:

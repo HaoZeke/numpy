@@ -7,6 +7,57 @@ from . import util
 
 
 @pytest.mark.slow
+class TestDataElementDesignator:
+    # gh-7189: data d(1) / 1 / must not invent a variable named "d(1)".
+    def _crack(self, src):
+        mod = crackfortran([str(src)])
+        return next(b for b in mod if b.get("name") == "minimal")["vars"]
+
+    def test_element_is_not_a_variable(self, tmp_path):
+        src = tmp_path / "gh7189.f90"
+        src.write_text(
+            "module minimal\n"
+            "  implicit none\n"
+            "  integer, dimension(2) :: d\n"
+            "  data d(1) / 1 /\n"
+            "  data d(2) / 2 /\n"
+            "end module minimal\n"
+        )
+        vs = self._crack(src)
+        assert set(vs) == {"d"}
+        assert vs["d"]["typespec"] == "integer"
+        assert vs["d"]["dimension"] == ["2"]
+
+    def test_element_list_is_not_a_variable(self, tmp_path):
+        src = tmp_path / "gh7189_list.f90"
+        src.write_text(
+            "module minimal\n"
+            "  implicit none\n"
+            "  integer, dimension(2) :: d\n"
+            "  data d(1), d(2) / 1, 2 /\n"
+            "end module minimal\n"
+        )
+        vs = self._crack(src)
+        assert set(vs) == {"d"}
+
+
+@pytest.mark.slow
+class TestDataElementRuntime(util.F2PyTest):
+    # gh-7189
+    suffix = ".f90"
+    code = """
+module minimal
+  implicit none
+  integer, dimension(2) :: d
+  data d(1) / 1 /
+  data d(2) / 2 /
+end module minimal
+"""
+
+    def test_element_values(self):
+        assert list(self.module.minimal.d) == [1, 2]
+
+
 class TestData(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "data_stmts.f90")]
 
