@@ -274,6 +274,44 @@ class TestStringLiteralDepend:
         assert mask('"badvar2"') == "''"
         assert mask("'mkdir '//badvar2") == "''//badvar2"
         assert mask("a + b") == "a + b"
+        # gh-33220: a backslash is data. Doubling a quote escapes it.
+        assert mask("len('c:\\'//n//'x')") == "len(''//n//'')"
+        assert mask("len('c:\\\\'//n//'x')") == "len(''//n//'')"
+        assert mask("'it''s'") == "''"
+        assert crackfortran.markoutercomma("len('c:\\'//n//'x')") == (
+            "len('c:\\'//n//'x')")
+
+    def test_backslash_between_literals_is_a_dependency(self, tmp_path):
+        # gh-33220: 'c:\'//n//'x' must keep n. The old escape rule masked
+        # that to ''x' and recorded no depend entry.
+        src = tmp_path / "gh33220.f90"
+        src.write_text(
+            "module m\n"
+            "  implicit none\n"
+            "  integer, parameter :: n = 4\n"
+            "  character(len=*), parameter :: p = 'c:\\'//n//'x'\n"
+            "end module\n"
+        )
+        mod = crackfortran.crackfortran([str(src)])
+        m = next(b for b in mod if b.get("name") == "m")
+        assert m["vars"]["p"]["depend"] == ["n"]
+
+    @pytest.mark.filterwarnings(
+        "ignore:fromstring:numpy.f2py.symbolic.ExprWarning")
+    def test_backslash_dimension_is_cracked(self, tmp_path):
+        # The same literal in a dimension used to raise AssertionError in
+        # markoutercomma, so the routine was never finished.
+        src = tmp_path / "gh33220_dim.f90"
+        src.write_text(
+            "subroutine probe(n, a)\n"
+            "  implicit none\n"
+            "  integer, intent(in) :: n\n"
+            "  real, dimension(len('c:\\'//n//'x')) :: a\n"
+            "end subroutine probe\n"
+        )
+        mod = crackfortran.crackfortran([str(src)])
+        probe = next(b for b in mod if b.get("name") == "probe")
+        assert "n" in " ".join(probe["vars"]["a"]["dimension"])
 
     def test_no_self_depend_from_literal(self):
         fpath = util.getpath("tests", "src", "crackfortran", "gh28700.f90")

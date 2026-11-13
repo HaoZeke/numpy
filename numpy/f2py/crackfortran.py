@@ -661,6 +661,14 @@ multilinepattern = re.compile(
     r"\s*(?P<before>''')(?P<this>.*?)(?P<after>''')\s*\Z", re.S), 'multiline'
 ##
 
+# A Fortran quote is escaped by writing it twice. Backslash is not an
+# escape (gh-33220): 'c:\'//n//'x' is two literals with n between them.
+_fortran_single_quoted = r"('(?:[^']|'')*')"
+_fortran_double_quoted = r'("(?:[^"]|"")*")'
+_quoted_string_re = re.compile(
+    rf"{_fortran_single_quoted}|{_fortran_double_quoted}")
+
+
 def split_by_unquoted(line, characters):
     """
     Splits the line into (line[:i], line[i:]),
@@ -668,22 +676,20 @@ def split_by_unquoted(line, characters):
     not within quotes, or len(line) if no such index exists
     """
     assert not (set('"\'') & set(characters)), "cannot split by unquoted quotes"
+    # Fortran escapes a quote by doubling it. A backslash is ordinary
+    # text, so a literal such as 'c:\' must not swallow the following code.
     r = re.compile(
         r"\A(?P<before>({single_quoted}|{double_quoted}|{not_quoted})*)"
         r"(?P<after>{char}.*)\Z".format(
             not_quoted=f"[^\"'{re.escape(characters)}]",
             char=f"[{re.escape(characters)}]",
-            single_quoted=r"('([^'\\]|(\\.))*')",
-            double_quoted=r'("([^"\\]|(\\.))*")'))
+            single_quoted=_fortran_single_quoted,
+            double_quoted=_fortran_double_quoted))
     m = r.match(line)
     if m:
         d = m.groupdict()
         return (d["before"], d["after"])
     return (line, "")
-
-
-_quoted_string_re = re.compile(
-    r"('([^'\\]|(\\.))*')|(\"([^\"\\]|(\\.))*\")")
 
 
 def mask_string_literals(expr):
@@ -695,6 +701,8 @@ def mask_string_literals(expr):
     identifiers that happen to appear inside its own literal value, so
     the quoted text is collapsed to empty quotes before the scan while
     identifiers outside the quotes (e.g. in ``'x '//name``) are kept.
+    A backslash does not escape the closing quote, and a quote inside a
+    literal is written twice.
     """
     return _quoted_string_re.sub("''", expr)
 

@@ -1185,11 +1185,22 @@ def eliminate_quotes(s):
         d[k] = value
         return k
 
-    new_s = re.sub(r'({kind}_|)({single_quoted}|{double_quoted})'.format(
-        kind=r'\w[\w\d_]*',
-        single_quoted=r"('([^'\\]|(\\.))*')",
-        double_quoted=r'("([^"\\]|(\\.))*")'),
-        repl, s)
+    def sub(single_quoted, double_quoted):
+        # A failed C-style match must not keep the replacements it made.
+        d.clear()
+        return re.sub(
+            r'({kind}_|)({single_quoted}|{double_quoted})'.format(
+                kind=r'\w[\w\d_]*',
+                single_quoted=single_quoted,
+                double_quoted=double_quoted),
+            repl, s)
+
+    # C character constants treat a backslash as an escape. Fortran does
+    # not: a quote is escaped by doubling it (gh-33220). If the C pattern
+    # leaves a quote behind, rescan with the Fortran literal grammar.
+    new_s = sub(r"('([^'\\]|(\\.))*')", r'("([^"\\]|(\\.))*")')
+    if "'" in new_s or '"' in new_s:
+        new_s = sub(r"('(?:[^']|'')*')", r'("(?:[^"]|"")*")')
 
     assert '"' not in new_s
     assert "'" not in new_s
