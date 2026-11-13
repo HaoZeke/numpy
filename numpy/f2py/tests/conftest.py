@@ -79,13 +79,17 @@ _XFAILS = (
         "selected_int_kind(19) is -1. f2py's static kind table uses "
         "gfortran's 16.",
     ),
-    (
-        "test_kind.py::TestKind::test_real",
-        "LFortran reports selected_real_kind(16) as 16, IEEE quad. "
-        "gfortran's is 10, 80-bit extended precision. f2py's static "
-        "kind table follows gfortran.",
-    ),
 )
+
+# Kind 10 is x87 extended precision. When LFortran has it,
+# selected_real_kind(16) matches f2py's gfortran table and the test
+# passes. Without it, precision 16 selects IEEE quad (16).
+_REAL_KIND_XFAIL = (
+    "test_kind.py::TestKind::test_real",
+    "LFortran has no kind 10 here, so selected_real_kind(16) is 16. "
+    "f2py's static kind table expects gfortran's 10.",
+)
+_real_kind_disagrees = None
 
 # gap -> (sources, extra compiler args, mode)
 # "run" compiles the Fortran in one invocation and runs it.
@@ -509,6 +513,23 @@ def _probe_gaps():
     return found
 
 
+def _selected_real_kind_disagrees():
+    global _real_kind_disagrees
+    if _real_kind_disagrees is not None:
+        return _real_kind_disagrees
+    from numpy.f2py.crackfortran import _selected_real_kind_func
+    expected = int(_selected_real_kind_func(16))
+    sources = {"p.f90": (
+        "program p\n"
+        "implicit none\n"
+        f"if (selected_real_kind(16) /= {expected}) error stop\n"
+        "end program\n"
+    )}
+    _real_kind_disagrees = not _probe_one(
+        _compiler(), sources, _DRIVER, "run")
+    return _real_kind_disagrees
+
+
 def pytest_sessionstart(session):
     if _lfortran():
         _GAP_OK.update(_probe_gaps())
@@ -519,10 +540,13 @@ def pytest_collection_modifyitems(config, items):
         return
     if not _GAP_OK:
         _GAP_OK.update(_probe_gaps())
+    real_xfail = _selected_real_kind_disagrees()
     for item in items:
         for key, reason in _XFAILS:
             if _matches(item.nodeid, key):
                 item.add_marker(pytest.mark.xfail(reason=reason))
+        if real_xfail and _matches(item.nodeid, _REAL_KIND_XFAIL[0]):
+            item.add_marker(pytest.mark.xfail(reason=_REAL_KIND_XFAIL[1]))
         for key, gap in _SKIPS:
             if _matches(item.nodeid, key) and not _GAP_OK.get(gap, False):
                 item.add_marker(pytest.mark.skip(reason=gap))
