@@ -207,7 +207,19 @@ def test_meson_extension_module_kwargs(kwarg):
     ).generate_meson_build()
 
     mparser.Parser(meson_build, "meson.build").parse()
-    assert f"{kwarg}," in meson_build
+    if kwarg == "gnu_symbol_visibility: 'default'":
+        # The extension receives default visibility through _vis_kwargs,
+        # and only when the compiler is not LFortran. A literal argument
+        # would make Meson pass -fvisibility, which LFortran rejects.
+        call = meson_build.split("py.extension_module(", 1)[1]
+        assert "kwargs: _vis_kwargs" in call
+        assert "gnu_symbol_visibility: 'default'" not in call
+        guard_at = meson_build.index("if not _lfortran")
+        guard = meson_build[guard_at:meson_build.index("endif", guard_at)]
+        assert "_vis_kwargs +=" in guard
+        assert "{'gnu_symbol_visibility': 'default'}" in guard
+    else:
+        assert f"{kwarg}," in meson_build
 
 
 @pytest.mark.slow
