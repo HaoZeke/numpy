@@ -284,6 +284,25 @@ def getstrlength(var):
     return len
 
 
+def _minval_shape_to_c(expr):
+    """`minval(shape(a))` is the smaller extent of a rank-2 array.
+
+    The Fortran wrapper keeps `minval`. The C wrapper has `size`,
+    which is `f2py_size`, and no `minval` or `shape`.
+    """
+    if not isinstance(expr, str) or 'minval' not in expr.lower():
+        return expr
+
+    def repl(match):
+        name = match.group(1)
+        return (f"(size({name}, 1)<size({name}, 2)?size({name}, 1)"
+                f":size({name}, 2))")
+
+    return re.sub(
+        r'minval\s*\(\s*shape\s*\(\s*([A-Za-z_]\w*)\s*\)\s*\)',
+        repl, expr, flags=re.I)
+
+
 def getarrdims(a, var, verbose=0):
     ret = {}
     if isstring(var) and not isarray(var):
@@ -320,6 +339,7 @@ def getarrdims(a, var, verbose=0):
         for d in dim:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
+                d = _minval_shape_to_c(d)
                 ret['setdims'] = f"{ret['setdims']}#varname#_Dims[{i}]={d},"
         if ret['setdims']:
             ret['setdims'] = ret['setdims'][:-1]
