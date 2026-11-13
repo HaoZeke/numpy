@@ -970,7 +970,16 @@ if (#varname#_cb.capi==Py_None) {
     {  # Common
         'decl': '    #ctype# #varname# = 0;',
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#);'},
-        'callfortran': {l_or(isintent_c, isattr_value): '#varname#,', l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
+        # An omitted optional has no storage. Pass NULL so Fortran
+        # `present()` is false. A value with an f2py init is still passed.
+        'callfortran': {
+            l_or(isintent_c, isattr_value): '#varname#,',
+            l_and(l_not(l_or(isintent_c, isattr_value)),
+                  l_or(l_not(isoptional), hasinitvalue)): '&#varname#,',
+            l_and(l_not(l_or(isintent_c, isattr_value)),
+                  isoptional, l_not(hasinitvalue)):
+            '(#varname#_capi == Py_None ? NULL : &#varname#),',
+        },
         'return': {isintent_out: ',#varname#'},
         '_check': l_and(isscalar, l_not(iscomplex))
     }, {
@@ -1035,7 +1044,12 @@ if (#varname#_cb.capi==Py_None) {
     # Complex scalars
     {  # Common
         'decl': '    #ctype# #varname#;',
-        'callfortran': {isintent_c: '#varname#,', l_not(isintent_c): '&#varname#,'},
+        'callfortran': {
+            isintent_c: '#varname#,',
+            l_and(l_not(isintent_c), l_or(l_not(isoptional), hasinitvalue)): '&#varname#,',
+            l_and(l_not(isintent_c), isoptional, l_not(hasinitvalue)):
+            '(#varname#_capi == Py_None ? NULL : &#varname#),',
+        },
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#.r,#varname#.i);'},
         'return': {isintent_out: ',#varname#_capi'},
         '_check': iscomplex

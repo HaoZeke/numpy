@@ -71,7 +71,13 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
     elif 'kind' in selector:
         vardef = f"{vardef}(kind={selector['kind']})"
 
-    vardef = f'{vardef} {fa}'
+    # The wrapper sits between C and the module procedure. An omitted
+    # optional must stay optional here, or `present()` is always true.
+    attrs = vars[a].get('attrspec') or []
+    if f90mode and 'optional' in attrs and '=' not in vars[a]:
+        vardef = f'{vardef}, optional :: {fa}'
+    else:
+        vardef = f'{vardef} {fa}'
     if 'dimension' in vars[a]:
         vardef = f"{vardef}({','.join(vars[a]['dimension'])})"
     return vardef
