@@ -333,6 +333,30 @@ class StatsMethods(Benchmark):
         self.data.sum()
 
 
+class TransposeCopy(Benchmark):
+    # Element counts. The tiled path starts above 8 MiB (1e6 float64 is
+    # just under that, 1e7 and 1e8 are over it).
+    params = [10**3, 10**4, 10**5, 10**6, 10**7, 10**8]
+    param_names = ['size']
+
+    def setup(self, size):
+        n = int(np.sqrt(size))
+        while size % n:
+            n -= 1
+        self.c_order = np.ones((n, size // n), dtype=np.float64)
+
+    def time_asfortranarray(self, size):
+        np.asfortranarray(self.c_order)
+
+    def time_copy_order_f(self, size):
+        self.c_order.copy(order='F')
+
+    def time_transpose_copy(self, size):
+        # .T of a C-ordered array is a Fortran view. copy() writes it
+        # back to C order, the other direction of the same transpose.
+        self.c_order.T.copy()
+
+
 class NumPyChar(Benchmark):
     def setup(self):
         self.A = np.array([100 * 'x', 100 * 'y'])

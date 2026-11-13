@@ -29,6 +29,9 @@
 
 #include "umathmodule.h"
 
+#include <stdint.h>
+#include <string.h>
+
 #define NPY_ALIGNED_CASTING_FLAG 1
 
 /*
@@ -73,6 +76,201 @@ copycast_isaligned(int ndim, npy_intp const *shape,
 }
 
 /*
+ * A C-ordered matrix copied into Fortran order does not coalesce.
+ * PrepareTwoRawArrayIter sorts by the destination stride, so the inner
+ * loop writes contiguous items while reading with the other axis's
+ * stride (a full row apart for float64). That is about 2 GB/s.
+ * Tiles of 16 (8 for rank 3) keep a block of both layouts in cache.
+ *
+ * Only plain numeric items of 1, 2, 4, 8 or 16 bytes, already aligned,
+ * with no cast. Anything else, including overlap that was not copied
+ * aside by the caller, objects, and arrays that still fit in cache,
+ * stays on the strided transfer loop. Returns 1 if this function did
+ * the copy, 0 if the caller should use the normal path.
+ */
+#define NPY_TILE_COPY2(TYPE) \
+    do { \
+        for (ii = 0; ii < n0; ii += tile) { \
+            ihi = ii + tile < n0 ? ii + tile : n0; \
+            for (jj = 0; jj < n1; jj += tile) { \
+                jhi = jj + tile < n1 ? jj + tile : n1; \
+                for (i = ii; i < ihi; ++i) { \
+                    for (j = jj; j < jhi; ++j) { \
+                        *(TYPE *)(dp + i * ds0 + j * ds1) = \
+                                *(const TYPE *)(sp + i * ss0 + j * ss1); \
+                    } \
+                } \
+            } \
+        } \
+    } while (0)
+
+#define NPY_TILE_COPY3(TYPE) \
+    do { \
+        for (ii = 0; ii < n0; ii += tile3) { \
+            ihi = ii + tile3 < n0 ? ii + tile3 : n0; \
+            for (jj = 0; jj < n1; jj += tile3) { \
+                jhi = jj + tile3 < n1 ? jj + tile3 : n1; \
+                for (kk = 0; kk < n2; kk += tile3) { \
+                    khi = kk + tile3 < n2 ? kk + tile3 : n2; \
+                    for (i = ii; i < ihi; ++i) { \
+                        for (j = jj; j < jhi; ++j) { \
+                            for (k = kk; k < khi; ++k) { \
+                                *(TYPE *)(dp + i * ds0 + j * ds1 + k * ds2) = \
+                                        *(const TYPE *)(sp + i * ss0 + \
+                                                        j * ss1 + k * ss2); \
+                            } \
+                        } \
+                    } \
+                } \
+            } \
+        } \
+    } while (0)
+
+static int
+raw_array_tile_transpose(int ndim, npy_intp const *shape,
+        PyArray_Descr *dst_dtype, char *dst_data, npy_intp const *dst_strides,
+        PyArray_Descr *src_dtype, char *src_data, npy_intp const *src_strides,
+        int aligned)
+{
+    int itemsize, kind;
+    npy_intp nitems, n0, n1, n2;
+    npy_intp ds0, ds1, ds2, ss0, ss1, ss2;
+    npy_intp ii, jj, kk, i, j, k, ihi, jhi, khi;
+    const npy_intp tile = 16;
+    const npy_intp tile3 = 8;
+    char *dp;
+    const char *sp;
+    int out_ndim;
+    npy_intp shape_it[NPY_MAXDIMS];
+    npy_intp dst_it[NPY_MAXDIMS], src_it[NPY_MAXDIMS];
+    char *dst_tmp, *src_tmp;
+    NPY_BEGIN_THREADS_DEF;
+
+    if ((ndim != 2 && ndim != 3) || !aligned) {
+        return 0;
+    }
+    if (dst_dtype->type_num != src_dtype->type_num ||
+            dst_dtype->elsize != src_dtype->elsize) {
+        return 0;
+    }
+    kind = dst_dtype->type_num;
+    if (!(kind == NPY_BOOL || kind == NPY_BYTE || kind == NPY_UBYTE ||
+            kind == NPY_SHORT || kind == NPY_USHORT ||
+            kind == NPY_INT || kind == NPY_UINT ||
+            kind == NPY_LONG || kind == NPY_ULONG ||
+            kind == NPY_LONGLONG || kind == NPY_ULONGLONG ||
+            kind == NPY_FLOAT || kind == NPY_DOUBLE || kind == NPY_LONGDOUBLE ||
+            kind == NPY_CFLOAT || kind == NPY_CDOUBLE ||
+            kind == NPY_CLONGDOUBLE)) {
+        return 0;
+    }
+    itemsize = dst_dtype->elsize;
+    if (itemsize != 1 && itemsize != 2 && itemsize != 4 &&
+            itemsize != 8 && itemsize != 16) {
+        return 0;
+    }
+    nitems = 1;
+    for (i = 0; i < ndim; ++i) {
+        if (shape[i] <= 0 ||
+                (dst_strides[i] % itemsize) != 0 ||
+                (src_strides[i] % itemsize) != 0) {
+            return 0;
+        }
+        nitems *= shape[i];
+    }
+    /* NumPy's inner loop is faster while the transpose fits in cache. */
+    if (nitems <= ((npy_intp)8 << 20) / itemsize) {
+        return 0;
+    }
+    if (((uintptr_t)dst_data % (uintptr_t)itemsize) != 0 ||
+            ((uintptr_t)src_data % (uintptr_t)itemsize) != 0) {
+        return 0;
+    }
+    /*
+     * Same-order copies coalesce to one contiguous or unit-stride
+     * transfer. That path is already a memcpy. Only the case that
+     * stays two- or three-dimensional is a transpose.
+     */
+    dst_tmp = dst_data;
+    src_tmp = src_data;
+    if (PyArray_PrepareTwoRawArrayIter(
+                ndim, shape, dst_tmp, dst_strides, src_tmp, src_strides,
+                &out_ndim, shape_it, &dst_tmp, dst_it, &src_tmp, src_it) < 0 ||
+            out_ndim < 2) {
+        return 0;
+    }
+
+    n0 = shape[0];
+    n1 = shape[1];
+    ds0 = dst_strides[0];
+    ds1 = dst_strides[1];
+    ss0 = src_strides[0];
+    ss1 = src_strides[1];
+    dp = dst_data;
+    sp = src_data;
+
+    NPY_BEGIN_THREADS;
+    if (ndim == 2) {
+        switch (itemsize) {
+        case 1: NPY_TILE_COPY2(npy_uint8); break;
+        case 2: NPY_TILE_COPY2(npy_uint16); break;
+        case 4: NPY_TILE_COPY2(npy_uint32); break;
+        case 8: NPY_TILE_COPY2(npy_uint64); break;
+        default:
+            for (ii = 0; ii < n0; ii += tile) {
+                ihi = ii + tile < n0 ? ii + tile : n0;
+                for (jj = 0; jj < n1; jj += tile) {
+                    jhi = jj + tile < n1 ? jj + tile : n1;
+                    for (i = ii; i < ihi; ++i) {
+                        for (j = jj; j < jhi; ++j) {
+                            memcpy(dp + i * ds0 + j * ds1,
+                                   sp + i * ss0 + j * ss1, 16);
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+    else {
+        n2 = shape[2];
+        ds2 = dst_strides[2];
+        ss2 = src_strides[2];
+        switch (itemsize) {
+        case 1: NPY_TILE_COPY3(npy_uint8); break;
+        case 2: NPY_TILE_COPY3(npy_uint16); break;
+        case 4: NPY_TILE_COPY3(npy_uint32); break;
+        case 8: NPY_TILE_COPY3(npy_uint64); break;
+        default:
+            for (ii = 0; ii < n0; ii += tile3) {
+                ihi = ii + tile3 < n0 ? ii + tile3 : n0;
+                for (jj = 0; jj < n1; jj += tile3) {
+                    jhi = jj + tile3 < n1 ? jj + tile3 : n1;
+                    for (kk = 0; kk < n2; kk += tile3) {
+                        khi = kk + tile3 < n2 ? kk + tile3 : n2;
+                        for (i = ii; i < ihi; ++i) {
+                            for (j = jj; j < jhi; ++j) {
+                                for (k = kk; k < khi; ++k) {
+                                    memcpy(dp + i * ds0 + j * ds1 + k * ds2,
+                                           sp + i * ss0 + j * ss1 + k * ss2,
+                                           16);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+    NPY_END_THREADS;
+    return 1;
+}
+
+#undef NPY_TILE_COPY2
+#undef NPY_TILE_COPY3
+
+/*
  * Assigns the array from 'src' to 'dst'. The strides must already have
  * been broadcast.
  *
@@ -94,6 +292,18 @@ raw_array_assign_array(int ndim, npy_intp const *shape,
     int same_value_cast = (flags & NPY_SAME_VALUE_CASTING_FLAG) != 0;
 
     NPY_BEGIN_THREADS_DEF;
+
+    /*
+     * A transposed rank-2 or rank-3 copy does not coalesce, and the
+     * stride sort below makes the inner loop jump across the source.
+     * Tile that case. Overlap of ndim > 1 is copied aside by the caller.
+     */
+    if (raw_array_tile_transpose(
+                ndim, shape,
+                dst_dtype, dst_data, dst_strides,
+                src_dtype, src_data, src_strides, aligned)) {
+        return 0;
+    }
 
     /* Use raw iteration with no heap allocation */
     if (PyArray_PrepareTwoRawArrayIter(
