@@ -181,6 +181,7 @@ beginpattern = ''
 currentfilename = ''
 expectbegin = 1
 f90modulevars = {}
+f90moduleuses = {}
 filepositiontext = ''
 gotnextfile = 1
 groupcache = None
@@ -199,7 +200,7 @@ usermodules = []
 
 def reset_global_f2py_vars():
     global groupcounter, grouplist, neededmodule, expectbegin
-    global skipblocksuntil, usermodules, f90modulevars, gotnextfile
+    global skipblocksuntil, usermodules, f90modulevars, f90moduleuses, gotnextfile
     global filepositiontext, currentfilename, skipfunctions, skipfuncs
     global onlyfuncs, include_paths, previous_context
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
@@ -225,6 +226,7 @@ def reset_global_f2py_vars():
     skipblocksuntil = -1
     usermodules = []
     f90modulevars = {}
+    f90moduleuses = {}
     gotnextfile = 1
     filepositiontext = ''
     currentfilename = ''
@@ -1516,8 +1518,10 @@ def analyzeline(m, case, line):
         groupcache[groupcounter]['common'] = commonkey
         previous_context = ('common', bn, groupcounter)
     elif case == 'use':
+        use_after = re.sub(
+            r'^\s*,?\s*intrinsic\s*::\s*', '', m.group('after') or '', flags=re.I)
         m1 = re.match(
-            r'\A\s*(?P<name>\b\w+\b)\s*((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z', m.group('after'), re.I)
+            r'\A\s*(?P<name>\b\w+\b)\s*((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z', use_after, re.I)
         if m1:
             mm = m1.groupdict()
             if 'use' not in groupcache[groupcounter]:
@@ -1990,6 +1994,171 @@ def get_usedict(block):
     return usedict
 
 
+def _intrinsic_kind_names():
+    from ._isocbind import isoc_kindmap
+    from ._isofenv import isof_kindmap
+    return set(isof_kindmap) | set(isoc_kindmap)
+
+
+def _kind_exports(usename, seen=None):
+    """Map a module's visible names onto intrinsic kind names.
+
+    Follows ``local => remote`` through ``use, only:`` and through a
+    module that itself renamed an intrinsic (``dp => rk => real64``).
+    """
+    if seen is None:
+        seen = set()
+    key = str(usename).lower()
+    if key in seen:
+        return {}
+    seen = set(seen)
+    seen.add(key)
+    intrinsic = _intrinsic_kind_names()
+    if key in ('iso_fortran_env', 'iso_c_binding'):
+        return {name: name for name in intrinsic}
+    exports = {}
+    for mod, mapping in (f90moduleuses.get(key) or {}).items():
+        remote = _kind_exports(mod, seen)
+        mmap = (mapping or {}).get('map') or {}
+        if mmap:
+            for local, src in mmap.items():
+                src_l = str(src).lower()
+                local_l = str(local).lower()
+                if src_l in remote:
+                    exports[local_l] = remote[src_l]
+                elif src_l in intrinsic:
+                    exports[local_l] = src_l
+        elif not (mapping or {}).get('only'):
+            exports.update(remote)
+    params = get_parameters(f90modulevars.get(key) or {})
+    for name, value in params.items():
+        if isinstance(value, str):
+            folded = value.lower()
+            if folded in exports:
+                exports[str(name).lower()] = exports[folded]
+            elif folded in intrinsic:
+                exports[str(name).lower()] = folded
+    return exports
+
+
+def _attach_generics(module):
+    """A private specific behind a public generic is called by the generic."""
+    if not isinstance(module, dict) or module.get('block') != 'module':
+        return
+    body = module.get('body') or []
+    by_name = {}
+    for block in body:
+        if isinstance(block, dict) and block.get('block') in ('subroutine', 'function'):
+            by_name.setdefault(block.get('name'), []).append(block)
+    for block in body:
+        if not isinstance(block, dict):
+            continue
+        if block.get('block') not in ('interface', 'abstract interface'):
+            continue
+        generic = block.get('name')
+        if not generic or generic == 'unknown_interface':
+            continue
+        targets = [str(name).lower() for name in (block.get('implementedby') or [])]
+        for proc in block.get('body') or []:
+            if isinstance(proc, dict) and proc.get('block') in ('subroutine', 'function'):
+                targets.append(str(proc.get('name', '')).lower())
+                _set_generic(proc, generic)
+        for name, procs in by_name.items():
+            if str(name).lower() in targets:
+                for proc in procs:
+                    _set_generic(proc, generic)
+
+
+def _share_generics(blocks):
+    """Give every copy of a specific the generic name.
+
+    A submodule stores another copy of the parent. The public name has
+    to be on that copy too, or the one that is kept still calls the
+    private specific.
+    """
+    modules = {}
+
+    def walk(block):
+        if isinstance(block, list):
+            for item in block:
+                walk(item)
+            return
+        if not isinstance(block, dict):
+            return
+        if block.get('block') == 'module':
+            modules.setdefault(block.get('name'), []).append(block)
+        for child in block.get('body') or []:
+            walk(child)
+
+    for block in blocks:
+        walk(block)
+    for copies in modules.values():
+        generics = {}
+        for module in copies:
+            for item in module.get('body') or []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get('block') not in ('interface', 'abstract interface'):
+                    continue
+                generic = item.get('name') or ''
+                if not generic or generic == 'unknown_interface':
+                    continue
+                for impl in item.get('implementedby') or []:
+                    generics[str(impl).lower()] = generic
+                for proc in item.get('body') or []:
+                    if isinstance(proc, dict) and proc.get('name'):
+                        generics[str(proc['name']).lower()] = generic
+                        _set_generic(proc, generic)
+        routines = []
+        for module in copies:
+            for item in module.get('body') or []:
+                if not isinstance(item, dict):
+                    continue
+                key = str(item.get('name', '')).lower()
+                if item.get('block') in ('subroutine', 'function') and key in generics:
+                    _set_generic(item, generics[key])
+                    routines.append(item)
+                if item.get('block') in ('interface', 'abstract interface'):
+                    for proc in item.get('body') or []:
+                        if isinstance(proc, dict) and str(proc.get('name', '')).lower() in generics:
+                            routines.append(proc)
+        _copy_resolved_kinds(routines)
+
+
+def _copy_resolved_kinds(routines):
+    """Copy an intrinsic kind onto the other copies of the same routine.
+
+    A submodule copy often still says ``rk`` while the interface copy
+    has already been rewritten to ``real64``.
+    """
+    intrinsic = _intrinsic_kind_names() | {
+        'real32', 'real64', 'real128', 'int8', 'int16', 'int32', 'int64',
+    }
+    for src in routines:
+        for name, svar in (src.get('vars') or {}).items():
+            kind = (svar.get('kindselector') or {}).get('kind')
+            if kind not in intrinsic:
+                continue
+            for dst in routines:
+                if dst is src:
+                    continue
+                dvar = (dst.get('vars') or {}).get(name)
+                if not isinstance(dvar, dict):
+                    continue
+                dkind = (dvar.get('kindselector') or {}).get('kind')
+                if dkind in intrinsic:
+                    continue
+                dvar.setdefault('kindselector', {})['kind'] = kind
+
+
+def _set_generic(proc, generic):
+    if not generic or generic == proc.get('name'):
+        return
+    proc['generic'] = generic
+    enh = proc.setdefault('f2pyenhancements', {})
+    enh.setdefault('fortranname', generic)
+
+
 def get_useparameters(block, param_map=None):
     global f90modulevars
 
@@ -1998,18 +2167,34 @@ def get_useparameters(block, param_map=None):
     usedict = get_usedict(block)
     if not usedict:
         return param_map
+    intrinsic = _intrinsic_kind_names()
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
+        remote = _kind_exports(usename)
+        mmap = (mapping or {}).get('map') or {}
+        if mmap:
+            for local, src in mmap.items():
+                src_l = str(src).lower()
+                local_l = str(local).lower()
+                if src_l in remote:
+                    param_map[local_l] = remote[src_l]
+                elif src_l in intrinsic:
+                    param_map[local_l] = src_l
+        elif remote and not (mapping or {}).get('only'):
+            for name, value in remote.items():
+                param_map.setdefault(name, value)
         if usename not in f90modulevars:
-            outmess(f'get_useparameters: no module {usename} info used by '
-                    f'{block.get("name")}\n')
+            if not remote:
+                outmess(f'get_useparameters: no module {usename} info used by '
+                        f'{block.get("name")}\n')
             continue
         mvars = f90modulevars[usename]
         params = get_parameters(mvars)
         if not params:
             continue
-        # XXX: apply mapping
-        if mapping:
+        # A rename above already recorded the local name. Still publish
+        # parameters under the name the module defines.
+        if mapping and not mmap:
             errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
         for k, v in list(params.items()):
             if k in param_map:
@@ -2032,8 +2217,13 @@ def postcrack2(block, tab='', param_map=None):
     setmesstext(block)
     outmess(f"{tab}Block: {block['name']}\n", 0)
 
-    if param_map is None:
-        param_map = get_useparameters(block)
+    # A parent with no USE of its own, such as the python module f2py
+    # wraps sources in, used to hand every child an empty map. Each
+    # block has to fold its own renames. The kind module may appear
+    # later in the source list; stage 2 runs after every module is
+    # registered, so the rename is visible here.
+    param_map = get_useparameters(
+        block, {} if param_map is None else dict(param_map))
 
     if param_map is not None and 'vars' in block:
         vars = block['vars']
@@ -2058,7 +2248,7 @@ def postcrack(block, args=None, tab=''):
           function return values
           determine expression types if in argument list
     """
-    global usermodules, onlyfunctions
+    global usermodules, onlyfunctions, f90modulevars, f90moduleuses
 
     if isinstance(block, list):
         gret = []
@@ -2073,6 +2263,9 @@ def postcrack(block, args=None, tab=''):
                 gret.append(g)
         return uret + gret
     setmesstext(block)
+    if isinstance(block, dict) and block.get('block') == 'module':
+        f90modulevars[block['name']] = block.get('vars') or {}
+        f90moduleuses[block['name']] = block.get('use') or {}
     if not isinstance(block, dict) and 'block' not in block:
         raise Exception('postcrack: Expected block dictionary instead of ' +
                         str(block))
@@ -2085,6 +2278,10 @@ def postcrack(block, args=None, tab=''):
     if block.get('args'):
         args = block['args']
     block['body'] = analyzebody(block, args, tab=tab)
+    if block.get('block') == 'module':
+        f90modulevars[block['name']] = block.get('vars') or {}
+        f90moduleuses[block['name']] = block.get('use') or {}
+    _attach_generics(block)
 
     userisdefined = []
     if 'use' in block:
@@ -2267,7 +2464,7 @@ def analyzecommon(block):
 
 
 def analyzebody(block, args, tab=''):
-    global usermodules, skipfuncs, onlyfuncs, f90modulevars
+    global usermodules, skipfuncs, onlyfuncs, f90modulevars, f90moduleuses
 
     setmesstext(block)
 
@@ -2277,6 +2474,21 @@ def analyzebody(block, args, tab=''):
         if 'attrspec' not in value or 'public' not in value['attrspec']
     }
 
+    public_specifics = set()
+    for item in block.get('body') or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get('block') not in ('interface', 'abstract interface'):
+            continue
+        generic = item.get('name') or ''
+        if not generic or generic == 'unknown_interface':
+            continue
+        for impl in item.get('implementedby') or []:
+            public_specifics.add(str(impl).lower())
+        for proc in item.get('body') or []:
+            if isinstance(proc, dict) and proc.get('name'):
+                public_specifics.add(str(proc.get('name')).lower())
+
     body = []
     for b in block['body']:
         b['parent_block'] = block
@@ -2285,8 +2497,11 @@ def analyzebody(block, args, tab=''):
                 continue
             else:
                 as_ = b['args']
-            # Add private members to skipfuncs for gh-23879
-            if b['name'] in maybe_private.keys():
+            # Add private members to skipfuncs for gh-23879.
+            # A private specific that implements a public generic is still
+            # reachable under that generic name.
+            if (b['name'] in maybe_private.keys()
+                    and str(b['name']).lower() not in public_specifics):
                 skipfuncs.append(b['name'])
             if b['name'] in skipfuncs:
                 continue
@@ -2307,6 +2522,7 @@ def analyzebody(block, args, tab=''):
         else:
             if b['block'] == 'module':
                 f90modulevars[b['name']] = b['vars']
+                f90moduleuses[b['name']] = b.get('use') or {}
             body.append(b)
     return body
 
@@ -3581,7 +3797,9 @@ def crackfortran(files):
         postlist = traverse(postlist, hook)
     outmess('Post-processing (stage 2)...\n', 0)
     postlist = postcrack2(postlist)
-    return usermodules + postlist
+    out = usermodules + postlist
+    _share_generics(out)
+    return out
 
 
 def crack2fortran(block):

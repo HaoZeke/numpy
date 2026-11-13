@@ -192,7 +192,30 @@ def buildhooks(pymod):
             dadd('\\end{description}')
         if hasbody(m):
             m_name = m['name']
+            # An unnamed interface publishes the signature of an external
+            # procedure. fftpack's zfftf is complex there. A named generic
+            # is not one of those: its specific is wrapped on its own.
+            routines = []
+            seen = set()
             for b in m['body']:
+                if isroutine(b):
+                    routines.append(b)
+                    seen.add(b.get('name'))
+                elif (b.get('block') == 'interface'
+                      and b.get('name') == 'unknown_interface'):
+                    for child in b.get('body') or []:
+                        if not isroutine(child) or child.get('name') in seen:
+                            continue
+                        # ``module function`` is implemented in a submodule
+                        # and wrapped there. An external interface is not.
+                        prefix = child.get('prefix') or ''
+                        if not isinstance(prefix, str):
+                            prefix = ' '.join(prefix)
+                        if 'module' in prefix.split():
+                            continue
+                        routines.append(child)
+                        seen.add(child.get('name'))
+            for b in routines:
                 b_name = b['name']
                 if not isroutine(b):
                     outmess("f90mod_rules.buildhooks:"
