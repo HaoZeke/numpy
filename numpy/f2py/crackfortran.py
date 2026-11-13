@@ -867,9 +867,48 @@ def crackline(line, reset=0):
         analyzeline(m, pat[1], line)
         expectbegin = 0
     elif pat[1] == 'endif':
-        pass
+        # `end procedure` is not a program end. It closes only the
+        # body opened for a separate module procedure. Inside an
+        # interface there is no such body, so the line stays ignored.
+        cur = groupcache.get(groupcounter) or {}
+        if cur.get('_procedure_body') and re.match(
+                r'\s*end\s*procedure\b', line, re.I):
+            if groupcounter <= 0:
+                raise Exception(
+                    f'crackline: groupcounter(={groupcounter}) is nonpositive. '
+                    'Check the blocks.')
+            grouplist[groupcounter - 1].append(groupcache[groupcounter])
+            grouplist[groupcounter - 1][-1]['body'] = grouplist[groupcounter]
+            del grouplist[groupcounter]
+            groupcounter = groupcounter - 1
+            if not skipemptyends:
+                expectbegin = 1
     elif pat[1] == 'moduleprocedure':
-        analyzeline(m, pat[1], line)
+        here = groupcache.get(groupcounter) or {}
+        raw = re.sub(r'!.*', '', (m.group('after') or '')).strip()
+        if raw.startswith('::'):
+            raw = raw[2:].strip()
+        names = [x.strip() for x in raw.split(',') if x.strip()]
+        # `module procedure bar` inside an interface is only a name.
+        # At module scope it is the body, and its locals must not
+        # become module variables (`n`, `buf(max(n, 0))`).
+        if here.get('block') == 'interface' or len(names) != 1:
+            analyzeline(m, pat[1], line)
+        else:
+            groupcounter += 1
+            groupname[groupcounter] = 'subroutine'
+            groupcache[groupcounter] = {
+                'block': 'subroutine',
+                'name': rmbadname1(names[0]),
+                '_procedure_body': True,
+                'body': [],
+                'vars': {},
+                'args': [],
+                'externals': [],
+                'interfaced': [],
+                'from': f"{here.get('from', '')}:{here.get('name', '')}",
+            }
+            grouplist[groupcounter] = []
     elif pat[1] == 'contains':
         if ignorecontains:
             return
@@ -2313,6 +2352,10 @@ def analyzebody(block, args, tab=''):
     body = []
     for b in block['body']:
         b['parent_block'] = block
+        # The signature lives on the parent interface. Wrapping this
+        # shell emits `use` of the submodule and its locals as data.
+        if b.get('_procedure_body'):
+            continue
         if b['block'] in ['function', 'subroutine']:
             if args is not None and b['name'] not in args:
                 continue
