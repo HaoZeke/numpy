@@ -14,6 +14,11 @@ class TestISOC(util.F2PyTest):
 
     @pytest.mark.parametrize("dtype", [np.complex64, np.complex128, np.clongdouble])
     def test_bindc_complex_float(self, dtype):
+        if dtype == np.clongdouble:
+            from numpy.f2py._longdouble_abi import fortran_c_long_double_status
+            status, detail = fortran_c_long_double_status()
+            if status == 'mismatch':
+                pytest.skip(detail)
         a = np.array([1j, 2j, 3j], dtype=dtype)
         b = np.array([4j, 5j, 6j], dtype=dtype)
         out = {
@@ -56,6 +61,16 @@ class TestISOC(util.F2PyTest):
         exp_out = a + b
         assert_allclose(out, exp_out)
         assert out.dtype == exp_out.dtype
+
+
+def test_c_long_double_probe_reports_a_reason():
+    from numpy.f2py._longdouble_abi import fortran_c_long_double_status
+    status, detail = fortran_c_long_double_status()
+    assert status in ('match', 'mismatch', 'unknown')
+    if status == 'match':
+        assert detail == ''
+    else:
+        assert 'long double' in detail
 
 
 def test_process_f2cmap_dict():

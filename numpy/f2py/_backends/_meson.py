@@ -202,7 +202,29 @@ class MesonBackend(Backend):
         compile_command = ["meson", "compile", "-C", self.meson_build_dir]
         self._run_subprocess_command(compile_command, build_dir)
 
+    def _warn_c_long_double_abi(self) -> None:
+        # ifx's c_long_double is binary128. The C compiler this extension
+        # is linked with has an 80-bit long double in the same 16 bytes.
+        # Say so at build time instead of returning a NaN at run time.
+        blob = []
+        for source in self.sources:
+            path = Path(source)
+            if path.suffix.lower() not in {'.f', '.f90', '.f95', '.for', '.ftn'}:
+                continue
+            try:
+                blob.append(path.read_text(errors='ignore').lower())
+            except OSError:
+                continue
+        if 'c_long_double' not in '\n'.join(blob):
+            return
+        from numpy.f2py._longdouble_abi import fortran_c_long_double_status
+        from numpy.f2py.cfuncs import errmess
+        status, detail = fortran_c_long_double_status()
+        if status == 'mismatch' and detail:
+            errmess(detail + '\n')
+
     def compile(self) -> None:
+        self._warn_c_long_double_abi()
         self.sources = _prepare_sources(self.modulename, self.sources, self.build_dir)
         _prepare_objects(self.modulename, self.extra_objects, self.build_dir)
         self.write_meson_build(self.build_dir)
