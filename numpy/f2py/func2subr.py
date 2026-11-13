@@ -15,9 +15,11 @@ from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
     getfortranname,
+    isattr_value,
     isexternal,
     isfunction,
     isfunction_wrap,
+    isintent_c,
     isintent_in,
     isintent_out,
     islogicalfunction,
@@ -312,6 +314,31 @@ def createsubrwrapper(rout, signature=0):
     return ret[0]
 
 
+def _has_value_arg(rout):
+    variables = rout.get('vars', {})
+    return any(isattr_value(variables.get(arg, {})) for arg in rout.get('args', []))
+
+
+def _strip_value_attr(rout):
+    """Drop VALUE from the C-facing signature.
+
+    gfortran passes a non-BIND(C) VALUE integer like a C ``int``. ifx
+    does not, and calling the procedure directly from C segfaults
+    (gh-21665). A Fortran wrapper declared without VALUE receives a
+    pointer and then calls the original, so the compiler applies VALUE
+    on the Fortran side.
+    """
+    rout = copy.deepcopy(rout)
+    for arg in rout.get('args', []):
+        var = rout['vars'].get(arg)
+        if not var:
+            continue
+        spec = var.get('attrspec')
+        if spec and 'value' in spec:
+            var['attrspec'] = [item for item in spec if item != 'value']
+    return rout
+
+
 def assubr(rout):
     if isfunction_wrap(rout):
         fortranname = getfortranname(rout)
@@ -338,11 +365,14 @@ def assubr(rout):
                 fvar['intent'].append(f'out={rname}')
         rout['args'][:] = [fname] + rout['args']
         return rout, createfuncwrapper(rout)
-    if issubroutine_wrap(rout):
+    needs_value_wrapper = (
+        ismoduleroutine(rout) and issubroutine(rout)
+        and not isintent_c(rout) and _has_value_arg(rout))
+    if issubroutine_wrap(rout) or needs_value_wrapper:
         fortranname = getfortranname(rout)
         name = rout['name']
         outmess('\t\tCreating wrapper for Fortran subroutine '
                 f'"{name}"("{fortranname}")...\n')
-        rout = copy.copy(rout)
+        rout = _strip_value_attr(rout)
         return rout, createsubrwrapper(rout)
     return rout, ''
