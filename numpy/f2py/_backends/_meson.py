@@ -154,7 +154,7 @@ class MesonBackend(Backend):
         self.build_type = (
             "debug" if any("debug" in flag for flag in self.fc_flags) else "release"
         )
-        self.fc_flags = _get_flags(self.fc_flags)
+        self.fc_flags = _lfortran_language_flags(_get_flags(self.fc_flags))
 
     def _move_exec_to_root(self, build_dir: Path):
         walk_dir = Path(build_dir) / self.meson_build_dir
@@ -241,6 +241,21 @@ def _prepare_objects(mname, objects, bdir):
     for obj in objects:
         if Path(obj).exists() and Path(obj).is_file():
             shutil.copy(obj, bdir)
+
+def _lfortran_language_flags(fc_flags):
+    """Flags f2py's generated Fortran needs and Meson does not pass.
+
+    LFortran rejects implicit names unless ``--implicit-typing`` is on.
+    Wrappers use that Fortran default for dimensions, loop indices and
+    untyped function results. Meson leaves the flag off on purpose.
+    """
+    flags = list(fc_flags)
+    if "lfortran" not in os.environ.get("FC", ""):
+        return flags
+    if "--implicit-typing" not in flags:
+        flags.append("--implicit-typing")
+    return flags
+
 
 def _get_flags(fc_flags):
     flag_values = []
