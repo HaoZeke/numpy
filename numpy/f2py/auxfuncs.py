@@ -477,7 +477,21 @@ def isintent_out(var):
     return 'out' in var.get('intent', [])
 
 
+def _assumed_size(var):
+    """True for an array dimension that the caller must supply."""
+    if not isarray(var):
+        return False
+    for dim in var.get('dimension') or []:
+        if str(dim).strip() in ('*', '(*)'):
+            return True
+    return False
+
+
 def isintent_hide(var):
+    # intent(out) :: a(*) cannot be allocated: the size is not known.
+    # Keep the array in the argument list so the caller provides it.
+    if _assumed_size(var) and 'hide' not in var.get('intent', []):
+        return False
     return ('intent' in var and ('hide' in var['intent'] or
             ('out' in var['intent'] and 'in' not in var['intent'] and
                 (not l_or(isintent_inout, isintent_inplace)(var)))))
