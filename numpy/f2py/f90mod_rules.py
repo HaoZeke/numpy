@@ -199,7 +199,12 @@ def buildhooks(pymod):
                             f" skipping {b['block']} {b_name}\n")
                     continue
                 modobjs.append(f"{b_name}()")
+                # Keep the child name in the wrapper symbol so
+                # `f2pywrap_simpl_ramp` does not collide with
+                # `f2pywrap_math_ramp`. The `use` names the parent.
                 b['modulename'] = m_name
+                if m.get('_parent_module'):
+                    b['use_module'] = m['_parent_module']
                 api, wrap = rules.buildapi(b)
                 if isfunction(b):
                     fhooks[0] = fhooks[0] + wrap

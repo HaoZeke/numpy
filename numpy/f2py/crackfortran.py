@@ -1069,11 +1069,17 @@ def analyzeline(m, case, line):
             result = None
         else:
             name, args, result, bindcline = _resolvenameargspattern(m.group('after'))
+        submodule_parent = None
         if block == 'submodule':
             # submodule (parent) child. The implementation stays in this
             # file for the compiler. `end procedure` is not a program end.
+            # The wrapper must `use` the parent: a submodule is not a
+            # module file `use` can open.
             sm = re.search(r'\)\s*(?P<child>\w+)', m.group('after') or '', re.I)
+            parent_m = re.search(
+                r'\(\s*(?P<parent>\w+)', m.group('after') or '', re.I)
             name = sm.group('child') if sm else 'submodule_impl'
+            submodule_parent = parent_m.group('parent') if parent_m else None
             args = []
             result = None
             block = 'module'
@@ -1178,6 +1184,8 @@ def analyzeline(m, case, line):
         groupcache[groupcounter]['interfaced'] = []
         groupcache[groupcounter]['vars'] = {}
         groupcache[groupcounter]['entry'] = {}
+        if submodule_parent:
+            groupcache[groupcounter]['_parent_module'] = submodule_parent
         # end of creation
         if block == 'type':
             groupcache[groupcounter]['varnames'] = []

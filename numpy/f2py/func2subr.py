@@ -30,6 +30,16 @@ from .auxfuncs import (
 )
 
 
+def _imported_module(rout):
+    """Module named by `use ..., only :`.
+
+    A submodule procedure is reached through its parent. The wrapper
+    symbol still uses `modulename`, which is the child, so
+    `f2pywrap_simpl_ramp` does not collide with `f2pywrap_math_ramp`.
+    """
+    return rout.get('use_module') or rout['modulename']
+
+
 def var2fixfortran(vars, a, fa=None, f90mode=None):
     if fa is None:
         fa = a
@@ -150,7 +160,7 @@ def createfuncwrapper(rout, signature=0):
         rout['args'] = args
         add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
         if not signature:
-            add(f"use {rout['modulename']}, only : {fortranname}")
+            add(f"use {_imported_module(rout)}, only : {fortranname}")
         if useisoc:
             add('use iso_c_binding')
         if useisof:
@@ -258,7 +268,7 @@ def createsubrwrapper(rout, signature=0):
         if useisof:
             add('use iso_fortran_env')
         if not signature:
-            add(f"use {rout['modulename']}, only : {fortranname}")
+            add(f"use {_imported_module(rout)}, only : {fortranname}")
     else:
         add(f'subroutine f2pywrap{name} ({sargs})')
         if useisoc:
