@@ -37,6 +37,25 @@ class TestModuleWithoutPublicEntities(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestInterfaceOnlyModule(util.F2PyTest):
+    # A module with only an interface has an empty data table.
+    # Importing it used to segfault.
+    suffix = ".f90"
+    code = """
+module parent
+  interface
+    subroutine s(n)
+      integer, intent(out) :: n
+    end subroutine
+  end interface
+end module
+"""
+
+    def test_import_exposes_module(self):
+        assert hasattr(self.module, "parent")
+
+
+@pytest.mark.slow
 class TestModuleDocString(util.F2PyTest):
     sources = [util.getpath("tests", "src", "modules", "module_data_docstring.f90")]
 

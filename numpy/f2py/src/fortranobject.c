@@ -156,7 +156,11 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
         fp->len++;
     }
     if (fp->len == 0) {
-        goto fail;
+        /* A module whose body is only an interface has no data
+           entries. Returning NULL makes the generated init pass NULL
+           to PyDict_SetItemString, and the import segfaults. */
+        fp->defs = defs;
+        return (PyObject *)fp;
     }
     fp->defs = defs;
     for (i = 0; i < fp->len; i++) {
