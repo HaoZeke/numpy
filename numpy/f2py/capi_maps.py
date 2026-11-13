@@ -253,6 +253,12 @@ def f2cexpr(expr):
     """
     # TODO: support Fortran `len` function with optional kind parameter
     expr = re.sub(r'\blen\b', 'f2py_slen', expr)
+    # `string` is a C reserved word, so the dummy is `string_bn`.
+    # A length expression `len(string)` must use that C name. Do not
+    # rename a call such as `size(`.
+    from .crackfortran import badnames
+    for name, renamed in badnames.items():
+        expr = re.sub(rf'\b{name}\b(?!\s*\()', renamed, expr)
     return expr
 
 

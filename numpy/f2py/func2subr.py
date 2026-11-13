@@ -10,6 +10,7 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
+import re
 
 from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
@@ -28,6 +29,14 @@ from .auxfuncs import (
     outmess,
     show,
 )
+
+
+def _rename_badnames(expr):
+    """Use the C/Fortran dummy name when a name like `string` was renamed."""
+    from .crackfortran import badnames
+    for name, renamed in badnames.items():
+        expr = re.sub(rf'\b{name}\b(?!\s*\()', renamed, str(expr))
+    return expr
 
 
 def var2fixfortran(vars, a, fa=None, f90mode=None):
@@ -63,7 +72,7 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
         else:
             vardef = f"{vardef}*{selector['*']}"
     elif 'len' in selector:
-        vardef = f"{vardef}(len={selector['len']}"
+        vardef = f"{vardef}(len={_rename_badnames(selector['len'])}"
         if 'kind' in selector:
             vardef = f"{vardef},kind={selector['kind']})"
         else:
