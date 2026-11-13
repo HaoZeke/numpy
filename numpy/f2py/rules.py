@@ -1669,6 +1669,22 @@ def buildapi(rout):
                 ['\\begin{description}'] + rd[k][1:] +\
                 ['\\end{description}']
 
+    if rout.get('_alloc_result_typenum'):
+        # The result array does not exist until Fortran allocates it.
+        # Ask the wrapper to call back with that memory, then return it.
+        # These keys are substituted into the routine body below.
+        cfs = rd.get('callfortran') or ''
+        if isinstance(cfs, list):
+            cfs = ','.join(cfs)
+        extra = f', {cfs}' if str(cfs).strip() else ''
+        rd['callfortranroutine'] = (
+            f"    f2py_alloc_reset({rout['_alloc_result_typenum']});\n"
+            f"    (*f2py_func)(f2py_alloc_copy{extra});"
+        )
+        rd['returnformat'] = 'N'
+        rd['return'] = ',f2py_alloc_take()'
+        rd['docreturn'] = 'a = '
+        cfuncs.append_needs('f2pyalloccopy')
     ar = applyrules(routine_rules, rd)
     if ismoduleroutine(rout):
         outmess(f"              {ar['docshort']}\n")

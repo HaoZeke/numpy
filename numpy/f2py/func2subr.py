@@ -312,7 +312,109 @@ def createsubrwrapper(rout, signature=0):
     return ret[0]
 
 
+def _allocatable_result(rout):
+    """Rank-1 allocatable function result, or None."""
+    if not isfunction(rout):
+        return None
+    rname = rout.get('result', rout['name'])
+    var = rout['vars'].get(rname, {})
+    dims = var.get('dimension') or []
+    if 'allocatable' not in var.get('attrspec', []):
+        return None
+    if len(dims) != 1:
+        return None
+    return rname, var
+
+
+def _alloc_typenum(var):
+    from .capi_maps import getctype
+    ctype = getctype(var)
+    return {
+        'char': 'NPY_BYTE',
+        'signed_char': 'NPY_BYTE',
+        'short': 'NPY_SHORT',
+        'int': 'NPY_INT',
+        'long': 'NPY_LONG',
+        'long_long': 'NPY_LONGLONG',
+        'float': 'NPY_FLOAT',
+        'double': 'NPY_DOUBLE',
+        'long_double': 'NPY_LONGDOUBLE',
+        'complex_float': 'NPY_CFLOAT',
+        'complex_double': 'NPY_CDOUBLE',
+        'complex_long_double': 'NPY_CLONGDOUBLE',
+    }.get(ctype, 'NPY_INT')
+
+
+def _alloc_result_wrapper(rout, rname, var):
+    """Fortran wrapper that lets the function allocate, then copies out."""
+    name = rout['name']
+    fortranname = getfortranname(rout)
+    args = [a for a in rout.get('args', []) if a not in (rname, name)]
+    lines = [f'subroutine f2pywrap{name}(copy, {", ".join(args)})'.replace(
+        '(copy, )', '(copy)')]
+    lines.append('external copy')
+    for arg in args:
+        lines.append(var2fixfortran(rout['vars'], arg, f90mode=True))
+    ts = var.get('typespec', 'integer')
+    kind = (var.get('kindselector') or {}).get('kind')
+    if kind:
+        ts = f'{ts}(kind={kind})'
+    lines.append(f'{ts}, allocatable :: tmp(:)')
+    lines.append('interface')
+    arglist = ', '.join(args)
+    lines.append(f'function {fortranname}({arglist}) result({rname})')
+    for arg in args:
+        lines.append(var2fixfortran(rout['vars'], arg, f90mode=True))
+    lines.append(f'{ts}, allocatable, dimension(:) :: {rname}')
+    lines.append(f'end function {fortranname}')
+    lines.append('end interface')
+    call_args = f'({arglist})' if arglist else '()'
+    lines.append(f'tmp = {fortranname}{call_args}')
+    lines.append('if (allocated(tmp)) then')
+    lines.append('if (size(tmp) > 0) then')
+    lines.append('call copy(size(tmp), tmp)')
+    lines.append('else')
+    lines.append('call copy(0, 0)')
+    lines.append('endif')
+    lines.append('else')
+    lines.append('call copy(0, 0)')
+    lines.append('endif')
+    lines.append('end')
+    return '\n'.join(f'      {line}' for line in lines) + '\n'
+
+
+def _as_alloc_subroutine(rout, var):
+    """Present an allocatable function to the C wrapper as a subroutine.
+
+    The subroutine is the generated f2pywrap* routine. It calls back into
+    C with the allocated array instead of requiring a pre-sized buffer.
+    """
+    from .auxfuncs import getcallprotoargument
+    rname = rout.get('result', rout['name'])
+    rout['args'] = [a for a in rout.get('args', []) if a not in (rname, rout['name'])]
+    rout['block'] = 'subroutine'
+    rout.pop('result', None)
+    enhancements = dict(rout.get('f2pyenhancements') or {})
+    enhancements['fortranname'] = f"f2pywrap{rout['name']}"
+    rout['f2pyenhancements'] = enhancements
+    proto = getcallprotoargument(rout)
+    callback = 'void (*)(const int *, const char *)'
+    if proto and proto != 'void':
+        enhancements['callprotoargument'] = f'{callback}, {proto}'
+    else:
+        enhancements['callprotoargument'] = callback
+    rout['_alloc_result_typenum'] = _alloc_typenum(var)
+    return rout
+
+
 def assubr(rout):
+    alloc = _allocatable_result(rout)
+    if alloc and not ismoduleroutine(rout):
+        rname, var = alloc
+        original = rout
+        rout = copy.deepcopy(rout)
+        wrap = _alloc_result_wrapper(original, rname, var)
+        return _as_alloc_subroutine(rout, var), wrap
     if isfunction_wrap(rout):
         fortranname = getfortranname(rout)
         name = rout['name']

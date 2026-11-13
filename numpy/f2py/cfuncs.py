@@ -1481,6 +1481,42 @@ capi_fail:
 """
 
 
+# Filled by f2py_alloc_copy while an allocatable function result is
+# being returned. The GIL is held across the Fortran call.
+cfuncs['f2pyalloccopy'] = r"""
+static PyObject *f2py_allocated_result = NULL;
+static int f2py_allocated_typenum = NPY_INT;
+
+static void f2py_alloc_reset(int typenum) {
+    Py_XDECREF(f2py_allocated_result);
+    f2py_allocated_result = NULL;
+    f2py_allocated_typenum = typenum;
+}
+
+static void f2py_alloc_copy(const int *n, const char *src) {
+    npy_intp dims[1];
+    int count = (n && *n > 0) ? *n : 0;
+    dims[0] = count;
+    PyArrayObject *arr = (PyArrayObject *)PyArray_SimpleNew(
+        1, dims, f2py_allocated_typenum);
+    if (arr == NULL) {
+        return;
+    }
+    if (count > 0 && src != NULL) {
+        memcpy(PyArray_DATA(arr), src,
+               (size_t)count * (size_t)PyArray_ITEMSIZE(arr));
+    }
+    f2py_allocated_result = (PyObject *)arr;
+}
+
+static PyObject *f2py_alloc_take(void) {
+    PyObject *obj = f2py_allocated_result;
+    f2py_allocated_result = NULL;
+    return obj;
+}
+"""
+
+
 def buildcfuncs():
     from .capi_maps import c2capi_map
     for k in c2capi_map.keys():
