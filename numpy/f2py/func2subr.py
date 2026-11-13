@@ -126,7 +126,10 @@ def createfuncwrapper(rout, signature=0):
         args = [newname] + rout['args']
 
     l_tmpl = var2fixfortran(vars, name, '@@@NAME@@@', f90mode)
-    if l_tmpl[:13] == 'character*(*)':
+    # Scalar assumed-length results are given a concrete length. An
+    # array result keeps its length and its bounds; rewriting the whole
+    # declarator would turn `character*(*) name(3)` into `character*10`.
+    if l_tmpl[:13] == 'character*(*)' and 'dimension' not in vars[name]:
         if f90mode:
             l_tmpl = 'character(len=10)' + l_tmpl[13:]
         else:
@@ -161,7 +164,7 @@ def createfuncwrapper(rout, signature=0):
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
-        if not need_interface:
+        if not need_interface and 'dimension' not in vars[name]:
             add(f'external {fortranname}')
             rl = l_tmpl.replace('@@@NAME@@@', '') + ' ' + fortranname
 
@@ -196,6 +199,21 @@ def createfuncwrapper(rout, signature=0):
     add(l1)
     if rl is not None:
         add(rl)
+    elif not need_interface and not f90mode and 'dimension' in vars[name]:
+        # An array-valued function needs an explicit interface.
+        # `external` together with a dimension is rejected, and a
+        # typed declaration without an interface is a local array.
+        call_args = [a for a in rout['args'][1:] if a not in extra_args]
+        add('interface')
+        add(f'function {fortranname}({", ".join(call_args)}) result(r)')
+        # Arguments first: a result length such as len(o) must see a
+        # character argument, not an implicitly typed real.
+        for a in call_args:
+            if a in vars and not isexternal(vars[a]):
+                add(var2fixfortran(vars, a, f90mode=f90mode))
+        add(var2fixfortran(vars, name, 'r', f90mode))
+        add('end function')
+        add('end interface')
 
     if need_interface:
         if f90mode:

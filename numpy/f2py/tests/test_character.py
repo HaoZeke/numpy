@@ -419,7 +419,6 @@ class TestCharacter(util.F2PyTest):
 
         assert_equal(f('a'), b'a')
 
-    @pytest.mark.skip('fortran function returning array segfaults')
     def test_array_return(self):
         f = getattr(self.module, self.fprefix + '_array_return')
 
@@ -642,3 +641,29 @@ class TestBCCharHandling(util.F2PyTest):
     def test_gh25286(self):
         info = self.module.charint('T')
         assert info == 2
+
+
+@pytest.mark.slow
+class TestCharacterArrayResult(util.F2PyTest):
+    # A character function result keeps its rank and length. Explicit
+    # lengths and lengths taken from an assumed-length argument, for
+    # rank 1 and rank 2.
+    sources = [util.getpath("tests", "src", "string", "char_array_return.f90")]
+
+    def test_rank1_explicit(self):
+        a = np.array([b"abcd", b"efgh"], dtype="S4")
+        assert_array_equal(self.module.r1_explicit(a), a)
+
+    def test_rank1_assumed(self):
+        a = np.array([b"xy", b"zq"], dtype="S2")
+        assert_array_equal(self.module.r1_assumed(a), a)
+
+    def test_rank2_explicit(self):
+        a = np.array([[b"abc", b"def", b"ghi"],
+                      [b"jkl", b"mno", b"pqr"]], dtype="S3", order="F")
+        assert_array_equal(self.module.r2_explicit(a), a)
+
+    def test_rank2_assumed(self):
+        a = np.array([[b"ab", b"cd", b"ef"],
+                      [b"gh", b"ij", b"kl"]], dtype="S2", order="F")
+        assert_array_equal(self.module.r2_assumed(a), a)

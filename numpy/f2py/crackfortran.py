@@ -932,8 +932,13 @@ def appenddecl(decl, decl2, force=1):
                 decl[k] = decl2[k]
         elif k == 'note':
             pass
-        elif k in ['intent', 'check', 'dimension', 'optional',
-                   'required', 'depend']:
+        elif k == 'dimension':
+            # A function result's bounds have to reach the name f2py
+            # calls. Without this, `character, dimension(3) :: c` is
+            # wrapped as a scalar character(3).
+            if force or 'dimension' not in decl:
+                decl['dimension'] = copy.copy(decl2[k])
+        elif k in ['intent', 'check', 'optional', 'required', 'depend']:
             errmess(f'appenddecl: "{k}" not implemented.\n')
         else:
             raise Exception('appenddecl: Unknown variable definition key: ' +
