@@ -137,6 +137,12 @@ def createfuncwrapper(rout, signature=0):
 
     l1 = l_tmpl.replace('@@@NAME@@@', newname)
     rl = None
+    # character(len=n), dimension(m) is an array of strings. EXTERNAL
+    # cannot carry that dimension: `character name(m)` conflicts with
+    # EXTERNAL, and stripping the name leaves `character (m) name`.
+    result_is_char_array = (
+        'dimension' in vars[name]
+        and vars[name].get('typespec') == 'character')
 
     useisoc = useiso_c_binding(rout)
     useisof = useiso_fortran_env(rout)
@@ -161,7 +167,7 @@ def createfuncwrapper(rout, signature=0):
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
-        if not need_interface:
+        if not need_interface and not result_is_char_array:
             add(f'external {fortranname}')
             rl = l_tmpl.replace('@@@NAME@@@', '') + ' ' + fortranname
 
@@ -196,6 +202,20 @@ def createfuncwrapper(rout, signature=0):
     add(l1)
     if rl is not None:
         add(rl)
+
+    if result_is_char_array and not f90mode and not need_interface:
+        rname = rout.get('result') or name
+        iface_args = [a for a in args if a not in extra_args]
+        header = f'function {fortranname}({", ".join(iface_args)})'
+        if rname != fortranname:
+            header += f' result({rname})'
+        add('interface')
+        add(header)
+        add(var2fixfortran(vars, name, rname, f90mode))
+        for a in iface_args:
+            add(var2fixfortran(vars, a, f90mode=f90mode))
+        add('end function')
+        add('end interface')
 
     if need_interface:
         if f90mode:

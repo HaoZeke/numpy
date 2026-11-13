@@ -3,6 +3,8 @@ import textwrap
 import pytest
 
 import numpy as np
+from numpy.f2py import crackfortran
+from numpy.f2py.func2subr import assubr
 from numpy.f2py.tests import util
 from numpy.testing import assert_array_equal, assert_equal, assert_raises
 
@@ -419,12 +421,31 @@ class TestCharacter(util.F2PyTest):
 
         assert_equal(f('a'), b'a')
 
-    @pytest.mark.skip('fortran function returning array segfaults')
     def test_array_return(self):
         f = getattr(self.module, self.fprefix + '_array_return')
 
         a = np.array(list('abc'), dtype='S1')
         assert_array_equal(f(a), a)
+
+
+def test_character_array_result_wrapper(tmp_path):
+    # character(len=n), dimension(m) is an array of strings, not a scalar
+    # of length m. The wrapper must declare the external result that way.
+    src = tmp_path / "cret.f90"
+    src.write_text(textwrap.dedent("""\
+        function cret(o, n, m) result (c)
+           integer, intent(in) :: n, m
+           character(len=n), dimension(m) :: c
+           character(len=n), intent(in) :: o(m)
+        end function cret
+    """))
+    blocks = crackfortran.crackfortran([str(src)])
+    func = next(b for b in blocks if b.get("block") == "function")
+    _rout, wrapper = assubr(func)
+    flat = " ".join(wrapper.split())
+    assert "function cret(o, n, m) result(c)" in flat
+    assert "character(len=n) c(m)" in flat
+    assert "character(len=n) (m)" not in flat
 
     def test_optional(self):
         f = getattr(self.module, self.fprefix + '_optional')
