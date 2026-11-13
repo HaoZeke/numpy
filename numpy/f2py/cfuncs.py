@@ -1481,6 +1481,72 @@ capi_fail:
 """
 
 
+# Slots filled while an allocatable intent(out) array is copied back.
+# The GIL is held across the Fortran call. At most four such arguments.
+cfuncs['f2pydeferredcopy'] = r"""
+#define F2PY_DEFERRED_MAX 4
+static PyObject *f2py_deferred_obj[F2PY_DEFERRED_MAX];
+static int f2py_deferred_type[F2PY_DEFERRED_MAX];
+
+static void f2py_deferred_reset(void) {
+    int i;
+    for (i = 0; i < F2PY_DEFERRED_MAX; i++) {
+        Py_XDECREF(f2py_deferred_obj[i]);
+        f2py_deferred_obj[i] = NULL;
+        f2py_deferred_type[i] = NPY_INT;
+    }
+}
+
+static void f2py_deferred_set(int slot, int typenum) {
+    f2py_deferred_type[slot] = typenum;
+}
+
+static void f2py_deferred_store(int slot, int isstr, const int *n,
+                                const int *slen, const void *src) {
+    int count = (n && *n > 0) ? *n : 0;
+    npy_intp dims[1];
+    PyObject *arr;
+    dims[0] = count;
+    if (isstr) {
+        int item = (slen && *slen > 0) ? *slen : 1;
+        arr = PyArray_New(&PyArray_Type, 1, dims, NPY_STRING,
+                          NULL, NULL, item, 0, NULL);
+        if (arr && count > 0 && slen && *slen > 0 && src) {
+            memcpy(PyArray_DATA((PyArrayObject *)arr), src,
+                   (size_t)count * (size_t)(*slen));
+        }
+    }
+    else {
+        arr = PyArray_SimpleNew(1, dims, f2py_deferred_type[slot]);
+        if (arr && count > 0 && src) {
+            memcpy(PyArray_DATA((PyArrayObject *)arr), src,
+                   (size_t)count * (size_t)PyArray_ITEMSIZE((PyArrayObject *)arr));
+        }
+    }
+    Py_XDECREF(f2py_deferred_obj[slot]);
+    f2py_deferred_obj[slot] = arr;
+}
+
+static void f2py_deferred_num0(const int *n, const void *src) { f2py_deferred_store(0, 0, n, NULL, src); }
+static void f2py_deferred_num1(const int *n, const void *src) { f2py_deferred_store(1, 0, n, NULL, src); }
+static void f2py_deferred_num2(const int *n, const void *src) { f2py_deferred_store(2, 0, n, NULL, src); }
+static void f2py_deferred_num3(const int *n, const void *src) { f2py_deferred_store(3, 0, n, NULL, src); }
+static void f2py_deferred_str0(const int *n, const int *slen, const void *src) { f2py_deferred_store(0, 1, n, slen, src); }
+static void f2py_deferred_str1(const int *n, const int *slen, const void *src) { f2py_deferred_store(1, 1, n, slen, src); }
+static void f2py_deferred_str2(const int *n, const int *slen, const void *src) { f2py_deferred_store(2, 1, n, slen, src); }
+static void f2py_deferred_str3(const int *n, const int *slen, const void *src) { f2py_deferred_store(3, 1, n, slen, src); }
+
+static PyObject *f2py_deferred_take(int slot) {
+    PyObject *obj = f2py_deferred_obj[slot];
+    f2py_deferred_obj[slot] = NULL;
+    if (obj == NULL) {
+        Py_RETURN_NONE;
+    }
+    return obj;
+}
+"""
+
+
 def buildcfuncs():
     from .capi_maps import c2capi_map
     for k in c2capi_map.keys():
