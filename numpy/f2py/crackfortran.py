@@ -1135,6 +1135,11 @@ def analyzeline(m, case, line):
             name = 'unknown_' + block.replace(' ', '_')
         groupcache[groupcounter]['prefix'] = m.group('before')
         groupcache[groupcounter]['name'] = rmbadname1(name)
+        # `string` is a C name, so the declaration is stored as string_bn.
+        # The result clause has to use that same key, or the result is an
+        # implicit real and the character declaration is orphaned.
+        if result:
+            result = rmbadname1(result)
         groupcache[groupcounter]['result'] = result
         if groupcounter == 1:
             groupcache[groupcounter]['from'] = currentfilename
