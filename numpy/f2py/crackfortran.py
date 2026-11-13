@@ -3369,9 +3369,33 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         result = f" result ({block['result']})"
         if block['result'] not in argsl:
             argsl.append(block['result'])
-    body = crack2fortrangen(block['body'], tab + tabchar, as_interface=as_interface)
+    # An interface body that names a nested procedure after one of its
+    # dummy arguments is legal to gfortran and rejected by flang
+    # ("'f' is already declared in this scoping unit"). Print the
+    # nested procedure under another name and associate the dummy
+    # with procedure().
+    body_src = block['body']
+    iface_renames = {}
+    if as_interface and isinstance(body_src, list) and argsl:
+        printed = []
+        for child in body_src:
+            if (isinstance(child, dict)
+                    and child.get('block') in ('function', 'subroutine')
+                    and child.get('name') in argsl):
+                child = copy.deepcopy(child)
+                renamed = f"f2py_iface_{child['name']}"
+                iface_renames[child['name']] = renamed
+                child['name'] = renamed
+            printed.append(child)
+        body_src = printed
+    iface_block = block
+    if iface_renames:
+        iface_block = copy.copy(block)
+        iface_block['_iface_renames'] = iface_renames
+    body = crack2fortrangen(body_src, tab + tabchar, as_interface=as_interface)
     vars = vars2fortran(
-        block, block['vars'], argsl, tab + tabchar, as_interface=as_interface)
+        iface_block, iface_block['vars'], argsl, tab + tabchar,
+        as_interface=as_interface)
     mess = ''
     if 'from' in block and not as_interface:
         mess = f"! in {block['from']}"
@@ -3464,6 +3488,10 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
                     errmess(
                         f'vars2fortran: Warning: cross-dependence between variables "{a}" and "{d}\"\n')
         if 'externals' in block and a in block['externals']:
+            renamed = block.get('_iface_renames', {}).get(a)
+            if renamed:
+                ret = f'{ret}{tab}procedure({renamed}) :: {a}'
+                continue
             if isintent_callback(vars[a]):
                 ret = f'{ret}{tab}intent(callback) {a}'
             ret = f'{ret}{tab}external {a}'
