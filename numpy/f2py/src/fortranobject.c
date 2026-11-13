@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -813,6 +814,173 @@ get_elsize(PyObject *obj) {
   return -1;
 }
 
+/*
+ * Copy src into dst when both have the same shape and item size.
+ *
+ * A C-ordered rank-2 array becoming Fortran-ordered is a transpose.
+ * NumPy's strided copy (PyArray_FromArray / PyArray_CopyInto) moves
+ * one element at a time and misses the cache on that transpose, about
+ * 2 GB/s here. Tiles keep a block of both layouts in cache. The bytes
+ * written are the same as NumPy's copy. Returns 0 on success, -1 when
+ * the layouts need NumPy (a cast, an object dtype, rank above 3).
+ */
+#define F2PY_COPY2(TYPE) \
+    do { \
+        for (ii = 0; ii < n0; ii += tile) { \
+            ihi = ii + tile < n0 ? ii + tile : n0; \
+            for (jj = 0; jj < n1; jj += tile) { \
+                jhi = jj + tile < n1 ? jj + tile : n1; \
+                for (i = ii; i < ihi; ++i) { \
+                    for (j = jj; j < jhi; ++j) { \
+                        *(TYPE *)(dp + i * ds0 + j * ds1) = \
+                            *(const TYPE *)(sp + i * ss0 + j * ss1); \
+                    } \
+                } \
+            } \
+        } \
+    } while (0)
+
+#define F2PY_COPY3(TYPE) \
+    do { \
+        for (ii = 0; ii < n0; ii += tile3) { \
+            ihi = ii + tile3 < n0 ? ii + tile3 : n0; \
+            for (jj = 0; jj < n1; jj += tile3) { \
+                jhi = jj + tile3 < n1 ? jj + tile3 : n1; \
+                for (kk = 0; kk < n2; kk += tile3) { \
+                    khi = kk + tile3 < n2 ? kk + tile3 : n2; \
+                    for (i = ii; i < ihi; ++i) { \
+                        for (j = jj; j < jhi; ++j) { \
+                            for (k = kk; k < khi; ++k) { \
+                                *(TYPE *)(dp + i * ds0 + j * ds1 + k * ds2) = \
+                                    *(const TYPE *)(sp + i * ss0 + j * ss1 + k * ss2); \
+                            } \
+                        } \
+                    } \
+                } \
+            } \
+        } \
+    } while (0)
+
+static int
+f2py_blocked_copy(const PyArrayObject *src, PyArrayObject *dst)
+{
+    int ndim, itemsize, ax;
+    npy_intp n0, n1, n2 = 0;
+    npy_intp ss0, ss1, ss2 = 0, ds0, ds1, ds2 = 0;
+    npy_intp ii, jj, kk, i, j, k, ihi, jhi, khi;
+    const char *sp;
+    char *dp;
+    const npy_intp tile = 16;
+    const npy_intp tile3 = 8;
+
+    ndim = PyArray_NDIM(src);
+    if (ndim != PyArray_NDIM(dst) || ndim < 2 || ndim > 3) {
+        return -1;
+    }
+    /* NumPy's element copy is faster while the transpose still fits in
+     * cache. The tiled copy wins once the working set misses it. 8 MiB
+     * is that point for a rank-2 float64 transpose: below it, leave the
+     * copy to PyArray_FromArray / PyArray_CopyInto. */
+    if (PyArray_NBYTES(src) <= ((npy_intp)8 << 20)) {
+        return -1;
+    }
+    if (PyArray_TYPE(src) != PyArray_TYPE(dst) ||
+            !PyArray_ISNOTSWAPPED(src) || !PyArray_ISNOTSWAPPED(dst)) {
+        return -1;
+    }
+    if (PyDataType_FLAGCHK(PyArray_DESCR(src), NPY_ITEM_REFCOUNT)) {
+        return -1;
+    }
+    itemsize = (int)PyArray_ITEMSIZE(src);
+    if (itemsize != (int)PyArray_ITEMSIZE(dst) ||
+            (itemsize != 1 && itemsize != 2 && itemsize != 4 &&
+             itemsize != 8 && itemsize != 16)) {
+        return -1;
+    }
+    for (ax = 0; ax < ndim; ++ax) {
+        if (PyArray_DIM(src, ax) != PyArray_DIM(dst, ax)) {
+            return -1;
+        }
+        /* A stride that is not a whole element would tear a typed load. */
+        if ((PyArray_STRIDE(src, ax) % itemsize) != 0 ||
+                (PyArray_STRIDE(dst, ax) % itemsize) != 0) {
+            return -1;
+        }
+    }
+    if (((uintptr_t)PyArray_DATA(src) % (uintptr_t)itemsize) != 0 ||
+            ((uintptr_t)PyArray_DATA(dst) % (uintptr_t)itemsize) != 0) {
+        return -1;
+    }
+
+    n0 = PyArray_DIM(src, 0);
+    n1 = PyArray_DIM(src, 1);
+    ss0 = PyArray_STRIDE(src, 0);
+    ss1 = PyArray_STRIDE(src, 1);
+    ds0 = PyArray_STRIDE(dst, 0);
+    ds1 = PyArray_STRIDE(dst, 1);
+    sp = (const char *)PyArray_DATA(src);
+    dp = (char *)PyArray_DATA(dst);
+
+    if (ndim == 2) {
+        switch (itemsize) {
+        case 1: F2PY_COPY2(npy_uint8); break;
+        case 2: F2PY_COPY2(npy_uint16); break;
+        case 4: F2PY_COPY2(npy_uint32); break;
+        case 8: F2PY_COPY2(npy_uint64); break;
+        default: {
+            for (ii = 0; ii < n0; ii += tile) {
+                ihi = ii + tile < n0 ? ii + tile : n0;
+                for (jj = 0; jj < n1; jj += tile) {
+                    jhi = jj + tile < n1 ? jj + tile : n1;
+                    for (i = ii; i < ihi; ++i) {
+                        for (j = jj; j < jhi; ++j) {
+                            memcpy(dp + i * ds0 + j * ds1,
+                                   sp + i * ss0 + j * ss1, 16);
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        }
+        return 0;
+    }
+
+    n2 = PyArray_DIM(src, 2);
+    ss2 = PyArray_STRIDE(src, 2);
+    ds2 = PyArray_STRIDE(dst, 2);
+    switch (itemsize) {
+    case 1: F2PY_COPY3(npy_uint8); break;
+    case 2: F2PY_COPY3(npy_uint16); break;
+    case 4: F2PY_COPY3(npy_uint32); break;
+    case 8: F2PY_COPY3(npy_uint64); break;
+    default: {
+        for (ii = 0; ii < n0; ii += tile3) {
+            ihi = ii + tile3 < n0 ? ii + tile3 : n0;
+            for (jj = 0; jj < n1; jj += tile3) {
+                jhi = jj + tile3 < n1 ? jj + tile3 : n1;
+                for (kk = 0; kk < n2; kk += tile3) {
+                    khi = kk + tile3 < n2 ? kk + tile3 : n2;
+                    for (i = ii; i < ihi; ++i) {
+                        for (j = jj; j < jhi; ++j) {
+                            for (k = kk; k < khi; ++k) {
+                                memcpy(dp + i * ds0 + j * ds1 + k * ds2,
+                                       sp + i * ss0 + j * ss1 + k * ss2, 16);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        break;
+    }
+    }
+    return 0;
+}
+
+#undef F2PY_COPY2
+#undef F2PY_COPY3
+
 extern PyArrayObject *
 ndarray_from_pyobj(const int type_num,
                    const int elsize_,
@@ -1057,6 +1225,31 @@ ndarray_from_pyobj(const int type_num,
           int flags = NPY_ARRAY_FORCECAST | NPY_ARRAY_ENSURECOPY
               | ((intent & F2PY_INTENT_C) ? NPY_ARRAY_IN_ARRAY
                  : NPY_ARRAY_IN_FARRAY);
+          /*
+           * Same-type rank 2 and 3 copies are a transpose into Fortran
+           * order. Do that in tiles. Inplace still goes through
+           * WRITEBACKIFCOPY below. A cast or an object dtype falls
+           * through to PyArray_FromArray.
+           */
+          if (!(intent & F2PY_INTENT_INPLACE) &&
+                  PyArray_TYPE(arr) == type_num &&
+                  PyArray_ITEMSIZE(arr) == elsize &&
+                  PyArray_NDIM(arr) == rank) {
+              /* PyArray_NewFromDescr treats a non-zero flags argument as
+               * "Fortran order" when no data pointer is passed. It is not
+               * a bitfield there. */
+              int fortran_order = !(intent & F2PY_INTENT_C);
+              Py_INCREF(descr);
+              PyArrayObject *copied = (PyArrayObject *)PyArray_NewFromDescr(
+                      &PyArray_Type, descr, rank, PyArray_DIMS(arr),
+                      NULL, NULL, fortran_order, NULL);
+              if (copied != NULL && f2py_blocked_copy(arr, copied) == 0) {
+                  Py_DECREF(descr);
+                  F2PY_REPORT_ON_ARRAY_COPY_FROMARR;
+                  return copied;
+              }
+              Py_XDECREF(copied);
+          }
           if (intent & F2PY_INTENT_INPLACE) {
               if (!(ARRAY_ISCOMPATIBLE(arr, type_num)) ||
                   (PyArray_ISSIGNED(arr) && PyTypeNum_ISUNSIGNED(type_num)) ||
@@ -1348,6 +1541,9 @@ extern int
 copy_ND_array(const PyArrayObject *arr, PyArrayObject *out)
 {
     F2PY_REPORT_ON_ARRAY_COPY_FROMARR;
+    if (f2py_blocked_copy(arr, out) == 0) {
+        return 0;
+    }
     return PyArray_CopyInto(out, (PyArrayObject *)arr);
 }
 
