@@ -367,7 +367,8 @@ class Expr:
             else:
                 args = [arg.tostring(Precedence.TUPLE, language=language)
                         for arg in args]
-                args += [k + '=' + v.tostring(Precedence.NONE)
+                args += [k + '=' + v.tostring(Precedence.NONE,
+                                             language=language)
                          for k, v in kwargs.items()]
                 r = f'{name}({", ".join(args)})'
                 precedence = Precedence.ATOM
@@ -1362,6 +1363,15 @@ class _FromStringWorker:
             expr2 = self.process(expr2)
             return as_ternary(oper, expr1, expr2)
 
+        # keyword argument. Check this before `<` so that
+        # `mask=1<dim` is the keyword mask with value `1<dim`,
+        # not the comparison `mask=1 < dim`. `==` is not a keyword.
+        m = re.match(r'\A([A-Za-z_]\w*)\s*=(?!=)(.*)\Z', r)
+        if m:
+            keyname, value = m.groups()
+            value = restore(value)
+            return _Pair(keyname, self.process(value))
+
         # relational expression
         if self.language is Language.Fortran:
             m = re.match(
@@ -1376,13 +1386,6 @@ class _FromStringWorker:
             left, right = self.process(restore((left, right)))
             rop = RelOp.fromstring(rop, language=self.language)
             return Expr(Op.RELATIONAL, (rop, left, right))
-
-        # keyword argument
-        m = re.match(r'\A(\w[\w\d_]*)\s*[=](.*)\Z', r)
-        if m:
-            keyname, value = m.groups()
-            value = restore(value)
-            return _Pair(keyname, self.process(value))
 
         # addition/subtraction operations
         operands = re.split(r'((?<!\d[edED])[+-])', r)
