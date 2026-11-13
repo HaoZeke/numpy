@@ -2080,6 +2080,9 @@ def postcrack(block, args=None, tab=''):
         outmess(f"{tab}Block: {block['name']}\n", 0)
     block = analyzeargs(block)
     block = analyzecommon(block)
+    blank = (block.get('vars') or {}).get('') or {}
+    if 'private' in (blank.get('attrspec') or []):
+        block['_default_private'] = True
     block['vars'] = analyzevars(block)
     block['sortvars'] = sortvarnames(block['vars'])
     if block.get('args'):
@@ -2276,6 +2279,32 @@ def analyzebody(block, args, tab=''):
         for key, value in block['vars'].items()
         if 'attrspec' not in value or 'public' not in value['attrspec']
     }
+    # A bare PRIVATE makes every unlisted module procedure private.
+    # A public generic still exposes its specifics under the generic name.
+    # A private generic, such as l_gamma or gpx, does not.
+    default_private = bool(block.get('_default_private'))
+    public_generic = {}
+    for item in block.get('body') or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get('block') not in ('interface', 'abstract interface'):
+            continue
+        generic = item.get('name') or ''
+        if not generic or generic == 'unknown_interface':
+            continue
+        attrs = (block['vars'].get(generic) or {}).get('attrspec') or []
+        if default_private and 'public' not in attrs:
+            continue
+        if 'private' in attrs and 'public' not in attrs:
+            continue
+        specifics = []
+        for impl in item.get('implementedby') or []:
+            specifics.append(str(impl).lower())
+        for proc in item.get('body') or []:
+            if isinstance(proc, dict) and proc.get('name'):
+                specifics.append(str(proc['name']).lower())
+        for spec in specifics:
+            public_generic[spec] = generic
 
     body = []
     for b in block['body']:
@@ -2285,9 +2314,15 @@ def analyzebody(block, args, tab=''):
                 continue
             else:
                 as_ = b['args']
-            # Add private members to skipfuncs for gh-23879
-            if b['name'] in maybe_private.keys():
-                skipfuncs.append(b['name'])
+            spec = str(b['name']).lower()
+            if spec in public_generic:
+                enh = b.setdefault('f2pyenhancements', {})
+                enh.setdefault('fortranname', public_generic[spec])
+            else:
+                # Add private members to skipfuncs for gh-23879.
+                unlisted = b['name'] not in block['vars']
+                if b['name'] in maybe_private or (default_private and unlisted):
+                    skipfuncs.append(b['name'])
             if b['name'] in skipfuncs:
                 continue
             if onlyfuncs and b['name'] not in onlyfuncs:

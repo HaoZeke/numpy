@@ -312,6 +312,11 @@ def createsubrwrapper(rout, signature=0):
     return ret[0]
 
 
+def _generic_wrap(rout):
+    name = (rout.get('f2pyenhancements') or {}).get('fortranname')
+    return bool(name) and name != rout.get('name')
+
+
 def assubr(rout):
     if isfunction_wrap(rout):
         fortranname = getfortranname(rout)
@@ -338,7 +343,7 @@ def assubr(rout):
                 fvar['intent'].append(f'out={rname}')
         rout['args'][:] = [fname] + rout['args']
         return rout, createfuncwrapper(rout)
-    if issubroutine_wrap(rout):
+    if issubroutine_wrap(rout) or (issubroutine(rout) and _generic_wrap(rout)):
         fortranname = getfortranname(rout)
         name = rout['name']
         outmess('\t\tCreating wrapper for Fortran subroutine '
