@@ -1333,8 +1333,13 @@ def analyzeline(m, case, line):
         if last_name is not None:
             previous_context = ('variable', last_name, groupcounter)
     elif case == 'moduleprocedure':
-        groupcache[groupcounter]['implementedby'] = \
-            [x.strip() for x in m.group('after').split(',')]
+        # Each `module procedure` line adds specifics. Replacing the
+        # list kept only the last line of a long generic.
+        names = [x.strip() for x in m.group('after').split(',') if x.strip()]
+        have = groupcache[groupcounter].setdefault('implementedby', [])
+        for name in names:
+            if name not in have:
+                have.append(name)
     elif case == 'parameter':
         edecl = groupcache[groupcounter]['vars']
         ll = m.group('after').strip()[1:-1]
@@ -2302,6 +2307,40 @@ def analyzebody(block, args, tab=''):
         if 'attrspec' not in value or 'public' not in value['attrspec']
     }
 
+    # A public generic (`public :: solve`) keeps every specific. The
+    # specific names themselves stay private, so they used to be skipped
+    # and only a later one, if any, was left callable.
+    public_generics = {}
+    for item in block.get('body') or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get('block') not in ('interface', 'abstract interface'):
+            continue
+        generic = item.get('name') or ''
+        if not generic or generic == 'unknown_interface':
+            continue
+        gattrs = (block['vars'].get(generic) or {}).get('attrspec') or []
+        if 'public' not in gattrs:
+            continue
+        if str(generic).lower().startswith('operator') or generic == 'assignment':
+            call_name = None
+        else:
+            call_name = generic
+        specific_names = list(item.get('implementedby') or [])
+        for proc in item.get('body') or []:
+            if isinstance(proc, dict) and proc.get('name'):
+                specific_names.append(proc['name'])
+        for name in specific_names:
+            # An operator generic is not a name the wrapper can call.
+            # Keep a later ordinary generic (`inv`) instead of
+            # `operator(.inv.)`.
+            key = str(name).lower()
+            prev = public_generics.get(key, False)
+            if call_name and (prev is False or prev is None):
+                public_generics[key] = call_name
+            elif prev is False:
+                public_generics[key] = None
+
     body = []
     for b in block['body']:
         b['parent_block'] = block
@@ -2310,9 +2349,15 @@ def analyzebody(block, args, tab=''):
                 continue
             else:
                 as_ = b['args']
-            # Add private members to skipfuncs for gh-23879
-            if b['name'] in maybe_private.keys():
+            # Add private members to skipfuncs for gh-23879.
+            # A specific of a public generic is still called, under the
+            # generic's public name.
+            call_name = public_generics.get(str(b['name']).lower(), False)
+            if call_name is False and b['name'] in maybe_private:
                 skipfuncs.append(b['name'])
+            elif call_name:
+                b.setdefault('f2pyenhancements', {}).setdefault(
+                    'fortranname', call_name)
             if b['name'] in skipfuncs:
                 continue
             if onlyfuncs and b['name'] not in onlyfuncs:
