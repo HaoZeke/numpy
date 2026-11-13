@@ -29,6 +29,11 @@ from numpy.testing import IS_IOS, IS_WASM, temppath
 # Check if compilers are available at all...
 #
 
+# A compiler that never exits used to hold the whole f2py suite (gh-9342).
+_COMPILER_PROBE_TIMEOUT = 60
+_MODULE_BUILD_TIMEOUT = 300
+
+
 def check_language(lang, code_snippet=None):
     if sys.platform == "win32":
         pytest.skip("No Fortran tests on Windows (Issue #25134)", allow_module_level=True)
@@ -52,9 +57,12 @@ def check_language(lang, code_snippet=None):
                 check=False,
                 cwd=tmpdir,
                 capture_output=True,
+                timeout=_COMPILER_PROBE_TIMEOUT,
             )
         except OSError:
             pytest.skip("meson not present, skipping compiler dependent test", allow_module_level=True)
+        except subprocess.TimeoutExpired:
+            return False
         return runmeson.returncode == 0
     finally:
         shutil.rmtree(tmpdir)
@@ -97,9 +105,10 @@ class CompilerChecker:
                     executor.submit(check_language, "fortran", fortran90_code)
                 ]
 
-                self.has_c = futures[0].result()
-                self.has_f77 = futures[1].result()
-                self.has_f90 = futures[2].result()
+                probe_timeout = _COMPILER_PROBE_TIMEOUT + 15
+                self.has_c = futures[0].result(timeout=probe_timeout)
+                self.has_f77 = futures[1].result(timeout=probe_timeout)
+                self.has_f90 = futures[2].result(timeout=probe_timeout)
 
             self.compilers_checked = True
 
@@ -246,7 +255,13 @@ def build_module(source_files, options=[], skip=[], only=[], module_name=None):
         p = subprocess.Popen(cmd,
                              stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT)
-        out, err = p.communicate()
+        try:
+            out, err = p.communicate(timeout=_MODULE_BUILD_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            out, err = p.communicate()
+            raise RuntimeError(
+                f"Running f2py timed out: {cmd[4:]}\n{asunicode(out)}")
         if p.returncode != 0:
             raise RuntimeError(f"Running f2py failed: {cmd[4:]}\n{asunicode(out)}")
     finally:
