@@ -3696,7 +3696,11 @@ def character_backward_compatibility_hook(item, parents, result,
         return value
 
     if parent_key in ['dimension', 'check']:
-        assert parents[-3][0] == 'vars'
+        # A variable or procedure named `check` or `dimension` sits
+        # directly in `vars`. That is not a check=/dimension= clause.
+        if (len(parents) < 3 or parents[-3][0] != 'vars'
+                or not isinstance(value, str)):
+            return item
         vars_dict = parents[-3][1]
     elif key == '=':
         assert parents[-2][0] == 'vars'
