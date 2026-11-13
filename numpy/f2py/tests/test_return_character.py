@@ -43,6 +43,13 @@ class TestFReturnCharacter(TestReturnCharacter):
         self.check_function(getattr(self.module, name), name)
 
     @pytest.mark.xfail(IS_S390X, reason="callback returns ' '")
+    def test_f77_assumed_length_result(self):
+        # character*(*) result follows the argument, not a fixed length of 10.
+        t = self.module.ts
+        assert t(23) == b"23"
+        assert t("123456789abcdef") == b"123456789abcdef"
+
+    @pytest.mark.xfail(IS_S390X, reason="callback returns ' '")
     @pytest.mark.parametrize("name", ["t0", "t1", "t5", "ts", "s0", "s1", "s5", "ss"])
     def test_all_f90(self, name):
         self.check_function(getattr(self.module.f90_return_char, name), name)

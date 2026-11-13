@@ -92,6 +92,19 @@ def useiso_fortran_env(rout):
             return True
     return useisof
 
+def _assumed_char_argument(rout, name, vars):
+    """A character*(*) argument whose length can size an assumed result."""
+    for arg in rout.get('args') or []:
+        if arg == name:
+            continue
+        selector = (vars.get(arg) or {}).get('charselector') or {}
+        star = str(selector.get('*', '')).replace(' ', '')
+        length = str(selector.get('len', '')).replace(' ', '')
+        if star in {'*', '(*)', ':'} or length in {'*', ':', '(*)'}:
+            return arg
+    return None
+
+
 def createfuncwrapper(rout, signature=0):
     assert isfunction(rout)
 
@@ -126,14 +139,23 @@ def createfuncwrapper(rout, signature=0):
         args = [newname] + rout['args']
 
     l_tmpl = var2fixfortran(vars, name, '@@@NAME@@@', f90mode)
-    if l_tmpl[:13] == 'character*(*)':
-        if f90mode:
-            l_tmpl = 'character(len=10)' + l_tmpl[13:]
+    assumed_src = None
+    if l_tmpl[:13] == 'character*(*)' and 'dimension' not in vars.get(name, {}):
+        # character*(*) is the caller's length. A fixed character*10 cuts
+        # a longer argument. Size the result from an assumed-length argument
+        # when there is one; otherwise keep the historical length of 10.
+        src = _assumed_char_argument(rout, name, vars)
+        if src:
+            assumed_src = src
+            vars[name].setdefault('charselector', {})['f2py_len'] = f'slen({src})'
         else:
-            l_tmpl = 'character*10' + l_tmpl[13:]
-        charselect = vars[name]['charselector']
-        if charselect.get('*', '') == '(*)':
-            charselect['*'] = '10'
+            if f90mode:
+                l_tmpl = 'character(len=10)' + l_tmpl[13:]
+            else:
+                l_tmpl = 'character*10' + l_tmpl[13:]
+            charselect = vars[name]['charselector']
+            if charselect.get('*', '') == '(*)':
+                charselect['*'] = '10'
 
     l1 = l_tmpl.replace('@@@NAME@@@', newname)
     rl = None
@@ -161,7 +183,7 @@ def createfuncwrapper(rout, signature=0):
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
-        if not need_interface:
+        if not need_interface and not assumed_src:
             add(f'external {fortranname}')
             rl = l_tmpl.replace('@@@NAME@@@', '') + ' ' + fortranname
 
@@ -196,6 +218,18 @@ def createfuncwrapper(rout, signature=0):
     add(l1)
     if rl is not None:
         add(rl)
+    elif assumed_src and not f90mode:
+        # character*(*) is illegal on an external function. The interface
+        # gives the result the length of the assumed-length argument.
+        call_args = [a for a in args if a not in extra_args]
+        add('interface')
+        add(f'function {fortranname}({", ".join(call_args)})')
+        for a in call_args:
+            if a in vars and not isexternal(vars[a]):
+                add(var2fixfortran(vars, a, f90mode=f90mode))
+        add(f'character(len=len({assumed_src})) :: {fortranname}')
+        add('end function')
+        add('end interface')
 
     if need_interface:
         if f90mode:
