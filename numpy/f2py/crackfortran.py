@@ -146,7 +146,9 @@ import os
 import platform
 import re
 import string
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -188,6 +190,10 @@ groupcounter = 0
 grouplist = {groupcounter: []}
 groupname = ''
 include_paths = []
+# -D / -U passed to the Fortran preprocessor for .F90 / .F sources.
+cpp_macros = []
+cpp_undefs = []
+_preprocessed_sources = []
 neededmodule = -1
 onlyfuncs = []
 previous_context = None
@@ -354,6 +360,68 @@ def is_free_format(fname):
     return result
 
 
+def _cleanup_preprocessed():
+    global _preprocessed_sources
+    for path in _preprocessed_sources:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    _preprocessed_sources = []
+
+
+def _preprocess_fortran_source(filename):
+    """Run the Fortran preprocessor on suffixes gfortran preprocesses.
+
+    ``.F`` and ``.F90`` (any suffix with an uppercase letter) are
+    preprocessed before parsing. ``.f`` and ``.f90`` are left as written.
+    Inactive ``#if`` branches are removed, so a parameter assigned under
+    ``#ifdef`` / ``#else`` keeps the branch the compiler keeps. ``-D`` and
+    ``-U`` from the f2py command line are forwarded.
+    """
+    if not isinstance(filename, str) or not os.path.isfile(filename):
+        return filename
+    suffix = os.path.splitext(filename)[1]
+    if not any(ch.isupper() for ch in suffix):
+        return filename
+    compiler = (os.environ.get('FC') or os.environ.get('F77') or 'gfortran')
+    compiler = compiler.split()[0]
+    cmd = [compiler, '-E', '-P', '-cpp']
+    for inc in include_paths:
+        cmd.extend(['-I', inc])
+    for macro in cpp_macros:
+        if isinstance(macro, (list, tuple)):
+            name = macro[0]
+            value = macro[1] if len(macro) > 1 else None
+            if value is None or value == '':
+                cmd.append(f'-D{name}')
+            else:
+                cmd.append(f'-D{name}={value}')
+        else:
+            cmd.append(f'-D{macro}')
+    for name in cpp_undefs:
+        cmd.append(f'-U{name}')
+    cmd.append(filename)
+    try:
+        proc = subprocess.run(
+            cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as exc:
+        errmess(f'preprocess: could not run {compiler} on {filename}: {exc}\n')
+        return filename
+    if proc.returncode != 0:
+        err = proc.stderr.decode('utf-8', 'replace').strip()
+        errmess(f'preprocess: {compiler} -E failed for {filename}: {err}\n')
+        return filename
+    handle = tempfile.NamedTemporaryFile(
+        mode='wb', suffix=suffix.lower(), prefix='f2py_', delete=False)
+    try:
+        handle.write(proc.stdout)
+    finally:
+        handle.close()
+    _preprocessed_sources.append(handle.name)
+    return handle.name
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -370,6 +438,13 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             beginpattern, quiet, verbose, dolowercase
     if ffile == []:
         return
+    if isinstance(ffile, str):
+        ffile = [_preprocess_fortran_source(ffile)]
+    else:
+        ffile = [
+            _preprocess_fortran_source(name) if isinstance(name, str) else name
+            for name in ffile
+        ]
     localdolowercase = dolowercase
     # cont: set to True when the content of the last line read
     # indicates statement continuation
@@ -574,6 +649,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     fin.close()
     if istop:
         dowithline('', 1)
+        _cleanup_preprocessed()
     else:
         gotnextfile, filepositiontext, currentfilename, sourcecodeform, strictf77,\
             beginpattern, quiet, verbose, dolowercase = saveglobals

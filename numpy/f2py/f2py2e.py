@@ -699,6 +699,9 @@ def run_compile():
             define_macros[i] = tuple(name_value)
         else:
             print('Invalid use of -D:', name_value)
+    # The cracker preprocesses .F/.F90 before it parses them.
+    crackfortran.cpp_macros = list(define_macros)
+    crackfortran.cpp_undefs = list(undef_macros)
 
     # Construct wrappers / signatures / things
     if backend_key == 'meson':
