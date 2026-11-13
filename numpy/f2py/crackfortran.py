@@ -600,17 +600,17 @@ groupbegins77 = r'program|block\s*data'
 beginpattern77 = re.compile(
     beforethisafter % ('', groupbegins77, groupbegins77, '.*'), re.I), 'begin'
 groupbegins90 = groupbegins77 + \
-    r'|module(?!\s*procedure)|python\s*module|(abstract|)\s*interface|'\
+    r'|submodule|module(?!\s*(?:procedure|subroutine|function))|python\s*module|(abstract|)\s*interface|'\
     r'type(?!\s*\()'
 beginpattern90 = re.compile(
     beforethisafter % ('', groupbegins90, groupbegins90, '.*'), re.I), 'begin'
-groupends = (r'end|endprogram|endblockdata|endmodule|endpythonmodule|'
+groupends = (r'end|endprogram|endblockdata|endmodule|endsubmodule|endpythonmodule|'
              r'endinterface|endsubroutine|endfunction')
 endpattern = re.compile(
     beforethisafter % ('', groupends, groupends, '.*'), re.I), 'end'
 # block, the Fortran 2008 construct needs special handling in the rest of the file
 endifs = r'end\s*(if|do|where|select|while|forall|associate|'\
-         r'critical|enum|team)'
+         r'critical|enum|team|procedure)'
 endifpattern = re.compile(
     beforethisafter % (r'[\w]*?', endifs, endifs, '.*'), re.I), 'endif'
 #
@@ -840,6 +840,21 @@ def crackline(line, reset=0):
             skipblocksuntil = -1
         grouplist[groupcounter - 1].append(groupcache[groupcounter])
         grouplist[groupcounter - 1][-1]['body'] = grouplist[groupcounter]
+        closing = grouplist[groupcounter - 1][-1]
+        parent = groupcache.get(groupcounter - 1) or {}
+        if closing.get('block') == 'interface':
+            mod_level = None
+            for level in range(groupcounter - 1, 0, -1):
+                if (groupcache.get(level) or {}).get('block') == 'module':
+                    mod_level = level
+                    break
+            if mod_level is not None:
+                for child in closing.get('body') or []:
+                    if (isinstance(child, dict)
+                            and child.get('_module_procedure')
+                            and child.get('block') in ('function', 'subroutine')
+                            and child not in grouplist[mod_level]):
+                        grouplist[mod_level].append(child)
         del grouplist[groupcounter]
         groupcounter = groupcounter - 1
         if not skipemptyends:
@@ -1054,6 +1069,14 @@ def analyzeline(m, case, line):
             result = None
         else:
             name, args, result, bindcline = _resolvenameargspattern(m.group('after'))
+        if block == 'submodule':
+            # submodule (parent) child. The implementation stays in this
+            # file for the compiler. `end procedure` is not a program end.
+            sm = re.search(r'\)\s*(?P<child>\w+)', m.group('after') or '', re.I)
+            name = sm.group('child') if sm else 'submodule_impl'
+            args = []
+            result = None
+            block = 'module'
         if name is None:
             if block == 'block data':
                 name = '_BLOCK_DATA_'
@@ -1134,6 +1157,8 @@ def analyzeline(m, case, line):
         if not name:
             name = 'unknown_' + block.replace(' ', '_')
         groupcache[groupcounter]['prefix'] = m.group('before')
+        if re.search(r'\bmodule\b', groupcache[groupcounter]['prefix'] or '', re.I):
+            groupcache[groupcounter]['_module_procedure'] = True
         groupcache[groupcounter]['name'] = rmbadname1(name)
         groupcache[groupcounter]['result'] = result
         if groupcounter == 1:
