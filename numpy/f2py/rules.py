@@ -730,6 +730,11 @@ rout_rules = [
         'freemem': '    STRINGFREE(#name#_return_value);',
         'need': ['F_FUNC', '#ctype#', 'STRINGFREE'],
         '_check': l_and(isstringfunction, l_not(isfunction_wrap))  # ???obsolete
+    }, {
+        # Length helper prototype. It has to live in the function body so
+        # F_FUNC from fortranobject.h is already defined.
+        'decl': '    #charlen_extern#',
+        '_check': lambda rout: bool(rout.get('f2py_charlen_extern')),
     },
     {  # Debugging
         'routdebugenter': '    fprintf(stderr,"debug-capi:Python C/API function #modulename#.#name#(#docsignature#)\\n");',

@@ -612,6 +612,8 @@ def routsign2map(rout):
         ret['F_WRAPPEDFUNC'] = 'F_WRAPPEDFUNC_US'
     else:
         ret['F_WRAPPEDFUNC'] = 'F_WRAPPEDFUNC'
+    if rout.get('f2py_charlen_extern'):
+        ret['charlen_extern'] = rout['f2py_charlen_extern']
     lcb_map = {}
     if 'use' in rout:
         for u in rout['use'].keys():

@@ -10,6 +10,7 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
+import re
 
 from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
@@ -28,6 +29,105 @@ from .auxfuncs import (
     outmess,
     show,
 )
+
+# C types that are passed as a single scalar and can be named in an
+# extern prototype without a generated typedef.
+_CHARLEN_CTYPES = {
+    'char': 'char',
+    'signed_char': 'signed char',
+    'short': 'short',
+    'int': 'int',
+    'long': 'long',
+    'long_long': 'long long',
+    'unsigned_char': 'unsigned char',
+    'unsigned_short': 'unsigned short',
+    'unsigned': 'unsigned',
+    'unsigned_long': 'unsigned long',
+    'unsigned_long_long': 'unsigned long long',
+    'float': 'float',
+    'double': 'double',
+    'long_double': 'long double',
+}
+
+
+def _result_len_expr(var):
+    sel = var.get('charselector') or {}
+    if 'len' in sel:
+        return str(sel['len']).strip()
+    if '*' in sel:
+        return str(sel['*']).strip()
+    return ''
+
+
+def _len_expr_is_call(expr):
+    """True when the length calls a Fortran function other than len or size.
+
+    ``len(x)`` and ``size(x)`` are rewritten to C. ``nlen(i)`` is not.
+    """
+    names = re.findall(r'([A-Za-z_]\w*)\s*\(', expr or '')
+    allowed = {'len', 'size', 'kind'}
+    return any(name.lower() not in allowed for name in names)
+
+
+def _charlen_helper(rout, vars, result):
+    """Build a Fortran integer function that returns len(result).
+
+    ``character(len=nlen(i))`` is a specification expression. Emitting
+    ``nlen(i)`` in the C wrapper calls a function that does not exist
+    in C. The helper evaluates ``len`` of the Fortran result instead.
+    """
+    if rout.get('_charlen_helper') == '':
+        return None
+    if rout.get('_charlen_helper'):
+        return rout['_charlen_helper']
+    var = vars.get(result) or {}
+    expr = _result_len_expr(var)
+    if not _len_expr_is_call(expr):
+        rout['_charlen_helper'] = ''
+        return None
+    from .capi_maps import getctype
+    args = []
+    ctypes = []
+    for arg in list(rout.get('args') or []):
+        if arg in (result, rout.get('name'), rout.get('result')):
+            continue
+        avar = vars.get(arg) or {}
+        if not isscalar(avar):
+            rout['_charlen_helper'] = ''
+            return None
+        intent = avar.get('intent') or []
+        if 'optional' in intent or 'hide' in intent:
+            rout['_charlen_helper'] = ''
+            return None
+        if 'value' in (avar.get('attrspec') or []):
+            rout['_charlen_helper'] = ''
+            return None
+        ctype = _CHARLEN_CTYPES.get(getctype(avar))
+        if ctype is None:
+            rout['_charlen_helper'] = ''
+            return None
+        args.append(arg)
+        ctypes.append(ctype)
+    mod = rout.get('modulename') or 'proc'
+    helper = f"f2pycharlen_{mod}_{rout['name']}".lower()
+    macro = 'F_FUNC_US' if '_' in helper else 'F_FUNC'
+    cargs = ', '.join(f'{ctype} *{arg}' for ctype, arg in zip(ctypes, args))
+    ccall = ', '.join(f'&{arg}' for arg in args)
+    extern = (f'extern int {macro}({helper},{helper.upper()})({cargs});')
+    sel = dict(var.get('charselector') or {})
+    sel.pop('len', None)
+    sel['*'] = '*'
+    sel['f2py_len'] = f'{macro}({helper},{helper.upper()})({ccall})'
+    var['charselector'] = sel
+    info = {
+        'name': helper,
+        'args': args,
+        'extern': extern,
+        'fortran': None,
+    }
+    rout['_charlen_helper'] = info
+    rout['f2py_charlen_extern'] = extern
+    return info
 
 
 def var2fixfortran(vars, a, fa=None, f90mode=None):
@@ -125,6 +225,34 @@ def createfuncwrapper(rout, signature=0):
     else:
         args = [newname] + rout['args']
 
+    # A length such as nlen(i) is not a C expression. character(len=*)
+    # takes the hidden length f2py already passes, and a helper asks
+    # Fortran for that length before the buffer is allocated.
+    charlen = _charlen_helper(rout, vars, name)
+    if charlen and charlen.get('fortran') is None and not signature:
+        call_args = ', '.join(charlen['args'])
+        decls = '\n'.join(
+            f'      {var2fixfortran(vars, arg, f90mode=f90mode)}'
+            for arg in charlen['args'])
+        uses = []
+        if f90mode:
+            uses.append(f"use {rout['modulename']}, only : {fortranname}")
+        if useiso_c_binding(rout):
+            uses.append('use iso_c_binding')
+        if useiso_fortran_env(rout):
+            uses.append('use iso_fortran_env')
+        use_block = '\n'.join(f'      {line}' for line in uses)
+        body = [f"      integer function {charlen['name']}({call_args})"]
+        if use_block:
+            body.append(use_block)
+        if decls:
+            body.append(decls)
+        if not f90mode:
+            body.append(f'      external {fortranname}')
+        body.append(f"      {charlen['name']} = len({fortranname}({call_args}))")
+        body.append('      end')
+        charlen['fortran'] = '\n'.join(body)
+
     l_tmpl = var2fixfortran(vars, name, '@@@NAME@@@', f90mode)
     if l_tmpl[:13] == 'character*(*)':
         if f90mode:
@@ -217,6 +345,8 @@ def createfuncwrapper(rout, signature=0):
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:
         add('end')
+    if charlen and charlen.get('fortran') and not signature:
+        ret[0] = f"{ret[0]}\n\n{charlen['fortran']}\n"
     return ret[0]
 
 
