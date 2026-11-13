@@ -145,6 +145,12 @@ def buildhooks(pymod):
             dadd(note)
         if onlyvars:
             dadd('\\begin{description}')
+        # PARAMETER actuals passed through the implicit f2pysetupfunc
+        # interface are temporaries. flang puts them on the stack, so the
+        # pointer captured here is dead once f2pyinit returns. A SAVE
+        # local keeps a stable address. gfortran and ifx happen to pass
+        # the constant from static storage.
+        param_copies = []
         for n in onlyvars:
             var = m['vars'][n]
             modobjs.append(n)
@@ -184,7 +190,18 @@ def buildhooks(pymod):
                 fhooks[0] = fhooks[0] + use_fgetdims2
                 fadd(f'end subroutine {fargs[-1]}')
             else:
-                fargs.append(n)
+                actual = n
+                if 'parameter' in var.get('attrspec', []):
+                    src = undo_rmbadname1(n)
+                    local = f'f2py_param_{src}'
+                    decl = func2subr.var2fixfortran(
+                        m['vars'], n, local, f90mode=True)
+                    if decl:
+                        typed = decl.replace(
+                            f' {local}', f', save :: {local}', 1)
+                        param_copies.append((local, src, typed))
+                        actual = local
+                fargs.append(actual)
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
                 iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
@@ -262,6 +279,10 @@ def buildhooks(pymod):
         if efargs:
             for a in undo_rmbadname(efargs):
                 fadd(f'external {a}')
+        for local, src, typed in param_copies:
+            fadd(typed)
+        for local, src, typed in param_copies:
+            fadd(f'{local} = {src}')
         fadd(f"call f2pysetupfunc({','.join(undo_rmbadname(fargs))})")
         fadd(f"end subroutine f2pyinit{m_name}\n")
 
