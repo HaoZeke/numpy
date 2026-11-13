@@ -1,6 +1,7 @@
 import pytest
 
 import numpy as np
+from numpy.f2py import crackfortran
 
 from . import util
 
@@ -119,3 +120,40 @@ class TestParameters(util.F2PyTest):
     def test_constant_array_delims(self):
         x = self.module.foo_array_delims()
         assert x == 9
+
+
+def test_bracket_array_constructor(tmp_path):
+    # A comma inside [4, 5] is part of the constructor, and p(1) is 4.
+    src = tmp_path / "brackets.f90"
+    src.write_text(
+        "subroutine s(a)\n"
+        "  integer, parameter :: n = 2\n"
+        "  integer, parameter :: p(n) = [4, 5]\n"
+        "  integer, parameter :: m = p(1)\n"
+        "  real a(m)\n"
+        "end subroutine\n"
+    )
+    block = crackfortran.crackfortran([str(src)])[0]
+    assert block['vars']['a']['dimension'] == ['4']
+
+
+@pytest.mark.slow
+class TestBracketArrayConstructor(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+subroutine s(a)
+  integer, parameter :: n = 2
+  integer, parameter :: p(n) = [4, 5]
+  integer, parameter :: m = p(1)
+  real a(m)
+  a = 1.0
+end subroutine
+"""
+
+    def test_bound_is_first_element(self):
+        four = np.ones(4, dtype=np.float32)
+        self.module.s(four)
+        assert four[0] == np.float32(1.0)
+        one = np.ones(1, dtype=np.float32)
+        with pytest.raises(ValueError):
+            self.module.s(one)

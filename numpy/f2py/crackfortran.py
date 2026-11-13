@@ -888,18 +888,21 @@ def markouterparen(line):
 def markoutercomma(line, comma=','):
     l = ''
     f = 0
-    before, after = split_by_unquoted(line, comma + '()')
+    # Square brackets are array constructors, so a comma inside
+    # ``[4, 5]`` is not a separator between entities.
+    groups = comma + '()[]'
+    before, after = split_by_unquoted(line, groups)
     l += before
     while after:
         if (after[0] == comma) and (f == 0):
             l += '@' + comma + '@'
         else:
             l += after[0]
-            if after[0] == '(':
+            if after[0] in '([':
                 f += 1
-            elif after[0] == ')':
+            elif after[0] in ')]':
                 f -= 1
-        before, after = split_by_unquoted(after[1:], comma + '()')
+        before, after = split_by_unquoted(after[1:], groups)
         l += before
     assert not f, repr((f, line, l))
     return l
@@ -3066,6 +3069,16 @@ def param_eval(v, g_params, params, dimspec=None):
     We are choosing 2 for now.
     """
     if dimspec is None:
+        # p(1) indexes a parameter array. eval would try to call the dict.
+        indexed = re.fullmatch(
+            r'[A-Za-z]\w*\s*\(\s*[^()]*\s*\)', v.strip())
+        if indexed:
+            try:
+                got = param_parse(v.strip(), params)
+                if re.fullmatch(r'-?\d+', got.strip()):
+                    return int(got)
+            except Exception:
+                pass
         try:
             p = eval(v, g_params, params)
         except Exception as msg:
@@ -3093,8 +3106,13 @@ def param_eval(v, g_params, params, dimspec=None):
         raise ValueError('param_eval: multidimensional array parameters '
                          f'{dimspec} not supported')
 
-    # Parse parameter value
-    v = (v[2:-2] if v.startswith('(/') else v).split(',')
+    # Parse parameter value. ``(/ ... /)`` and ``[ ... ]`` are the
+    # same array constructor.
+    if v.startswith('(/') and v.endswith('/)'):
+        v = v[2:-2]
+    elif v.startswith('[') and v.endswith(']'):
+        v = v[1:-1]
+    v = v.split(',')
     v_eval = []
     for item in v:
         try:
