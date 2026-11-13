@@ -854,7 +854,27 @@ def crackline(line, reset=0):
     elif pat[1] == 'endif':
         pass
     elif pat[1] == 'moduleprocedure':
-        analyzeline(m, pat[1], line)
+        here = groupcache.get(groupcounter) or {}
+        # `module procedure work` ... `end procedure` is a body.
+        # `module procedure bar` inside an interface is only a name.
+        if here.get('block') == 'interface' or groupcounter < 1:
+            analyzeline(m, pat[1], line)
+        else:
+            name = ((m.group('after') or '').strip().split(',')[0].strip()
+                    or 'unknown_procedure')
+            groupcounter += 1
+            groupname[groupcounter] = 'subroutine'
+            groupcache[groupcounter] = {
+                'block': 'subroutine',
+                'name': name.lower(),
+                'body': [],
+                'vars': {},
+                'args': [],
+                'externals': [],
+                'interfaced': [],
+                'from': f"{here.get('from', '')}:{here.get('name', '')}",
+            }
+            grouplist[groupcounter] = []
     elif pat[1] == 'contains':
         if ignorecontains:
             return
