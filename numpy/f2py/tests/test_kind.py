@@ -12,12 +12,24 @@ from . import util
 
 IS_PPC_OR_AIX = platform.machine().lower().startswith("ppc") or platform.system() == 'AIX'
 
+
+def test_selected_int_kind_width(monkeypatch):
+    # 19 decimal digits need a 128-bit integer. ILP32 gfortran returns -1.
+    assert selected_int_kind(18) == 8
+    if sys.maxsize > 2 ** 32:
+        assert selected_int_kind(19) == 16
+    else:
+        assert selected_int_kind(19) == -1
+    monkeypatch.setattr(sys, "maxsize", 2 ** 31 - 1)
+    assert selected_int_kind(18) == 8
+    assert selected_int_kind(19) == -1
+    assert selected_int_kind(40) == -1
+
+
 @pytest.mark.slow
 class TestKind(util.F2PyTest):
     sources = [util.getpath("tests", "src", "kind", "foo.f90")]
 
-    @pytest.mark.skipif(sys.maxsize < 2 ** 31 + 1,
-                        reason="Fails for 32 bit machines")
     def test_int(self):
         """Test `int` kind_func for integers up to 10**40."""
         selectedintkind = self.module.selectedintkind

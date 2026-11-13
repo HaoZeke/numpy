@@ -2490,7 +2490,9 @@ def _kind_func(string):
 
 
 def _selected_int_kind_func(r):
-    # XXX: This should be processor dependent
+    # gfortran's kind is the byte size of the smallest integer that can
+    # hold 10**r. integer(16) is __int128. ILP32 gfortran does not
+    # provide it, and selected_int_kind returns -1 (gh-24548).
     m = 10 ** r
     if m <= 2 ** 8:
         return 1
@@ -2500,7 +2502,7 @@ def _selected_int_kind_func(r):
         return 4
     if m <= 2 ** 63:
         return 8
-    if m <= 2 ** 128:
+    if m <= 2 ** 128 and sys.maxsize > 2 ** 32:
         return 16
     return -1
 
