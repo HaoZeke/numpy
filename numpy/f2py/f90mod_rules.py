@@ -95,6 +95,22 @@ def buildhooks(pymod):
     def dadd(line, s=doc):
         s[0] = f'{s[0]}\n{line}'
 
+    def _entity_names(m):
+        names = set()
+        for b in m.get('body') or []:
+            if not isinstance(b, dict):
+                continue
+            if b.get('name'):
+                names.add(str(b['name']).lower())
+            for n in b.get('implementedby') or []:
+                names.add(str(n).lower())
+            called = (b.get('f2pyenhancements') or {}).get('fortranname')
+            if called:
+                names.add(str(called).lower())
+        return names
+
+    entities = {str(m.get('name') or '').lower(): _entity_names(m)
+                for m in findf90modules(pymod)}
     usenames = getuseblocks(pymod)
     for m in findf90modules(pymod):
         sargs, fargs, efargs, modobjs, notvars, onlyvars = [], [], [], [], [
@@ -198,13 +214,23 @@ def buildhooks(pymod):
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b['block']} {b_name}\n")
                     continue
-                modobjs.append(f"{b_name}()")
                 # Keep the child name in the wrapper symbol so
                 # `f2pywrap_simpl_ramp` does not collide with
                 # `f2pywrap_math_ramp`. The `use` names the parent.
                 b['modulename'] = m_name
                 if m.get('_parent_module'):
                     b['use_module'] = m['_parent_module']
+                    known = entities.get(str(m['_parent_module']).lower(), set())
+                    called = str((b.get('f2pyenhancements') or {}).get(
+                        'fortranname') or b_name).lower()
+                    # `rot` lives only in the submodule. `use parent,
+                    # only : rot` is not a public entity of the parent.
+                    if called not in known and str(b_name).lower() not in known:
+                        outmess(f"\t\t\tSkipping routine {b_name!r}: "
+                                "not a public entity of "
+                                f"{m['_parent_module']}.\n")
+                        continue
+                modobjs.append(f"{b_name}()")
                 api, wrap = rules.buildapi(b)
                 if isfunction(b):
                     fhooks[0] = fhooks[0] + wrap
