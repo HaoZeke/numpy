@@ -189,19 +189,20 @@ def test_meson_library_names_use_valid_identifiers():
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():
-    # Compile dubious file using passed flags
-    try:
-        aa = util.build_module(
-            [util.getpath("tests", "src", "regression", "f77fixedform.f95")],
-            options=[
-                # Meson will collect and dedup these to pass to fortran_args:
-                "--f77flags='-ffixed-form -O2'",
-                "--f90flags=\"-ffixed-form -g\"",
-            ],
-            module_name="Blah",
-        )
-    except ImportError as rerr:
-        assert "unknown_subroutine_" in str(rerr)
+    # `--f77flags=-ffixed-form` is also how the parser must read the
+    # file. A fixed-form continuation in a `.f95` file otherwise hides
+    # the subroutine name and the wrapper calls `unknown_subroutine_`
+    # (gh-26704).
+    aa = util.build_module(
+        [util.getpath("tests", "src", "regression", "f77fixedform.f95")],
+        options=[
+            # Meson will collect and dedup these to pass to fortran_args:
+            "--f77flags='-ffixed-form -O2'",
+            "--f90flags=\"-ffixed-form -g\"",
+        ],
+        module_name="Blah",
+    )
+    aa.mwe(np.float32(1.0))
 
 
 @pytest.mark.slow

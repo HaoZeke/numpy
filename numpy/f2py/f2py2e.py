@@ -653,6 +653,10 @@ def run_compile():
     fc_flags = [_m for _m in sys.argv[1:] if reg_f77_f90_flags.match(_m)]
     distutils_flags = [_m for _m in sys.argv[1:] if reg_distutils_flags.match(_m)]
     sys.argv = [_m for _m in sys.argv if _m not in (fc_flags + distutils_flags)]
+    # The parser decides fixed or free form from the file suffix.
+    # `--f77flags=-ffixed-form` never reached it, so a `.f95` continuation
+    # hid the subroutine name (gh-26704).
+    crackfortran.forcefixform = _fc_flags_select_fixed_form(fc_flags)
 
     del_list = []
     for s in flib_flags:
@@ -732,6 +736,16 @@ def run_compile():
     )
 
     builder.compile()
+
+
+def _fc_flags_select_fixed_form(fc_flags):
+    """True when `--f77flags` or `--f90flags` asks for fixed form."""
+    for item in fc_flags:
+        body = item.split('=', 1)[-1].strip('\'"')
+        for token in body.split():
+            if token in ('-ffixed-form', '-fixed'):
+                return 1
+    return 0
 
 
 def validate_modulename(pyf_files, modulename='untitled'):

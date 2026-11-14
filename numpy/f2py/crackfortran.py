@@ -166,6 +166,9 @@ f2py_version = __version__.version
 # Global flags:
 strictf77 = 1          # Ignore `!' comments unless line[0]=='!'
 sourcecodeform = 'fix'  # 'fix','free'
+# Set when `--f77flags` or `--f90flags` contains `-ffixed-form`.
+# The per-file suffix check must not override it (gh-26704).
+forcefixform = 0
 quiet = 0              # Be verbose if 0 (Obsolete: not used any more)
 verbose = 1            # Be quiet if 0, extra verbose if > 1.
 tabchar = 4 * ' '
@@ -406,7 +409,12 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             strictf77 = 0
             sourcecodeform = 'fix'
             ext = os.path.splitext(currentfilename)[1]
-            if Path(currentfilename).suffix.lower() in COMMON_FIXED_EXTENSIONS and \
+            if forcefixform:
+                # `-ffixed-form` was passed to the compiler. Read the
+                # file that way even when the suffix says free form.
+                strictf77 = 1
+                sourcecodeform = 'fix'
+            elif Path(currentfilename).suffix.lower() in COMMON_FIXED_EXTENSIONS and \
                     not (_has_f90_header(l) or _has_fix_header(l)):
                 strictf77 = 1
             elif is_free_format(currentfilename) and not _has_fix_header(l):
