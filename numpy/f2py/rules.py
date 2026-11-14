@@ -50,6 +50,64 @@ import copy
 import os
 import sys
 import time
+
+
+def _fortran_check_to_c(expr):
+    """Render a Fortran consistency check as a C expression.
+
+    Dimension checks keep the Fortran text, including ``merge`` and
+    ``.lt.``. Those are not C.
+    """
+    text = str(expr)
+    for src, dst in (
+        ('.lt.', '<'), ('.gt.', '>'), ('.le.', '<='), ('.ge.', '>='),
+        ('.eq.', '=='), ('.ne.', '!='), ('.and.', '&&'), ('.or.', '||'),
+        ('.not.', '!'),
+    ):
+        text = text.replace(src, dst)
+    key = 'merge('
+    def once(src):
+        lower = src.lower()
+        out = []
+        i = 0
+        changed = False
+        while True:
+            j = lower.find(key, i)
+            if j < 0:
+                out.append(src[i:])
+                break
+            k = j + len(key)
+            depth = 1
+            args = []
+            start = k
+            while k < len(src) and depth:
+                ch = src[k]
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth == 0:
+                        args.append(src[start:k])
+                        break
+                elif ch == ',' and depth == 1:
+                    args.append(src[start:k])
+                    start = k + 1
+                k += 1
+            if (depth == 0 and len(args) == 3
+                    and args[2].strip().lower().startswith('mask=')):
+                cond = args[2].split('=', 1)[1].strip()
+                out.append(src[i:j] + f'({cond}?{args[0].strip()}:{args[1].strip()})')
+                i = k + 1
+                changed = True
+            else:
+                out.append(src[i:j + len(key)])
+                i = j + len(key)
+        return ''.join(out), changed
+    for _ in range(4):
+        text, changed = once(text)
+        if not changed:
+            break
+    return text
 from pathlib import Path
 
 # __version__.version is now the same as the NumPy version
@@ -1621,7 +1679,7 @@ def buildapi(rout):
                     break
         if 'check' in var[a]:
             for c in var[a]['check']:
-                vrd['check'] = c
+                vrd['check'] = _fortran_check_to_c(c)
                 ar = applyrules(check_rules, vrd, var[a])
                 rd = dictappend(rd, ar)
     if isinstance(rd['cleanupfrompyobj'], list):
