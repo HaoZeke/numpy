@@ -3575,6 +3575,7 @@ def crackfortran(files):
     outmess('Post-processing...\n', 0)
     usermodules = []
     postlist = postcrack(grouplist[0])
+    _bind_forwarded_externals(postlist)
     outmess('Applying post-processing hooks...\n', 0)
     for hook in post_processing_hooks:
         outmess(f'  {hook.__name__}\n', 0)
@@ -3582,6 +3583,104 @@ def crackfortran(files):
     outmess('Post-processing (stage 2)...\n', 0)
     postlist = postcrack2(postlist)
     return usermodules + postlist
+
+
+def _callback_signatures():
+    """Map a callback name to an interface routine that calls it.
+
+    The interface is recorded on the routine that contains the call.
+    A routine that only forwards the external does not get one.
+    """
+    found = {}
+
+    def walk(node):
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        if node.get('block') == 'interface':
+            for proc in node.get('body') or []:
+                if (isinstance(proc, dict) and proc.get('name')
+                        and proc.get('block') in ('subroutine', 'function')):
+                    found.setdefault(proc['name'], proc)
+        for child in node.get('body') or []:
+            walk(child)
+
+    for mod in usermodules:
+        walk(mod)
+    return found
+
+
+def _bind_forwarded_externals(postlist):
+    """Give a pass-through ``external`` the callback of the routine that calls it.
+
+    ``subroutine diva(divaf); external divaf; call divaa(divaf)`` never
+    calls ``divaf``, so it gets no callback typedef. The wrapper still
+    emits ``divaf_t``. Copy the signature from the routine that does
+    call it (gh-24284).
+    """
+    global usermodules
+    signatures = _callback_signatures()
+    if not signatures:
+        return
+
+    def visit(node):
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        if node.get('block') in ('subroutine', 'function'):
+            _bind_one_forwarded(node, signatures)
+        for child in node.get('body') or []:
+            visit(child)
+
+    visit(postlist)
+
+
+def _bind_one_forwarded(block, signatures):
+    global usermodules
+    externals = list(block.get('externals') or [])
+    if not externals:
+        return
+    # A routine that already calls the external has a user module.
+    # `interfaced` no longer lists that name: postcrack moved the body.
+    use = block.get('use') or {}
+    if any('__user__' in key for key in use):
+        return
+    interfaced = list(block.get('interfaced') or [])
+    missing = [name for name in externals
+               if name not in interfaced and name in signatures]
+    if not missing:
+        return
+    name = block.get('name') or 'unknown'
+    interface = {
+        'block': 'interface',
+        'body': [copy.deepcopy(signatures[name]) for name in missing],
+        'vars': {},
+        'name': name + '_user_interface',
+    }
+    mname = name + '__user__routines'
+    use = dict(block.get('use') or {})
+    taken = {mod.get('name') for mod in usermodules}
+    if mname in use or mname in taken:
+        i = 1
+        while f'{mname}_{i}' in use or f'{mname}_{i}' in taken:
+            i += 1
+        mname = f'{mname}_{i}'
+    usermodules.append({
+        'block': 'python module',
+        'body': [interface],
+        'vars': {},
+        'name': mname,
+        'interfaced': missing,
+    })
+    use[mname] = {}
+    block['use'] = use
+    block['interfaced'] = interfaced + missing
 
 
 def crack2fortran(block):
