@@ -597,8 +597,15 @@ subroutinepattern = re.compile(beforethisafter % (
 # modulepattern=re.compile(beforethisafter%('[a-z\s]*?','module','module','.*'),re.I),'begin'
 #
 groupbegins77 = r'program|block\s*data'
+# ``endmodule`` and ``endinterface`` are closers in every source form.
+# Fixed form has to open those groups too. Otherwise ``ENDMODULE``
+# decrements a group it never opened and the contained procedure is
+# wrapped as an external (gh-32360).
+groupbegins77_fixed = (
+    groupbegins77 + r'|module(?!\s*procedure)|(abstract|)\s*interface')
 beginpattern77 = re.compile(
-    beforethisafter % ('', groupbegins77, groupbegins77, '.*'), re.I), 'begin'
+    beforethisafter % (
+        '', groupbegins77_fixed, groupbegins77_fixed, '.*'), re.I), 'begin'
 groupbegins90 = groupbegins77 + \
     r'|module(?!\s*procedure)|python\s*module|(abstract|)\s*interface|'\
     r'type(?!\s*\()'
