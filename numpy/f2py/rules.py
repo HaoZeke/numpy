@@ -127,6 +127,8 @@ from .auxfuncs import (
     l_and,
     l_not,
     l_or,
+    needs_caller_extent,
+    note_assumed_out_extent,
     outmess,
     replace,
     requiresf90wrapper,
@@ -1200,7 +1202,16 @@ if (#varname#_cb.capi==Py_None) {
              '    capi_#varname#_as_array = ndarray_from_pyobj('
              '  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,'
              '  capi_#varname#_intent,Py_None,capi_errmess);'},
-            {isintent_nothide:
+            {l_and(isintent_nothide, needs_caller_extent):
+             '''\
+    if (#varname#_capi == Py_None) {
+        PyErr_SetString(#modulename#_error, "#modulename#.#pyname#: assumed-shape intent(out) array `#varname#` has no extent; pass an array");
+        capi_#varname#_as_array = NULL;
+    } else {
+        capi_#varname#_as_array = ndarray_from_pyobj(  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,  capi_#varname#_intent,#varname#_capi,capi_errmess);
+    }
+'''},
+            {l_and(isintent_nothide, l_not(needs_caller_extent)):
              '    capi_#varname#_as_array = ndarray_from_pyobj('
              '  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,'
              '  capi_#varname#_intent,#varname#_capi,capi_errmess);'},
@@ -1558,6 +1569,7 @@ stnd = {1: 'st', 2: 'nd', 3: 'rd', 4: 'th', 5: 'th',
 
 
 def buildapi(rout):
+    note_assumed_out_extent(rout)
     rout, wrap = func2subr.assubr(rout)
     args, depargs = getargs2(rout)
     capi_maps.depargs = depargs

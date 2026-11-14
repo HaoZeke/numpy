@@ -487,6 +487,70 @@ def isintent_nothide(var):
     return not isintent_hide(var)
 
 
+_OPEN_DIMS = {':', '*', '(:)', '(*)'}
+
+
+def _var_dims(var):
+    return [str(dim).strip() for dim in (var.get('dimension') or [])]
+
+
+def _var_intent(var):
+    return [str(item).lower() for item in (var.get('intent') or [])]
+
+
+def _var_optional(var):
+    attrs = [str(item).lower() for item in (var.get('attrspec') or [])]
+    return 'optional' in attrs or 'optional' in _var_intent(var)
+
+
+def _pure_intent_out(var):
+    intent = _var_intent(var)
+    return ('out' in intent and 'in' not in intent
+            and 'inout' not in intent and 'hide' not in intent)
+
+
+def needs_caller_extent(var):
+    """True when an assumed-shape intent(out) array has no extent to copy."""
+    return isinstance(var, dict) and bool(var.get('f2py_caller_extent'))
+
+
+def note_assumed_out_extent(rout):
+    """Give a required assumed-shape intent(out) array an extent.
+
+    `index(0:)` records no upper bound. One earlier in or inout array of
+    the same rank supplies that extent. Any other case has to be passed
+    by the caller.
+    """
+    if not isinstance(rout, dict):
+        return
+    variables = rout.get('vars') or {}
+    args = [name for name in (rout.get('args') or []) if name in variables]
+
+    def is_donor(name):
+        var = variables[name]
+        return isarray(var) and not _var_optional(var) and not _pure_intent_out(var)
+
+    for index, name in enumerate(args):
+        var = variables[name]
+        dims = _var_dims(var)
+        if (not isarray(var) or _var_optional(var) or not _pure_intent_out(var)
+                or not dims or any(dim not in _OPEN_DIMS for dim in dims)):
+            continue
+        earlier = [
+            other for other in args[:index]
+            if is_donor(other) and len(_var_dims(variables[other])) == len(dims)
+        ]
+        if len(earlier) == 1:
+            var['f2py_extent_from'] = earlier[0]
+            continue
+        var['intent'] = ['inout']
+        attrs = list(var.get('attrspec') or [])
+        if 'optional' not in [str(item).lower() for item in attrs]:
+            attrs.append('optional')
+        var['attrspec'] = attrs
+        var['f2py_caller_extent'] = True
+
+
 def isintent_c(var):
     return 'c' in var.get('intent', [])
 

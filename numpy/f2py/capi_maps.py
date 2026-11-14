@@ -337,6 +337,12 @@ def getarrdims(a, var, verbose=0):
                     f'getarrdims: If in call-back function: array argument {repr(a)} must have bounded dimensions: got {repr(d)}\n')
         if ret['cbsetdims']:
             ret['cbsetdims'] = ret['cbsetdims'][:-1]
+        src = var.get('f2py_extent_from')
+        if src:
+            # The matching input array already filled its Dims.
+            ret['setdims'] = ','.join(
+                f'#varname#_Dims[{i}]={src}_Dims[{i}]'
+                for i in range(len(var['dimension'])))
 #         if not isintent_c(var):
 #             var['dimension'].reverse()
     return ret
