@@ -365,11 +365,20 @@ class Expr:
                 r = f'{numer} / {denom}'
                 precedence = Precedence.PRODUCT
             else:
-                args = [arg.tostring(Precedence.TUPLE, language=language)
-                        for arg in args]
-                args += [k + '=' + v.tostring(Precedence.NONE)
-                         for k, v in kwargs.items()]
-                r = f'{name}({", ".join(args)})'
+                fname = (name.tostring(language=language)
+                         if hasattr(name, 'tostring') else str(name))
+                rendered = [arg.tostring(Precedence.TUPLE, language=language)
+                            for arg in args]
+                for k, v in kwargs.items():
+                    piece = v.tostring(Precedence.NONE, language=language)
+                    # `size(a, dim=1)` is `size(a, 1)` in C. `dim` is
+                    # not an identifier there.
+                    if (language is Language.C and str(fname).lower() == 'size'
+                            and str(k).lower() == 'dim'):
+                        rendered.append(piece)
+                    else:
+                        rendered.append(k + '=' + piece)
+                r = f'{fname}({", ".join(rendered)})'
                 precedence = Precedence.ATOM
         elif self.op is Op.INDEXING:
             name = self.data[0]
