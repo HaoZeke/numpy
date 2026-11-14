@@ -376,6 +376,11 @@ class Expr:
                     if (language is Language.C and str(fname).lower() == 'size'
                             and str(k).lower() == 'dim'):
                         rendered.append(piece)
+                    elif (language is Language.C and str(fname).lower() == 'size'
+                            and str(k).lower() == 'kind'):
+                        # `kind=` selects the integer type of the result.
+                        # The C `size` macro does not take it.
+                        continue
                     else:
                         rendered.append(k + '=' + piece)
                 r = f'{fname}({", ".join(rendered)})'
