@@ -220,6 +220,106 @@ def createfuncwrapper(rout, signature=0):
     return ret[0]
 
 
+def _proc_iface_needs_explicit(iface):
+    """VALUE on a dummy means EXTERNAL is not a legal procedure-pointer target."""
+    if not isinstance(iface, dict):
+        return False
+    for var in (iface.get('vars') or {}).values():
+        if not isinstance(var, dict):
+            continue
+        attrs = [str(item).lower() for item in var.get('attrspec') or []]
+        if 'value' in attrs:
+            return True
+    return False
+
+
+def _iface_mentions_cptr(iface):
+    for var in (iface.get('vars') or {}).values():
+        if not isinstance(var, dict):
+            continue
+        if (var.get('typespec') == 'type'
+                and str(var.get('typename') or '').lower() in ('c_ptr', 'c_funptr')):
+            return True
+    return False
+
+
+def _iface_arg_decl(ivars, arg):
+    base = var2fixfortran(ivars, arg, f90mode=True)
+    if not base:
+        return ''
+    head, sep, tail = base.rpartition(' ')
+    if not sep:
+        return base
+    var = ivars[arg]
+    extras = []
+    intent = [str(item).lower() for item in var.get('intent') or []]
+    if 'inout' in intent or ('in' in intent and 'out' in intent):
+        extras.append('intent(inout)')
+    elif 'out' in intent:
+        extras.append('intent(out)')
+    elif 'in' in intent:
+        extras.append('intent(in)')
+    attrs = [str(item).lower() for item in var.get('attrspec') or []]
+    if 'value' in attrs:
+        extras.append('value')
+    if extras:
+        return f"{head}, {', '.join(extras)} :: {tail}"
+    return f"{head} :: {tail}"
+
+
+def _resolve_iface_kinds(iface):
+    """Turn ``real64`` and module kind names into integer kind constants.
+
+    The interface is emitted in the wrapper, which does not import the
+    module that defined the kind parameter.
+    """
+    from . import crackfortran
+    resolve = getattr(crackfortran, '_resolved_kind', None)
+    literals = {
+        'real32': '4', 'real64': '8', 'real128': '16',
+        'int8': '1', 'int16': '2', 'int32': '4', 'int64': '8',
+    }
+    for var in (iface.get('vars') or {}).values():
+        if not isinstance(var, dict):
+            continue
+        selector = var.get('kindselector') or {}
+        kind = selector.get('kind')
+        if not isinstance(kind, str):
+            continue
+        key = kind.strip().strip("'\"")
+        resolved = resolve(key) if resolve else None
+        if not resolved:
+            resolved = literals.get(key.lower())
+        if resolved:
+            selector['kind'] = resolved
+
+
+def _emit_explicit_proc(add, name, iface):
+    """Give ``name`` the abstract interface of the procedure pointer."""
+    _resolve_iface_kinds(iface)
+    ivars = iface.get('vars') or {}
+    iargs = [a for a in (iface.get('args') or []) if a in ivars]
+    kind = 'function' if iface.get('block') == 'function' else 'subroutine'
+    iname = f'f2py_{name}_iface'
+    prefix = ''
+    if kind == 'function':
+        rname = iface.get('result') or iface.get('name')
+        if rname in ivars:
+            rbase = var2fixfortran(ivars, rname, fa='@@@', f90mode=True)
+            prefix = rbase.split('@@@')[0].strip()
+            if prefix:
+                prefix += ' '
+    add('abstract interface')
+    add(f"{prefix}{kind} {iname}({', '.join(iargs)})")
+    if _iface_mentions_cptr(iface):
+        add('import :: c_ptr, c_funptr')
+    for arg in iargs:
+        add(_iface_arg_decl(ivars, arg))
+    add(f'end {kind} {iname}')
+    add('end interface')
+    add(f'procedure({iname}) :: {name}')
+
+
 def createsubrwrapper(rout, signature=0):
     assert issubroutine(rout)
 
@@ -284,8 +384,17 @@ def createsubrwrapper(rout, signature=0):
 
     dumped_args = []
     for a in args:
+        iface = (vars.get(a) or {}).get('f2py_iface')
+        if iface and _iface_mentions_cptr(iface):
+            add('use iso_c_binding')
+            break
+    for a in args:
         if isexternal(vars[a]):
-            add(f'external {a}')
+            iface = (vars.get(a) or {}).get('f2py_iface')
+            if iface and _proc_iface_needs_explicit(iface):
+                _emit_explicit_proc(add, a, iface)
+            else:
+                add(f'external {a}')
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:

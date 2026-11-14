@@ -1988,6 +1988,9 @@ def updatevars(typespec, selector, attrspec, entitydecl):
                     groupcache[groupcounter]['interfaced'].append(ename)
                 copied = copy.deepcopy(found)
                 copied['name'] = ename
+                # Kept for the wrapper. A VALUE dummy cannot be the
+                # target of a procedure pointer through EXTERNAL.
+                edecl['f2py_iface'] = copied
                 if copied.get('result') == found.get('name'):
                     copied['result'] = ename
                     copied_vars = copied.get('vars') or {}
