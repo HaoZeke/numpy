@@ -181,6 +181,7 @@ beginpattern = ''
 currentfilename = ''
 expectbegin = 1
 f90modulevars = {}
+f90moduleuses = {}
 filepositiontext = ''
 gotnextfile = 1
 groupcache = None
@@ -199,7 +200,7 @@ usermodules = []
 
 def reset_global_f2py_vars():
     global groupcounter, grouplist, neededmodule, expectbegin
-    global skipblocksuntil, usermodules, f90modulevars, gotnextfile
+    global skipblocksuntil, usermodules, f90modulevars, f90moduleuses, gotnextfile
     global filepositiontext, currentfilename, skipfunctions, skipfuncs
     global onlyfuncs, include_paths, previous_context
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
@@ -225,6 +226,7 @@ def reset_global_f2py_vars():
     skipblocksuntil = -1
     usermodules = []
     f90modulevars = {}
+    f90moduleuses = {}
     gotnextfile = 1
     filepositiontext = ''
     currentfilename = ''
@@ -1517,7 +1519,10 @@ def analyzeline(m, case, line):
         previous_context = ('common', bn, groupcounter)
     elif case == 'use':
         m1 = re.match(
-            r'\A\s*(?P<name>\b\w+\b)\s*((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z', m.group('after'), re.I)
+            r'\A\s*(?:,\s*(?:intrinsic|non_intrinsic)\s*)?(?:::)?\s*'
+            r'(?P<name>\b\w+\b)\s*'
+            r'((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z',
+            m.group('after'), re.I)
         if m1:
             mm = m1.groupdict()
             if 'use' not in groupcache[groupcounter]:
@@ -1990,6 +1995,42 @@ def get_usedict(block):
     return usedict
 
 
+# Names from iso_fortran_env / iso_c_binding that f2py already maps.
+_ISO_KIND_NAMES = {
+    'real32', 'real64', 'real128',
+    'int8', 'int16', 'int32', 'int64',
+    'c_float', 'c_double', 'c_long_double', 'c_int',
+    'c_int8_t', 'c_int16_t', 'c_int32_t', 'c_int64_t',
+}
+
+
+def _iso_kind_exports(usename, seen=None):
+    """Local names in a module that mean an iso kind, such as ``rk => real64``."""
+    key = str(usename).lower()
+    if seen is None:
+        seen = set()
+    if key in seen:
+        return {}
+    seen = set(seen)
+    seen.add(key)
+    out = {}
+    for mod, mapping in (f90moduleuses.get(key) or {}).items():
+        remote = _iso_kind_exports(mod, seen)
+        if str(mod).lower() in ('iso_fortran_env', 'iso_c_binding'):
+            remote = {name: name for name in _ISO_KIND_NAMES}
+        mmap = (mapping or {}).get('map') or {}
+        if mmap:
+            for local, src in mmap.items():
+                src_l = str(src).lower()
+                if src_l in remote:
+                    out[str(local).lower()] = remote[src_l]
+                elif src_l in _ISO_KIND_NAMES:
+                    out[str(local).lower()] = src_l
+        elif not (mapping or {}).get('only'):
+            out.update(remote)
+    return out
+
+
 def get_useparameters(block, param_map=None):
     global f90modulevars
 
@@ -2000,9 +2041,24 @@ def get_useparameters(block, param_map=None):
         return param_map
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
+        exported = _iso_kind_exports(usename)
+        if str(usename) in ('iso_fortran_env', 'iso_c_binding'):
+            exported = {name: name for name in _ISO_KIND_NAMES}
+        mmap = (mapping or {}).get('map') or {}
+        if mmap:
+            for local, src in mmap.items():
+                src_l = str(src).lower()
+                if src_l in exported:
+                    param_map[str(local).lower()] = exported[src_l]
+                elif src_l in _ISO_KIND_NAMES:
+                    param_map[str(local).lower()] = src_l
+        elif exported and not (mapping or {}).get('only'):
+            for name, value in exported.items():
+                param_map.setdefault(name, value)
         if usename not in f90modulevars:
-            outmess(f'get_useparameters: no module {usename} info used by '
-                    f'{block.get("name")}\n')
+            if usename not in ('iso_fortran_env', 'iso_c_binding') and not exported:
+                outmess(f'get_useparameters: no module {usename} info used by '
+                        f'{block.get("name")}\n')
             continue
         mvars = f90modulevars[usename]
         params = get_parameters(mvars)
@@ -2021,10 +2077,13 @@ def get_useparameters(block, param_map=None):
 
 
 def postcrack2(block, tab='', param_map=None):
-    global f90modulevars
+    global f90modulevars, f90moduleuses
 
-    if not f90modulevars:
-        return block
+    if isinstance(block, list) and param_map is None:
+        # Later modules need the kind renames of earlier ones.
+        for item in block:
+            if isinstance(item, dict) and item.get('block') == 'module':
+                f90moduleuses[str(item.get('name') or '').lower()] = item.get('use') or {}
     if isinstance(block, list):
         ret = [postcrack2(g, tab=tab + '\t', param_map=param_map)
                for g in block]
@@ -2032,8 +2091,12 @@ def postcrack2(block, tab='', param_map=None):
     setmesstext(block)
     outmess(f"{tab}Block: {block['name']}\n", 0)
 
-    if param_map is None:
-        param_map = get_useparameters(block)
+    # A parent map of {} is not "no map": `-m` wraps the file in a
+    # python module whose map is empty, and that empty dict used to
+    # stop the Fortran module from reading its own use statements.
+    if param_map is None or block.get('use'):
+        param_map = get_useparameters(
+            block, None if param_map is None else dict(param_map))
 
     if param_map is not None and 'vars' in block:
         vars = block['vars']
@@ -2043,8 +2106,13 @@ def postcrack2(block, tab='', param_map=None):
                 kind = var['kindselector']
                 if 'kind' in kind:
                     val = kind['kind']
+                    mapped = None
                     if val in param_map:
-                        kind['kind'] = param_map[val]
+                        mapped = param_map[val]
+                    elif isinstance(val, str) and val.lower() in param_map:
+                        mapped = param_map[val.lower()]
+                    if mapped is not None:
+                        kind['kind'] = mapped
     new_body = [postcrack2(b, tab=tab + '\t', param_map=param_map)
                 for b in block['body']]
     block['body'] = new_body
@@ -2058,7 +2126,7 @@ def postcrack(block, args=None, tab=''):
           function return values
           determine expression types if in argument list
     """
-    global usermodules, onlyfunctions
+    global usermodules, onlyfunctions, f90moduleuses
 
     if isinstance(block, list):
         gret = []
@@ -2078,6 +2146,10 @@ def postcrack(block, args=None, tab=''):
                         str(block))
     if 'name' in block and not block['name'] == 'unknown_interface':
         outmess(f"{tab}Block: {block['name']}\n", 0)
+    # Record use renames before analyzevars so a later module can fold
+    # ``rk => real64`` while its own kind selectors are still strings.
+    if block.get('block') == 'module':
+        f90moduleuses[str(block.get('name') or '').lower()] = block.get('use') or {}
     block = analyzeargs(block)
     block = analyzecommon(block)
     block['vars'] = analyzevars(block)
