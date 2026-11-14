@@ -211,8 +211,21 @@ def buildhooks(pymod):
                     ifargs.append(
                         func2subr.createsubrwrapper(b, signature=1))
                 else:
-                    fargs.append(b_name)
-                    mfargs.append(fargs[-1])
+                    # A scalar module subroutine is not wrapped. If it is
+                    # only a private specific, `use mod, only: specific`
+                    # is illegal. Call the public generic instead.
+                    generic = (b.get('f2pyenhancements') or {}).get(
+                        'fortranname')
+                    if (generic and str(generic).lower() != str(b_name).lower()
+                            and ismoduleroutine(b)):
+                        forced = func2subr.createsubrwrapper(b)
+                        fhooks[0] = fhooks[0] + forced
+                        fargs.append(f"f2pywrap_{m_name}_{b_name}")
+                        ifargs.append(
+                            func2subr.createsubrwrapper(b, signature=1))
+                    else:
+                        fargs.append(b_name)
+                        mfargs.append(fargs[-1])
                 api['externroutines'] = []
                 ar = applyrules(api, vrd)
                 ar['docs'] = []
