@@ -10,6 +10,7 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
+import hashlib
 
 from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
@@ -28,6 +29,20 @@ from .auxfuncs import (
     outmess,
     show,
 )
+
+
+def fortran_wrapper_name(modulename, name):
+    """Fortran symbol for the wrapper of a module procedure.
+
+    A short name stays `f2pywrap_<module>_<routine>`. A name past the
+    63-character Fortran limit keeps a prefix and a stable hash.
+    """
+    raw = f"f2pywrap_{modulename}_{name}"
+    if len(raw) <= 63:
+        return raw
+    digest = hashlib.sha1(raw.encode('ascii')).hexdigest()[:8]
+    keep = 63 - len(digest) - 1
+    return f"{raw[:keep]}_{digest}"
 
 
 def var2fixfortran(vars, a, fa=None, f90mode=None):
@@ -148,7 +163,7 @@ def createfuncwrapper(rout, signature=0):
         sargs = sargs.replace(f"{name}, ", '')
         args = [arg for arg in args if arg != name]
         rout['args'] = args
-        add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
+        add(f"subroutine {fortran_wrapper_name(rout['modulename'], name)} ({sargs})")
         if not signature:
             add(f"use {rout['modulename']}, only : {fortranname}")
         if useisoc:
@@ -214,7 +229,7 @@ def createfuncwrapper(rout, signature=0):
         else:
             add(f'{newname} = {fortranname}({sargs})')
     if f90mode:
-        add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
+        add(f"end subroutine {fortran_wrapper_name(rout['modulename'], name)}")
     else:
         add('end')
     return ret[0]
@@ -252,7 +267,7 @@ def createsubrwrapper(rout, signature=0):
     useisof = useiso_fortran_env(rout)
     sargs = ', '.join(args)
     if f90mode:
-        add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
+        add(f"subroutine {fortran_wrapper_name(rout['modulename'], name)} ({sargs})")
         if useisoc:
             add('use iso_c_binding')
         if useisof:
@@ -306,7 +321,7 @@ def createsubrwrapper(rout, signature=0):
     if not signature:
         add(f'call {fortranname}({sargs})')
     if f90mode:
-        add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
+        add(f"end subroutine {fortran_wrapper_name(rout['modulename'], name)}")
     else:
         add('end')
     return ret[0]

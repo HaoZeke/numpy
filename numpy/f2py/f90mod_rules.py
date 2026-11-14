@@ -203,11 +203,11 @@ def buildhooks(pymod):
                 api, wrap = rules.buildapi(b)
                 if isfunction(b):
                     fhooks[0] = fhooks[0] + wrap
-                    fargs.append(f"f2pywrap_{m_name}_{b_name}")
+                    fargs.append(func2subr.fortran_wrapper_name(m_name, b_name))
                     ifargs.append(func2subr.createfuncwrapper(b, signature=1))
                 elif wrap:
                     fhooks[0] = fhooks[0] + wrap
-                    fargs.append(f"f2pywrap_{m_name}_{b_name}")
+                    fargs.append(func2subr.fortran_wrapper_name(m_name, b_name))
                     ifargs.append(
                         func2subr.createsubrwrapper(b, signature=1))
                 else:
