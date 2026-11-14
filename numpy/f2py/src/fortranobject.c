@@ -899,6 +899,19 @@ ndarray_from_pyobj(const int type_num,
         ) {
         /* intent(cache), optional, intent(hide) */
         int ineg = find_first_negative_dimension(rank, dims);
+        if (ineg >= 0 && (intent & F2PY_OPTIONAL) && obj == Py_None) {
+            /* An omitted optional array whose size depends on another
+               argument, or an assumed shape, has no extent yet. A
+               zero-size array keeps the call from aborting; size()
+               is then 0. */
+            int i;
+            for (i = 0; i < rank; ++i) {
+                if (dims[i] < 0) {
+                    dims[i] = 0;
+                }
+            }
+            ineg = -1;
+        }
         if (ineg >= 0) {
             int i;
             PyObject *dims_str = PyUnicode_FromStringAndSize(NULL, 0);
