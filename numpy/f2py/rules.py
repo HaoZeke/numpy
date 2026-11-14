@@ -1201,21 +1201,38 @@ if (#varname#_cb.capi==Py_None) {
              '  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,'
              '  capi_#varname#_intent,Py_None,capi_errmess);'},
             {isintent_nothide:
-             '    capi_#varname#_as_array = ndarray_from_pyobj('
-             '  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,'
-             '  capi_#varname#_intent,#varname#_capi,capi_errmess);'},
+             '''\
+    if ((capi_#varname#_intent & F2PY_OPTIONAL) && #varname#_capi == Py_None) {
+        int f2py_i;
+        for (f2py_i = 0; f2py_i < #varname#_Rank; ++f2py_i)
+            #varname#_Dims[f2py_i] = 0;
+        #varname# = NULL;
+        capi_#varname#_as_array = NULL;
+    } else {
+        capi_#varname#_as_array = ndarray_from_pyobj(  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,  capi_#varname#_intent,#varname#_capi,capi_errmess);
+    }
+'''},
+            {isintent_hide:
+             '    if (capi_#varname#_as_array == NULL) {'},
+            {isintent_nothide:
+             '    if (capi_#varname#_as_array == NULL && !((capi_#varname#_intent & F2PY_OPTIONAL) && #varname#_capi == Py_None)) {'},
             """\
-    if (capi_#varname#_as_array == NULL) {
         PyObject* capi_err = PyErr_Occurred();
         if (capi_err == NULL) {
             capi_err = #modulename#_error;
             PyErr_SetString(capi_err, capi_errmess);
         }
     } else {
-        #varname# = (#ctype# *)(PyArray_DATA(capi_#varname#_as_array));
 """,
+            {isintent_hide:
+             '        #varname# = (#ctype# *)(PyArray_DATA(capi_#varname#_as_array));'},
+            {isintent_nothide:
+             '''\
+        if (capi_#varname#_as_array != NULL)
+            #varname# = (#ctype# *)(PyArray_DATA(capi_#varname#_as_array));
+'''},
             {isstringarray:
-             '    slen(#varname#) = f2py_itemsize(#varname#);'},
+             '    if (capi_#varname#_as_array != NULL) slen(#varname#) = f2py_itemsize(#varname#);'},
             {hasinitvalue: [
                 {isintent_nothide:
                  '    if (#varname#_capi == Py_None) {'},

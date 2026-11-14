@@ -15,6 +15,7 @@ from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
     getfortranname,
+    isarray,
     isexternal,
     isfunction,
     isfunction_wrap,
@@ -22,12 +23,19 @@ from .auxfuncs import (
     isintent_out,
     islogicalfunction,
     ismoduleroutine,
+    isoptional,
     isscalar,
     issubroutine,
     issubroutine_wrap,
     outmess,
     show,
 )
+
+
+def _note_optional_array(add, vars, name):
+    """An omitted optional array is a null pointer, so the dummy is optional."""
+    if isarray(vars[name]) and isoptional(vars[name]):
+        add(f'optional {name}')
 
 
 def var2fixfortran(vars, a, fa=None, f90mode=None):
@@ -181,17 +189,20 @@ def createfuncwrapper(rout, signature=0):
             continue
         if isscalar(vars[a]):
             add(var2fixfortran(vars, a, f90mode=f90mode))
+            _note_optional_array(add, vars, a)
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
         if isintent_in(vars[a]):
             add(var2fixfortran(vars, a, f90mode=f90mode))
+            _note_optional_array(add, vars, a)
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
         add(var2fixfortran(vars, a, f90mode=f90mode))
+        _note_optional_array(add, vars, a)
 
     add(l1)
     if rl is not None:
@@ -283,11 +294,13 @@ def createsubrwrapper(rout, signature=0):
             continue
         if isscalar(vars[a]):
             add(var2fixfortran(vars, a, f90mode=f90mode))
+            _note_optional_array(add, vars, a)
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
         add(var2fixfortran(vars, a, f90mode=f90mode))
+        _note_optional_array(add, vars, a)
 
     if need_interface:
         if f90mode:

@@ -24,11 +24,10 @@ contains
 end module
 """
 
-    def test_omitted_optional_array_does_not_abort(self):
+    def test_omitted_optional_array_is_absent(self):
         x = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        # A zero-size stand-in has size 0. Absent would be -1.
-        # Either value means the call was not rejected.
-        assert self.module.m.saw(x) in (0, -1)
+        # A present zero-size array has size 0. Absent is -1.
+        assert self.module.m.saw(x) == -1
 
     def test_passed_optional_array_is_used(self):
         x = np.array([1.0, 2.0, 3.0], dtype=np.float32)
