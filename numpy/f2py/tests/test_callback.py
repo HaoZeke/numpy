@@ -206,7 +206,12 @@ class TestF77Callback(util.F2PyTest):
 class TestF77CallbackPythonTLS(TestF77Callback):
     """
     Callback tests using Python thread-local storage instead of
-    compiler-provided
+    compiler-provided thread-local storage.
+
+    `-DF2PY_USE_PYTHON_TLS` has to reach the C compile of both the
+    generated module and `fortranobject.c`. Otherwise the callback
+    keeps using compiler thread-local storage, and a raising callback
+    never takes the path that used to abort.
     """
 
     options = ["-DF2PY_USE_PYTHON_TLS"]

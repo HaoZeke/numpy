@@ -11,6 +11,17 @@ from string import Template
 from ._backend import Backend
 
 
+def _c_defines(define_macros) -> list[str]:
+    """Meson `c_args` for f2py `-D` macros, such as `-DF2PY_USE_PYTHON_TLS`."""
+    args = []
+    for name, value in define_macros or []:
+        if value is None:
+            args.append(f"'-D{name}'")
+        else:
+            args.append(f"'-D{name}={value}'")
+    return args
+
+
 def _meson_identifier(prefix: str, value: str, index: int) -> str:
     safe_value = re.sub(r"[^a-zA-Z0-9_]", "_", value)
     if not safe_value or safe_value[0].isdigit():
@@ -34,6 +45,7 @@ class MesonTemplate:
         fortran_args: list[str],
         build_type: str,
         python_exe: str,
+        c_args: list[str] | None = None,
     ):
         self.modulename = modulename
         self.build_template_path = (
@@ -54,6 +66,7 @@ class MesonTemplate:
             f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
             for x in fortran_args
         ]
+        self.c_args = list(c_args or [])
         self.pipeline = [
             self.initialize_template,
             self.sources_substitution,
@@ -62,6 +75,7 @@ class MesonTemplate:
             self.include_substitution,
             self.libraries_substitution,
             self.fortran_args_substitution,
+            self.c_args_substitution,
         ]
         self.build_type = build_type
         self.python_exe = python_exe
@@ -137,6 +151,14 @@ class MesonTemplate:
         else:
             self.substitutions["fortran_args"] = ""
 
+    def c_args_substitution(self) -> None:
+        if self.c_args:
+            self.substitutions["c_args"] = (
+                f"{self.indent}c_args: [{', '.join(self.c_args)}],"
+            )
+        else:
+            self.substitutions["c_args"] = ""
+
     def generate_meson_build(self):
         for node in self.pipeline:
             node()
@@ -186,6 +208,7 @@ class MesonBackend(Backend):
             self.fc_flags,
             self.build_type,
             sys.executable,
+            c_args=_c_defines(self.define_macros),
         )
         src = meson_template.generate_meson_build()
         Path(build_dir).mkdir(parents=True, exist_ok=True)
