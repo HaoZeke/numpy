@@ -284,6 +284,27 @@ def getstrlength(var):
     return len
 
 
+def _count_bound_to_c(expr):
+    """Fortran ``count(mask)`` is not a C function.
+
+    The logical dummy is an int buffer by the time the dimension is
+    evaluated, so count the true or false entries of that buffer.
+    """
+    text = str(expr)
+
+    def neg(match):
+        return f"f2py_count_false({match.group(1)})"
+
+    def pos(match):
+        return f"f2py_count_true({match.group(1)})"
+
+    text = re.sub(
+        r"count\(\s*\.not\.\s*([A-Za-z_]\w*)\s*\)", neg, text, flags=re.I)
+    text = re.sub(
+        r"count\(\s*([A-Za-z_]\w*)\s*\)", pos, text, flags=re.I)
+    return text
+
+
 def getarrdims(a, var, verbose=0):
     ret = {}
     if isstring(var) and not isarray(var):
@@ -320,6 +341,7 @@ def getarrdims(a, var, verbose=0):
         for d in dim:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
+                d = _count_bound_to_c(d)
                 ret['setdims'] = f"{ret['setdims']}#varname#_Dims[{i}]={d},"
         if ret['setdims']:
             ret['setdims'] = ret['setdims'][:-1]

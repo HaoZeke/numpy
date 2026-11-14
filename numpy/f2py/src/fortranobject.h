@@ -165,6 +165,11 @@ extern PyObject *f2py_describe_obj(PyObject *obj);
 #define f2py_slen(var) capi_ ## var ## _len
 
   extern npy_intp f2py_size_impl(PyArrayObject* var, ...);
+  /* Fortran count(mask) / count(.not. mask) for a logical array that
+   * f2py has already turned into an int buffer. */
+  extern npy_intp f2py_count_impl(PyArrayObject* arr, int want_true);
+#define f2py_count_true(var) f2py_count_impl((PyArrayObject *)(capi_ ## var ## _as_array), 1)
+#define f2py_count_false(var) f2py_count_impl((PyArrayObject *)(capi_ ## var ## _as_array), 0)
 
 #ifdef __cplusplus
 }

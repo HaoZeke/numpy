@@ -1448,6 +1448,22 @@ F2PyCapsule_Check(PyObject *ptr)
     return PyCapsule_CheckExact(ptr);
 }
 
+npy_intp
+f2py_count_impl(PyArrayObject *arr, int want_true)
+{
+    npy_intp i, n, c = 0;
+    int *data;
+    if (arr == NULL)
+        return 0;
+    n = PyArray_SIZE(arr);
+    data = (int *)PyArray_DATA(arr);
+    for (i = 0; i < n; ++i) {
+        if (want_true ? data[i] : !data[i])
+            ++c;
+    }
+    return c;
+}
+
 #ifdef __cplusplus
 }
 #endif
