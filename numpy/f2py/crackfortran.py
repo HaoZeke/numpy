@@ -2692,7 +2692,9 @@ def analyzevars(block):
             try:
                 dep_matches[n]
             except KeyError:
-                dep_matches[n] = re.compile(rf'.*\b{v}\b', re.I).match
+                # `operator(*)` is a legal name. A raw `*` is not a
+                # regex atom, and compiling it aborts the whole module.
+                dep_matches[n] = re.compile(rf'.*\b{re.escape(v)}\b', re.I).match
     for n in svars:
         if n[0] in list(attrrules.keys()):
             vars[n] = setattrspec(vars[n], attrrules[n[0]])
