@@ -155,10 +155,13 @@ PyFortranObject_New(FortranDataDef *defs, f2py_void_func init)
     while (defs[fp->len].name != NULL) {
         fp->len++;
     }
-    if (fp->len == 0) {
-        goto fail;
-    }
     fp->defs = defs;
+    if (fp->len == 0) {
+        /* Every routine in the module was skipped. An empty hook is
+         * still a module; failing here aborts the whole extension
+         * without an exception. */
+        return (PyObject *)fp;
+    }
     for (i = 0; i < fp->len; i++) {
         if (fp->defs[i].rank == -1) { /* Is Fortran routine */
             v = PyFortranObject_NewAsAttr(&(fp->defs[i]));
