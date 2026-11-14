@@ -1628,8 +1628,8 @@ def removespaces(expr):
     expr2 = expr[0]
     for i in range(1, len(expr) - 1):
         if (expr[i] == ' ' and
-            ((expr[i + 1] in "()[]{}=+-/* ") or
-                (expr[i - 1] in "()[]{}=+-/* "))):
+            ((expr[i + 1] in "()[]{}=+-/*> ") or
+                (expr[i - 1] in "()[]{}=+-/*> "))):
             continue
         expr2 = expr2 + expr[i]
     expr2 = expr2 + expr[-1]
@@ -1854,7 +1854,12 @@ def updatevars(typespec, selector, attrspec, entitydecl):
                                 f'"{ename}" ("{current_init}") to "{new_init}". '
                                 f'Ignoring.\n')
                     else:
-                        edecl['='] = d1['init']
+                        init = d1['init']
+                        # ``f => null()`` is the initialization of this
+                        # component, not a second component named ``null``.
+                        if isinstance(init, str) and init[:1] == '>':
+                            init = init[1:].strip()
+                        edecl['='] = init
 
                 if 'array' in d1:
                     dm = f"dimension({d1['array']})"

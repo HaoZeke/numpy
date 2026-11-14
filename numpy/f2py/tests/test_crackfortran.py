@@ -69,6 +69,37 @@ class TestPublicPrivate:
         pyf = crackfortran.crack2fortran(mod)
         assert 'bar1337baz' not in pyf
 
+
+class TestProcedurePointerInit:
+    def test_null_init_is_one_component(self, tmp_path):
+        # ``f => null()`` is the initialization of one pointer.
+        # A space after ``=>`` used to become a second component
+        # named ``null``.
+        src = tmp_path / "pptr.f90"
+        src.write_text(
+            "module m\n"
+            "  implicit none\n"
+            "  abstract interface\n"
+            "    subroutine s(x)\n"
+            "      real, intent(in) :: x\n"
+            "    end subroutine s\n"
+            "  end interface\n"
+            "  type t\n"
+            "    procedure(s), nopass, pointer :: f => null()\n"
+            "  end type t\n"
+            "end module m\n"
+        )
+        mod = crackfortran.crackfortran([str(src)])[0]
+        derived = [b for b in mod["body"] if b.get("block") == "type"]
+        assert len(derived) == 1
+        names = set(derived[0]["vars"])
+        assert "f" in names
+        assert "null" not in names
+        comp = derived[0]["vars"]["f"]
+        assert "pointer" in comp["attrspec"]
+        assert comp["="] == "null()"
+
+
 class TestModuleProcedure:
     def test_moduleOperators(self, tmp_path):
         fpath = util.getpath("tests", "src", "crackfortran", "operators.f90")
