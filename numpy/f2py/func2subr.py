@@ -21,6 +21,7 @@ from .auxfuncs import (
     isintent_in,
     isintent_out,
     islogicalfunction,
+    isoptional,
     ismoduleroutine,
     isscalar,
     issubroutine,
@@ -181,6 +182,8 @@ def createfuncwrapper(rout, signature=0):
             continue
         if isscalar(vars[a]):
             add(var2fixfortran(vars, a, f90mode=f90mode))
+            if isoptional(vars[a]):
+                add(f'optional {a}')
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
@@ -283,6 +286,8 @@ def createsubrwrapper(rout, signature=0):
             continue
         if isscalar(vars[a]):
             add(var2fixfortran(vars, a, f90mode=f90mode))
+            if isoptional(vars[a]):
+                add(f'optional {a}')
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
