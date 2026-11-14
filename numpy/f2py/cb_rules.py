@@ -18,6 +18,7 @@ from .auxfuncs import (
     hasnote,
     isarray,
     iscomplex,
+    iscptr,
     iscomplexarray,
     iscomplexfunction,
     isfunction,
@@ -354,6 +355,24 @@ cb_arg_rules = [
         'docsign': {l_and(isrequired, isintent_nothide): '#varname#,'},
         'docsignopt': {l_and(isoptional, isintent_nothide): '#varname#,'},
         'depend': ''
+    },
+    {  # type(c_ptr), value: opaque address, None when NULL
+        'args': 'void *#varname_i#',
+        'args_nm': '#varname_i#',
+        'args_td': 'void *',
+        'pyobjfrom': """\
+    if (cb->nofargs>capi_i) {
+        PyObject *capiptr = (#varname_i# == NULL)
+            ? Py_None : PyLong_FromVoidPtr(#varname_i#);
+        if (capiptr == Py_None)
+            Py_INCREF(Py_None);
+        if (capiptr == NULL)
+            goto capi_fail;
+        if (CAPI_ARGLIST_SETITEM(capi_i++, capiptr))
+            goto capi_fail;
+    }""",
+        '_check': iscptr,
+        '_break': '1',
     },
     {
         'args': {

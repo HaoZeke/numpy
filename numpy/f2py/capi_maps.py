@@ -355,6 +355,10 @@ def getpydocsign(a, var):
             errmess(f'getctype: function {af} has no return value?!\n')
         return '', ''
     sig, sigout = a, a
+    if iscptr(var):
+        # Opaque address. NULL is None; any other pointer is its integer address.
+        sig = f'{a} : input int or None'
+        return sig, sig
     opt = ''
     if isintent_in(var):
         opt = 'input'

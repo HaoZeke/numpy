@@ -25,7 +25,7 @@ __all__ = [
     'hasexternals', 'hasinitvalue', 'hasnote', 'hasresultnote',
     'isallocatable', 'isarray', 'isarrayofstrings',
     'ischaracter', 'ischaracterarray', 'ischaracter_or_characterarray',
-    'iscomplex', 'iscstyledirective',
+    'iscomplex', 'iscptr', 'iscstyledirective',
     'iscomplexarray', 'iscomplexfunction', 'iscomplexfunction_warn',
     'isdouble', 'isdummyroutine', 'isexternal', 'isfunction',
     'isfunction_wrap', 'isint1', 'isint1array', 'isinteger', 'isintent_aux',
@@ -109,8 +109,22 @@ def isarray(var):
     return 'dimension' in var and not isexternal(var)
 
 
+def iscptr(var):
+    """A ``type(c_ptr), value`` or ``type(c_funptr), value`` dummy.
+
+    In a callback this is an address passed by value. ``NULL`` is
+    ``None`` on the Python side and any other address is an ``int``.
+    """
+    if not isinstance(var, dict) or var.get('typespec') != 'type':
+        return False
+    if str(var.get('typename') or '').lower() not in ('c_ptr', 'c_funptr'):
+        return False
+    attrs = [str(item).lower() for item in (var.get('attrspec') or [])]
+    return 'value' in attrs
+
+
 def isscalar(var):
-    return not (isarray(var) or isstring(var) or isexternal(var))
+    return not (isarray(var) or isstring(var) or isexternal(var) or iscptr(var))
 
 
 def iscomplex(var):
