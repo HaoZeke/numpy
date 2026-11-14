@@ -1,6 +1,9 @@
 """Kind selectors go through crackfortran's parameter evaluator."""
 import textwrap
 
+import numpy as np
+import pytest
+
 from numpy.f2py import capi_maps, crackfortran
 
 # Kind numbers the parameter evaluator returns for the compilers f2py maps.
@@ -55,7 +58,17 @@ def test_module_kind_selectors_resolve(tmp_path):
     assert vs['wide']['kindselector']['kind'] == str(_KIND_QUAD)
     assert vs['narrow']['kindselector']['kind'] == str(_KIND_SINGLE)
     assert vs['dbl']['kindselector']['kind'] == str(_KIND_DOUBLE)
-    assert capi_maps.getctype(vs['wide']) == 'long_double'
+    # real(16) is long double only where that type is binary128 or
+    # IBM double-double. x87 raises, as test_real16_follows_long_double does.
+    info = np.finfo(np.longdouble)
+    quad = (info.nmant == crackfortran._BINARY128_NMANT
+            or (info.maxexp == crackfortran._IEEE_DOUBLE_MAXEXP
+                and info.nmant > crackfortran._BINARY64_NMANT))
+    if quad:
+        assert capi_maps.getctype(vs['wide']) == 'long_double'
+    else:
+        with pytest.raises(ValueError, match=r"real\(kind=16\)"):
+            capi_maps.getctype(vs['wide'])
     assert capi_maps.getctype(vs['narrow']) == 'float'
     assert capi_maps.getctype(vs['dbl']) == 'double'
 
