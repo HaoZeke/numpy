@@ -2278,6 +2278,7 @@ def analyzebody(block, args, tab=''):
     }
 
     body = []
+    access = {}
     for b in block['body']:
         b['parent_block'] = block
         if b['block'] in ['function', 'subroutine']:
@@ -2297,6 +2298,9 @@ def analyzebody(block, args, tab=''):
 
         else:
             as_ = args
+            if b['block'] == 'module':
+                # analyzevars consumes the access statements, read them first
+                access[b['name'].lower()] = _access_specs(b['vars'])
         b = postcrack(b, as_, tab=tab + '\t')
         if b['block'] in ['interface', 'abstract interface'] and \
            not b['body'] and not b.get('implementedby'):
@@ -2308,7 +2312,111 @@ def analyzebody(block, args, tab=''):
             if b['block'] == 'module':
                 f90modulevars[b['name']] = b['vars']
             body.append(b)
+    _use_associate(body, access)
     return body
+
+
+def _access_specs(vars):
+    """Read the PUBLIC and PRIVATE statements of a module before analysis.
+
+    Returns the default accessibility (``None`` when the module has no
+    access statement without a list), the accessibility given to names
+    that appear only in access statements, and the names the module
+    declares itself.
+    """
+    default, named, declared = None, {}, set()
+    for name, var in vars.items():
+        spec = var.get('attrspec', [])
+        if not name:
+            default = next(
+                (a for a in spec if a in ('public', 'private')), None)
+        elif (set(var) == {'attrspec'} and spec
+              and set(spec) <= {'public', 'private'}):
+            named[name] = 'private' if 'private' in spec else 'public'
+        else:
+            declared.add(name)
+    return default, named, declared
+
+
+def _use_associate(body, access):
+    """Add the data entities that USEd sibling modules make accessible.
+
+    A module accesses the public entities of the modules it USEs, limited
+    by ONLY and renamed by ``local => remote`` (F2018 14.2.2), and makes
+    them public unless an access statement says otherwise (F2018 8.6.1).
+    Copy the variables and named constants that f90mod_rules would expose
+    for a used module into ``vars`` of the using module, so they are
+    exposed there too. This runs once every sibling is analyzed, so the
+    order of the source files does not matter. Derived-type variables are
+    skipped (gh-29037), local declarations take precedence, and a name
+    that two USE statements bind to different entities is skipped because
+    referencing it would be ambiguous.
+    """
+    modules = {b['name'].lower(): b for b in body if b['block'] == 'module'}
+    resolved = {}
+
+    def resolve(key):
+        if key in resolved:
+            return resolved[key]
+        resolved[key] = origins = {}
+        block = modules[key]
+        default, named, declared = access[key]
+        offers = {}
+        for usename, mapping in block.get('use', {}).items():
+            ukey = usename.lower()
+            if ukey == key or ukey not in modules:
+                continue
+            used = modules[ukey]
+            used_origins = resolve(ukey)
+            notvars = {used['name']} | {b['name'] for b in used['body']}
+            public = {
+                n.lower(): n for n, v in used['vars'].items()
+                if n not in notvars and v.get('typespec') not in (None, 'type')
+                and not l_or(isexternal, isintent_hide, isprivate)(v)}
+            renames = {k: v for k, v in mapping.get('map', {}).items() if k}
+            if mapping.get('only'):
+                pairs = list(renames.items())
+            else:
+                renamed = {v.lower() for v in renames.values()}
+                pairs = [(n, n) for k, n in public.items() if k not in renamed]
+                pairs.extend(renames.items())
+            for local, remote in pairs:
+                name = public.get(remote.lower())
+                if name is not None:
+                    origin = used_origins.get(name, (ukey, name))
+                    offers.setdefault(local, []).append(
+                        (origin, used['vars'][name], named.get(usename)))
+        notvars = {block['name']} | {b['name'] for b in block['body']}
+        for local, offer in offers.items():
+            if local in notvars or local in declared:
+                continue
+            if len({origin for origin, _, _ in offer}) > 1:
+                continue
+            # A module named in an access statement sets the default for
+            # the entities accessed from it when every module they are
+            # accessed from is named (F2018 8.6.1).
+            routes = [route for _, _, route in offer]
+            if local in named:
+                spec = named[local]
+            elif None not in routes:
+                spec = 'public' if 'public' in routes else 'private'
+            else:
+                spec = default
+            if spec == 'private':
+                continue
+            var = copy.deepcopy(offer[0][1])
+            var['attrspec'] = [a for a in var.get('attrspec', [])
+                               if a not in ('public', 'private')]
+            if spec:
+                var['attrspec'].append(spec)
+            block['vars'][local] = var
+            origins[local] = offer[0][0]
+        if origins:
+            block['sortvars'] = sortvarnames(block['vars'])
+        return origins
+
+    for key in modules:
+        resolve(key)
 
 
 def buildimplicitrules(block):
