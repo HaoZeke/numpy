@@ -1731,28 +1731,45 @@ def _procptr_container(derived):
 
 
 def _find_procedure_interface(iface_name):
-    """Return a parsed abstract-interface procedure named iface_name."""
+    """Return a parsed abstract-interface procedure named iface_name.
+
+    The interface may be in another module already on the crack stack.
+    ``_find_derived_type`` walks those modules. This search has to as
+    well, or a dummy in a later module is marked external with no
+    copied signature.
+    """
     target = str(iface_name).lower()
+
+    def match_in(items, descend_modules):
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            block = str(item.get('block') or '')
+            if block == 'interface' or block.endswith(' interface'):
+                candidates = item.get('body') or []
+            elif item.get('block') in ('subroutine', 'function'):
+                candidates = [item]
+            elif descend_modules and block in ('module', 'python module'):
+                found = match_in(item.get('body'), True)
+                if found:
+                    return found
+                continue
+            else:
+                continue
+            for proc in candidates:
+                if (isinstance(proc, dict)
+                        and str(proc.get('name', '')).lower() == target):
+                    return proc
+        return None
+
     for level in range(groupcounter, -1, -1):
-        pools = [
+        for body in (
             groupcache.get(level, {}).get('body') or [],
             grouplist.get(level) or [],
-        ]
-        for body in pools:
-            for item in body:
-                if not isinstance(item, dict):
-                    continue
-                block = str(item.get('block') or '')
-                if block == 'interface' or block.endswith(' interface'):
-                    candidates = item.get('body') or []
-                elif item.get('block') in ('subroutine', 'function'):
-                    candidates = [item]
-                else:
-                    continue
-                for proc in candidates:
-                    if (isinstance(proc, dict)
-                            and str(proc.get('name', '')).lower() == target):
-                        return proc
+        ):
+            found = match_in(body, True)
+            if found:
+                return found
     return None
 
 
