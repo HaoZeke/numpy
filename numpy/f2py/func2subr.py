@@ -232,13 +232,19 @@ def deferred_state(rout):
 
 
 def _deferred_alloc_out(var):
-    """Rank-1 allocatable intent(out) with deferred shape."""
+    """Rank-1 allocatable intent(out) or intent(inout) with deferred shape.
+
+    `intent(inout)` is the allocatable dummy on `unique`. An explicit-shape
+    actual is still not a legal argument, so it uses the same copy-back.
+    """
     if not isinstance(var, dict):
         return False
     if 'allocatable' not in (var.get('attrspec') or []):
         return False
     intent = [str(item).lower() for item in (var.get('intent') or [])]
-    if 'in' in intent or 'inout' in intent or 'out' not in intent:
+    writable = ('inout' in intent
+                or ('out' in intent and 'in' not in intent))
+    if not writable:
         return False
     dims = [str(dim).strip() for dim in (var.get('dimension') or [])]
     return dims == [':']
