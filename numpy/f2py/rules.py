@@ -1045,7 +1045,16 @@ if (#varname#_cb.capi==Py_None) {
     # Complex scalars
     {  # Common
         'decl': '    #ctype# #varname#;',
-        'callfortran': {isintent_c: '#varname#,', l_not(isintent_c): '&#varname#,'},
+        'callfortran': {
+            isintent_c: '#varname#,',
+            # An omitted optional complex is not present. Passing the
+            # uninitialized local makes present() true and the value garbage.
+            l_and(isoptional, l_not(hasinitvalue), l_not(isintent_c)):
+                '(#varname#_capi == Py_None ? NULL : &#varname#),',
+            l_and(l_not(isintent_c),
+                  l_not(l_and(isoptional, l_not(hasinitvalue)))):
+                '&#varname#,',
+        },
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#.r,#varname#.i);'},
         'return': {isintent_out: ',#varname#_capi'},
         '_check': iscomplex
