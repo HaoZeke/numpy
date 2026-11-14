@@ -205,10 +205,21 @@ class TestF77CallbackPythonTLS(TestF77Callback):
     options = ["-DF2PY_USE_PYTHON_TLS"]
 
 
+def _saved_interface(blocks):
+    for block in blocks:
+        if "saved_interface" in block:
+            return block["saved_interface"]
+        body = [b for b in block.get("body") or [] if isinstance(b, dict)]
+        found = _saved_interface(body)
+        if found is not None:
+            return found
+    return None
+
+
 def test_callback_saved_interface():
     path = util.getpath("tests", "src", "callback", "gh17797.f90")
     blocks = crackfortran.crackfortran([str(path)])
-    interface = blocks[0]["saved_interface"]
+    interface = _saved_interface(blocks)
     lines = [line.strip() for line in interface.splitlines()]
     assert "external f" not in lines
     assert "function f(e_0_e) result (r)" in lines
