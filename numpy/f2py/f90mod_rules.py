@@ -208,6 +208,9 @@ def buildhooks(pymod):
             dadd('\\end{description}')
         if hasbody(m):
             m_name = m['name']
+            # An interface module procedure and its contains implementation
+            # are both routines. Emitting both defines the C wrapper twice.
+            seen_rout = set()
             for b in m['body']:
                 b_name = b['name']
                 if not isroutine(b):
@@ -230,6 +233,12 @@ def buildhooks(pymod):
                                 "not a public entity of "
                                 f"{m['_parent_module']}.\n")
                         continue
+                rout_key = str(b_name).lower()
+                if rout_key in seen_rout:
+                    outmess(f"\t\t\tSkipping routine {b_name!r}: "
+                            "already wrapped in this module.\n")
+                    continue
+                seen_rout.add(rout_key)
                 modobjs.append(f"{b_name}()")
                 api, wrap = rules.buildapi(b)
                 if isfunction(b):
