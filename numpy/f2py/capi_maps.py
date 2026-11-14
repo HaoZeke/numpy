@@ -498,6 +498,12 @@ def sign2map(a, var):
     for f, s in isintent_dict.items():
         if f(var):
             intent_flags.append(f'F2PY_{s}')
+    attrs = var.get('attrspec') or []
+    # intent(out) arrays are hidden, so isoptional() is false. The
+    # attribute still means an omitted array must not be allocated.
+    if (isarray(var) and 'optional' in attrs and 'required' not in attrs
+            and 'F2PY_OPTIONAL' not in intent_flags):
+        intent_flags.append('F2PY_OPTIONAL')
     if intent_flags:
         # TODO: Evaluate intent_flags here.
         ret['intent'] = '|'.join(intent_flags)

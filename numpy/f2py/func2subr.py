@@ -33,8 +33,15 @@ from .auxfuncs import (
 
 
 def _note_optional_array(add, vars, name):
-    """An omitted optional array is a null pointer, so the dummy is optional."""
-    if isarray(vars[name]) and isoptional(vars[name]):
+    """An omitted optional array is a null pointer, so the dummy is optional.
+
+    intent(out) arrays are hidden, so `isoptional` is false for them.
+    The `optional` attribute still has to reach the Fortran dummy.
+    """
+    var = vars[name]
+    attrs = var.get('attrspec') or []
+    if (isarray(var) and 'optional' in attrs
+            and 'required' not in attrs):
         add(f'optional {name}')
 
 

@@ -1197,9 +1197,27 @@ if (#varname#_cb.capi==Py_None) {
             ('    const char capi_errmess[] = "#modulename#.#pyname#:'
              ' failed to create array from the #nth# `#varname#`";'),
             {isintent_hide:
-             '    capi_#varname#_as_array = ndarray_from_pyobj('
-             '  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,'
-             '  capi_#varname#_intent,Py_None,capi_errmess);'},
+             '''\
+    if (capi_#varname#_intent & F2PY_OPTIONAL) {
+        int f2py_i, f2py_absent = 0;
+        for (f2py_i = 0; f2py_i < #varname#_Rank; ++f2py_i)
+            if (#varname#_Dims[f2py_i] < 0)
+                f2py_absent = 1;
+        /* No extent: an omitted optional intent(out) array is absent. */
+        if (f2py_absent) {
+            for (f2py_i = 0; f2py_i < #varname#_Rank; ++f2py_i)
+                #varname#_Dims[f2py_i] = 0;
+            #varname# = NULL;
+            /* Returned to Python as None; Fortran sees a null pointer. */
+            capi_#varname#_as_array = (PyArrayObject *)Py_None;
+            Py_INCREF(Py_None);
+        } else {
+            capi_#varname#_as_array = ndarray_from_pyobj(  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,  capi_#varname#_intent,Py_None,capi_errmess);
+        }
+    } else {
+        capi_#varname#_as_array = ndarray_from_pyobj(  #atype#,#elsize#,#varname#_Dims,#varname#_Rank,  capi_#varname#_intent,Py_None,capi_errmess);
+    }
+'''},
             {isintent_nothide:
              '''\
     if ((capi_#varname#_intent & F2PY_OPTIONAL) && #varname#_capi == Py_None) {
@@ -1225,14 +1243,14 @@ if (#varname#_cb.capi==Py_None) {
     } else {
 """,
             {isintent_hide:
-             '        #varname# = (#ctype# *)(PyArray_DATA(capi_#varname#_as_array));'},
+             '        if (capi_#varname#_as_array != NULL && (PyObject *)capi_#varname#_as_array != Py_None) #varname# = (#ctype# *)(PyArray_DATA(capi_#varname#_as_array));'},
             {isintent_nothide:
              '''\
         if (capi_#varname#_as_array != NULL)
             #varname# = (#ctype# *)(PyArray_DATA(capi_#varname#_as_array));
 '''},
             {isstringarray:
-             '    if (capi_#varname#_as_array != NULL) slen(#varname#) = f2py_itemsize(#varname#);'},
+             '    if (capi_#varname#_as_array != NULL && (PyObject *)capi_#varname#_as_array != Py_None) slen(#varname#) = f2py_itemsize(#varname#);'},
             {hasinitvalue: [
                 {isintent_nothide:
                  '    if (#varname#_capi == Py_None) {'},
