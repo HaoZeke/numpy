@@ -1084,7 +1084,7 @@ if (#varname#_cb.capi==Py_None) {
     {
         'decl': ['    char *f2py_#varname#_ptr = NULL;',
                  '    size_t f2py_#varname#_len = 0;',
-                 '    #ctype# #varname# = NULL;'],
+                 '    char *#varname# = NULL;'],
         'callfortran': '&f2py_#varname#_ptr,',
         'callfortranappend': '&f2py_#varname#_len,',
         'frompyobj': '    f2py_#varname#_ptr = NULL;\n    f2py_#varname#_len = 0;',
