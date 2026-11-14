@@ -259,6 +259,15 @@ def createsubrwrapper(rout, signature=0):
             add('use iso_fortran_env')
         if not signature:
             add(f"use {rout['modulename']}, only : {fortranname}")
+            seen_types = set()
+            for a in args:
+                meta_a = vars.get(a) or {}
+                tname = meta_a.get('f2py_procptr_type')
+                if tname and tname not in seen_types:
+                    seen_types.add(tname)
+                    add(f"use {meta_a.get('f2py_procptr_mod') or rout['modulename']}, only : {tname}")
+            if any((vars.get(a) or {}).get('f2py_procptr_cptr') for a in args):
+                add('use iso_c_binding')
     else:
         add(f'subroutine f2pywrap{name} ({sargs})')
         if useisoc:
@@ -301,10 +310,21 @@ def createsubrwrapper(rout, signature=0):
                 add(line)
             add('end interface')
 
-    sargs = ', '.join([a for a in args if a not in extra_args])
-
+    kept = [a for a in args if a not in extra_args]
     if not signature:
-        add(f'call {fortranname}({sargs})')
+        call_args = []
+        for a in kept:
+            meta = vars.get(a) or {}
+            if meta.get('f2py_procptr_type'):
+                local = f'f2py_{a}'
+                add(f"type({meta['f2py_procptr_type']}) :: {local}")
+                add(f"{local}%{meta['f2py_procptr_comp']} => {a}")
+                if meta.get('f2py_procptr_cptr'):
+                    add(f"{local}%{meta['f2py_procptr_cptr']} = c_null_ptr")
+                call_args.append(local)
+            else:
+                call_args.append(a)
+        add(f"call {fortranname}({', '.join(call_args)})")
     if f90mode:
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:

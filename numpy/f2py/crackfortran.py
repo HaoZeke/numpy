@@ -1673,6 +1673,63 @@ def markinnerspaces(line):
     return fragment
 
 
+def _find_derived_type(type_name):
+    """Return ``(type block, module name)`` for a derived type."""
+    target = str(type_name).lower()
+
+    def scan(items, module):
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            here = module
+            if item.get('block') == 'module' and item.get('name'):
+                here = item.get('name')
+            if (item.get('block') == 'type'
+                    and str(item.get('name', '')).lower() == target):
+                return item, here
+            found = scan(item.get('body'), here)
+            if found:
+                return found
+        return None
+
+    for level in range(groupcounter, -1, -1):
+        for body in (
+            groupcache.get(level, {}).get('body') or [],
+            grouplist.get(level) or [],
+        ):
+            found = scan(body, None)
+            if found:
+                return found
+    return None, None
+
+
+def _procptr_container(derived):
+    """A type that only carries one nopass procedure pointer.
+
+    Other components may be ``c_ptr`` or ``c_funptr``. Returns
+    ``(component, interface name, c_ptr component or None)``.
+    """
+    if not derived:
+        return None
+    procs = []
+    cptrs = []
+    for name, var in (derived.get('vars') or {}).items():
+        if not isinstance(var, dict):
+            continue
+        attrs = [str(a).lower() for a in var.get('attrspec') or []]
+        if var.get('typespec') == 'procedure' and 'pointer' in attrs:
+            procs.append((name, var.get('typename')))
+        elif (var.get('typespec') == 'type'
+              and str(var.get('typename') or '').lower()
+              in ('c_ptr', 'c_funptr')):
+            cptrs.append(name)
+        else:
+            return None
+    if len(procs) != 1 or not procs[0][1]:
+        return None
+    return procs[0][0], procs[0][1], (cptrs[0] if cptrs else None)
+
+
 def _find_procedure_interface(iface_name):
     """Return a parsed abstract-interface procedure named iface_name."""
     target = str(iface_name).lower()
@@ -1881,6 +1938,25 @@ def updatevars(typespec, selector, attrspec, entitydecl):
             if not edecl[k]:
                 del edecl[k]
         groupcache[groupcounter]['vars'][ename] = edecl
+        if (typespec == 'type' and typename
+                and ename in groupcache[groupcounter].get('args', [])):
+            derived, derived_mod = _find_derived_type(typename)
+            info = _procptr_container(derived)
+            if info:
+                comp, iface_name, cptr = info
+                edecl['typespec'] = 'procedure'
+                edecl['typename'] = iface_name
+                edecl['f2py_procptr_type'] = typename
+                edecl['f2py_procptr_mod'] = derived_mod
+                edecl['f2py_procptr_comp'] = comp
+                if cptr:
+                    edecl['f2py_procptr_cptr'] = cptr
+                attrs = edecl.setdefault('attrspec', [])
+                if 'external' not in attrs:
+                    attrs.append('external')
+                # Reuse the procedure() path below to copy the interface.
+                typespec = 'procedure'
+                typename = iface_name
         if (typespec == 'procedure' and typename
                 and ename in groupcache[groupcounter].get('args', [])):
             found = _find_procedure_interface(typename)

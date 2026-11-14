@@ -312,6 +312,11 @@ def issubroutine(rout):
 def issubroutine_wrap(rout):
     if isintent_c(rout):
         return 0
+    # A derived type that only holds a procedure pointer is built in
+    # the Fortran wrapper and passed in place of the C callback.
+    for arg in rout.get('args') or []:
+        if (rout.get('vars') or {}).get(arg, {}).get('f2py_procptr_type'):
+            return issubroutine(rout)
     return issubroutine(rout) and hasassumedshape(rout)
 
 def isattr_value(var):
