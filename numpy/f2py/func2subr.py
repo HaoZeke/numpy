@@ -247,17 +247,29 @@ def createsubrwrapper(rout, signature=0):
     f90mode = ismoduleroutine(rout)
 
     args = rout['args']
+    private_sub = bool((rout.get('f2pyenhancements') or {}).get('privatesubmod'))
+    wrap_name = (f"f2pywrap_{rout['modulename']}_{name}" if f90mode
+                 else f"f2pywrap{name}")
 
     useisoc = useiso_c_binding(rout)
     useisof = useiso_fortran_env(rout)
     sargs = ', '.join(args)
-    if f90mode:
-        add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
+    if private_sub and f90mode and not signature:
+        # The generic is private. A submodule can call it; `use` cannot.
+        add(f"submodule ({rout['modulename']}) f2py_priv_{rout['modulename']}_{name}")
+        add('contains')
+        add(f"module subroutine {wrap_name} ({sargs}) bind(c, name='{wrap_name}_')")
         if useisoc:
             add('use iso_c_binding')
         if useisof:
             add('use iso_fortran_env')
-        if not signature:
+    elif f90mode:
+        add(f"subroutine {wrap_name} ({sargs})")
+        if useisoc:
+            add('use iso_c_binding')
+        if useisof:
+            add('use iso_fortran_env')
+        if not signature and not private_sub:
             add(f"use {rout['modulename']}, only : {fortranname}")
     else:
         add(f'subroutine f2pywrap{name} ({sargs})')
@@ -305,8 +317,11 @@ def createsubrwrapper(rout, signature=0):
 
     if not signature:
         add(f'call {fortranname}({sargs})')
-    if f90mode:
-        add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
+    if private_sub and f90mode and not signature:
+        add(f"end subroutine {wrap_name}")
+        add(f"end submodule f2py_priv_{rout['modulename']}_{name}")
+    elif f90mode:
+        add(f"end subroutine {wrap_name}")
     else:
         add('end')
     return ret[0]

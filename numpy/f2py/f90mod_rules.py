@@ -111,6 +111,12 @@ def buildhooks(pymod):
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
                 onlyvars.append(n)
                 mfargs.append(n)
+        if m.get('_from_submodule'):
+            # The parent module wraps the generic. This file still
+            # compiles the implementation.
+            outmess(f"\t\t\tSkipping submodule {m['name']}: "
+                    "implementation is compiled with its parent.\n")
+            continue
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
         if len(onlyvars) == 0 and len(notvars) == 1 and m['name'] in notvars:
             outmess(f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n")

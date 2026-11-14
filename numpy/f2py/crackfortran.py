@@ -1069,6 +1069,7 @@ def analyzeline(m, case, line):
             result = None
         else:
             name, args, result, bindcline = _resolvenameargspattern(m.group('after'))
+        from_submodule = False
         if block == 'submodule':
             # submodule (parent) child. The implementation stays in this
             # file for the compiler. `end procedure` is not a program end.
@@ -1077,6 +1078,7 @@ def analyzeline(m, case, line):
             args = []
             result = None
             block = 'module'
+            from_submodule = True
         if name is None:
             if block == 'block data':
                 name = '_BLOCK_DATA_'
@@ -1161,6 +1163,8 @@ def analyzeline(m, case, line):
             groupcache[groupcounter]['_module_procedure'] = True
         groupcache[groupcounter]['name'] = rmbadname1(name)
         groupcache[groupcounter]['result'] = result
+        if from_submodule:
+            groupcache[groupcounter]['_from_submodule'] = True
         if groupcounter == 1:
             groupcache[groupcounter]['from'] = currentfilename
         elif f77modulename and groupcounter == 3:
@@ -2311,6 +2315,7 @@ def analyzebody(block, args, tab=''):
     # specific names themselves stay private, so they used to be skipped
     # and only a later one, if any, was left callable.
     public_generics = {}
+    private_generics = {}
     for item in block.get('body') or []:
         if not isinstance(item, dict):
             continue
@@ -2320,16 +2325,23 @@ def analyzebody(block, args, tab=''):
         if not generic or generic == 'unknown_interface':
             continue
         gattrs = (block['vars'].get(generic) or {}).get('attrspec') or []
+        specific_names = list(item.get('implementedby') or [])
+        for proc in item.get('body') or []:
+            if isinstance(proc, dict) and proc.get('name'):
+                specific_names.append(proc['name'])
         if 'public' not in gattrs:
+            # A private generic (`sort_unique`) is still reachable from a
+            # submodule. Remember its specifics so the wrapper can call it.
+            if (str(generic).lower().startswith('operator')
+                    or generic == 'assignment'):
+                continue
+            for name in specific_names:
+                private_generics.setdefault(str(name).lower(), generic)
             continue
         if str(generic).lower().startswith('operator') or generic == 'assignment':
             call_name = None
         else:
             call_name = generic
-        specific_names = list(item.get('implementedby') or [])
-        for proc in item.get('body') or []:
-            if isinstance(proc, dict) and proc.get('name'):
-                specific_names.append(proc['name'])
         for name in specific_names:
             # An operator generic is not a name the wrapper can call.
             # Keep a later ordinary generic (`inv`) instead of
@@ -2353,7 +2365,12 @@ def analyzebody(block, args, tab=''):
             # A specific of a public generic is still called, under the
             # generic's public name.
             call_name = public_generics.get(str(b['name']).lower(), False)
-            if call_name is False and b['name'] in maybe_private:
+            priv_generic = private_generics.get(str(b['name']).lower())
+            if priv_generic:
+                enh = b.setdefault('f2pyenhancements', {})
+                enh.setdefault('fortranname', priv_generic)
+                enh['privatesubmod'] = True
+            elif call_name is False and b['name'] in maybe_private:
                 skipfuncs.append(b['name'])
             elif call_name:
                 b.setdefault('f2pyenhancements', {}).setdefault(
