@@ -355,6 +355,36 @@ class TestStringLiteralDepend:
         assert "cyclic dependencies" in err
 
 
+class TestBackslashCharLiteral:
+    # gh-33220: a backslash cannot escape the closing quote of a literal
+    def test_mask_string_literals(self):
+        mask = crackfortran.mask_string_literals
+        assert mask(r"'c:\'//n//'x'") == "''//n//''"
+        assert mask(r'"c:\"//n//"x"') == "''//n//''"
+
+    def test_split_by_unquoted(self):
+        split = crackfortran.split_by_unquoted
+        assert split(r"call f('c:\', n)", ",") == (r"call f('c:\'", ", n)")
+        assert split(r'call f("c:\", n)', ",") == (r'call f("c:\"', ", n)")
+
+
+@pytest.mark.slow
+class TestBackslashCharLiteralLen(util.F2PyTest):
+    suffix = ".f90"
+    code = r"""
+subroutine probe(n, got)
+  integer, intent(in) :: n
+  integer, intent(out) :: got
+  character(len=len('c:\') + n + len('x')) :: work
+  got = len(work)
+end subroutine probe
+"""
+
+    def test_len_expression(self):
+        for n in (1, 4, 7):
+            assert self.module.probe(n) == n + 4
+
+
 @pytest.mark.slow
 class TestLdaBeforeNRuntime(util.F2PyTest):
     # Fortran-order array shape (5, 4): shape(a, 1) is a_Dims[1] == 4,

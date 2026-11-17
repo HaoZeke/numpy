@@ -457,7 +457,7 @@ def getinit(a, var):
             if not init:
                 init, showinit = '""', "''"
             if init[0] == "'":
-                escaped_init = init[1:-1].replace('"', '\\"')
+                escaped_init = init[1:-1].replace('\\', '\\\\').replace('"', '\\"')
                 init = f'"{escaped_init}"'
             if init[0] == '"':
                 showinit = f"'{init[1:-1]}'"
