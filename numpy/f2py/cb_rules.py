@@ -17,6 +17,7 @@ from .auxfuncs import (
     getargs,
     hasnote,
     isarray,
+    ischaracter_or_characterarray,
     iscomplex,
     iscomplexarray,
     iscomplexfunction,
@@ -339,6 +340,11 @@ return_value
     {'_check': issubroutine, 'return': 'return;'}
 ]
 
+isbarecharacter_with_hidden_length = l_and(
+    ischaracter_or_characterarray, l_not(isintent_c)
+)
+
+
 cb_arg_rules = [
     {  # Doc
         'docstropt': {l_and(isoptional, isintent_nothide): '        #pydocsign#'},
@@ -375,11 +381,19 @@ cb_arg_rules = [
             isstring: '#ctype#'
         },
         'need': {l_or(isscalar, isarray, isstring): '#ctype#'},
-        # untested with multiple args
-        'strarglens': {isstring: ',int #varname_i#_cb_len'},
-        'strarglens_td': {isstring: ',int'},  # untested with multiple args
-        # untested with multiple args
-        'strarglens_nm': {isstring: ',#varname_i#_cb_len'},
+        'strarglens': {
+            isstring: ',int #varname_i#_cb_len',
+            isbarecharacter_with_hidden_length:
+                ',size_t #varname_i#_cb_len',
+        },
+        'strarglens_td': {
+            isstring: ',int',
+            isbarecharacter_with_hidden_length: ',size_t',
+        },
+        'strarglens_nm': {
+            l_or(isstring, isbarecharacter_with_hidden_length):
+                ',#varname_i#_cb_len',
+        },
     },
     {  # Scalars
         'decl': {l_not(isintent_c): '    #ctype# #varname_i#=(*#varname_i#_cb_capi);'},

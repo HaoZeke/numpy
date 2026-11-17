@@ -77,9 +77,7 @@ from .auxfuncs import (
     isarray,
     isarrayofstrings,
     isattr_value,
-    ischaracter,
     ischaracter_or_characterarray,
-    ischaracterarray,
     iscomplex,
     iscomplexarray,
     iscomplexfunction,
@@ -1297,13 +1295,9 @@ if (#varname#_cb.capi==Py_None) {
      },
     # Character
     {
+        'callfortranappend': {l_not(isintent_c): '1,'},
         'need': 'string',
-        '_check': ischaracter,
-    },
-    # Character array
-    {
-        'need': 'string',
-        '_check': ischaracterarray,
+        '_check': ischaracter_or_characterarray,
     },
     # Stringarray
     {

@@ -261,6 +261,10 @@ cppmacros['len..'] = """
 cppmacros['pyobj_from_char1'] = r"""
 #define pyobj_from_char1(v) (PyLong_FromLong(v))
 """
+needs['pyobj_from_character1'] = ['character']
+cppmacros['pyobj_from_character1'] = r"""
+#define pyobj_from_character1(v) (PyUnicode_FromStringAndSize((char *)&(v), 1))
+"""
 cppmacros['pyobj_from_short1'] = r"""
 #define pyobj_from_short1(v) (PyLong_FromLong(v))
 """
