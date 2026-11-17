@@ -1,7 +1,7 @@
 module gh23879
     implicit none
     private
-    public :: foo
+    public :: foo42bar
 
  contains
 
