@@ -2648,6 +2648,61 @@ def _eval_scalar(value, params):
     return value
 
 
+def _character_length_expr(var):
+    """Expression f2py uses for the length of a character entity."""
+    sel = var.get('charselector') or {}
+    if sel.get('f2py_len'):
+        return sel['f2py_len']
+    if '*' in sel:
+        return sel['*']
+    if 'len' in sel:
+        return sel['len']
+    return None
+
+
+def _depend_reaches(src, dst, vars, seen):
+    """True when following depend edges from src reaches dst."""
+    if src == dst:
+        return True
+    if src in seen or src not in vars:
+        return False
+    seen.add(src)
+    for dep in vars[src].get('depend') or []:
+        if _depend_reaches(dep, dst, vars, seen):
+            return True
+    return False
+
+
+def _add_character_length_deps(vars):
+    """Allocate a character value after the names in its length are set.
+
+    Variables without a depend list keep declaration order. A dummy or
+    function result declared before the integer that gives its length is
+    then sized while that integer is still zero.
+    """
+    assumed = {'*', ':', '(*)', '(:)', ''}
+    for name, var in list(vars.items()):
+        if not (isstring(var) or isstringarray(var)):
+            continue
+        expr = _character_length_expr(var)
+        if not isinstance(expr, str):
+            continue
+        if ''.join(expr.split()).lower() in assumed:
+            continue
+        deps = var.get('depend')
+        for word in word_pattern.findall(expr):
+            key = word if word in vars else word.lower()
+            if key not in vars or key == name:
+                continue
+            if _depend_reaches(key, name, vars, set()):
+                continue
+            if deps is None:
+                deps = []
+                var['depend'] = deps
+            if key not in deps:
+                deps.append(key)
+
+
 def analyzevars(block):
     """
     Sets correct dimension information for each variable/parameter
@@ -3040,6 +3095,8 @@ def analyzevars(block):
         for n in list(vars.keys()):
             if n not in neededvars:
                 del vars[n]
+    if block['block'] in ['subroutine', 'function']:
+        _add_character_length_deps(vars)
     return vars
 
 
