@@ -708,6 +708,25 @@ def _simplifyargs(argsline):
     return ','.join(a)
 
 
+def _find_call_args(line, name):
+    masked = _quoted_string_re.sub(
+        lambda match: ' ' * len(match.group()), line)
+    match = re.search(
+        rf'(?<![\w$]){re.escape(name)}(?![\w$])\s*\(', masked, re.I)
+    if match is None:
+        return None
+    start = match.end() - 1
+    depth = 1
+    for index in range(start + 1, len(masked)):
+        if masked[index] == '(':
+            depth += 1
+        elif masked[index] == ')':
+            depth -= 1
+            if depth == 0:
+                return line[:match.start()], line[start + 1:index]
+    return None
+
+
 crackline_re_1 = re.compile(r'\s*(?P<result>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bind_1 = re.compile(r'\s*(?P<bind>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bindlang = re.compile(r'\s*bind\(\s*(?P<lang>[^,]+)\s*,\s*name\s*=\s*"(?P<lang_name>[^"]+)"\s*\)', re.I)
@@ -797,28 +816,31 @@ def crackline(line, reset=0):
         if 0 <= skipblocksuntil <= groupcounter:
             return
         if 'externals' in groupcache[groupcounter]:
-            for name in groupcache[groupcounter]['externals']:
+            matched_call = False
+            for name in list(groupcache[groupcounter]['externals']):
                 if name in invbadnames:
                     name = invbadnames[name]
                 if 'interfaced' in groupcache[groupcounter] and name in groupcache[groupcounter]['interfaced']:
                     continue
-                m1 = re.match(
-                    rf'(?P<before>[^"]*)\b{name}\b\s*@\(@(?P<args>[^@]*)@\)@.*\Z',
-                    markouterparen(line), re.I)
-                if m1:
-                    m2 = re_1.match(m1.group('before'))
-                    a = _simplifyargs(m1.group('args'))
-                    if m2:
-                        line = f"callfun {name}({a}) result ({m2.group('result')})"
-                    else:
-                        line = f'callfun {name}({a})'
-                    m = callfunpattern[0].match(line)
-                    if not m:
-                        outmess(
-                            f'crackline: could not resolve function call for line={repr(line)}.\n')
-                        return
-                    analyzeline(m, 'callfun', line)
+                call = _find_call_args(line, name)
+                if call is None:
+                    continue
+                before, args = call
+                m2 = re_1.match(before)
+                a = _simplifyargs(args)
+                if m2:
+                    callline = f"callfun {name}({a}) result ({m2.group('result')})"
+                else:
+                    callline = f'callfun {name}({a})'
+                m = callfunpattern[0].match(callline)
+                if not m:
+                    outmess(
+                        f'crackline: could not resolve function call for line={repr(callline)}.\n')
                     return
+                analyzeline(m, 'callfun', callline)
+                matched_call = True
+            if matched_call:
+                return
         if verbose > 1 or (verbose == 1 and currentfilename.lower().endswith('.pyf')):
             previous_context = None
             outmess(f'crackline:{groupcounter}: No pattern for line\n')
