@@ -365,6 +365,15 @@ class Expr:
                 r = f'{numer} / {denom}'
                 precedence = Precedence.PRODUCT
             else:
+                if language is Language.C and not kwargs and len(args) > 2:
+                    fname = name.data if (isinstance(name, Expr)
+                                          and name.op is Op.SYMBOL) else name
+                    if isinstance(fname, str) and fname.lower() in ('min', 'max'):
+                        result = as_apply(name, args[0], args[1])
+                        for arg in args[2:]:
+                            result = as_apply(name, result, arg)
+                        return result.tostring(parent_precedence,
+                                               language=language)
                 args = [arg.tostring(Precedence.TUPLE, language=language)
                         for arg in args]
                 args += [k + '=' + v.tostring(Precedence.NONE)
@@ -1011,6 +1020,16 @@ def as_apply(func, *args, **kwargs):
     return Expr(Op.APPLY,
                 (func, tuple(map(as_expr, args)),
                  {k: as_expr(v) for k, v in kwargs.items()}))
+
+
+def lower_nary_minmax(expression):
+    """Lower n-ary ``min`` and ``max`` in a C expression string."""
+    if not re.search(r'\b(?:min|max)\s*\(', expression, re.I):
+        return expression
+    try:
+        return Expr.parse(expression).tostring(language=Language.C)
+    except Exception:
+        return expression
 
 
 def as_ternary(cond, expr1, expr2):

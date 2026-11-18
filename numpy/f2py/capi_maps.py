@@ -17,6 +17,7 @@ import re
 from . import cb_rules
 from ._isocbind import iso_c2py_map, iso_c_binding_map, isoc_c2pycode_map
 from ._isofenv import iso_fortran_env_map
+from .symbolic import lower_nary_minmax
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -435,7 +436,7 @@ def getinit(a, var):
     else:
         init, showinit = '', ''
     if hasinitvalue(var):
-        init = var['=']
+        init = lower_nary_minmax(var['='])
         showinit = init
         if iscomplex(var) or iscomplexarray(var):
             ret = {}

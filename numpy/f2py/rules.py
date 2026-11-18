@@ -60,6 +60,7 @@ from . import (
     common_rules,
     f90mod_rules,
     func2subr,
+    symbolic,
     use_rules,
 )
 from .auxfuncs import (
@@ -1621,7 +1622,7 @@ def buildapi(rout):
                     break
         if 'check' in var[a]:
             for c in var[a]['check']:
-                vrd['check'] = c
+                vrd['check'] = symbolic.lower_nary_minmax(c)
                 ar = applyrules(check_rules, vrd, var[a])
                 rd = dictappend(rd, ar)
     if isinstance(rd['cleanupfrompyobj'], list):
