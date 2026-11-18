@@ -33,7 +33,7 @@ class TestData(util.F2PyTest):
         assert mod[0]['vars']['ref_index_one']['='] == '(13.0d0, 21.0d0)'
         assert mod[0]['vars']['ref_index_two']['='] == '(-30.0d0, 43.0d0)'
         assert mod[0]['vars']['my_array']['='] == '(/(1.0d0, 2.0d0), (-3.0d0, 4.0d0)/)'
-        assert mod[0]['vars']['z']['='] == '(/3.5,  7.0/)'
+        assert mod[0]['vars']['z']['='] == '(/3.5, 7.0/)'
 
 @pytest.mark.slow
 class TestDataF77(util.F2PyTest):
@@ -88,3 +88,20 @@ class TestDataWithCommentsF77(util.F2PyTest):
         assert self.module.mycom.mytab[0] == 0
         assert self.module.mycom.mytab[1] == 4
         assert self.module.mycom.mytab[2] == 0
+
+
+def test_data_repeat_across_scalars(tmp_path):
+    src = tmp_path / "data_repeat.f90"
+    src.write_text(
+        "module data_repeat\n"
+        "  implicit none\n"
+        "  integer :: a, b, c, d\n"
+        "  integer :: e, f, g\n"
+        "  data a, b, c, d /4*0/\n"
+        "  data e, f, g /2*1, 3/\n"
+        "end module data_repeat\n"
+    )
+    mod = crackfortran([str(src)])
+    got = mod[0]["vars"]
+    assert [got[name]["="] for name in "abcd"] == ["0", "0", "0", "0"]
+    assert [got[name]["="] for name in "efg"] == ["1", "1", "3"]

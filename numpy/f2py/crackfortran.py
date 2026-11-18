@@ -1441,6 +1441,22 @@ def analyzeline(m, case, line):
             if l[0].startswith('('):
                 outmess(f'analyzeline: implied-DO list "{l[0]}" is not supported. Skipping.\n')
                 continue
+            matches = [match.strip() for match in _split_outer(l[1])]
+            if any("*" in match for match in matches):
+                expanded = []
+                params = get_parameters(vars)
+                for match in matches:
+                    multiplier, separator, value = match.partition("*")
+                    if separator:
+                        try:
+                            repeat = int(_eval_scalar(multiplier, params))
+                        except ValueError:
+                            pass
+                        else:
+                            expanded.extend([value.strip()] * repeat)
+                            continue
+                    expanded.append(match)
+                matches = expanded
             for idx, v in enumerate(rmbadname([x.strip() for x in markoutercomma(l[0]).split('@,@')])):
                 if v.startswith('('):
                     outmess(f'analyzeline: implied-DO list "{v}" is not supported. Skipping.\n')
@@ -1457,33 +1473,9 @@ def analyzeline(m, case, line):
                     outmess(f'Comment line in declaration "{l[1]}" is not supported. Skipping.\n')
                     continue
                 vars.setdefault(v, {})
-                vtype = vars[v].get('typespec')
                 vdim = getdimension(vars[v])
-                matches = _split_outer(l[1])
-                if vtype == 'complex':
-                    matches = [match.strip() for match in matches]
-                try:
-                    new_val = (f"(/{', '.join(matches)}/)" if vdim
-                               else matches[idx].strip())
-                except IndexError:
-                    # gh-24746
-                    # Runs only if above code fails. Fixes the line
-                    # DATA IVAR1, IVAR2, IVAR3, IVAR4, EVAR5 /4*0,0.0D0/
-                    # by expanding to ['0', '0', '0', '0', '0.0d0']
-                    if any("*" in m for m in matches):
-                        expanded_list = []
-                        for match in matches:
-                            if "*" in match:
-                                try:
-                                    multiplier, value = match.split("*")
-                                    expanded_list.extend([value.strip()] * int(multiplier))
-                                except ValueError:  # if int(multiplier) fails
-                                    expanded_list.append(match.strip())
-                            else:
-                                expanded_list.append(match.strip())
-                        matches = expanded_list
-                    new_val = (f"(/{', '.join(matches)}/)" if vdim
-                               else matches[idx].strip())
+                new_val = (f"(/{', '.join(matches)}/)" if vdim
+                           else matches[idx])
                 current_val = vars[v].get('=')
                 if current_val and (current_val != new_val):
                     outmess(f'analyzeline: changing init expression of "{v}" ("{current_val}") to "{new_val}\"\n')
