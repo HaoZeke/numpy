@@ -3426,8 +3426,12 @@ def true_intent_list(var):
     lst = var['intent']
     ret = []
     for intent in lst:
+        if intent.startswith('out='):
+            ret.append(intent)
+            continue
         try:
-            f = globals()[f'isintent_{intent}']
+            name = 'inout' if intent == 'outin' else intent
+            f = globals()[f'isintent_{name}']
         except KeyError:
             pass
         else:
