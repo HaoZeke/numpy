@@ -2738,7 +2738,7 @@ def analyzevars(block):
             for a in attr:
                 if a[:9] == 'dimension':
                     dim = (a[9:].strip())[1:-1]
-                elif a[:6] == 'intent':
+                elif a[:6].lower() == 'intent':
                     intent = (a[6:].strip())[1:-1]
                 elif a[:6] == 'depend':
                     depend = (a[6:].strip())[1:-1]
@@ -2754,6 +2754,8 @@ def analyzevars(block):
                     for c in [x.strip() for x in markoutercomma(intent).split('@,@')]:
                         # Remove spaces so that 'in out' becomes 'inout'
                         tmp = c.replace(' ', '')
+                        head, sep, tail = tmp.partition('=')
+                        tmp = head.lower() + sep + tail
                         if tmp not in vars[n]['intent']:
                             vars[n]['intent'].append(tmp)
                     intent = None
