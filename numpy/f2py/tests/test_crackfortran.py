@@ -563,6 +563,23 @@ class TestParamParseNestedParens:
         assert vs["dimension"] == ["26", "1800"]
 
 
+def test_complex_parameter_literal(tmp_path):
+    fpath = tmp_path / "complex_param.f90"
+    fpath.write_text(textwrap.dedent("""\
+        module complex_param
+          integer, parameter :: one = 1
+          complex(8), parameter :: z = (one, -2.0d0)
+          complex(16), parameter :: q = (+1.0q0, 2.0_16)
+          complex(8) :: a = z
+        end module complex_param
+        """))
+
+    variables = crackfortran.crackfortran([str(fpath)])[0]["vars"]
+    assert crackfortran.get_parameters(variables) == {
+        "one": 1, "z": (1, -2.0), "q": (1.0, 2.0)}
+    assert variables["a"]["="] == "(1, -2.0)"
+
+
 @pytest.mark.slow
 class TestLowerF2PYDirective(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "gh27697.f90")]

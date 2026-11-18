@@ -2578,14 +2578,6 @@ def get_parameters(vars, global_params={}):
                     if len(v_) > 1:
                         v = ''.join(v_[:-1]).lower().replace(v_[-1].lower(), '')
 
-            # Currently this will not work for complex numbers.
-            # There is missing code for extracting a complex number,
-            # which may be defined in either of these:
-            #  a) (Re, Im)
-            #  b) cmplx(Re, Im)
-            #  c) dcmplx(Re, Im)
-            #  d) cmplx(Re, Im, <prec>)
-
             if isdouble(vars[n]):
                 tt = list(v)
                 for m in real16pattern.finditer(v):
@@ -2594,8 +2586,9 @@ def get_parameters(vars, global_params={}):
                 v = ''.join(tt)
 
             elif iscomplex(vars[n]):
-                outmess(f'get_parameters[TODO]: '
-                        f'implement evaluation of complex expression {v}\n')
+                # Python accepts a complex literal pair after its Fortran
+                # exponent letters are normalized.
+                v = re.sub(r'(?<=\d)[dq](?=[+-]?\d)', 'e', v, flags=re.I)
 
             dimspec = ([s.removeprefix('dimension').strip()
                         for s in vars[n]['attrspec']
@@ -2603,10 +2596,11 @@ def get_parameters(vars, global_params={}):
 
             # Handle _dp for gh-6624
             # Also fixes gh-20460
-            if real16pattern.search(v):
-                v = 8
-            elif real8pattern.search(v):
-                v = 4
+            if not iscomplex(vars[n]):
+                if real16pattern.search(v):
+                    v = 8
+                elif real8pattern.search(v):
+                    v = 4
             try:
                 params[n] = param_eval(v, g_params, params, dimspec=dimspec)
             except Exception as msg:
