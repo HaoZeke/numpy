@@ -382,7 +382,15 @@ cb_arg_rules = [
         'strarglens_nm': {isstring: ',#varname_i#_cb_len'},
     },
     {  # Scalars
-        'decl': {l_not(isintent_c): '    #ctype# #varname_i#=(*#varname_i#_cb_capi);'},
+        'decl': {
+            l_and(l_not(isintent_c),
+                  l_not(l_and(isoptional, isintent_in))):
+                '    #ctype# #varname_i#=(*#varname_i#_cb_capi);',
+            l_and(l_not(isintent_c), isoptional, isintent_in):
+                '    #ctype# #varname_i# = 0;\n'
+                '    if (#varname_i#_cb_capi != NULL)\n'
+                '        #varname_i# = *#varname_i#_cb_capi;',
+        },
         'error': {l_and(isintent_c, isintent_out,
                         throw_error('intent(c,out) is forbidden for callback scalar arguments')):
                   ''},
@@ -402,10 +410,19 @@ cb_arg_rules = [
                  {debugcapi: 'CFUNCSMESS'}],
         '_check': isscalar
     }, {
-        'pyobjfrom': [{isintent_in: """\
+        'pyobjfrom': [{l_and(isintent_in, l_not(isoptional)): """\
     if (cb->nofargs>capi_i)
         if (CAPI_ARGLIST_SETITEM(capi_i++,pyobj_from_#ctype#1(#varname_i#)))
-            goto capi_fail;"""},
+            goto capi_fail;""",
+                       l_and(isintent_in, isoptional): """\
+    if (cb->nofargs>capi_i) {
+        if (#varname_i#_cb_capi == NULL) {
+            Py_INCREF(Py_None);
+            if (CAPI_ARGLIST_SETITEM(capi_i++, Py_None))
+                goto capi_fail;
+        } else if (CAPI_ARGLIST_SETITEM(capi_i++,pyobj_from_#ctype#1(#varname_i#)))
+            goto capi_fail;
+    }"""},
                       {isintent_inout: """\
     if (cb->nofargs>capi_i)
         if (CAPI_ARGLIST_SETITEM(capi_i++,pyarr_from_p_#ctype#1(#varname_i#_cb_capi)))
