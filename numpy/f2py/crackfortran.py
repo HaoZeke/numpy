@@ -2951,8 +2951,10 @@ def analyzevars(block):
         if '=' in vars[n]:
             if 'attrspec' not in vars[n]:
                 vars[n]['attrspec'] = []
+            # A PROTECTED initializer is not a defaulted dummy argument.
             if ('optional' not in vars[n]['attrspec']) and \
-               ('required' not in vars[n]['attrspec']):
+               ('required' not in vars[n]['attrspec']) and \
+               ('protected' not in vars[n]['attrspec']):
                 vars[n]['attrspec'].append('optional')
             if 'depend' not in vars[n]:
                 vars[n]['depend'] = []
