@@ -284,6 +284,17 @@ def getstrlength(var):
     return len
 
 
+def _size_shape_rank(expr):
+    if not isinstance(expr, str) or 'shape' not in expr.lower():
+        return expr
+    return re.sub(
+        r'size\s*\(\s*shape\s*\(\s*([A-Za-z_]\w*)\s*\)\s*\)',
+        r'rank(\1)',
+        expr,
+        flags=re.I,
+    )
+
+
 def getarrdims(a, var, verbose=0):
     ret = {}
     if isstring(var) and not isarray(var):
@@ -320,6 +331,7 @@ def getarrdims(a, var, verbose=0):
         for d in dim:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
+                d = _size_shape_rank(d)
                 ret['setdims'] = f"{ret['setdims']}#varname#_Dims[{i}]={d},"
         if ret['setdims']:
             ret['setdims'] = ret['setdims'][:-1]
@@ -327,6 +339,7 @@ def getarrdims(a, var, verbose=0):
         for d in var['dimension']:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
+                d = _size_shape_rank(d)
                 ret['cbsetdims'] = f"{ret['cbsetdims']}#varname#_Dims[{i}]={d},"
             elif isintent_in(var):
                 outmess('getarrdims:warning: assumed shape array, using 0 '
