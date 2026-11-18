@@ -1,4 +1,4 @@
-       subroutine t(fun,a)
+       recursive subroutine t(fun,a)
        integer a
 cf2py  intent(out) a
        external fun
