@@ -1004,6 +1004,15 @@ def _resolvenameargspattern(line):
     return None, [], None, None
 
 
+def _split_common_blocks(line):
+    if not line.startswith('/'):
+        line = '//' + line
+    fields = markoutercomma(line, '/').split('@/@')
+    blocks = zip(fields[1::2], fields[2::2], strict=True)
+    return [[name.strip() or '_BLNK_', items.rstrip(' ,')]
+            for name, items in blocks]
+
+
 def analyzeline(m, case, line):
     """
     Reads each line in the input file in sequence and updates global vars.
@@ -1495,15 +1504,8 @@ def analyzeline(m, case, line):
             previous_context = ('variable', last_name, groupcounter)
     elif case == 'common':
         line = m.group('after').strip()
-        if not line[0] == '/':
-            line = '//' + line
-
-        cl = []
-        [_, bn, ol] = re.split('/', line, maxsplit=2)
-        bn = bn.strip()
-        if not bn:
-            bn = '_BLNK_'
-        cl.append([bn, ol])
+        cl = _split_common_blocks(line)
+        bn = cl[-1][0] if cl else '_BLNK_'
         commonkey = {}
         if 'common' in groupcache[groupcounter]:
             commonkey = groupcache[groupcounter]['common']
