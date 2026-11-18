@@ -605,7 +605,7 @@ groupbegins90 = groupbegins77 + \
 beginpattern90 = re.compile(
     beforethisafter % ('', groupbegins90, groupbegins90, '.*'), re.I), 'begin'
 groupends = (r'end|endprogram|endblockdata|endmodule|endpythonmodule|'
-             r'endinterface|endsubroutine|endfunction')
+             r'endinterface|endsubroutine|endfunction|endtype')
 endpattern = re.compile(
     beforethisafter % ('', groupends, groupends, '.*'), re.I), 'end'
 # block, the Fortran 2008 construct needs special handling in the rest of the file
