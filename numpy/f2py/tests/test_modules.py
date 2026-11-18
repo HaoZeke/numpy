@@ -89,6 +89,25 @@ class TestAllocatableCharacterArray(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestDeferredCharacterArray(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "deferred_char.f90")
+    ]
+
+    @pytest.mark.parametrize("name,shape,itemsize,raw", [
+        ("names", (2,), 4, b"ab  wxyz"),
+        ("grid", (2, 3), 2, b"xyq q q q q "),
+    ])
+    def test_deferred_character(self, name, shape, itemsize, raw):
+        mod = self.module.defchar
+        mod.setup()
+        arr = getattr(mod, name)
+        assert arr.shape == shape
+        assert arr.dtype.itemsize == itemsize
+        assert arr.tobytes() == raw
+
+
+@pytest.mark.slow
 class TestUsedModule(util.F2PyTest):
     module_name = "fmath"
     sources = [

@@ -78,6 +78,17 @@ fgetdims2_sa = """\
       flag = 2
       call f2pysetdata(d,allocated(d))"""
 
+fgetdims2_deferred = """\
+      end if
+      if (allocated(d)) then
+         do i=1,r
+            s(i) = size(d,i)
+         end do
+         s(r+1) = len(d)
+      end if
+      flag = 3
+      call f2pysetdata(d,allocated(d))"""
+
 
 def buildhooks(pymod):
     from . import rules
@@ -177,11 +188,26 @@ def buildhooks(pymod):
                 fadd(f'subroutine {fargs[-1]}(r,s,f2pysetdata,flag)')
                 fadd(f"use {m['name']}, only: d => {undo_rmbadname1(n)}\n")
                 fadd('integer flag\n')
-                fhooks[0] = fhooks[0] + fgetdims1
                 dms = range(1, int(dm['rank']) + 1)
                 alloc_args = ','.join(f's({i})' for i in dms)
-                fadd(f' allocate(d({alloc_args}))\n')
-                fhooks[0] = fhooks[0] + use_fgetdims2
+                selector = var.get('charselector') or {}
+                deferred_char = (int(dm['rank']) > 0
+                                 and selector.get('len') == ':')
+                if deferred_char:
+                    prelude = fgetdims1.replace(
+                        "         do i=1,r\n",
+                        "         if ((len(d).ne.s(r+1)).and.(s(r+1).ge.1)) "
+                        "ns = .TRUE.\n         do i=1,r\n",
+                        1,
+                    )
+                    fhooks[0] = fhooks[0] + prelude
+                    fadd(' allocate(character(len=s(r+1)) :: '
+                         f'd({alloc_args}))\n')
+                    fhooks[0] = fhooks[0] + fgetdims2_deferred
+                else:
+                    fhooks[0] = fhooks[0] + fgetdims1
+                    fadd(f' allocate(d({alloc_args}))\n')
+                    fhooks[0] = fhooks[0] + use_fgetdims2
                 fadd(f'end subroutine {fargs[-1]}')
             else:
                 fargs.append(n)

@@ -337,6 +337,8 @@ fortran_getattr(PyFortranObject *fp, char *name)
             if (fp->defs[i].func == NULL)
                 return NULL;
             for (k = 0; k < fp->defs[i].rank; ++k) fp->defs[i].dims.d[k] = -1;
+            if (fp->defs[i].elsize < 0 && fp->defs[i].rank < F2PY_MAX_DIMS)
+                fp->defs[i].dims.d[fp->defs[i].rank] = 0;
             save_def = &fp->defs[i];
             (*(fp->defs[i].func))(&fp->defs[i].rank, fp->defs[i].dims.d,
                                   set_data, &flag);
@@ -345,8 +347,11 @@ fortran_getattr(PyFortranObject *fp, char *name)
             else
                 k = fp->defs[i].rank;
             if (fp->defs[i].data != NULL) { /* array is allocated */
+                int elsize = fp->defs[i].elsize;
+                if (flag == 3)
+                    elsize = (int)fp->defs[i].dims.d[fp->defs[i].rank];
                 PyArray_Descr *descr = get_descr_from_type_and_elsize(
-                        fp->defs[i].type, fp->defs[i].elsize);
+                        fp->defs[i].type, elsize);
                 if (descr == NULL)
                     return NULL;
                 PyObject *v = PyArray_NewFromDescr(
@@ -426,11 +431,22 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                                             fp->defs[i].rank, F2PY_INTENT_IN,
                                             v)) == NULL)
                     return -1;
-                (*(fp->defs[i].func))(&fp->defs[i].rank, PyArray_DIMS(arr),
-                                      set_data, &flag);
+                if (fp->defs[i].elsize < 0) {
+                    for (k = 0; k < fp->defs[i].rank; k++)
+                        dims[k] = PyArray_DIMS(arr)[k];
+                    dims[fp->defs[i].rank] = PyArray_ITEMSIZE(arr);
+                    (*(fp->defs[i].func))(&fp->defs[i].rank, dims,
+                                          set_data, &flag);
+                }
+                else {
+                    (*(fp->defs[i].func))(&fp->defs[i].rank, PyArray_DIMS(arr),
+                                          set_data, &flag);
+                }
             }
             else { /* deallocate */
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = 0;
+                if (fp->defs[i].elsize < 0 && fp->defs[i].rank < F2PY_MAX_DIMS)
+                    dims[fp->defs[i].rank] = 0;
                 (*(fp->defs[i].func))(&fp->defs[i].rank, dims, set_data,
                                       &flag);
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = -1;
