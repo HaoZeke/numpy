@@ -1120,6 +1120,7 @@ def analyzeline(m, case, line):
             groupname[groupcounter] = 'interface'
             groupcache[groupcounter]['block'] = 'interface'
             groupcache[groupcounter]['name'] = 'unknown_interface'
+            groupcache[groupcounter]['generated_interface'] = True
             prev_group = groupcache[groupcounter - 1]
             groupcache[groupcounter]['from'] = f"{prev_group['from']}:{prev_group['name']}"
             groupcache[groupcounter]['body'] = []
@@ -2313,20 +2314,31 @@ def analyzebody(block, args, tab=''):
 
 def buildimplicitrules(block):
     setmesstext(block)
-    implicitrules = defaultimplicitrules
-    attrrules = {}
+    parent = block.get('parent_block')
+    if parent and parent.get('generated_interface'):
+        parent = parent.get('parent_block')
+    if parent and parent.get('block') in [
+            'module', 'program', 'subroutine', 'function']:
+        implicitrules, attrrules = buildimplicitrules(parent)
+        setmesstext(block)
+    else:
+        implicitrules = copy.deepcopy(defaultimplicitrules)
+        attrrules = {}
     if 'implicit' in block:
         if block['implicit'] is None:
             implicitrules = None
+            attrrules = {}
             if verbose > 1:
                 outmess(
                     f"buildimplicitrules: no implicit rules for routine {repr(block['name'])}.\n")
         else:
-            for k in list(block['implicit'].keys()):
-                if block['implicit'][k].get('typespec') not in ['static', 'automatic']:
-                    implicitrules[k] = block['implicit'][k]
+            if implicitrules is None:
+                implicitrules = {}
+            for k, rule in block['implicit'].items():
+                if rule.get('typespec') not in ['static', 'automatic']:
+                    implicitrules[k] = copy.deepcopy(rule)
                 else:
-                    attrrules[k] = block['implicit'][k]['typespec']
+                    attrrules[k] = rule['typespec']
     return implicitrules, attrrules
 
 
@@ -2698,8 +2710,8 @@ def analyzevars(block):
             vars[n] = setattrspec(vars[n], attrrules[n[0]])
         if 'typespec' not in vars[n]:
             if not ('attrspec' in vars[n] and 'external' in vars[n]['attrspec']):
-                if implicitrules:
-                    ln0 = n[0].lower()
+                ln0 = n[0].lower()
+                if implicitrules and ln0 in implicitrules:
                     for k in list(implicitrules[ln0].keys()):
                         if k == 'typespec' and implicitrules[ln0][k] == 'undefined':
                             continue

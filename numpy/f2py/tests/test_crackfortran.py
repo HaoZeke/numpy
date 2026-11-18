@@ -264,6 +264,59 @@ class TestModuleDeclaration:
         assert mod[0]["vars"]["abar"]["="] == "bar('abar')"
 
 
+def test_implicit_rules_are_scoped(tmp_path):
+    src = tmp_path / "implicit.f90"
+    src.write_text(textwrap.dedent("""\
+        module host
+          implicit real*8 (a-h,o-z)
+          interface
+            subroutine ext(a)
+            end subroutine
+          end interface
+        contains
+          subroutine inner(a)
+          end subroutine
+        end module
+        module nonemod
+          implicit none
+        contains
+          subroutine part(i, a)
+            implicit integer (i-n)
+          end subroutine
+        end module
+        subroutine one(a)
+          implicit real*8 (a-h,o-z)
+        end
+        subroutine two(a)
+        end
+        subroutine outer(cb, x)
+          implicit real(kind=8) (a-h,o-z)
+          external cb
+          call cb(x)
+        end
+    """))
+    crackfortran.reset_global_f2py_vars()
+    blocks = {
+        block["name"]: block
+        for block in crackfortran.crackfortran([str(src)])
+    }
+    host = blocks["host"]
+    inner = next(b for b in host["body"] if b.get("name") == "inner")
+    interface = next(
+        b for b in host["body"] if b.get("block") == "interface")
+    ext = next(b for b in interface["body"] if b.get("name") == "ext")
+    part = blocks["nonemod"]["body"][0]
+    callback = blocks["outer__user__routines"]["body"][0]["body"][0]
+
+    assert inner["vars"]["a"]["kindselector"]["*"] == "8"
+    assert "kindselector" not in ext["vars"]["a"]
+    assert part["vars"]["i"]["typespec"] == "integer"
+    assert "typespec" not in part["vars"]["a"]
+    assert blocks["one"]["vars"]["a"]["kindselector"]["*"] == "8"
+    assert "kindselector" not in blocks["two"]["vars"]["a"]
+    assert callback["vars"]["x"]["kindselector"]["kind"] == "8"
+
+
 class TestStringLiteralDepend:
     # gh-28700: identifiers inside a character parameter's literal value
     # must not be harvested as dependencies (a self-dependency crashes the
