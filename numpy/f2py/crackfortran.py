@@ -870,18 +870,23 @@ def crackline(line, reset=0):
 def markouterparen(line):
     l = ''
     f = 0
-    for c in line:
-        if c == '(':
+    before, after = split_by_unquoted(line, '()')
+    l += before
+    while after:
+        if after[0] == '(':
             f = f + 1
             if f == 1:
                 l = l + '@(@'
-                continue
-        elif c == ')':
+            else:
+                l += after[0]
+        elif after[0] == ')':
             f = f - 1
             if f == 0:
                 l = l + '@)@'
-                continue
-        l = l + c
+            else:
+                l += after[0]
+        before, after = split_by_unquoted(after[1:], '()')
+        l += before
     return l
 
 
@@ -952,7 +957,9 @@ operatorpattern = re.compile(
     r'\s*(?P<scheme>(operator|assignment))'
     r'@\(@\s*(?P<name>[^)]+)\s*@\)@\s*\Z', re.I)
 callnameargspattern = re.compile(
-    r'\s*(?P<name>\b[\w$]+\b)\s*@\(@\s*(?P<args>.*)\s*@\)@\s*\Z', re.I)
+    r'\s*(?P<name>\b[\w$]+\b)\s*@\(@\s*(?P<args>.*?)\s*@\)@'
+    r'(?:\s*result\s*@\(@\s*(?P<result>\b[\w$]+\b)\s*@\)@)?'
+    r'\s*\Z', re.I)
 real16pattern = re.compile(
     r'([-+]?(?:\d+(?:\.\d*)?|\d*\.\d+))[dD]((?:[-+]?\d+)?)')
 real8pattern = re.compile(
@@ -1000,7 +1007,7 @@ def _resolvenameargspattern(line):
         return name, [], None, None
     m1 = callnameargspattern.match(line)
     if m1:
-        return m1.group('name'), m1.group('args'), None, None
+        return m1.group('name'), m1.group('args'), m1.group('result'), None
     return None, [], None, None
 
 
