@@ -261,6 +261,7 @@ cb_rout_rules = [
             """\
     if (capi_j>capi_i) {
         GETSTRFROMPYTUPLE(capi_return,capi_i++,return_value,return_value_len);
+        STRINGPADN(return_value,return_value_len,'\\0',' ');
     } else {
         fprintf(stderr,"Warning: call-back function #name# did not provide"
                        " return value (index=%d, type=#ctype#)\\n",capi_i);
@@ -269,7 +270,7 @@ cb_rout_rules = [
              '    fprintf(stderr,"#showvalueformat#\\".\\n",return_value);'}
         ],
         'need': ['#ctype#_from_pyobj', {debugcapi: 'CFUNCSMESS'},
-                 'string.h', 'GETSTRFROMPYTUPLE'],
+                 'string.h', 'GETSTRFROMPYTUPLE', 'STRINGPADN'],
         'return': 'return;',
         '_check': isstringfunction
     },
@@ -417,12 +418,17 @@ cb_arg_rules = [
         '_optional': ''
     }, {  # String
         'frompyobj': [{debugcapi: '    CFUNCSMESS("cb:Getting #varname#->\\"");'},
-                      """    if (capi_j>capi_i)
+                      {isintent_c: """    if (capi_j>capi_i)
         GETSTRFROMPYTUPLE(capi_return,capi_i++,#varname_i#,#varname_i#_cb_len);""",
+                       l_not(isintent_c): """    if (capi_j>capi_i) {
+        GETSTRFROMPYTUPLE(capi_return,capi_i++,#varname_i#,#varname_i#_cb_len);
+        STRINGPADN(#varname_i#,#varname_i#_cb_len,'\\0',' ');
+    }"""},
                       {debugcapi:
                        '    fprintf(stderr,"#showvalueformat#\\":%d:.\\n",#varname_i#,#varname_i#_cb_len);'},
                       ],
         'need': ['#ctype#', 'GETSTRFROMPYTUPLE',
+                 {l_not(isintent_c): 'STRINGPADN'},
                  {debugcapi: 'CFUNCSMESS'}, 'string.h'],
         '_check': l_and(isstring, isintent_out)
     }, {

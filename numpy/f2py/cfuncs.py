@@ -434,8 +434,13 @@ cppmacros['GETSTRFROMPYTUPLE'] = """
         PyObject *rv_cb_str = PyTuple_GetItem((tuple),(index));\\
         if (rv_cb_str == NULL)\\
             goto capi_fail;\\
-        if (PyBytes_Check(rv_cb_str)) {\\
-            str[len-1]='\\0';\\
+        if (PyUnicode_Check(rv_cb_str)) {\\
+            PyObject *rv_cb_bytes = PyUnicode_AsASCIIString(rv_cb_str);\\
+            if (rv_cb_bytes == NULL)\\
+                goto capi_fail;\\
+            STRINGCOPYN((str),PyBytes_AS_STRING((PyBytesObject*)rv_cb_bytes),(len));\\
+            Py_DECREF(rv_cb_bytes);\\
+        } else if (PyBytes_Check(rv_cb_str)) {\\
             STRINGCOPYN((str),PyBytes_AS_STRING((PyBytesObject*)rv_cb_str),(len));\\
         } else {\\
             PRINTPYOBJERR(rv_cb_str);\\
