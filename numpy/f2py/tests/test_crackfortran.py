@@ -528,6 +528,26 @@ class TestParamEval:
                       dimspec=dimspec)
 
 
+def test_kind_prefixed_character_constants(tmp_path):
+    source = tmp_path / "kind_char.f90"
+    source.write_text(textwrap.dedent("""\
+        module kind_char
+          integer, parameter :: ck = 1
+          character(len=3), parameter :: text = ck_'a_b'
+          integer, parameter :: n = len(1_"hello")
+          character :: bare = 1_'z'
+          real :: arr(n)
+        end module kind_char
+        """))
+
+    variables = crackfortran.crackfortran([str(source)])[0]["vars"]
+
+    assert variables["text"]["="] == "'a_b'"
+    assert variables["n"]["="] == "5"
+    assert variables["bare"]["="] == "'z'"
+    assert variables["arr"]["dimension"] == ["5"]
+
+
 class TestParamParseNestedParens:
     # issue gh-28095: grouping parens in a dimension expression such as
     # (mx_supply_curves + mx_intl_curves) must fold to a concrete size,

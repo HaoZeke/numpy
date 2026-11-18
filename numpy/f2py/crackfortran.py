@@ -1328,6 +1328,7 @@ def analyzeline(m, case, line):
             if '=' in edecl[k] and (not edecl[k]['='] == initexpr):
                 outmess(f'analyzeline: Overwriting the value of parameter "{k}" '
                         f'("{edecl[k]["="]}") with "{initexpr}".\n')
+            initexpr = _kind_character_re.sub(r'\1', initexpr)
             t = determineexprtype(initexpr, params)
             if t:
                 if t.get('typespec') == 'real':
@@ -2523,6 +2524,11 @@ def _selected_real_kind_func(p, r=0, radix=0):
     return -1
 
 
+_kind_character_re = re.compile(
+    r"(?:\b(?:\d+|[A-Za-z]\w*)_)?"
+    r"('(?:''|\\.|[^'\\])*'|\"(?:\"\"|\\.|[^\"\\])*\")")
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2543,6 +2549,7 @@ def get_parameters(vars, global_params={}):
     for n in param_names:
         if '=' in vars[n]:
             v = vars[n]['=']
+            v = _kind_character_re.sub(r'\1', v)
             if islogical(vars[n]):
                 v = v.lower()
                 for repl in [
@@ -2573,7 +2580,13 @@ def get_parameters(vars, global_params={}):
 
             if not is_replaced:
                 if not selected_kind_re.match(v):
-                    v_ = v.split('_')
+                    v_ = []
+                    while True:
+                        before, after = split_by_unquoted(v, '_')
+                        v_.append(before)
+                        if not after:
+                            break
+                        v = after[1:]
                     # In case there are additive parameters
                     if len(v_) > 1:
                         v = ''.join(v_[:-1]).lower().replace(v_[-1].lower(), '')
@@ -2634,6 +2647,7 @@ _is_kind_number = re.compile(r'\d+_').match
 
 
 def _eval_scalar(value, params):
+    value = _kind_character_re.sub(r'\1', value)
     if _is_kind_number(value):
         value = value.split('_')[0]
     try:
@@ -2949,6 +2963,7 @@ def analyzevars(block):
                 vars[n]['depend'] = list(set(n_deps))
 
         if '=' in vars[n]:
+            vars[n]['='] = _kind_character_re.sub(r'\1', vars[n]['='])
             if 'attrspec' not in vars[n]:
                 vars[n]['attrspec'] = []
             if ('optional' not in vars[n]['attrspec']) and \
