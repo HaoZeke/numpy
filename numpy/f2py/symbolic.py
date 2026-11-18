@@ -1385,7 +1385,8 @@ class _FromStringWorker:
             return _Pair(keyname, self.process(value))
 
         # addition/subtraction operations
-        operands = re.split(r'((?<!\d[edED])[+-])', r)
+        operands = re.split(
+            r'((?<!\d[edED])(?<=[\w\d_.)\]@])\s*[+-])', r)
         if len(operands) > 1:
             result = self.process(restore(operands[0] or '0'))
             for op, operand in zip(operands[1::2], operands[2::2]):
@@ -1397,6 +1398,12 @@ class _FromStringWorker:
                     assert op == '-'
                     result -= operand
             return result
+
+        m = re.match(r'\A\s*([+-])\s*(.*)\Z', r)
+        if m and m.group(2):
+            sign, rest = m.groups()
+            operand = self.process(restore(rest))
+            return operand if sign == '+' else -operand
 
         # string concatenate operation
         if self.language is Language.Fortran and '//' in r:
