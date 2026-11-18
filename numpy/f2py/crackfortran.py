@@ -1673,6 +1673,42 @@ def markinnerspaces(line):
     return fragment
 
 
+def _split_pointer_init(expr):
+    """Split ``decl => init`` outside quotes and parentheses.
+
+    ``type(node), pointer :: next => null()`` is one component. A space
+    before ``null`` must not become a second component named ``null``.
+    """
+    depth = 0
+    quote = None
+    i = 0
+    length = len(expr)
+    while i < length - 1:
+        c = expr[i]
+        if quote:
+            # Same escape rule as markoutercomma: \' does not end a literal.
+            if c == '\\' and i + 1 < length:
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            i += 1
+            continue
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+        elif c == '=' and expr[i + 1] == '>' and depth == 0:
+            init = expr[i + 2:].lstrip().replace('@_@', ' ')
+            return expr[:i].rstrip(), init
+        i += 1
+    return expr, None
+
+
 def updatevars(typespec, selector, attrspec, entitydecl):
     """
     Returns last_name, the variable name without special chars, parenthesis
@@ -1702,10 +1738,14 @@ def updatevars(typespec, selector, attrspec, entitydecl):
     el = [x.strip() for x in markoutercomma(entitydecl).split('@,@')]
     el1 = []
     for e in el:
-        for e1 in [x.strip() for x in markoutercomma(removespaces(markinnerspaces(e)), comma=' ').split('@ @')]:
+        collapsed = removespaces(markinnerspaces(e))
+        decl, pointer_init = _split_pointer_init(collapsed)
+        for e1 in [x.strip() for x in markoutercomma(decl, comma=' ').split('@ @')]:
             if e1:
-                el1.append(e1.replace('@_@', ' '))
-    for e in el1:
+                el1.append((e1.replace('@_@', ' '), pointer_init))
+                # One initializer belongs to this entity, not the next name.
+                pointer_init = None
+    for e, pointer_init in el1:
         m = namepattern.match(e)
         if not m:
             outmess(
@@ -1840,6 +1880,8 @@ def updatevars(typespec, selector, attrspec, entitydecl):
             else:
                 outmess('updatevars: could not crack entity declaration "%s". Ignoring.\n' % (
                     ename + m.group('after')))
+        if pointer_init is not None:
+            edecl['='] = pointer_init
         for k in list(edecl.keys()):
             if not edecl[k]:
                 del edecl[k]
@@ -3554,7 +3596,9 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
                     v = f'({v.real},{v.imag})'
                 except Exception:
                     pass
-            vardef = f'{vardef} :: {a}={v}'
+            # Pointer initialization is ``=>``, not the ``=`` used for values.
+            sep = '=>' if 'pointer' in (vars[a].get('attrspec') or []) else '='
+            vardef = f'{vardef} :: {a}{sep}{v}'
         else:
             vardef = f'{vardef} :: {a}'
         ret = f'{ret}{tab}{vardef}'
