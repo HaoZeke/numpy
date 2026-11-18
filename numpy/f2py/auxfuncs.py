@@ -445,8 +445,9 @@ def isrequired(var):
 
 
 def iscstyledirective(f2py_line):
-    directives = {"callstatement", "callprotoargument", "pymethoddef"}
-    return any(directive in f2py_line.lower() for directive in directives)
+    directives = {"callstatement", "callprotoargument", "pymethoddef", "usercode"}
+    statement = f2py_line.lstrip().split(maxsplit=1)
+    return bool(statement) and statement[0].lower() in directives
 
 
 def isintent_in(var):

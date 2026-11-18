@@ -424,14 +424,11 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             if l[-1] not in "\n\r\f":
                 break
             l = l[:-1]
-        # Do not lower for directives, gh-2547, gh-27697, gh-26681
-        is_f2py_directive = False
         # Unconditionally remove comments
         (l, rl) = split_by_unquoted(l, '!')
         l += ' '
         if rl[:5].lower() == '!f2py':  # f2py directive
             l, _ = split_by_unquoted(l + 4 * ' ' + rl[5:], '!')
-            is_f2py_directive = True
         if l.strip() == '':  # Skip empty line
             if sourcecodeform == 'free':
                 # In free form, a statement continues in the next line
@@ -451,10 +448,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             if l[0] in ['*', 'c', '!', 'C', '#']:
                 if l[1:5].lower() == 'f2py':  # f2py directive
                     l = '     ' + l[5:]
-                    is_f2py_directive = True
                 else:  # Skip comment line
                     cont = False
-                    is_f2py_directive = False
                     continue
             elif strictf77:
                 if len(l) > 72:
@@ -481,10 +476,9 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     # clean up line beginning from possible digits.
                     l = '     ' + l[5:]
                     # f2py directives are already stripped by this point
-                    if localdolowercase:
-                        finalline = ll.lower()
-                    else:
-                        finalline = ll
+                    finalline = (ll.lower()
+                                 if localdolowercase and not iscstyledirective(ll)
+                                 else ll)
                     origfinalline = ll
                     ll = l
 
@@ -509,12 +503,9 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 finalline = ''
                 origfinalline = ''
             else:
-                if localdolowercase:
-                    # only skip lowering for C style constructs
-                    # gh-2547, gh-27697, gh-26681, gh-28014
-                    finalline = ll.lower() if not (is_f2py_directive and iscstyledirective(ll)) else ll
-                else:
-                    finalline = ll
+                finalline = (ll.lower()
+                             if localdolowercase and not iscstyledirective(ll)
+                             else ll)
                 origfinalline = ll
                 ll = l
             cont = (r is not None)
@@ -544,11 +535,9 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         else:
             dowithline(finalline)
         l1 = ll
-    # Last line should never have an f2py directive anyway
-    if localdolowercase:
-        finalline = ll.lower()
-    else:
-        finalline = ll
+    finalline = (ll.lower()
+                 if localdolowercase and not iscstyledirective(ll)
+                 else ll)
     origfinalline = ll
     filepositiontext = f'Line #{fin.filelineno() - 1} in {currentfilename}:"{l1}"\n\t'
     m = includeline.match(origfinalline)
