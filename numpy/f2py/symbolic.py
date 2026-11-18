@@ -359,9 +359,12 @@ class Expr:
         elif self.op is Op.APPLY:
             name, args, kwargs = self.data
             if name is ArithOp.DIV and language is Language.C:
-                numer, denom = [arg.tostring(Precedence.PRODUCT,
-                                             language=language)
-                                for arg in args]
+                numer = args[0].tostring(Precedence.PRODUCT,
+                                         language=language)
+                # `*` and `/` associate left to right, so group a
+                # product divisor.
+                denom = args[1].tostring(Precedence.UNARY,
+                                         language=language)
                 r = f'{numer} / {denom}'
                 precedence = Precedence.PRODUCT
             else:

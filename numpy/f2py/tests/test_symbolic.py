@@ -196,6 +196,8 @@ class TestSymbolic(util.F2PyTest):
 
         assert as_apply(ArithOp.DIV, x,
                         y).tostring(language=language) == "x / y"
+        assert (Expr.parse("n/(m*k)", language=Language.Fortran).tostring(
+            language=language) == "n / (k * m)")
         assert (as_apply(ArithOp.DIV, x,
                          x + y).tostring(language=language) == "x / (x + y)")
         assert (as_apply(ArithOp.DIV, x - y, x +
