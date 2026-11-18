@@ -198,9 +198,11 @@ def buildhooks(pymod):
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b['block']} {b_name}\n")
                     continue
-                modobjs.append(f"{b_name}()")
                 b['modulename'] = m_name
                 api, wrap = rules.buildapi(b)
+                if api is None:
+                    continue
+                modobjs.append(f"{b_name}()")
                 if isfunction(b):
                     fhooks[0] = fhooks[0] + wrap
                     fargs.append(f"f2pywrap_{m_name}_{b_name}")

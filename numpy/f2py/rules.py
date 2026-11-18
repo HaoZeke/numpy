@@ -1404,6 +1404,8 @@ def buildmodule(m, um):
                     outmess(f'    Maybe empty "{m_name}-f2pywrappers.f"\n')
                     Path(f'{b_path}/{m_name}-f2pywrappers.f').touch()
             api, wrap = buildapi(nb)
+            if api is None:
+                continue
             if wrap:
                 if isf90:
                     funcwrappers2.append(wrap)
@@ -1558,6 +1560,16 @@ stnd = {1: 'st', 2: 'nd', 3: 'rd', 4: 'th', 5: 'th',
 
 
 def buildapi(rout):
+    variables = rout.get('vars') or {}
+    for arg in rout.get('args') or []:
+        var = variables.get(arg)
+        if (isinstance(var, dict) and var.get('typespec') == 'type'
+                and isattr_value(var)):
+            outmess(f"\t\t\tSkipping {rout.get('name')} since dummy "
+                    f"argument {arg} is a derived type with the value "
+                    f"attribute...\n")
+            return None, None
+
     rout, wrap = func2subr.assubr(rout)
     args, depargs = getargs2(rout)
     capi_maps.depargs = depargs
