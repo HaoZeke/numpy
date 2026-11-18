@@ -31,6 +31,7 @@ from .auxfuncs import (
     isrequired,
     isscalar,
     isstring,
+    isstringarray,
     isstringfunction,
     issubroutine,
     l_and,
@@ -375,11 +376,12 @@ cb_arg_rules = [
             isstring: '#ctype#'
         },
         'need': {l_or(isscalar, isarray, isstring): '#ctype#'},
-        # untested with multiple args
-        'strarglens': {isstring: ',int #varname_i#_cb_len'},
-        'strarglens_td': {isstring: ',int'},  # untested with multiple args
-        # untested with multiple args
-        'strarglens_nm': {isstring: ',#varname_i#_cb_len'},
+        'strarglens': {l_or(isstring, isstringarray):
+                       ',int #varname_i#_cb_len'},
+        'strarglens_td': {l_or(isstring, isstringarray):
+                          ',int'},
+        'strarglens_nm': {l_or(isstring, isstringarray):
+                          ',#varname_i#_cb_len'},
     },
     {  # Scalars
         'decl': {l_not(isintent_c): '    #ctype# #varname_i#=(*#varname_i#_cb_capi);'},

@@ -702,6 +702,8 @@ def cb_sign2map(a, var, index=None):
     if ret['ctype'] in c2capi_map:
         ret['atype'] = c2capi_map[ret['ctype']]
         ret['elsize'] = get_elsize(var)
+        if isstringarray(var) and ret['elsize'] == '-1':
+            ret['elsize'] = f"{ret['varname_i']}_cb_len"
     if ret['ctype'] in cformat_map:
         ret['showvalueformat'] = f"{cformat_map[ret['ctype']]}"
     if isarray(var):
