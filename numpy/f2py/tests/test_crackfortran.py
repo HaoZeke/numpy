@@ -69,6 +69,35 @@ class TestPublicPrivate:
         pyf = crackfortran.crack2fortran(mod)
         assert 'bar1337baz' not in pyf
 
+
+@pytest.mark.slow
+class TestUseOnlyParameters(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+module source_a
+  integer, parameter :: n = 2
+  integer, parameter :: k = 3
+end module source_a
+module source_b
+  integer, parameter :: n = 5
+end module source_b
+module use_target
+  use source_a, only: n
+  use source_b, only: m => n
+  use source_a, only: a => n
+  use source_a, only: b => k
+contains
+  subroutine sizes(w, x, y, z)
+    integer, intent(out) :: w(n), x(m), y(a), z(b)
+  end subroutine sizes
+end module use_target
+"""
+
+    def test_local_names_and_repeated_use(self):
+        arrays = self.module.use_target.sizes()
+        assert [array.size for array in arrays] == [2, 5, 2, 3]
+
+
 class TestModuleProcedure:
     def test_moduleOperators(self, tmp_path):
         fpath = util.getpath("tests", "src", "crackfortran", "operators.f90")

@@ -1523,12 +1523,9 @@ def analyzeline(m, case, line):
             if 'use' not in groupcache[groupcounter]:
                 groupcache[groupcounter]['use'] = {}
             name = m1.group('name')
-            groupcache[groupcounter]['use'][name] = {}
-            isonly = 0
+            spec = {}
             if 'list' in mm and mm['list'] is not None:
-                if 'notonly' in mm and mm['notonly'] is None:
-                    isonly = 1
-                groupcache[groupcounter]['use'][name]['only'] = isonly
+                isonly = int(mm.get('notonly') is None)
                 ll = [x.strip() for x in mm['list'].split(',')]
                 rl = {}
                 for l in ll:
@@ -1543,7 +1540,11 @@ def analyzeline(m, case, line):
                                 f'analyzeline: Not local=>use pattern found in {repr(l)}\n')
                     else:
                         rl[l] = l
-                    groupcache[groupcounter]['use'][name]['map'] = rl
+                spec = {'only': isonly, 'map': rl}
+            uses = groupcache[groupcounter]['use']
+            if name in uses:
+                spec = _merge_use(uses[name], spec)
+            uses[name] = spec
         else:
             print(m.groupdict())
             outmess('analyzeline: Could not crack the use statement.\n')
@@ -1981,12 +1982,25 @@ def setmesstext(block):
         pass
 
 
+def _merge_use(left, right):
+    """Combine USE statements for the same module."""
+    mapping = dict((left or {}).get('map') or {})
+    mapping.update((right or {}).get('map') or {})
+    only = bool((left or {}).get('only') and (right or {}).get('only'))
+    if mapping or only:
+        return {'only': int(only), 'map': mapping}
+    return {}
+
+
 def get_usedict(block):
     usedict = {}
     if 'parent_block' in block:
         usedict = get_usedict(block['parent_block'])
     if 'use' in block:
-        usedict.update(block['use'])
+        for name, spec in block['use'].items():
+            if name in usedict:
+                spec = _merge_use(usedict[name], spec)
+            usedict[name] = spec
     return usedict
 
 
@@ -2004,18 +2018,36 @@ def get_useparameters(block, param_map=None):
             outmess(f'get_useparameters: no module {usename} info used by '
                     f'{block.get("name")}\n')
             continue
-        mvars = f90modulevars[usename]
-        params = get_parameters(mvars)
+        params = get_parameters(f90modulevars[usename])
         if not params:
             continue
-        # XXX: apply mapping
-        if mapping:
-            errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
+        mapping = mapping or {}
+        mmap = mapping.get('map') or {}
+        renamed = {
+            str(remote).lower()
+            for local, remote in mmap.items()
+            if str(local).lower() != str(remote).lower()
+        }
+        explicit = {
+            str(remote).lower()
+            for local, remote in mmap.items()
+            if str(local).lower() == str(remote).lower()
+        }
         for k, v in list(params.items()):
+            key = str(k).lower()
+            if mapping.get('only') or (key in renamed and key not in explicit):
+                continue
             if k in param_map:
                 outmess(f'get_useparameters: overriding parameter {k!r} with'
                         f' value from module {usename!r}\n')
             param_map[k] = v
+        for local, remote in mmap.items():
+            remote = str(remote).lower()
+            if remote in params:
+                param_map[str(local).lower()] = params[remote]
+
+    for name in block.get('vars', {}):
+        param_map.pop(str(name).lower(), None)
 
     return param_map
 
