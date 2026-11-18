@@ -354,6 +354,31 @@ def is_free_format(fname):
     return result
 
 
+def _lower_fortran_line(line):
+    """Lowercase Fortran text outside character literals."""
+    chars = []
+    quote = None
+    i = 0
+    n = len(line)
+    while i < n:
+        char = line[i]
+        if quote is None:
+            chars.append(char if char in ("'", '"') else char.lower())
+            if char in ("'", '"'):
+                quote = char
+            i += 1
+            continue
+        chars.append(char)
+        if char == quote:
+            if i + 1 < n and line[i + 1] == quote:
+                i += 1
+                chars.append(line[i])
+            else:
+                quote = None
+        i += 1
+    return "".join(chars)
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -482,7 +507,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     l = '     ' + l[5:]
                     # f2py directives are already stripped by this point
                     if localdolowercase:
-                        finalline = ll.lower()
+                        finalline = _lower_fortran_line(ll)
                     else:
                         finalline = ll
                     origfinalline = ll
@@ -512,7 +537,9 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 if localdolowercase:
                     # only skip lowering for C style constructs
                     # gh-2547, gh-27697, gh-26681, gh-28014
-                    finalline = ll.lower() if not (is_f2py_directive and iscstyledirective(ll)) else ll
+                    finalline = (ll if is_f2py_directive
+                                 and iscstyledirective(ll)
+                                 else _lower_fortran_line(ll))
                 else:
                     finalline = ll
                 origfinalline = ll
@@ -546,7 +573,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         l1 = ll
     # Last line should never have an f2py directive anyway
     if localdolowercase:
-        finalline = ll.lower()
+        finalline = _lower_fortran_line(ll)
     else:
         finalline = ll
     origfinalline = ll

@@ -309,7 +309,7 @@ class TestStringLiteralDepend:
         lvs = lwork_case["vars"]
         # depend harvest order follows vars dict iteration; compare as a set
         assert set(lvs["lwork"]["depend"]) == {"norm", "n"}
-        assert lvs["lwork"]["="] == "(*norm=='i'?3*n:n)"
+        assert lvs["lwork"]["="] == "(*norm=='I'?3*n:n)"
         assert lvs["work"]["dimension"] == ["lwork"]
 
     def test_lda_declared_before_n(self):
