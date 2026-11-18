@@ -2951,8 +2951,10 @@ def analyzevars(block):
         if '=' in vars[n]:
             if 'attrspec' not in vars[n]:
                 vars[n]['attrspec'] = []
-            if ('optional' not in vars[n]['attrspec']) and \
-               ('required' not in vars[n]['attrspec']):
+            # A component initializer is not a default argument.
+            if (block['block'] != 'type' and
+                    'optional' not in vars[n]['attrspec'] and
+                    'required' not in vars[n]['attrspec']):
                 vars[n]['attrspec'].append('optional')
             if 'depend' not in vars[n]:
                 vars[n]['depend'] = []
