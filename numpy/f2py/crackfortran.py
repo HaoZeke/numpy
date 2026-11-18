@@ -2266,6 +2266,14 @@ def analyzecommon(block):
     return block
 
 
+def _name_listed(name, names):
+    folded = name.lower()
+    for item in names:
+        if item.lower() == folded:
+            return True
+    return False
+
+
 def analyzebody(block, args, tab=''):
     global usermodules, skipfuncs, onlyfuncs, f90modulevars
 
@@ -2288,9 +2296,9 @@ def analyzebody(block, args, tab=''):
             # Add private members to skipfuncs for gh-23879
             if b['name'] in maybe_private.keys():
                 skipfuncs.append(b['name'])
-            if b['name'] in skipfuncs:
+            if _name_listed(b['name'], skipfuncs):
                 continue
-            if onlyfuncs and b['name'] not in onlyfuncs:
+            if onlyfuncs and not _name_listed(b['name'], onlyfuncs):
                 continue
             b['saved_interface'] = crack2fortrangen(
                 b, '\n' + ' ' * 6, as_interface=True)
@@ -3322,9 +3330,9 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     if isinstance(block, list):
         for g in block:
             if g and g['block'] in ['function', 'subroutine']:
-                if g['name'] in skipfuncs:
+                if _name_listed(g['name'], skipfuncs):
                     continue
-                if onlyfuncs and g['name'] not in onlyfuncs:
+                if onlyfuncs and not _name_listed(g['name'], onlyfuncs):
                     continue
             ret = ret + crack2fortrangen(g, tab, as_interface=as_interface)
         return ret
