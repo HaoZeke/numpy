@@ -7,7 +7,7 @@ import pytest
 
 import numpy as np
 import numpy.testing as npt
-from numpy.f2py._backends._meson import MesonTemplate
+from numpy.f2py._backends._meson import MesonTemplate, _prepare_sources
 
 from . import util
 
@@ -106,6 +106,7 @@ class TestIncludeFiles(util.F2PyTest):
         exp = 7.0
         res = self.module.add(3.0, 4.0)
         assert exp == res
+
 
 @pytest.mark.slow
 class TestF77Comments(util.F2PyTest):
@@ -317,3 +318,57 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+@pytest.mark.slow
+def test_include_file_beside_source(tmp_path):
+    import subprocess
+
+    if not util.has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "defs.inc").write_text("      integer, parameter :: param = 41\n")
+    (src / "code.f90").write_text(
+        "subroutine addp(x, y)\n"
+        "  implicit none\n"
+        "  include 'defs.inc'\n"
+        "  integer, intent(in) :: x\n"
+        "  integer, intent(out) :: y\n"
+        "  y = x + param\n"
+        "end subroutine\n"
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "numpy.f2py",
+            "-c",
+            "src/code.f90",
+            "-m",
+            "incmod",
+            "--backend",
+            "meson",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
+    proc = subprocess.run(
+        [sys.executable, "-c", "import incmod; print(incmod.addp(1))"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
+    assert proc.stdout.strip() == "42"
+
+
+def test_prepare_sources_preserves_symlink(tmp_path):
+    source = tmp_path / "source.f90"
+    source.write_text("")
+    link = tmp_path / "link.f90"
+    link.symlink_to(source)
+
+    assert _prepare_sources("mod", [link], tmp_path / "build") == [link.absolute()]
