@@ -418,6 +418,15 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             outmess(f"\tReading file {currentfilename!r} "
                     f"(format:{sourcecodeform}{',strict' if strictf77 else ''})\n")
 
+        if sourcecodeform == 'fix':
+            # DEC tab format uses a nonzero digit after a tab as continuation.
+            tab = l.find('\t', 0, 6)
+            if tab >= 0:
+                head, rest = l[:tab], l[tab + 1:]
+                if not head.strip() and rest and rest[0] in '123456789':
+                    l = '     ' + rest
+                else:
+                    l = head.ljust(6) + rest
         l = l.expandtabs().replace('\xa0', ' ')
         # Get rid of newline characters
         while not l == '':

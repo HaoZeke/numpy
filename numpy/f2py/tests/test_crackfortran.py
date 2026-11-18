@@ -400,6 +400,31 @@ class TestFortranReader(util.F2PyTest):
         assert mod[0]['name'] == 'foo'
 
 
+def test_fixed_form_tab_continuation(tmp_path):
+    src = tmp_path / "tab.f"
+    src.write_text(
+        "      subroutine foo(a,\n"
+        "\t1b,\n"
+        "\t2c)\n"
+        "      integer a, b, c\n"
+        "      end\n"
+        "\t subroutine bar(n)\n"
+        "\t integer n\n"
+        "\t end\n"
+    )
+    crackfortran.reset_global_f2py_vars()
+    blocks = {
+        block["name"]: block
+        for block in crackfortran.crackfortran([str(src)])
+    }
+    assert blocks["foo"]["args"] == ["a", "b", "c"]
+    assert blocks["bar"]["args"] == ["n"]
+    assert all(
+        blocks["foo"]["vars"][name]["typespec"] == "integer"
+        for name in ("a", "b", "c")
+    )
+
+
 @pytest.mark.slow
 class TestUnicodeComment(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "unicode_comment.f90")]
