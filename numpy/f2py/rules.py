@@ -1014,8 +1014,12 @@ if (#varname#_cb.capi==Py_None) {
         f2py_success = #ctype#_from_pyobj(&#varname#,#varname#_capi,"#pyname#() #nth# (#varname#) can\'t be converted to #ctype#");
     if (f2py_success) {'''},
             {islogical: '''\
-        #varname# = (#ctype#)PyObject_IsTrue(#varname#_capi);
-        f2py_success = 1;
+        {
+            int _f2py_truth = PyObject_IsTrue(#varname#_capi);
+            f2py_success = _f2py_truth >= 0;
+            if (f2py_success)
+                #varname# = (#ctype#)_f2py_truth;
+        }
     if (f2py_success) {'''},
         ],
         'cleanupfrompyobj': '    } /*if (f2py_success) of #varname#*/',

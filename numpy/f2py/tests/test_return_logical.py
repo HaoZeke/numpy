@@ -64,3 +64,26 @@ class TestFReturnLogical(TestReturnLogical):
                              ["t0", "t1", "t2", "t4", "t8", "s0", "s1", "s2", "s4", "s8"])
     def test_all_f90(self, name):
         self.check_function(getattr(self.module.f90_return_logical, name))
+
+
+@pytest.mark.slow
+class TestLogicalTruthErrorSkipsCall(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+module mside
+  implicit none
+  integer :: ncalls = 0
+contains
+  subroutine touch(x)
+    logical(kind=8), intent(inout), optional :: x
+    ncalls = ncalls + 1
+  end subroutine touch
+end module mside
+"""
+
+    def test_ambiguous_ndarray_does_not_call_fortran(self):
+        mod = self.module.mside
+        mod.ncalls = 0
+        with pytest.raises(ValueError):
+            mod.touch(array([0, 0]))
+        assert int(mod.ncalls) == 0
