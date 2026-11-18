@@ -1176,11 +1176,11 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
         int free_axe = -1;
         int i;
         npy_intp d;
-        /* Fill dims where -1 or 0; check dimensions; calc new_size; */
+        /* Fill free dimensions; check dimensions; calculate new_size. */
         for (i = 0; i < PyArray_NDIM(arr); ++i) {
             d = PyArray_DIM(arr, i);
             if (dims[i] >= 0) {
-                if (d > 1 && dims[i] != d) {
+                if ((d > 1 || dims[i] == 0) && dims[i] != d) {
                     PyErr_Format(
                             PyExc_ValueError,
                             "%d-th dimension must be fixed to %" NPY_INTP_FMT
@@ -1188,8 +1188,6 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                             i, dims[i], d);
                     return 1;
                 }
-                if (!dims[i])
-                    dims[i] = 1;
             }
             else {
                 dims[i] = d ? d : 1;
@@ -1204,12 +1202,18 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                              i, dims[i]);
                 return 1;
             }
+            else if (!dims[i]) {
+                PyErr_Format(PyExc_ValueError,
+                             "%d-th dimension must be fixed to 0 but got no "
+                             "axis.\n", i);
+                return 1;
+            }
             else if (free_axe < 0)
                 free_axe = i;
             else
                 dims[i] = 1;
         if (free_axe >= 0) {
-            dims[free_axe] = arr_size / new_size;
+            dims[free_axe] = new_size ? arr_size / new_size : 1;
             new_size *= dims[free_axe];
         }
         if (new_size != arr_size) {
@@ -1228,7 +1232,7 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
         for (i = 0; i < rank; ++i) {
             d = PyArray_DIM(arr, i);
             if (dims[i] >= 0) {
-                if (d > 1 && d != dims[i]) {
+                if ((d > 1 || dims[i] == 0) && d != dims[i]) {
                     PyErr_Format(
                         PyExc_ValueError,
                         "%s -- %d-th dimension must be fixed to %"
@@ -1237,8 +1241,6 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                         i, dims[i], d);
                     return 1;
                 }
-                if (!dims[i])
-                    dims[i] = 1;
             }
             else
                 dims[i] = d;
@@ -1276,7 +1278,7 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
             else
                 d = PyArray_DIM(arr, j++);
             if (dims[i] >= 0) {
-                if (d > 1 && d != dims[i]) {
+                if ((d > 1 || dims[i] == 0) && d != dims[i]) {
                     PyErr_Format(
                         PyExc_ValueError,
                         "%s -- %d-th dimension must be fixed to %"
@@ -1286,8 +1288,6 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                         i, dims[i], d, j-1);
                     return 1;
                 }
-                if (!dims[i])
-                    dims[i] = 1;
             }
             else
                 dims[i] = d;
