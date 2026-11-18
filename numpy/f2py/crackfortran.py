@@ -2045,6 +2045,53 @@ def postcrack2(block, tab='', param_map=None):
                     val = kind['kind']
                     if val in param_map:
                         kind['kind'] = param_map[val]
+    if block.get('block') == 'module' and 'vars' in block:
+        pending = []
+        for var in block['vars'].values():
+            for d in var.get('dimension') or []:
+                if d not in (':', '*', '(*)', '(:)') and not str(d).isdigit():
+                    pending.append(var)
+                    break
+        use_params = {}
+        if pending:
+            for usename, mapping in get_usedict(block).items():
+                params = get_parameters(
+                    f90modulevars.get(usename.lower(), {}))
+                mapping = mapping or {}
+                mmap = mapping.get('map') or {}
+                mapped = {
+                    str(local).lower(): params[str(remote).lower()]
+                    for local, remote in mmap.items()
+                    if str(remote).lower() in params
+                }
+                if mapping.get('only'):
+                    params = mapped
+                else:
+                    for remote in mmap.values():
+                        params.pop(str(remote).lower(), None)
+                    params.update(mapped)
+                use_params.update(params)
+            use_params.update(get_parameters(block['vars']))
+        if use_params:
+            for var in pending:
+                folded = []
+                for d in var['dimension']:
+                    if d in (':', '*', '(*)', '(:)'):
+                        folded.append(d)
+                        continue
+                    try:
+                        resolved = str(param_parse(str(d), use_params))
+                    except (ValueError, IndexError, KeyError):
+                        folded.append(d)
+                        continue
+                    if resolved != str(d):
+                        try:
+                            resolved = symbolic.Expr.parse(resolved).tostring(
+                                language=symbolic.Language.C)
+                        except Exception:
+                            pass
+                    folded.append(resolved)
+                var['dimension'] = folded
     new_body = [postcrack2(b, tab=tab + '\t', param_map=param_map)
                 for b in block['body']]
     block['body'] = new_body

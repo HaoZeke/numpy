@@ -89,6 +89,29 @@ class TestAllocatableCharacterArray(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestUsedParameterExtent(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "used_extent_use.f90"),
+        util.getpath("tests", "src", "modules", "used_extent_src.f90"),
+    ]
+
+    @pytest.mark.parametrize("module_name,arrays", [
+        ("useonly", {"local": ((4,), 4)}),
+        ("userename", {
+            "renamed": ((4,), 4),
+            "shadowed": ((2,), 2),
+        }),
+    ])
+    def test_used_parameter_extent(self, module_name, arrays):
+        mod = getattr(self.module, module_name)
+        mod.fill()
+        for name, (shape, value) in arrays.items():
+            arr = getattr(mod, name)
+            assert arr.shape == shape
+            assert list(arr) == [value] * shape[0]
+
+
+@pytest.mark.slow
 class TestUsedModule(util.F2PyTest):
     module_name = "fmath"
     sources = [
