@@ -412,6 +412,26 @@ class TestUnicodeComment(util.F2PyTest):
         self.module.foo(3)
 
 
+def test_fixed_form_bang_column_six_continues(tmp_path):
+    src = tmp_path / "bang.f"
+    src.write_text(
+        "     !subroutine skipped\n"
+        "      subroutine bang(i,\n"
+        "C    ! comment\n"
+        "     !j) ! trailing comment\n"
+        "      integer i, j\n"
+        "      end\n"
+    )
+    crackfortran.reset_global_f2py_vars()
+    mod = crackfortran.crackfortran([str(src)])[0]
+    assert mod["name"] == "bang"
+    assert mod["args"] == ["i", "j"]
+    assert all(
+        mod["vars"][name]["typespec"] == "integer"
+        for name in ("i", "j")
+    )
+
+
 class TestNameArgsPatternBacktracking:
     @pytest.mark.parametrize(
         ['adversary'],

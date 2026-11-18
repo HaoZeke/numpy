@@ -426,8 +426,14 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             l = l[:-1]
         # Do not lower for directives, gh-2547, gh-27697, gh-26681
         is_f2py_directive = False
-        # Unconditionally remove comments
-        (l, rl) = split_by_unquoted(l, '!')
+        # In fixed form, '!' in column 6 continues a pending statement.
+        if (sourcecodeform == 'fix' and not fin.isfirstline() and ll.strip()
+                and len(l) > 5 and l[5] == '!'
+                and l[0] not in 'cC*!#'):
+            tail, rl = split_by_unquoted(l[6:], '!')
+            l = l[:6] + tail
+        else:
+            (l, rl) = split_by_unquoted(l, '!')
         l += ' '
         if rl[:5].lower() == '!f2py':  # f2py directive
             l, _ = split_by_unquoted(l + 4 * ' ' + rl[5:], '!')
