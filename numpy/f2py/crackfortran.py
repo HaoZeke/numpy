@@ -593,7 +593,8 @@ typespattern4implicit = re.compile(beforethisafter % (
 functionpattern = re.compile(beforethisafter % (
     r'([a-z]+[\w\s(=*+-/)]*?|)', 'function', 'function', '.*'), re.I), 'begin'
 subroutinepattern = re.compile(beforethisafter % (
-    r'[a-z\s]*?', 'subroutine', 'subroutine', '.*'), re.I), 'begin'
+    r'(?:non_recursive\b|[a-z]+|\s)*?',
+    'subroutine', 'subroutine', '.*'), re.I), 'begin'
 # modulepattern=re.compile(beforethisafter%('[a-z\s]*?','module','module','.*'),re.I),'begin'
 #
 groupbegins77 = r'program|block\s*data'
