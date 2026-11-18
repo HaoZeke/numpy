@@ -642,3 +642,18 @@ class TestBCCharHandling(util.F2PyTest):
     def test_gh25286(self):
         info = self.module.charint('T')
         assert info == 2
+
+
+@pytest.mark.slow
+class TestStarLen(util.F2PyTest):
+    suffix = '.f90'
+    code = textwrap.dedent("""
+        pure function starlen(x) result (y)
+          character(len=*), intent(in) :: x
+          character*(len(x)) :: y
+          y = x
+        end function starlen
+    """)
+
+    def test_star_len(self):
+        assert_equal(self.module.starlen('abC'), b'abC')

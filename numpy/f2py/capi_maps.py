@@ -273,7 +273,7 @@ def getstrlength(var):
     if 'charselector' in var:
         a = var['charselector']
         if '*' in a:
-            len = a['*']
+            len = f2cexpr(a['*'])
         elif 'len' in a:
             len = f2cexpr(a['len'])
     if re.match(r'\(\s*(\*|:)\s*\)', len) or re.match(r'(\*|:)', len):
