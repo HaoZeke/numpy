@@ -563,6 +563,25 @@ class TestParamParseNestedParens:
         assert vs["dimension"] == ["26", "1800"]
 
 
+@pytest.mark.parametrize(
+    ("suffix", "directive"),
+    [
+        (".pyf", "FORTRANNAME Mixed_C_Name"),
+        (".f90", "!f2py FORTRANNAME Mixed_C_Name"),
+        (".f", "Cf2py FORTRANNAME Mixed_C_Name"),
+    ],
+)
+def test_fortranname_case(tmp_path, monkeypatch, suffix, directive):
+    monkeypatch.setattr(crackfortran, "dolowercase", 1)
+    path = tmp_path / f"name{suffix}"
+    header = "! -*- f90 -*-\n" if suffix == ".pyf" else ""
+    path.write_text(f"{header}{directive}\n")
+    lines = []
+    crackfortran.readfortrancode(
+        [str(path)], lambda line, *args: lines.append(line))
+    assert any("fortranname Mixed_C_Name" in line for line in lines)
+
+
 @pytest.mark.slow
 class TestLowerF2PYDirective(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "gh27697.f90")]

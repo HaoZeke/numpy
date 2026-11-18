@@ -354,6 +354,16 @@ def is_free_format(fname):
     return result
 
 
+_fortranname_line_re = re.compile(r'^(\s*fortranname\b)(.*)$', re.I)
+
+
+def _lower_line(line):
+    matched = _fortranname_line_re.match(line)
+    if matched:
+        return matched.group(1).lower() + matched.group(2)
+    return line.lower()
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -482,7 +492,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     l = '     ' + l[5:]
                     # f2py directives are already stripped by this point
                     if localdolowercase:
-                        finalline = ll.lower()
+                        finalline = _lower_line(ll)
                     else:
                         finalline = ll
                     origfinalline = ll
@@ -512,7 +522,9 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 if localdolowercase:
                     # only skip lowering for C style constructs
                     # gh-2547, gh-27697, gh-26681, gh-28014
-                    finalline = ll.lower() if not (is_f2py_directive and iscstyledirective(ll)) else ll
+                    finalline = (ll if is_f2py_directive
+                                 and iscstyledirective(ll)
+                                 else _lower_line(ll))
                 else:
                     finalline = ll
                 origfinalline = ll
@@ -546,7 +558,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         l1 = ll
     # Last line should never have an f2py directive anyway
     if localdolowercase:
-        finalline = ll.lower()
+        finalline = _lower_line(ll)
     else:
         finalline = ll
     origfinalline = ll
