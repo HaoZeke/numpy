@@ -2977,10 +2977,14 @@ def analyzevars(block):
                     vars[n] = appenddecl(vars[n], vars[block['result']])
                 if 'prefix' in block:
                     pr = block['prefix']
-                    pr1 = pr.replace('pure', '')
-                    ispure = (not pr == pr1)
-                    pr = pr1.replace('recursive', '')
-                    isrec = (not pr == pr1)
+                    # Remove prefix keywords before matching the type.
+                    ispure = re.search(r'\bpure\b', pr) is not None
+                    isrec = re.search(r'\brecursive\b', pr) is not None
+                    pr = re.sub(
+                        r'\b(?:non_recursive|recursive|impure|pure)\b',
+                        '',
+                        pr,
+                    ).strip()
                     m = typespattern[0].match(pr)
                     if m:
                         typespec, selector, attr, edecl = cracktypespec0(

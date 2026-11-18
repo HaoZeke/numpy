@@ -468,6 +468,27 @@ class TestFortranGroupCounters(util.F2PyTest):
             assert False, f"'crackfortran.crackfortran' raised an exception {exc}"
 
 
+class TestFunctionPrefix:
+    @pytest.mark.parametrize("prefix, name, typespec, attrs", [
+        ("non_recursive integer", "rval", "integer", set()),
+        ("integer non_recursive", "rval", "integer", set()),
+        ("impure real", "ival", "real", set()),
+        ("real impure", "ival", "real", set()),
+        ("pure recursive real", "ival", "real", {"pure", "recursive"}),
+    ])
+    def test_type_after_prefix(self, tmp_path, prefix, name, typespec, attrs):
+        fpath = tmp_path / "prefix.f90"
+        fpath.write_text(textwrap.dedent(f"""
+            {prefix} function {name}(x)
+              integer, intent(in) :: x
+              {name} = x
+            end function
+        """))
+        fn = crackfortran.crackfortran([str(fpath)])[0]
+        assert fn["vars"][name]["typespec"] == typespec
+        assert set(fn["vars"][name].get("attrspec", [])) == attrs
+
+
 class TestF77CommonBlockReader:
     def test_gh22648(self, tmp_path):
         fpath = util.getpath("tests", "src", "crackfortran", "gh22648.pyf")
