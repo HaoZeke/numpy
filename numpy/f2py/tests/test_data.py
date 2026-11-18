@@ -62,6 +62,22 @@ class TestDataMultiplierF77(util.F2PyTest):
         assert self.module.mycom.evar5 == 0
 
 
+def test_data_character_values():
+    source = util.getpath("tests", "src", "crackfortran", "data_char.f90")
+    vars = crackfortran([source])[0]["vars"]
+    expected = {
+        "comma_a": "'a,b'",
+        "comma_b": "'c,d'",
+        "slash_sq": "'a/b'",
+        "slash_dq": '"a/b"',
+        "apostrophe": "'it''s, ok'",
+        "i": "1",
+        "j": "2",
+        "k": "3",
+    }
+    assert {name: vars[name]["="] for name in expected} == expected
+
+
 @pytest.mark.slow
 class TestDataWithCommentsF77(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "data_with_comments.f")]

@@ -885,6 +885,28 @@ def markouterparen(line):
     return l
 
 
+def _split_outer(line, delimiter=','):
+    """Split at delimiters outside quotes and parentheses."""
+    parts = []
+    start = depth = 0
+    quote = None
+    for i, char in enumerate(line):
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in "'\"":
+            quote = char
+        elif char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+        elif char == delimiter and not depth:
+            parts.append(line[start:i])
+            start = i + 1
+    return parts + [line[start:]]
+
+
 def markoutercomma(line, comma=','):
     l = ''
     f = 0
@@ -1406,39 +1428,12 @@ def analyzeline(m, case, line):
             groupcache[groupcounter]['implicit'] = impl
     elif case == 'data':
         ll = []
-        dl = ''
-        il = ''
-        f = 0
-        fc = 1
-        inp = 0
-        for c in m.group('after'):
-            if not inp:
-                if c == "'":
-                    fc = not fc
-                if c == '/' and fc:
-                    f = f + 1
-                    continue
-            if c == '(':
-                inp = inp + 1
-            elif c == ')':
-                inp = inp - 1
-            if f == 0:
-                dl = dl + c
-            elif f == 1:
-                il = il + c
-            elif f == 2:
-                dl = dl.strip()
-                if dl.startswith(','):
-                    dl = dl[1:].strip()
-                ll.append([dl, il])
-                dl = c
-                il = ''
-                f = 0
-        if f == 2:
-            dl = dl.strip()
+        parts = _split_outer(m.group('after'), '/')
+        for i in range(0, len(parts) - 2, 2):
+            dl = parts[i].strip()
             if dl.startswith(','):
                 dl = dl[1:].strip()
-            ll.append([dl, il])
+            ll.append([dl, parts[i + 1]])
         vars = groupcache[groupcounter].get('vars', {})
         last_name = None
         for l in ll:
@@ -1464,9 +1459,12 @@ def analyzeline(m, case, line):
                 vars.setdefault(v, {})
                 vtype = vars[v].get('typespec')
                 vdim = getdimension(vars[v])
-                matches = re.findall(r"\(.*?\)", l[1]) if vtype == 'complex' else l[1].split(',')
+                matches = _split_outer(l[1])
+                if vtype == 'complex':
+                    matches = [match.strip() for match in matches]
                 try:
-                    new_val = f"(/{', '.join(matches)}/)" if vdim else matches[idx]
+                    new_val = (f"(/{', '.join(matches)}/)" if vdim
+                               else matches[idx].strip())
                 except IndexError:
                     # gh-24746
                     # Runs only if above code fails. Fixes the line
@@ -1484,7 +1482,8 @@ def analyzeline(m, case, line):
                             else:
                                 expanded_list.append(match.strip())
                         matches = expanded_list
-                    new_val = f"(/{', '.join(matches)}/)" if vdim else matches[idx]
+                    new_val = (f"(/{', '.join(matches)}/)" if vdim
+                               else matches[idx].strip())
                 current_val = vars[v].get('=')
                 if current_val and (current_val != new_val):
                     outmess(f'analyzeline: changing init expression of "{v}" ("{current_val}") to "{new_val}\"\n')
