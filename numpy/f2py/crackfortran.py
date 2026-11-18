@@ -2523,6 +2523,25 @@ def _selected_real_kind_func(p, r=0, radix=0):
     return -1
 
 
+_boz_literal_re = re.compile(
+    r"(?P<string>'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")"
+    r"|(?<!\w)(?P<base>[boz])\s*(?P<quote>['\"])"
+    r"(?P<digits>[0-9a-f]+)(?P=quote)", re.I)
+
+
+def _replace_boz_literals(expr):
+    def repl(match):
+        if match.group('string') is not None:
+            return match.group(0)
+        base = {'b': 2, 'o': 8, 'z': 16}[match.group('base').lower()]
+        try:
+            return str(int(match.group('digits'), base))
+        except ValueError:
+            return match.group(0)
+
+    return _boz_literal_re.sub(repl, expr)
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2603,7 +2622,10 @@ def get_parameters(vars, global_params={}):
 
             # Handle _dp for gh-6624
             # Also fixes gh-20460
-            if real16pattern.search(v):
+            boz_v = _replace_boz_literals(v) if isinstance(v, str) else v
+            if boz_v != v:
+                v = boz_v
+            elif real16pattern.search(v):
                 v = 8
             elif real8pattern.search(v):
                 v = 4
