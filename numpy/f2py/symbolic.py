@@ -129,6 +129,18 @@ class Precedence(Enum):
     NONE = 100
 
 
+def _mul_operand(obj, language):
+    if (obj.op is Op.APPLY and obj.data[0] is ArithOp.DIV
+            and not obj.data[2]):
+        if language is Language.C:
+            return obj.tostring(Precedence.ATOM, language=language)
+        numer, denom = obj.data[1]
+        numer = numer.tostring(Precedence.PRODUCT, language=language)
+        denom = denom.tostring(Precedence.UNARY, language=language)
+        return f'({numer} / {denom})'
+    return obj.tostring(Precedence.PRODUCT, language=language)
+
+
 integer_types = (int,)
 number_types = (int, float)
 
@@ -313,8 +325,7 @@ class Expr:
                 elif term == as_number(1):
                     term = str(coeff)
                 else:
-                    term = f'{coeff} * ' + term.tostring(
-                        Precedence.PRODUCT, language=language)
+                    term = f'{coeff} * ' + _mul_operand(term, language)
                 if terms:
                     terms.append(op)
                 elif op == ' - ':
@@ -328,8 +339,7 @@ class Expr:
             for base, exp in sorted(self.data.items()):
                 op = ' * '
                 if exp == 1:
-                    factor = base.tostring(Precedence.PRODUCT,
-                                           language=language)
+                    factor = _mul_operand(base, language)
                 elif language is Language.C:
                     if exp in range(2, 10):
                         factor = base.tostring(Precedence.PRODUCT,
@@ -1083,10 +1093,6 @@ def as_factors(obj):
                 if coeff == 1:
                     return Expr(Op.FACTORS, {term: 1})
                 return Expr(Op.FACTORS, {term: 1, Expr.number(coeff): 1})
-        if (obj.op is Op.APPLY
-             and obj.data[0] is ArithOp.DIV
-             and not obj.data[2]):
-            return Expr(Op.FACTORS, {obj.data[1][0]: 1, obj.data[1][1]: -1})
         return Expr(Op.FACTORS, {obj: 1})
     raise OpError(f'cannot convert {type(obj)} to terms Expr')
 
