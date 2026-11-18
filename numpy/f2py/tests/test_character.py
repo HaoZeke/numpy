@@ -235,6 +235,12 @@ class TestCharacter(util.F2PyTest):
           end do
        end function {fprefix}_array_return
 
+       function test_integer_array_return(n) result (values)
+          integer, intent(in) :: n
+          integer, dimension(n) :: values
+          values = 42
+       end function test_integer_array_return
+
        function {fprefix}_optional(o) result (c)
           character, intent(in) :: o
           !f2py character o = "a"
@@ -419,12 +425,15 @@ class TestCharacter(util.F2PyTest):
 
         assert_equal(f('a'), b'a')
 
-    @pytest.mark.skip('fortran function returning array segfaults')
     def test_array_return(self):
         f = getattr(self.module, self.fprefix + '_array_return')
 
         a = np.array(list('abc'), dtype='S1')
         assert_array_equal(f(a), a)
+
+    def test_integer_array_return(self):
+        assert_array_equal(self.module.test_integer_array_return(4),
+                           np.full(4, 42))
 
     def test_optional(self):
         f = getattr(self.module, self.fprefix + '_optional')

@@ -108,7 +108,10 @@ def createfuncwrapper(rout, signature=0):
                 vars[dn] = dv
                 v['dimension'][i] = dn
     rout['args'].extend(extra_args)
-    need_interface = bool(extra_args)
+    need_interface = bool(
+        extra_args
+        or ('dimension' in vars[rout['name']] and not ismoduleroutine(rout))
+    )
 
     ret = ['']
 
