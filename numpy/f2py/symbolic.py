@@ -277,6 +277,20 @@ class Expr:
                  language=Language.Fortran):
         """Return a string representation of Expr.
         """
+        if self.op is Op.APPLY and language is Language.C:
+            name, args, kwargs = self.data
+            fname = (name.data if isinstance(name, Expr)
+                     and name.op is Op.SYMBOL else name)
+            low = fname.lower() if isinstance(fname, str) else ''
+            if not kwargs and low == 'mod' and len(args) == 2:
+                numer, denom = [arg.tostring(Precedence.ATOM,
+                                             language=language)
+                                for arg in args]
+                return f'({numer} % {denom})'
+            if not kwargs and low == 'int' and len(args) == 1:
+                inner = args[0].tostring(Precedence.ATOM,
+                                         language=language)
+                return f'(npy_intp)({inner})'
         if self.op in (Op.INTEGER, Op.REAL):
             precedence = (Precedence.SUM if self.data[0] < 0
                           else Precedence.ATOM)
