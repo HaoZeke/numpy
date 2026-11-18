@@ -3314,6 +3314,10 @@ def determineexprtype(expr, vars, rules={}):
 ######
 
 
+def note2fortran(note):
+    return note.replace('\n\n', '\\n\\n').replace('\n', '\\n ')
+
+
 def crack2fortrangen(block, tab='\n', as_interface=False):
     global skipfuncs, onlyfuncs
 
@@ -3356,6 +3360,10 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     if intent_lst:
         f2pyenhancements = (f"{f2pyenhancements}{tab + tabchar}"
                             f"intent({','.join(intent_lst)}) {name}")
+    notes = ''
+    if name and block.get('note'):
+        for note in reversed(block['note']):
+            notes += f"{tab + tabchar}note({note2fortran(note)}) {name}"
     use = ''
     if 'use' in block:
         use = use2fortran(block['use'], tab + tabchar)
@@ -3383,7 +3391,7 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     if blocktype == 'block data' and name == '_BLOCK_DATA_':
         name = ''
     ret = (f'{tab}{prefix}{blocktype} {name}{args}{result} '
-           f'{mess}{f2pyenhancements}{use}{vars}{common}{body}{tab}end '
+           f'{mess}{f2pyenhancements}{notes}{use}{vars}{common}{body}{tab}end '
            f'{blocktype} {name}')
     return ret
 
@@ -3546,6 +3554,11 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         if 'depend' in vars[a]:
             vardef = f"{vardef}{c}depend({','.join(vars[a]['depend'])})"
             c = ','
+        if 'note' in vars[a] and not (
+                a == block.get('name') and block.get('note')):
+            for note in reversed(vars[a]['note']):
+                vardef = f"{vardef}{c}note({note2fortran(note)})"
+                c = ','
         if '=' in vars[a]:
             v = vars[a]['=']
             if vars[a]['typespec'] in ['complex', 'double complex']:
