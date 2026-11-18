@@ -41,6 +41,20 @@ class MesonTemplate:
         )
         self.sources = sources
         self.deps = deps
+        generated_fortran = {
+            f"{modulename}-f2pywrappers.f",
+            f"{modulename}-f2pywrappers2.f90",
+        }
+        self.has_fortran_sources = any(
+            Path(source).suffix.lower().startswith(".f")
+            and Path(source).name not in generated_fortran
+            for source in sources
+        )
+        self.has_c_sources = any(
+            Path(source).suffix.lower() == ".c"
+            and Path(source).name != f"{modulename}module.c"
+            for source in sources
+        )
         self.libraries = libraries
         self.library_dirs = library_dirs
         if include_dirs is not None:
@@ -93,9 +107,39 @@ class MesonTemplate:
         )
 
     def deps_substitution(self) -> None:
-        self.substitutions["dep_list"] = f",\n{self.indent}".join(
-            [f"{self.indent}dependency('{dep}')," for dep in self.deps]
+        openmp = any(dep.strip().lower() == "openmp" for dep in self.deps)
+        deps = []
+        for dep in self.deps:
+            name = dep.strip()
+            if name.lower() == "openmp":
+                continue
+            deps.append(f"{self.indent}dependency('{name}'),")
+        self.substitutions["dep_list"] = f",\n{self.indent}".join(deps)
+        project_dependencies = []
+        if openmp and self.has_fortran_sources:
+            project_dependencies.extend(
+                [
+                    "openmp_fortran = dependency('openmp', language: 'fortran')",
+                    "add_project_dependencies("
+                    "openmp_fortran, language: 'fortran')",
+                ]
+            )
+        if openmp and (self.has_c_sources or not self.has_fortran_sources):
+            project_dependencies.extend(
+                [
+                    "openmp_c = dependency('openmp', language: 'c')",
+                    "add_project_dependencies(openmp_c, language: 'c')",
+                ]
+            )
+        self.substitutions["project_dependencies"] = "\n".join(
+            project_dependencies
         )
+        if openmp and self.has_fortran_sources:
+            self.substitutions["link_language"] = (
+                f"{self.indent}link_language: 'fortran',"
+            )
+        else:
+            self.substitutions["link_language"] = ""
 
     def libraries_substitution(self) -> None:
         lib_names = [

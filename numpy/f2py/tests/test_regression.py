@@ -187,6 +187,46 @@ def test_meson_library_names_use_valid_identifiers():
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(platform.system() != "Linux", reason="requires Linux OpenMP")
+def test_dep_openmp_enables_fortran(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    cc = shutil.which("clang")
+    fc = shutil.which("gfortran")
+    if cc is None or fc is None:
+        pytest.skip("clang and gfortran are required")
+    source = tmp_path / "omp.f90"
+    source.write_text(
+        "subroutine thread_count(n)\n"
+        "  use omp_lib\n"
+        "  integer, intent(out) :: n\n"
+        "  n = 0\n"
+        "  !$omp parallel\n"
+        "  !$omp atomic update\n"
+        "  n = n + 1\n"
+        "  !$omp end parallel\n"
+        "end subroutine\n"
+    )
+    chk = subprocess.run(
+        [fc, "-fsyntax-only", "-fopenmp", source],
+        capture_output=True,
+        text=True,
+    )
+    if chk.returncode != 0:
+        pytest.skip("gfortran OpenMP is not available")
+    monkeypatch.setenv("CC", cc)
+    monkeypatch.setenv("FC", fc)
+    monkeypatch.setenv("OMP_DYNAMIC", "false")
+    monkeypatch.setenv("OMP_NUM_THREADS", "2")
+    module = util.build_module(
+        [source],
+        options=["--dep", "openmp"],
+    )
+    assert module.thread_count() == 2
+
+
+@pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():
     # Compile dubious file using passed flags
