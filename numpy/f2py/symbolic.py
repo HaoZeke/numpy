@@ -458,6 +458,21 @@ class Expr:
         return NotImplemented
 
     def __sub__(self, other):
+        other = as_expr(other)
+        if (isinstance(other, Expr)
+                and self.op is Op.APPLY and other.op is Op.APPLY):
+            upper, upper_args, upper_kwargs = self.data
+            lower, lower_args, lower_kwargs = other.data
+            if (isinstance(upper, Expr) and upper.op is Op.SYMBOL
+                    and isinstance(upper.data, str)
+                    and upper.data.lower() == 'ubound'
+                    and isinstance(lower, Expr) and lower.op is Op.SYMBOL
+                    and isinstance(lower.data, str)
+                    and lower.data.lower() == 'lbound'
+                    and len(upper_args) == 2
+                    and upper_args == lower_args
+                    and not upper_kwargs and not lower_kwargs):
+                return as_apply(as_symbol('size'), *upper_args) - 1
         return self + (-other)
 
     def __rsub__(self, other):
