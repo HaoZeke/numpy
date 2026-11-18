@@ -548,6 +548,19 @@ def test_kind_prefixed_character_constants(tmp_path):
     assert variables["arr"]["dimension"] == ["5"]
 
 
+def test_numeric_kind_suffix_parameter_values():
+    variables = {
+        name: {
+            "typespec": "integer",
+            "attrspec": ["parameter"],
+            "=": value,
+        }
+        for name, value in {"n": "14_4", "m": "2_4*3"}.items()
+    }
+
+    assert crackfortran.get_parameters(variables) == {"n": 14, "m": 6}
+
+
 class TestParamParseNestedParens:
     # issue gh-28095: grouping parens in a dimension expression such as
     # (mx_supply_curves + mx_intl_curves) must fold to a concrete size,

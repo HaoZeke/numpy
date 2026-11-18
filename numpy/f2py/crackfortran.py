@@ -2527,6 +2527,8 @@ def _selected_real_kind_func(p, r=0, radix=0):
 _kind_character_re = re.compile(
     r"(?:\b(?:\d+|[A-Za-z]\w*)_)?"
     r"('(?:''|\\.|[^'\\])*'|\"(?:\"\"|\\.|[^\"\\])*\")")
+_is_kind_literal = re.compile(
+    r"(?<!\w)(?:\d+(?:\.\d*)?|\.\d+)(?:[de][+-]?\d+)?$", re.I).search
 
 
 def get_parameters(vars, global_params={}):
@@ -2586,10 +2588,12 @@ def get_parameters(vars, global_params={}):
                         v_.append(before)
                         if not after:
                             break
-                        v = after[1:]
-                    # In case there are additive parameters
-                    if len(v_) > 1:
-                        v = ''.join(v_[:-1]).lower().replace(v_[-1].lower(), '')
+                        if _is_kind_literal(before):
+                            v = re.sub(r'^_\w+', '', after)
+                        else:
+                            v_.append('_')
+                            v = after[1:]
+                    v = ''.join(v_)
 
             # Currently this will not work for complex numbers.
             # There is missing code for extracting a complex number,
