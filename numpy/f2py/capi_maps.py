@@ -580,6 +580,10 @@ def sign2map(a, var):
     ret['pydocsign'], ret['pydocsignout'] = getpydocsign(a, var)
     if hasnote(var):
         ret['note'] = var['note']
+    if (isstringarray_blankpad(var)
+            and 'F2PY_INTENT_COPY' not in ret['intent'].split('|')):
+        # Blank-padding a character array must not rewrite the caller.
+        ret['intent'] += '|F2PY_INTENT_COPY'
     return ret
 
 

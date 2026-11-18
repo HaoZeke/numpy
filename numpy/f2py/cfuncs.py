@@ -498,6 +498,23 @@ STRINGPADN(to, N, PADDING, NULLVALUE) is an inverse operation.
         }                                                       \\
     } while (0)
 """
+needs['f2py_string_array_pad'] = ['STRINGPADN']
+cfuncs['f2py_string_array_pad'] = """
+/*
+  Replace a trailing byte in every element of a contiguous character array.
+  `from` and `to` are the bytes STRINGPADN swaps, from the right.
+ */
+static void f2py_string_array_pad(char *base, npy_intp count, int elsize,
+                                  char from, char to) {
+    npy_intp i;
+    if (base == NULL || elsize <= 0 || count <= 0) {
+        return;
+    }
+    for (i = 0; i < count; ++i) {
+        STRINGPADN(base + i * (npy_intp)elsize, elsize, from, to);
+    }
+}
+"""
 needs['STRINGCOPYN'] = ['string.h', 'FAILNULL']
 cppmacros['STRINGCOPYN'] = """
 /*

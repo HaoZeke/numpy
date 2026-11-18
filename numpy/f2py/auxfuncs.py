@@ -36,7 +36,8 @@ __all__ = [
     'islong_doublefunction', 'islong_long', 'islong_longfunction',
     'ismodule', 'ismoduleroutine', 'isoptional', 'isprivate', 'isvariable',
     'isrequired', 'isroutine', 'isscalar', 'issigned_long_longarray',
-    'isstring', 'isstringarray', 'isstring_or_stringarray', 'isstringfunction',
+    'isstring', 'isstringarray', 'isstringarray_blankpad',
+    'isstring_or_stringarray', 'isstringfunction',
     'issubroutine', 'get_f2py_modulename', 'issubroutine_wrap', 'isthreadsafe',
     'isunsigned', 'isunsigned_char', 'isunsigned_chararray',
     'isunsigned_long_long', 'isunsigned_long_longarray', 'isunsigned_short',
@@ -97,6 +98,18 @@ def isstring(var):
 
 def isstringarray(var):
     return isstring_or_stringarray(var) and isarray(var)
+
+
+def isstringarray_blankpad(var):
+    """True for input character arrays that need Fortran blank padding.
+
+    Arrays passed on to a callback stay NUL-padded: the callback sees
+    the same buffer Fortran does.
+    """
+    return (isstringarray(var) and isintent_in(var)
+            and not isintent_out(var) and not isintent_inout(var)
+            and not isintent_inplace(var) and not isintent_c(var)
+            and not var.get('f2py_no_blank_pad'))
 
 
 def isarrayofstrings(var):  # obsolete?

@@ -113,6 +113,7 @@ from .auxfuncs import (
     issigned_long_longarray,
     isstring,
     isstringarray,
+    isstringarray_blankpad,
     isstringfunction,
     issubroutine,
     issubroutine_wrap,
@@ -1239,7 +1240,9 @@ if (#varname#_cb.capi==Py_None) {
         }
     }
     if (f2py_success) {"""]},
-                      ],
+            {isstringarray_blankpad:
+             "        f2py_string_array_pad((char *)#varname#, PyArray_SIZE(capi_#varname#_as_array), slen(#varname#), '\\0', ' ');"},
+        ],
         'pyobjfrom': [
             {l_and(isintent_inplace, l_not(isintent_out)): """\
         f2py_success = (PyArray_ResolveWritebackIfCopy(capi_#varname#_as_array) >= 0);
@@ -1261,6 +1264,7 @@ if (#varname#_cb.capi==Py_None) {
                    : """        Py_XDECREF(capi_#varname#_as_array);"""},
             {hasinitvalue: '    }  /*if (f2py_success) of #varname# init*/'},
         ],
+        'need': {isstringarray_blankpad: 'f2py_string_array_pad'},
         '_check': isarray,
         '_depend': ''
     },
@@ -1562,6 +1566,11 @@ def buildapi(rout):
     args, depargs = getargs2(rout)
     capi_maps.depargs = depargs
     var = rout['vars']
+    # A callback observes the array buffer. Leave it NUL-padded.
+    if hasexternals(rout):
+        for value in var.values():
+            if isstringarray(value):
+                value['f2py_no_blank_pad'] = True
 
     if ismoduleroutine(rout):
         module_name = rout['modulename']
