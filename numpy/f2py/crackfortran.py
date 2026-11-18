@@ -2624,6 +2624,26 @@ def get_parameters(vars, global_params={}):
     return params
 
 
+_len_call = re.compile(
+    r'\blen\s*\(\s*([A-Za-z_]\w*)\s*\)',
+    re.I,
+)
+
+
+def _len_to_slen(expr, char_names):
+    if not char_names or not isinstance(expr, str) or 'len' not in expr.lower():
+        return expr
+    names = {n.lower() for n in char_names}
+
+    def repl(match):
+        name = match.group(1)
+        if name.lower() in names:
+            return f'slen({name})'
+        return match.group(0)
+
+    return _len_call.sub(repl, expr)
+
+
 def _eval_length(length, params):
     if length in ['(:)', '(*)', '*']:
         return '(*)'
@@ -2845,6 +2865,13 @@ def analyzevars(block):
                         # definiteness of such symbols.
                         dimension_exprs[d] = solver_and_deps
                     vars[n]['dimension'].append(d)
+                    if isinstance(d, str) and 'len' in d.lower():
+                        for match in _len_call.finditer(d):
+                            nm = match.group(1)
+                            if vars.get(nm, {}).get('typespec') == 'character':
+                                got = vars[n].setdefault('char_lens', [])
+                                if nm not in got:
+                                    got.append(nm)
 
         if 'check' not in vars[n] and 'args' in block and n in block['args']:
             # n is an argument that has no checks defined. Here we
@@ -2898,8 +2925,10 @@ def analyzevars(block):
                                 if 'check' not in vars[v]:
                                     # add check only when no
                                     # user-specified checks exist
+                                    cdim = _len_to_slen(
+                                        d, vars[n].get('char_lens', ()))
                                     vars[v]['check'] = [
-                                        f'shape({n}, {i}) == {d}']
+                                        f'shape({n}, {i}) == {cdim}']
                             else:
                                 # d is a non-linear function on v,
                                 # hence, v must be a required input
@@ -2911,8 +2940,10 @@ def analyzevars(block):
                                     vars[v]['intent'].append('in')
                                 # v needs to be initialized before n
                                 n_deps.append(v)
+                                cdim = _len_to_slen(
+                                    d, vars[n].get('char_lens', ()))
                                 n_checks.append(
-                                    f'shape({n}, {i}) == {d}')
+                                    f'shape({n}, {i}) == {cdim}')
                             v_attr = vars[v].get('attrspec', [])
                             if not ('optional' in v_attr
                                     or 'required' in v_attr):
