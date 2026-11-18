@@ -2523,6 +2523,44 @@ def _selected_real_kind_func(p, r=0, radix=0):
     return -1
 
 
+_char_substring_re = re.compile(
+    r"(?P<base>(?<!\w)(?P<literal>'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")"
+    r"|(?<![%\w])(?P<name>[A-Za-z]\w*))"
+    r"(?P<bounds>\s*\(\s*(?P<start>[^:()]*)\s*:"
+    r"\s*(?P<end>[^()]*)\))?", re.I)
+
+
+def _replace_char_substrings(expr, params, vars):
+    def repl(match):
+        if match.group('bounds') is None:
+            return match.group(0)
+        raw = match.group('literal')
+        if raw is not None:
+            value = raw[1:-1].replace(2 * raw[0], raw[0])
+        else:
+            name = match.group('name').lower()
+            spec = vars.get(name, {})
+            value = params.get(name)
+            if (spec.get('typespec') != 'character'
+                    or 'parameter' not in spec.get('attrspec', [])
+                    or not isinstance(value, str)):
+                return match.group(0)
+        bounds = []
+        for text, default in ((match.group('start'), 1),
+                              (match.group('end'), len(value))):
+            text = text.strip()
+            try:
+                bound = eval(text, {}, params) if text else default
+            except Exception:
+                return match.group(0)
+            if type(bound) is not int:
+                return match.group(0)
+            bounds.append(bound)
+        return repr(value[bounds[0] - 1:bounds[1]])
+
+    return _char_substring_re.sub(repl, expr)
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2603,7 +2641,11 @@ def get_parameters(vars, global_params={}):
 
             # Handle _dp for gh-6624
             # Also fixes gh-20460
-            if real16pattern.search(v):
+            substring_v = (_replace_char_substrings(v, params, vars)
+                           if isinstance(v, str) else v)
+            if substring_v != v:
+                v = substring_v
+            elif real16pattern.search(v):
                 v = 8
             elif real8pattern.search(v):
                 v = 4
