@@ -563,6 +563,19 @@ class TestParamParseNestedParens:
         assert vs["dimension"] == ["26", "1800"]
 
 
+@pytest.mark.parametrize("decl, selector, expect", [
+    ("real * 8", "kindselector", "8"),
+    ("character * 5", "charselector", "5"),
+])
+def test_spaced_star_kind(tmp_path, decl, selector, expect):
+    src = tmp_path / "starkind.f90"
+    src.write_text(
+        f"subroutine foo(x)\n{decl} :: x\nend subroutine foo\n"
+    )
+    var = crackfortran.crackfortran([str(src)])[0]["vars"]["x"]
+    assert var[selector]["*"] == expect
+
+
 @pytest.mark.slow
 class TestLowerF2PYDirective(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "gh27697.f90")]

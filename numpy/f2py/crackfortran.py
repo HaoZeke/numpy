@@ -942,7 +942,7 @@ def appenddecl(decl, decl2, force=1):
 
 
 selectpattern = re.compile(
-    r'\s*(?P<this>(@\(@.*?@\)@|\*[\d*]+|\*\s*@\(@.*?@\)@|))(?P<after>.*)\Z', re.I)
+    r'\s*(?P<this>(@\(@.*?@\)@|\*\s*[\d*]+|\*\s*@\(@.*?@\)@|))(?P<after>.*)\Z', re.I)
 typedefpattern = re.compile(
     r'(?:,(?P<attributes>[\w(),]+))?(::)?(?P<name>\b[a-z$_][\w$]*\b)'
     r'(?:\((?P<params>[\w,]*)\))?\Z', re.I)
