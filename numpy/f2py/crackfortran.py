@@ -195,6 +195,7 @@ skipblocksuntil = -1
 skipfuncs = []
 skipfunctions = []
 usermodules = []
+enum_last = None
 
 
 def reset_global_f2py_vars():
@@ -204,6 +205,7 @@ def reset_global_f2py_vars():
     global onlyfuncs, include_paths, previous_context
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
     global f77modulename, skipemptyends, ignorecontains, dolowercase, debug
+    global enum_last
 
     # flags
     strictf77 = 1
@@ -233,6 +235,7 @@ def reset_global_f2py_vars():
     onlyfuncs = []
     include_paths = []
     previous_context = None
+    enum_last = None
 
 
 def outmess(line, flag=1):
@@ -638,6 +641,8 @@ intentpattern = re.compile(beforethisafter % (
     '', 'intent|depend|note|check', 'intent|depend|note|check', r'\s*\(.*?\).*'), re.I), 'intent'
 parameterpattern = re.compile(
     beforethisafter % ('', 'parameter', 'parameter', r'\s*\(.*'), re.I), 'parameter'
+enumeratorpattern = re.compile(
+    beforethisafter % ('', 'enumerator', 'enumerator', '.*'), re.I), 'enumerator'
 datapattern = re.compile(
     beforethisafter % ('', 'data', 'data', '.*'), re.I), 'data'
 callpattern = re.compile(
@@ -723,6 +728,7 @@ def crackline(line, reset=0):
     global beginpattern, groupcounter, groupname, groupcache, grouplist
     global filepositiontext, currentfilename, neededmodule, expectbegin
     global skipblocksuntil, skipemptyends, previous_context, gotnextfile
+    global enum_last
 
     _, has_semicolon = split_by_unquoted(line, ";")
     if has_semicolon and not (f2pyenhancementspattern[0].match(line) or
@@ -747,6 +753,7 @@ def crackline(line, reset=0):
         groupcache[groupcounter]['name'] = ''
         neededmodule = -1
         skipblocksuntil = -1
+        enum_last = None
         return
     if reset > 0:
         fl = 0
@@ -776,7 +783,8 @@ def crackline(line, reset=0):
     flag = 0
     for pat in [dimensionpattern, externalpattern, intentpattern, optionalpattern,
                 requiredpattern,
-                parameterpattern, datapattern, publicpattern, privatepattern,
+                parameterpattern, enumeratorpattern, datapattern,
+                publicpattern, privatepattern,
                 intrinsicpattern,
                 endifpattern, endpattern,
                 formatpattern,
@@ -852,7 +860,8 @@ def crackline(line, reset=0):
         analyzeline(m, pat[1], line)
         expectbegin = 0
     elif pat[1] == 'endif':
-        pass
+        if re.match(r'\s*end\s*enum\b', line, re.I):
+            enum_last = None
     elif pat[1] == 'moduleprocedure':
         analyzeline(m, pat[1], line)
     elif pat[1] == 'contains':
@@ -1017,7 +1026,7 @@ def analyzeline(m, case, line):
     """
     global groupcounter, groupname, groupcache, grouplist, filepositiontext
     global currentfilename, f77modulename, neededinterface, neededmodule
-    global expectbegin, gotnextfile, previous_context
+    global expectbegin, gotnextfile, previous_context, enum_last
 
     block = m.group('this')
     if case != 'multiline':
@@ -1352,6 +1361,21 @@ def analyzeline(m, case, line):
                 edecl[k]['attrspec'] = ['parameter']
             last_name = k
         groupcache[groupcounter]['vars'] = edecl
+        if last_name is not None:
+            previous_context = ('variable', last_name, groupcounter)
+    elif case == 'enumerator':
+        ll = m.group('after').strip().removeprefix('::').strip()
+        declarations = []
+        for item in markoutercomma(ll).split('@,@'):
+            name, equals, value = item.partition('=')
+            name = name.strip()
+            if not equals:
+                value = '0' if enum_last is None else f'{enum_last} + 1'
+            declarations.append(f'{name} = {value.strip()}')
+            enum_last = rmbadname1(name)
+        last_name = updatevars(
+            'integer', '', 'parameter', ', '.join(declarations)
+        )
         if last_name is not None:
             previous_context = ('variable', last_name, groupcounter)
     elif case == 'implicit':
