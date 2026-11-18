@@ -528,6 +528,10 @@ def sign2map(a, var):
                     f'lcb_map{lcb_map_keys}.\n')
     if isstring(var):
         ret['length'] = getstrlength(var)
+        # "y" stops at the first NUL. Hand back an explicit-length
+        # bytes object for Fortran character results.
+        if isintent_out(var) and not isintent_c(var):
+            ret['varrformat'] = 'N'
     if isarray(var):
         ret = dictappend(ret, getarrdims(a, var))
         dim = copy.copy(var['dimension'])

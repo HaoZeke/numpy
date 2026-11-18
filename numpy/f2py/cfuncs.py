@@ -651,7 +651,7 @@ static int *nextforcomb(struct ForcombCache *cache) {
   if (cache->tr) return i_tr;
   return i;
 }"""
-needs['try_pyarr_from_string'] = ['STRINGCOPYN', 'PRINTPYOBJERR', 'string']
+needs['try_pyarr_from_string'] = ['MEMCOPY', 'PRINTPYOBJERR', 'string']
 cfuncs['try_pyarr_from_string'] = """
 /*
   try_pyarr_from_string copies str[:len(obj)] to the data of an `ndarray`.
@@ -681,7 +681,9 @@ fprintf(stderr, "try_pyarr_from_string(str='%s', len=%d, obj=%p)\\n",
         if (n > PyArray_NBYTES(arr)) {
             n = PyArray_NBYTES(arr);
         }
-        STRINGCOPYN(buf, str, n);
+        if (n > 0) {
+            MEMCOPY(buf, str, n);
+        }
         return 1;
     }
 capi_fail:
@@ -690,7 +692,7 @@ capi_fail:
     return 0;
 }
 """
-needs['string_from_pyobj'] = ['string', 'STRINGMALLOC', 'STRINGCOPYN']
+needs['string_from_pyobj'] = ['string', 'STRINGMALLOC', 'MEMCOPY']
 cfuncs['string_from_pyobj'] = """
 /*
   Create a new string buffer `str` of at most length `len` from a
@@ -703,7 +705,7 @@ cfuncs['string_from_pyobj'] = """
  */
 static int
 string_from_pyobj(string *str, int *len, const string inistr, PyObject *obj,
-                  const char *errmess)
+                  const int pad, const char *errmess)
 {
     PyObject *tmp = NULL;
     string buf = NULL;
@@ -725,7 +727,13 @@ fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
         }
         n = PyArray_NBYTES(arr);
         buf = PyArray_DATA(arr);
-        n = strnlen(buf, n);
+        /*
+          A NumPy bytes array stores a counted sequence, so an interior
+          NUL is data. Unicode arrays are still measured as C strings.
+        */
+        if (PyArray_TYPE(arr) != NPY_STRING) {
+            n = strnlen(buf, n);
+        }
     }
     else {
         if (PyBytes_Check(obj)) {
@@ -768,14 +776,11 @@ fprintf(stderr,\"string_from_pyobj(str='%s',len=%d,inistr='%s',obj=%p)\\n\",
     }
     STRINGMALLOC(*str, *len);  // *str is allocated with size (*len + 1)
     if (n < *len) {
-        /*
-          Pad fixed-width string with nulls. The caller will replace
-          nulls with blanks when the corresponding argument is not
-          intent(c).
-        */
-        memset(*str + n, '\\0', *len - n);
+        memset(*str + n, pad ? ' ' : '\\0', *len - n);
     }
-    STRINGCOPYN(*str, buf, n);
+    if (n > 0) {
+        MEMCOPY(*str, buf, n);
+    }
     Py_XDECREF(tmp);
     return 1;
 capi_fail:
@@ -788,6 +793,23 @@ capi_fail:
         PyErr_SetString(err, errmess);
     }
     return 0;
+}
+"""
+
+cfuncs['pyobj_from_fortstring'] = """
+/*
+  Build a bytes object from a Fortran character value of the given
+  length, dropping only trailing blanks.
+ */
+static PyObject *pyobj_from_fortstring(const char *s, int len) {
+    int n = len;
+    if (s == NULL || n < 0) {
+        return PyBytes_FromStringAndSize("", 0);
+    }
+    while (n > 0 && s[n - 1] == ' ') {
+        n--;
+    }
+    return PyBytes_FromStringAndSize(s, n);
 }
 """
 

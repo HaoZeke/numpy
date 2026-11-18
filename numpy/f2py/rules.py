@@ -1088,31 +1088,35 @@ if (#varname#_cb.capi==Py_None) {
             {debugcapi:
              '    fprintf(stderr,'
              '"#vardebugshowvalue#\\n",slen(#varname#),#varname#);'},
-            # The trailing null value for Fortran is blank.
             {l_and(isintent_out, l_not(isintent_c)):
-             "        STRINGPADN(#varname#, slen(#varname#), ' ', '\\0');"},
+             "        #varname#_capi = pyobj_from_fortstring(#varname#, slen(#varname#));"},
         ],
-        'return': {isintent_out: ',#varname#'},
+        'return': [{l_and(isintent_out, isintent_c): ',#varname#'},
+                   {l_and(isintent_out, l_not(isintent_c)): ',#varname#_capi'}],
         'need': ['len..',
-                 {l_and(isintent_out, l_not(isintent_c)): 'STRINGPADN'}],
+                 {l_and(isintent_out, l_not(isintent_c)): 'pyobj_from_fortstring'}],
         '_check': isstring
     }, {  # Common
-        'frompyobj': [(
+        'frompyobj': [
+            {l_not(isintent_c): (
             """\
     slen(#varname#) = #elsize#;
-    f2py_success = #ctype#_from_pyobj(&#varname#,&slen(#varname#),#init#,"""
-"""#varname#_capi,\"#ctype#_from_pyobj failed in converting #nth#"""
+    f2py_success = string_from_pyobj(&#varname#,&slen(#varname#),#init#,"""
+"""#varname#_capi,1,\"string_from_pyobj failed in converting #nth#"""
 """`#varname#\' of #pyname# to C #ctype#\");
-    if (f2py_success) {"""),
-            # The trailing null value for Fortran is blank.
-            {l_not(isintent_c):
-             "        STRINGPADN(#varname#, slen(#varname#), '\\0', ' ');"},
+    if (f2py_success) {""")},
+            {isintent_c: (
+            """\
+    slen(#varname#) = #elsize#;
+    f2py_success = string_from_pyobj(&#varname#,&slen(#varname#),#init#,"""
+"""#varname#_capi,0,\"string_from_pyobj failed in converting #nth#"""
+"""`#varname#\' of #pyname# to C #ctype#\");
+    if (f2py_success) {""")},
         ],
         'cleanupfrompyobj': """\
         STRINGFREE(#varname#);
     }  /*if (f2py_success) of #varname#*/""",
-        'need': ['#ctype#_from_pyobj', 'len..', 'STRINGFREE',
-                 {l_not(isintent_c): 'STRINGPADN'}],
+        'need': ['string_from_pyobj', 'len..', 'STRINGFREE'],
         '_check': isstring,
         '_depend': ''
     }, {  # Not hidden
