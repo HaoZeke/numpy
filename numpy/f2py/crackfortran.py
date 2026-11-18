@@ -2681,6 +2681,11 @@ def analyzevars(block):
             svars.append(n)
 
     params = get_parameters(vars, get_useparameters(block))
+    kind_params = {
+        'selected_int_kind': _selected_int_kind_func,
+        'selected_real_kind': _selected_real_kind_func,
+    }
+    kind_params.update(params)
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
     dep_matches = {}
@@ -2724,7 +2729,7 @@ def analyzevars(block):
             if 'kind' in vars[n]['kindselector']:
                 l = vars[n]['kindselector']['kind']
                 try:
-                    l = str(eval(l, {}, params))
+                    l = str(eval(l, {}, kind_params))
                 except Exception:
                     pass
                 vars[n]['kindselector']['kind'] = l
@@ -2997,7 +3002,7 @@ def analyzevars(block):
                             if 'kind' in kindselect:
                                 try:
                                     kindselect['kind'] = eval(
-                                        kindselect['kind'], {}, params)
+                                        kindselect['kind'], {}, kind_params)
                                 except Exception:
                                     pass
                             vars[n]['kindselector'] = kindselect
