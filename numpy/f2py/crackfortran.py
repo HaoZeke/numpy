@@ -2856,6 +2856,7 @@ def analyzevars(block):
             n_is_input = l_or(isintent_in, isintent_inout,
                               isintent_inplace)(vars[n])
             if isarray(vars[n]):  # n is array
+                inferred_dimensions = set()
                 for i, d in enumerate(vars[n]['dimension']):
                     coeffs_and_deps = dimension_exprs.get(d)
                     if coeffs_and_deps is None:
@@ -2865,6 +2866,15 @@ def analyzevars(block):
                         # n is an input array argument and its shape
                         # may define variables used in dimension
                         # specifications.
+                        check_owner = next(
+                            (v for v, (_, deps) in coeffs_and_deps.items()
+                             if v in inferred_dimensions and all(
+                                 w not in inferred_dimensions
+                                 and '=' not in vars[w]
+                                 and 'depend' not in vars[w]
+                                 for w in deps)),
+                            None,
+                        )
                         for v, (solver, deps) in coeffs_and_deps.items():
                             def compute_deps(v, deps):
                                 for v1 in coeffs_and_deps.get(v, [None, []])[1]:
@@ -2873,6 +2883,8 @@ def analyzevars(block):
                                         compute_deps(v1, deps)
                             all_deps = set()
                             compute_deps(v, all_deps)
+                            if v in inferred_dimensions:
+                                continue
                             if (v in n_deps
                                  or '=' in vars[v]
                                  or 'depend' in vars[v]):
@@ -2900,6 +2912,7 @@ def analyzevars(block):
                                     # user-specified checks exist
                                     vars[v]['check'] = [
                                         f'shape({n}, {i}) == {d}']
+                                inferred_dimensions.add(v)
                             else:
                                 # d is a non-linear function on v,
                                 # hence, v must be a required input
@@ -2911,8 +2924,9 @@ def analyzevars(block):
                                     vars[v]['intent'].append('in')
                                 # v needs to be initialized before n
                                 n_deps.append(v)
-                                n_checks.append(
-                                    f'shape({n}, {i}) == {d}')
+                                if check_owner is None:
+                                    n_checks.append(
+                                        f'shape({n}, {i}) == {d}')
                             v_attr = vars[v].get('attrspec', [])
                             if not ('optional' in v_attr
                                     or 'required' in v_attr):
@@ -2920,6 +2934,11 @@ def analyzevars(block):
                                     'required' if is_required else 'optional')
                             if v_attr:
                                 vars[v]['attrspec'] = v_attr
+                        if check_owner is not None:
+                            check = f'shape({n}, {i}) == {d}'
+                            checks = vars[check_owner].setdefault('check', [])
+                            if check not in checks:
+                                checks.append(check)
                     if coeffs_and_deps is not None:
                         # extend v dependencies with ones specified in attrspec
                         for v, (solver, deps) in coeffs_and_deps.items():
