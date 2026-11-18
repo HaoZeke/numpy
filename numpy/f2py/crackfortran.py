@@ -384,6 +384,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     if istop:
         dowithline('', -1)
     ll, l1 = '', ''
+    ll_filename = origfilename = ''
     spacedigits = [' '] + [str(_m) for _m in range(10)]
     filepositiontext = ''
     fin = fileinput.FileInput(ffile, openhook=openhook)
@@ -486,7 +487,9 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     else:
                         finalline = ll
                     origfinalline = ll
+                    origfilename = ll_filename
                     ll = l
+                    ll_filename = currentfilename
 
         elif sourcecodeform == 'free':
             if not cont and ext == '.pyf' and mline_mark.match(l):
@@ -516,7 +519,9 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 else:
                     finalline = ll
                 origfinalline = ll
+                origfilename = ll_filename
                 ll = l
+                ll_filename = currentfilename
             cont = (r is not None)
         else:
             raise ValueError(
@@ -526,21 +531,16 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         m = includeline.match(origfinalline)
         if m:
             fn = m.group('name')
-            if os.path.isfile(fn):
-                readfortrancode(fn, dowithline=dowithline, istop=0)
+            include_dirs = [
+                os.path.dirname(origfilename)] + include_paths + [os.curdir]
+            for inc_dir in include_dirs:
+                fn1 = os.path.join(inc_dir, fn)
+                if os.path.isfile(fn1):
+                    readfortrancode(fn1, dowithline=dowithline, istop=0)
+                    break
             else:
-                include_dirs = [
-                    os.path.dirname(currentfilename)] + include_paths
-                foundfile = 0
-                for inc_dir in include_dirs:
-                    fn1 = os.path.join(inc_dir, fn)
-                    if os.path.isfile(fn1):
-                        foundfile = 1
-                        readfortrancode(fn1, dowithline=dowithline, istop=0)
-                        break
-                if not foundfile:
-                    outmess(f'readfortrancode: could not find include file {fn!r} '
-                            f'in {os.pathsep.join(include_dirs)}. Ignoring.\n')
+                outmess(f'readfortrancode: could not find include file {fn!r} '
+                        f'in {os.pathsep.join(include_dirs)}. Ignoring.\n')
         else:
             dowithline(finalline)
         l1 = ll
@@ -550,24 +550,21 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     else:
         finalline = ll
     origfinalline = ll
+    origfilename = ll_filename
     filepositiontext = f'Line #{fin.filelineno() - 1} in {currentfilename}:"{l1}"\n\t'
     m = includeline.match(origfinalline)
     if m:
         fn = m.group('name')
-        if os.path.isfile(fn):
-            readfortrancode(fn, dowithline=dowithline, istop=0)
+        include_dirs = [
+            os.path.dirname(origfilename)] + include_paths + [os.curdir]
+        for inc_dir in include_dirs:
+            fn1 = os.path.join(inc_dir, fn)
+            if os.path.isfile(fn1):
+                readfortrancode(fn1, dowithline=dowithline, istop=0)
+                break
         else:
-            include_dirs = [os.path.dirname(currentfilename)] + include_paths
-            foundfile = 0
-            for inc_dir in include_dirs:
-                fn1 = os.path.join(inc_dir, fn)
-                if os.path.isfile(fn1):
-                    foundfile = 1
-                    readfortrancode(fn1, dowithline=dowithline, istop=0)
-                    break
-            if not foundfile:
-                outmess(f'readfortrancode: could not find include file {fn!r} '
-                        f'in {os.pathsep.join(include_dirs)}. Ignoring.\n')
+            outmess(f'readfortrancode: could not find include file {fn!r} '
+                    f'in {os.pathsep.join(include_dirs)}. Ignoring.\n')
     else:
         dowithline(finalline)
     filepositiontext = ''

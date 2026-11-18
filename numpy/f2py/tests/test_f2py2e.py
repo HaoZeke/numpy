@@ -733,7 +733,7 @@ def test_inclpath(monkeypatch):
         ["--include-paths", r"C:\inc1;D:\inc2"]
     )
 
-    assert set(include_paths) == {r"C:\inc1", r"D:\inc2"}
+    assert include_paths == [r"C:\inc1", r"D:\inc2"]
     assert ftcompat is None
     assert remain == []
 
@@ -741,7 +741,7 @@ def test_inclpath(monkeypatch):
         ["--include_paths", r"C:\inc1;D:\inc2"]
     )
 
-    assert set(include_paths) == {r"C:\inc1", r"D:\inc2"}
+    assert include_paths == [r"C:\inc1", r"D:\inc2"]
     assert ftcompat is None
     assert remain == []
 
@@ -750,6 +750,14 @@ def test_inclpath(monkeypatch):
     )
 
     assert include_paths == [r"C:\inc1;D:\inc2"]
+    assert ftcompat is None
+    assert remain == []
+
+    include_paths, ftcompat, remain = get_newer_options(
+        ["-I", r"C:\inc1", "-I", r"D:\inc2", "-I", r"C:\inc1"]
+    )
+
+    assert include_paths == [r"C:\inc1", r"D:\inc2"]
     assert ftcompat is None
     assert remain == []
 

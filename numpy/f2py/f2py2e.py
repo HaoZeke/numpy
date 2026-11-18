@@ -536,14 +536,17 @@ def get_prefix(module):
 
 class CombineIncludePaths(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        include_paths_set = set(getattr(namespace, 'include_paths', []) or [])
+        include_paths = getattr(namespace, 'include_paths', []) or []
         if option_string == "--include_paths":
             outmess("Use --include-paths or -I instead of --include_paths which will be removed")
         if option_string in {"--include-paths", "--include_paths"}:
-            include_paths_set.update(values.split(os.pathsep))
+            values = values.split(os.pathsep)
         else:
-            include_paths_set.add(values)
-        namespace.include_paths = list(include_paths_set)
+            values = [values]
+        for path in values:
+            if path not in include_paths:
+                include_paths.append(path)
+        namespace.include_paths = include_paths
 
 def f2py_parser():
     parser = argparse.ArgumentParser(add_help=False)

@@ -475,6 +475,26 @@ class TestF77CommonBlockReader:
             mod = crackfortran.crackfortran([str(fpath)])
         assert "Mismatch" not in stdout_f2py.getvalue()
 
+
+def test_include_prefers_the_including_file(tmp_path, monkeypatch):
+    src = tmp_path / "src"
+    cwd = tmp_path / "cwd"
+    src.mkdir()
+    cwd.mkdir()
+    (src / "inc.inc").write_text("      integer a\n")
+    (cwd / "inc.inc").write_text("      real a\n")
+    (src / "main.f").write_text(
+        "      subroutine incs(a)\n"
+        "      include 'inc.inc'"
+    )
+    tail = cwd / "tail.f"
+    tail.write_text("      end\n")
+    monkeypatch.chdir(cwd)
+    crackfortran.reset_global_f2py_vars()
+    mod = crackfortran.crackfortran([str(src / "main.f"), str(tail)])[0]
+    assert mod["vars"]["a"]["typespec"] == "integer"
+
+
 class TestParamEval:
     # issue gh-11612, array parameter parsing
     def test_param_eval_nested(self):
