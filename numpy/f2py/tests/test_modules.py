@@ -101,3 +101,22 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+class TestAllocatableScalar(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+module m
+  integer, allocatable :: s
+end module m
+"""
+
+    @pytest.mark.parametrize("value", [0, -7])
+    def test_allocatable_scalar(self, value):
+        mod = self.module.m
+        assert mod.s is None
+        mod.s = value
+        assert mod.s == value
+        mod.s = None
+        assert mod.s is None

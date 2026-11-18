@@ -418,6 +418,7 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
             npy_intp dims[F2PY_MAX_DIMS];
             int k;
             save_def = &fp->defs[i];
+            if (fp->defs[i].rank == 0) dims[0] = v != Py_None;
             if (v != Py_None) { /* set new value (reallocate if needed --
                                    see f2py generated code for more
                                    details ) */
@@ -426,8 +427,10 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                                             fp->defs[i].rank, F2PY_INTENT_IN,
                                             v)) == NULL)
                     return -1;
-                (*(fp->defs[i].func))(&fp->defs[i].rank, PyArray_DIMS(arr),
-                                      set_data, &flag);
+                (*(fp->defs[i].func))(
+                        &fp->defs[i].rank,
+                        fp->defs[i].rank ? PyArray_DIMS(arr) : dims, set_data,
+                        &flag);
             }
             else { /* deallocate */
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = 0;
