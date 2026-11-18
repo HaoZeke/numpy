@@ -378,6 +378,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     ll = ''
     includeline = re.compile(
         r'\s*include\s*(\'|")(?P<name>[^\'"]*)(\'|")', re.I)
+    labelpattern = re.compile(
+        r'\s*(?P<label>\d{1,5})\s+(?P<line>\S.*)\Z')
     cont1 = re.compile(r'(?P<line>.*)&\s*\Z')
     cont2 = re.compile(r'(\s*&|)(?P<line>.*)')
     mline_mark = re.compile(r".*?'''")
@@ -501,6 +503,10 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     if mline_mark.match(lc):
                         break
                 l = l.rstrip()
+            if not cont and ext.lower() != '.pyf':
+                label = labelpattern.match(l)
+                if label and int(label.group('label')) != 0:
+                    l = label.group('line')
             r = cont1.match(l)
             if r:
                 l = r.group('line')  # Continuation follows ..

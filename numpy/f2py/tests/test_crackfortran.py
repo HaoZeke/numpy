@@ -563,6 +563,21 @@ class TestParamParseNestedParens:
         assert vs["dimension"] == ["26", "1800"]
 
 
+@pytest.mark.parametrize("labels", [
+    ("1", "2", "3"),
+    ("00001", "00002", "00003"),
+])
+def test_free_form_statement_label(tmp_path, labels):
+    src = tmp_path / "labeled.f90"
+    src.write_text(
+        f"{labels[0]} subroutine foo(x)\n"
+        f"{labels[1]} integer, intent(in) :: x\n"
+        f"{labels[2]} end subroutine foo\n"
+    )
+    mod = crackfortran.crackfortran([str(src)])
+    assert mod[0]["vars"]["x"]["intent"] == ["in"]
+
+
 @pytest.mark.slow
 class TestLowerF2PYDirective(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "gh27697.f90")]
