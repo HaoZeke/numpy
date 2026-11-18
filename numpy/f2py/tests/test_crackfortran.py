@@ -457,6 +457,28 @@ class TestFunctionReturn(util.F2PyTest):
         assert self.module.intproduct(3, 4) == 12
 
 
+def test_fixed_form_zero_column_six_is_not_continuation(tmp_path):
+    src = tmp_path / "zero.f"
+    src.write_text(
+        "      subroutine zed(a, b)\n"
+        "      integer a\n"
+        "     0real b\n"
+        "      end\n"
+        "      subroutine dig(a,\n"
+        "     1b)\n"
+        "      integer a, b\n"
+        "      end\n"
+    )
+    crackfortran.reset_global_f2py_vars()
+    blocks = {
+        block["name"]: block
+        for block in crackfortran.crackfortran([str(src)])
+    }
+    assert blocks["zed"]["vars"]["a"]["typespec"] == "integer"
+    assert blocks["zed"]["vars"]["b"]["typespec"] == "real"
+    assert blocks["dig"]["args"] == ["a", "b"]
+
+
 @pytest.mark.slow
 class TestFortranGroupCounters(util.F2PyTest):
     def test_end_if_comment(self):

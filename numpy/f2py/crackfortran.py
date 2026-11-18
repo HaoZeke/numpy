@@ -464,6 +464,9 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                                 'in the first column.\n\tAre you sure that '
                                 f'this code is in fix form?\n\tline={l!r}')
 
+            # Zero in column 6 marks an initial line, like a blank.
+            if len(l) > 5 and l[5] == '0':
+                l = l[:5] + ' ' + l[6:]
             if (not cont or strictf77) and (len(l) > 5 and not l[5] == ' '):
                 # Continuation of a previous line
                 ll = ll + l[6:]
