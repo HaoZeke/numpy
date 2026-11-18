@@ -329,6 +329,28 @@ def openhook(filename, mode):
     return open(filename, mode, encoding=encoding)
 
 
+_c_directive_re = re.compile(
+    r'^\s*(?:[*c!#]f2py\s+)?'
+    r'(?:callstatement|callprotoargument|pymethoddef|usercode)\b', re.I)
+
+
+def _split_c_bang_comment(line, context=''):
+    prefix = ''
+    rest = line
+    while True:
+        before, after = split_by_unquoted(rest, '!')
+        if not after:
+            return prefix + rest, ''
+        previous = _c_directive_re.sub(
+            '', context + prefix + before, count=1).rstrip()
+        if after.startswith('!=') or (
+                not previous or previous[-1] in '([{,:=!?&|+-*/%^~<>'):
+            prefix += before + '!'
+            rest = after[1:]
+            continue
+        return prefix + before, after
+
+
 def is_free_format(fname):
     """Check if file is in free format Fortran."""
     # f90 allows both fixed and free format, assuming fixed unless
@@ -426,12 +448,25 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             l = l[:-1]
         # Do not lower for directives, gh-2547, gh-27697, gh-26681
         is_f2py_directive = False
-        # Unconditionally remove comments
+        raw_line = l
+        is_c_continuation = _c_directive_re.match(ll) and (
+            (sourcecodeform == 'free' and cont)
+            or (sourcecodeform == 'fix' and len(l) > 5 and l[5] != ' ')
+        )
         (l, rl) = split_by_unquoted(l, '!')
         l += ' '
         if rl[:5].lower() == '!f2py':  # f2py directive
-            l, _ = split_by_unquoted(l + 4 * ' ' + rl[5:], '!')
+            body = l + 4 * ' ' + rl[5:]
+            if _c_directive_re.match(body) or is_c_continuation:
+                l, _ = _split_c_bang_comment(
+                    body, ll if is_c_continuation else '')
+            else:
+                l, _ = split_by_unquoted(body, '!')
             is_f2py_directive = True
+        elif _c_directive_re.match(raw_line) or is_c_continuation:
+            l, _ = _split_c_bang_comment(
+                raw_line, ll if is_c_continuation else '')
+            l += ' '
         if l.strip() == '':  # Skip empty line
             if sourcecodeform == 'free':
                 # In free form, a statement continues in the next line

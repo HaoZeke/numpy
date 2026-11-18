@@ -563,6 +563,24 @@ class TestParamParseNestedParens:
         assert vs["dimension"] == ["26", "1800"]
 
 
+@pytest.mark.parametrize(
+    ("suffix", "directive"),
+    [
+        (".pyf", "callstatement if (! ready && n != 0) foo();"),
+        (".f90", "!f2py callstatement if (! ready && n != 0) foo();"),
+        (".f", "cf2py callstatement if (! ready && n != 0) foo();"),
+    ],
+)
+def test_c_bang_in_directive(tmp_path, suffix, directive):
+    path = tmp_path / f"bang{suffix}"
+    header = "! -*- f90 -*-\n" if suffix == ".pyf" else ""
+    path.write_text(f"{header}{directive}\n")
+    lines = []
+    crackfortran.readfortrancode(
+        [str(path)], lambda line, *args: lines.append(line))
+    assert any("! ready && n != 0" in line for line in lines)
+
+
 @pytest.mark.slow
 class TestLowerF2PYDirective(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "gh27697.f90")]
