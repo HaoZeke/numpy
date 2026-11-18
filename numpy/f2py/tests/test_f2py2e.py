@@ -8,6 +8,7 @@ import textwrap
 from collections import namedtuple
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from numpy.f2py.f2py2e import get_newer_options, main as f2pycli
@@ -175,6 +176,19 @@ def test_gh23598_warn(capfd, gh23598_warn, monkeypatch):
         f2pycli()  # Generate files
         wrapper = foutl.wrap90.read_text()
         assert "intproductf2pywrap, intpr" not in wrapper
+
+
+def test_allocatable_getdims_status_uses_intp(tmp_path, monkeypatch):
+    source = util.getpath("tests", "src", "modules", "gh21674_alloc_char.f90")
+    monkeypatch.setattr(sys, "argv", ["f2py", str(source), "-m", "test"])
+
+    with util.switchdir(tmp_path):
+        f2pycli()
+
+    wrapper = (tmp_path / "test-f2pywrappers2.f90").read_text()
+    assert f"integer({np.intp().itemsize}) s(*),isallocated" in wrapper
+    assert "call f2pysetdata(d,isallocated)" in wrapper
+    assert "call f2pysetdata(d,allocated(d))" not in wrapper
 
 
 def test_gen_pyf(capfd, hello_world_f90, monkeypatch):

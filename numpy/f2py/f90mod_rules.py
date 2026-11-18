@@ -43,7 +43,7 @@ fgetdims1 = f"""\
       external f2pysetdata
       logical ns
       integer r,i
-      integer({np.intp().itemsize}) s(*)
+      integer({np.intp().itemsize}) s(*),isallocated
       ns = .FALSE.
       if (allocated(d)) then
          do i=1,r
@@ -65,7 +65,8 @@ fgetdims2 = """\
          end do
       end if
       flag = 1
-      call f2pysetdata(d,allocated(d))"""
+      isallocated = merge(1, 0, allocated(d))
+      call f2pysetdata(d,isallocated)"""
 
 fgetdims2_sa = """\
       end if
@@ -76,7 +77,8 @@ fgetdims2_sa = """\
          !s(r) must be equal to len(d(1))
       end if
       flag = 2
-      call f2pysetdata(d,allocated(d))"""
+      isallocated = merge(1, 0, allocated(d))
+      call f2pysetdata(d,isallocated)"""
 
 
 def buildhooks(pymod):
