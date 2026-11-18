@@ -2065,6 +2065,8 @@ def postcrack(block, args=None, tab=''):
         uret = []
         for g in block:
             setmesstext(g)
+            if _skip_assumed_rank(g):
+                continue
             g = postcrack(g, tab=tab + '\t')
             # sort user routines to appear first
             if 'name' in g and '__user__' in g['name']:
@@ -2266,6 +2268,22 @@ def analyzecommon(block):
     return block
 
 
+def _skip_assumed_rank(block):
+    if (not isinstance(block, dict)
+            or block.get('block') not in ('function', 'subroutine')):
+        return False
+    for arg in block.get('args', []):
+        var = block.get('vars', {}).get(arg, {})
+        specs = [*var.get('dimension', []), *var.get('attrspec', [])]
+        for spec in specs:
+            spec = ''.join(str(spec).split()).lower()
+            if spec.removeprefix('dimension(').removesuffix(')') == '..':
+                errmess(f'routine "{block.get("name")}" has an assumed-rank '
+                        'argument. Skipping.\n')
+                return True
+    return False
+
+
 def analyzebody(block, args, tab=''):
     global usermodules, skipfuncs, onlyfuncs, f90modulevars
 
@@ -2291,6 +2309,8 @@ def analyzebody(block, args, tab=''):
             if b['name'] in skipfuncs:
                 continue
             if onlyfuncs and b['name'] not in onlyfuncs:
+                continue
+            if _skip_assumed_rank(b):
                 continue
             b['saved_interface'] = crack2fortrangen(
                 b, '\n' + ' ' * 6, as_interface=True)
