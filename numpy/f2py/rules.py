@@ -1035,7 +1035,8 @@ if (#varname#_cb.capi==Py_None) {
     # Complex scalars
     {  # Common
         'decl': '    #ctype# #varname#;',
-        'callfortran': {isintent_c: '#varname#,', l_not(isintent_c): '&#varname#,'},
+        'callfortran': {l_or(isintent_c, isattr_value): '#varname#,',
+                        l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#.r,#varname#.i);'},
         'return': {isintent_out: ',#varname#_capi'},
         '_check': iscomplex

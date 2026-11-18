@@ -75,8 +75,18 @@ def _isstring(var):
            not isexternal(var)
 
 
+def _ischaracter_value(var):
+    selector = var.get('charselector', {})
+    length = selector.get('*', selector.get('len', '1'))
+    kind = selector.get('kind', '1')
+    return (isattr_value(var) and not isarray(var)
+            and str(length).strip().lower() in ['1', 'c_char']
+            and str(kind).strip().lower() in ['1', 'c_char'])
+
+
 def ischaracter_or_characterarray(var):
-    return _ischaracter(var) and 'charselector' not in var
+    return _ischaracter(var) and (
+        'charselector' not in var or _ischaracter_value(var))
 
 
 def ischaracter(var):
@@ -88,7 +98,8 @@ def ischaracterarray(var):
 
 
 def isstring_or_stringarray(var):
-    return _ischaracter(var) and 'charselector' in var
+    return (_ischaracter(var) and 'charselector' in var
+            and not _ischaracter_value(var))
 
 
 def isstring(var):
