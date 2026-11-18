@@ -642,3 +642,25 @@ class TestBCCharHandling(util.F2PyTest):
     def test_gh25286(self):
         info = self.module.charint('T')
         assert info == 2
+
+
+@pytest.mark.slow
+class TestLenKind(util.F2PyTest):
+    suffix = '.f90'
+    code = textwrap.dedent("""
+        pure function lenkind_kw(x) result (y)
+          character(len=*), intent(in) :: x
+          character(len=len(x, kind=4)+1) :: y
+          y = x // 'Z'
+        end function lenkind_kw
+
+        pure function lenkind_pos(x) result (y)
+          character(len=*), intent(in) :: x
+          character(len=len(x, 8)) :: y
+          y = x
+        end function lenkind_pos
+    """)
+
+    def test_len_kind(self):
+        assert_equal(self.module.lenkind_kw('abC'), b'abCZ')
+        assert_equal(self.module.lenkind_pos('abC'), b'abC')

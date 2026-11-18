@@ -162,7 +162,7 @@ extern PyObject *f2py_describe_obj(PyObject *obj);
 #define f2py_len(var) f2py_shape(var,0)
 #define f2py_fshape(var,dim) f2py_shape(var,rank(var)-dim-1)
 #define f2py_flen(var) f2py_fshape(var,0)
-#define f2py_slen(var) capi_ ## var ## _len
+#define f2py_slen(var, ...) capi_ ## var ## _len
 
   extern npy_intp f2py_size_impl(PyArrayObject* var, ...);
 

@@ -251,7 +251,6 @@ def f2cexpr(expr):
     macros calls.
 
     """
-    # TODO: support Fortran `len` function with optional kind parameter
     expr = re.sub(r'\blen\b', 'f2py_slen', expr)
     return expr
 
