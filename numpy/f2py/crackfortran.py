@@ -1702,9 +1702,13 @@ def updatevars(typespec, selector, attrspec, entitydecl):
     el = [x.strip() for x in markoutercomma(entitydecl).split('@,@')]
     el1 = []
     for e in el:
-        for e1 in [x.strip() for x in markoutercomma(removespaces(markinnerspaces(e)), comma=' ').split('@ @')]:
-            if e1:
-                el1.append(e1.replace('@_@', ' '))
+        e = removespaces(markinnerspaces(e))
+        if '=' in e:
+            el1.append(e.replace('@_@', ' '))
+        else:
+            el1.extend(
+                x.strip().replace('@_@', ' ') for x in
+                markoutercomma(e, comma=' ').split('@ @') if x.strip())
     for e in el1:
         m = namepattern.match(e)
         if not m:
@@ -2523,6 +2527,38 @@ def _selected_real_kind_func(p, r=0, radix=0):
     return -1
 
 
+_LOGICAL_REPLACEMENTS = (
+    ('.false.', ' False '),
+    ('.true.', ' True '),
+    ('.not.', ' not '),
+    ('.and.', ' and '),
+    ('.or.', ' or '),
+)
+
+
+def _logical_to_python(value):
+    """Rewrite a Fortran logical expression as a Python expression."""
+    v = value.lower()
+    for src, dst in _LOGICAL_REPLACEMENTS:
+        v = v.replace(src, dst)
+    return v
+
+
+def _fold_logical_init(value, params):
+    """Evaluate a logical initializer to the C text '1' or '0'.
+
+    The wrapper assigns this text directly. `.not. .false.` is not valid C,
+    and neither is the Python spelling `True`.
+    """
+    try:
+        result = eval(_logical_to_python(value), {}, params)
+    except Exception:
+        return None
+    if isinstance(result, bool):
+        return '1' if result else '0'
+    return None
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2544,13 +2580,7 @@ def get_parameters(vars, global_params={}):
         if '=' in vars[n]:
             v = vars[n]['=']
             if islogical(vars[n]):
-                v = v.lower()
-                for repl in [
-                    ('.false.', 'False'),
-                    ('.true.', 'True'),
-                    # TODO: test .eq., .neq., etc replacements.
-                ]:
-                    v = v.replace(*repl)
+                v = _logical_to_python(v)
 
             v = kind_re.sub(r'kind("\1")', v)
             v = selected_int_kind_re.sub(r'selected_int_kind(\1)', v)
@@ -2966,7 +2996,14 @@ def analyzevars(block):
                 if not vars[n]['depend']:
                     del vars[n]['depend']
             if isscalar(vars[n]):
-                vars[n]['='] = _eval_scalar(vars[n]['='], params)
+                if islogical(vars[n]):
+                    folded = _fold_logical_init(vars[n]['='], params)
+                    if folded is not None:
+                        vars[n]['='] = folded
+                    else:
+                        vars[n]['='] = _eval_scalar(vars[n]['='], params)
+                else:
+                    vars[n]['='] = _eval_scalar(vars[n]['='], params)
 
     for n in list(vars.keys()):
         if n == block['name']:  # n is block name
