@@ -427,10 +427,20 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         # Do not lower for directives, gh-2547, gh-27697, gh-26681
         is_f2py_directive = False
         # Unconditionally remove comments
-        (l, rl) = split_by_unquoted(l, '!')
+        is_fixed_f2py_directive = (
+            sourcecodeform == 'fix'
+            and len(l) >= 5
+            and l[0] in ['*', 'c', '!', 'C', '#']
+            and l[1:5].lower() == 'f2py'
+        )
+        if (Path(currentfilename).suffix.lower() == '.pyf'
+                or is_fixed_f2py_directive):
+            l, rl = _split_check_comment(l)
+        else:
+            l, rl = split_by_unquoted(l, '!')
         l += ' '
         if rl[:5].lower() == '!f2py':  # f2py directive
-            l, _ = split_by_unquoted(l + 4 * ' ' + rl[5:], '!')
+            l, _ = _split_check_comment(l + 4 * ' ' + rl[5:])
             is_f2py_directive = True
         if l.strip() == '':  # Skip empty line
             if sourcecodeform == 'free':
@@ -660,6 +670,23 @@ f2pyenhancementspattern = re.compile(beforethisafter % ('', 'threadsafe|fortrann
 multilinepattern = re.compile(
     r"\s*(?P<before>''')(?P<this>.*?)(?P<after>''')\s*\Z", re.S), 'multiline'
 ##
+
+def _split_check_comment(line):
+    """Split a comment, leaving != inside a check expression."""
+    prefix = ''
+    while True:
+        before, after = split_by_unquoted(line, '!')
+        before_bang = mask_string_literals(prefix + before)
+        checks = list(re.finditer(r'\bcheck\s*\(', before_bang, re.I))
+        in_check = checks and (
+            before_bang[checks[-1].end():].count('(')
+            >= before_bang[checks[-1].end():].count(')')
+        )
+        if not after.startswith('!=') or not in_check:
+            return prefix + before, after
+        prefix += before + '!'
+        line = after[1:]
+
 
 def split_by_unquoted(line, characters):
     """
