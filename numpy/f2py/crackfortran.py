@@ -303,8 +303,8 @@ def openhook(filename, mode):
 
     This function uses charset_normalizer package, when available, for
     determining the encoding of the file to be opened. When charset_normalizer
-    is not available, the function detects only UTF encodings, otherwise, ASCII
-    encoding is used as fallback.
+    is not available, the function detects UTF byte-order marks and otherwise
+    uses UTF-8.
     """
     # Reads in the entire file. Robust detection of encoding.
     # Correctly handles comments or late stage unicode characters
@@ -324,8 +324,8 @@ def openhook(filename, mode):
             elif raw.startswith((codecs.BOM_LE, codecs.BOM_BE)):
                 encoding = 'UTF-16'
             else:
-                # Fallback, without charset_normalizer
-                encoding = 'ascii'
+                # UTF-8 also covers ASCII sources.
+                encoding = 'UTF-8'
     return open(filename, mode, encoding=encoding)
 
 
