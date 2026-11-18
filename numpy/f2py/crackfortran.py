@@ -1216,8 +1216,10 @@ def analyzeline(m, case, line):
                                   for x in markoutercomma(args).split('@,@')])
             else:
                 args = []
-            assert result is None, repr(result)
             groupcache[groupcounter]['entry'][name] = args
+            if result:
+                groupcache[groupcounter].setdefault(
+                    'entryresult', {})[name] = result
             previous_context = ('entry', name, groupcounter)
     elif case == 'type':
         typespec, selector, attr, edecl = cracktypespec0(
@@ -2658,8 +2660,10 @@ def analyzevars(block):
     setmesstext(block)
     implicitrules, attrrules = buildimplicitrules(block)
     vars = copy.copy(block['vars'])
-    if block['block'] == 'function' and block['name'] not in vars:
-        vars[block['name']] = {}
+    if block['block'] == 'function':
+        for n in (block['name'], *block.get('entryresult', {}).values()):
+            if n not in vars:
+                vars[n] = {}
     if '' in block['vars']:
         del vars['']
         if 'attrspec' in block['vars']['']:
@@ -3026,6 +3030,7 @@ def analyzevars(block):
                 for n in block['entry'][k]:
                     if n not in neededvars:
                         neededvars.append(n)
+            neededvars.extend(block.get('entryresult', {}).values())
         if block['block'] == 'function':
             if 'result' in block:
                 neededvars.append(block['result'])
@@ -3377,8 +3382,11 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         mess = f"! in {block['from']}"
     if 'entry' in block:
         entry_stmts = ''
+        er = block.get('entryresult') or {}
         for k, i in list(block['entry'].items()):
-            entry_stmts = f"{entry_stmts}{tab + tabchar}entry {k}({','.join(i)})"
+            res = f" result({er[k]})" if k in er else ''
+            entry_stmts = (f"{entry_stmts}{tab + tabchar}entry "
+                           f"{k}({','.join(i)}){res}")
         body = body + entry_stmts
     if blocktype == 'block data' and name == '_BLOCK_DATA_':
         name = ''
