@@ -888,18 +888,19 @@ def markouterparen(line):
 def markoutercomma(line, comma=','):
     l = ''
     f = 0
-    before, after = split_by_unquoted(line, comma + '()')
+    groups = comma + '()[]'
+    before, after = split_by_unquoted(line, groups)
     l += before
     while after:
         if (after[0] == comma) and (f == 0):
             l += '@' + comma + '@'
         else:
             l += after[0]
-            if after[0] == '(':
+            if after[0] in '([':
                 f += 1
-            elif after[0] == ')':
+            elif after[0] in ')]':
                 f -= 1
-        before, after = split_by_unquoted(after[1:], comma + '()')
+        before, after = split_by_unquoted(after[1:], groups)
         l += before
     assert not f, repr((f, line, l))
     return l
@@ -1768,8 +1769,25 @@ def updatevars(typespec, selector, attrspec, entitydecl):
             if 'externals' not in groupcache[groupcounter]:
                 groupcache[groupcounter]['externals'] = []
             groupcache[groupcounter]['externals'].append(e)
-        if m.group('after'):
-            m1 = lenarraypattern.match(markouterparen(m.group('after')))
+        after = m.group('after')
+        if after:
+            # A coarray-spec is the [] list after the array-spec. Brackets
+            # after '=' are array constructors, not a coarray.
+            depth, bracket = 0, -1
+            for i, c in enumerate(after):
+                depth += {'(': 1, ')': -1}.get(c, 0)
+                if depth == 0 and c in '=[':
+                    bracket = i if c == '[' else -1
+                    break
+            if bracket != -1:
+                closing = after.find(']', bracket)
+                if closing != -1:
+                    spec = f'codimension{after[bracket:closing + 1]}'
+                    edecl['attrspec'] = [
+                        *(edecl.get('attrspec') or []), spec]
+                    after = after[:bracket] + after[closing + 1:]
+            m1 = (lenarraypattern.match(markouterparen(after))
+                  if after.strip() else None)
             if m1:
                 d1 = m1.groupdict()
                 for lk in ['len', 'array', 'init']:
@@ -1837,9 +1855,9 @@ def updatevars(typespec, selector, attrspec, entitydecl):
                                         f'{dm1!r} to {dm!r}. Ignoring.\n')
                                 break
 
-            else:
+            elif after.strip():
                 outmess('updatevars: could not crack entity declaration "%s". Ignoring.\n' % (
-                    ename + m.group('after')))
+                    ename + after))
         for k in list(edecl.keys()):
             if not edecl[k]:
                 del edecl[k]
@@ -2052,6 +2070,27 @@ def postcrack2(block, tab='', param_map=None):
     return block
 
 
+def _coarray_dummy(rout):
+    """Return the name of a coarray dummy argument, or None."""
+    for arg in rout.get('args') or []:
+        var = (rout.get('vars') or {}).get(arg) or {}
+        for attr in var.get('attrspec') or []:
+            if isinstance(attr, str) and attr.lower().startswith('codimension'):
+                return arg
+    return None
+
+
+def _skip_coarray_routine(rout):
+    """Drop a routine whose dummy is a coarray. Return True if dropped."""
+    arg = _coarray_dummy(rout)
+    if not arg:
+        return False
+    outmess(
+        f"Skipping {rout['block']} {rout['name']!r} since coarray argument "
+        f"{arg!r} cannot be passed from Python.\n")
+    return True
+
+
 def postcrack(block, args=None, tab=''):
     """
     TODO:
@@ -2065,6 +2104,8 @@ def postcrack(block, args=None, tab=''):
         uret = []
         for g in block:
             setmesstext(g)
+            if _skip_coarray_routine(g):
+                continue
             g = postcrack(g, tab=tab + '\t')
             # sort user routines to appear first
             if 'name' in g and '__user__' in g['name']:
@@ -2291,6 +2332,8 @@ def analyzebody(block, args, tab=''):
             if b['name'] in skipfuncs:
                 continue
             if onlyfuncs and b['name'] not in onlyfuncs:
+                continue
+            if _skip_coarray_routine(b):
                 continue
             b['saved_interface'] = crack2fortrangen(
                 b, '\n' + ' ' * 6, as_interface=True)

@@ -563,6 +563,40 @@ class TestParamParseNestedParens:
         assert vs["dimension"] == ["26", "1800"]
 
 
+def test_coarray_argument_skips_routine(tmp_path, capsys):
+    fpath = tmp_path / "coarray.f90"
+    fpath.write_text(textwrap.dedent("""\
+        module coarr
+        contains
+          subroutine plain(x, a)
+            real(kind=kind([1.0, 2.0])) :: x
+            integer :: a(size([1, 2]))
+            integer, parameter :: p(2) = [1, 2]
+            real :: local[*]
+          end subroutine plain
+          subroutine star(a)
+            real :: a(10)[*]
+          end subroutine star
+          subroutine attr(a)
+            real, codimension[*] :: a
+          end subroutine attr
+          subroutine bounds(a)
+            real :: a(10)[2,*]
+          end subroutine bounds
+        end module coarr
+        subroutine free(a)
+          real :: a[*]
+        end subroutine free
+        """))
+
+    blocks = crackfortran.crackfortran([str(fpath)])
+    assert [block["name"] for block in blocks] == ["coarr"]
+    assert [block["name"] for block in blocks[0]["body"]] == ["plain"]
+    out = capsys.readouterr().out
+    for name in ("star", "attr", "bounds", "free"):
+        assert f"Skipping subroutine '{name}'" in out
+
+
 @pytest.mark.slow
 class TestLowerF2PYDirective(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "gh27697.f90")]
