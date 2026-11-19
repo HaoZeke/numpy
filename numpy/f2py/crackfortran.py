@@ -2648,6 +2648,20 @@ def _eval_scalar(value, params):
     return value
 
 
+def _check_depend_blocked(vars, name, target, seen=None):
+    if name == target:
+        return True
+    if seen is None:
+        seen = set()
+    if name in seen or name not in vars:
+        return False
+    seen.add(name)
+    for dep_name in vars[name].get('depend') or []:
+        if _check_depend_blocked(vars, dep_name, target, seen):
+            return True
+    return False
+
+
 def analyzevars(block):
     """
     Sets correct dimension information for each variable/parameter
@@ -3040,6 +3054,21 @@ def analyzevars(block):
         for n in list(vars.keys()):
             if n not in neededvars:
                 del vars[n]
+    args = set(block.get('args') or [])
+    for n in list(vars.keys()):
+        for expr in vars[n].get('check') or []:
+            masked = mask_string_literals(expr)
+            for v, m in dep_matches.items():
+                if v == n or v not in args:
+                    continue
+                if not m(masked) or _check_depend_blocked(vars, v, n):
+                    continue
+                deps = vars[n].get('depend')
+                if not deps:
+                    deps = []
+                    vars[n]['depend'] = deps
+                if v not in deps:
+                    deps.append(v)
     return vars
 
 
