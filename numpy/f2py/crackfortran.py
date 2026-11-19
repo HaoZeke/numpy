@@ -2769,14 +2769,14 @@ def analyzevars(block):
                     if 'depend' not in vars[n]:
                         vars[n]['depend'] = []
                     for c in rmbadname([x.strip() for x in markoutercomma(depend).split('@,@')]):
-                        if c not in vars[n]['depend']:
+                        if c and c not in vars[n]['depend']:
                             vars[n]['depend'].append(c)
                     depend = None
                 if check is not None:
                     if 'check' not in vars[n]:
                         vars[n]['check'] = []
                     for c in [x.strip() for x in markoutercomma(check).split('@,@')]:
-                        if c not in vars[n]['check']:
+                        if c and c not in vars[n]['check']:
                             vars[n]['check'].append(c)
                     check = None
             if dim and 'dimension' not in vars[n]:
