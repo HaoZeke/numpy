@@ -681,10 +681,9 @@ def modsign2map(m):
         ret['note'] = m['note']
     ret['usercode'] = getusercode(m) or ''
     ret['usercode1'] = getusercode1(m) or ''
-    if m['body']:
-        ret['interface_usercode'] = getusercode(m['body'][0]) or ''
-    else:
-        ret['interface_usercode'] = ''
+    ret['interface_usercode'] = '\n'.join(
+        getusercode(interface) or '' for interface in m['body']
+    )
     ret['pymethoddef'] = getpymethoddef(m) or ''
     if 'gil_used' in m:
         ret['gil_used'] = m['gil_used']
