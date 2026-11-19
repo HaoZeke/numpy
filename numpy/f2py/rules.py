@@ -970,7 +970,14 @@ if (#varname#_cb.capi==Py_None) {
     {  # Common
         'decl': '    #ctype# #varname# = 0;',
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#);'},
-        'callfortran': {l_or(isintent_c, isattr_value): '#varname#,', l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
+        'callfortran': {
+            l_and(l_or(isintent_c, isattr_value),
+                  l_not(l_and(isintent_c,
+                              l_or(isintent_inout, isintent_out)))): '#varname#,',
+            l_not(l_and(l_or(isintent_c, isattr_value),
+                        l_not(l_and(isintent_c,
+                                    l_or(isintent_inout, isintent_out))))): '&#varname#,',
+        },
         'return': {isintent_out: ',#varname#'},
         '_check': l_and(isscalar, l_not(iscomplex))
     }, {
@@ -1035,7 +1042,12 @@ if (#varname#_cb.capi==Py_None) {
     # Complex scalars
     {  # Common
         'decl': '    #ctype# #varname#;',
-        'callfortran': {isintent_c: '#varname#,', l_not(isintent_c): '&#varname#,'},
+        'callfortran': {
+            l_and(isintent_c,
+                  l_not(l_or(isintent_inout, isintent_out))): '#varname#,',
+            l_not(l_and(isintent_c,
+                        l_not(l_or(isintent_inout, isintent_out)))): '&#varname#,',
+        },
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#.r,#varname#.i);'},
         'return': {isintent_out: ',#varname#_capi'},
         '_check': iscomplex
