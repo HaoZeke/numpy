@@ -82,6 +82,9 @@ def useiso_c_binding(rout):
         kind_value = value.get('kindselector', {}).get('kind')
         if kind_value in isoc_kindmap:
             return True
+        char_kind = value.get('charselector', {}).get('kind')
+        if char_kind in isoc_kindmap:
+            return True
     return useisoc
 
 def useiso_fortran_env(rout):
