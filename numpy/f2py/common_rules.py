@@ -17,6 +17,17 @@ from .auxfuncs import getuseblocks, hasbody, hascommon, hasnote, isintent_hide, 
 from .crackfortran import rmbadname
 
 
+def _modules_defining(block, name):
+    found = set()
+    if isinstance(block, dict):
+        if (block.get('block') == 'module' and
+                name in (block.get('common') or {})):
+            found.add(block.get('name'))
+        for child in block.get('body') or []:
+            found.update(_modules_defining(child, name))
+    return found
+
+
 def findcommonblocks(block, top=1):
     ret = []
     if hascommon(block):
@@ -73,7 +84,10 @@ def buildhooks(m):
             outmess(f'\t\tConstructing COMMON block support for "{name}"...\n\t\t  '
                     f'{inames_str}\n')
         fadd(f'subroutine f2pyinit{name}(setupfunc)')
+        owned_by = _modules_defining(m, name)
         for usename in getuseblocks(m):
+            if usename in owned_by:
+                continue
             fadd(f'use {usename}')
         fadd('external setupfunc')
         for n in vnames:
