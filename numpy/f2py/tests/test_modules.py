@@ -1,5 +1,6 @@
 import textwrap
 
+import numpy as np
 import pytest
 
 from . import util
@@ -101,3 +102,21 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+class TestAllocatableInputShape(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "modules", "alloc_input_shape.f90")]
+
+    @pytest.mark.parametrize("src, shape", [
+        (np.arange(6, dtype=np.int32).reshape((2, 3), order="F"), (2, 3)),
+        (np.arange(6, dtype=np.int32), (6, 1)),
+    ])
+    def test_shape_follows_input(self, src, shape):
+        mod = self.module.amod
+        mod.a = src
+        got = mod.a
+        assert got.shape == shape
+        assert got.dtype == np.dtype(np.int32)
+        expect = np.arange(6, dtype=np.int32).reshape(shape, order="F")
+        assert np.array_equal(got, expect)
