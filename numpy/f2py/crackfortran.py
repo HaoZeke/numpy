@@ -403,18 +403,19 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             currentfilename = fin.filename()
             gotnextfile = 1
             l1 = l
-            strictf77 = 0
-            sourcecodeform = 'fix'
             ext = os.path.splitext(currentfilename)[1]
-            if Path(currentfilename).suffix.lower() in COMMON_FIXED_EXTENSIONS and \
-                    not (_has_f90_header(l) or _has_fix_header(l)):
-                strictf77 = 1
-            elif is_free_format(currentfilename) and not _has_fix_header(l):
-                sourcecodeform = 'free'
-            if strictf77:
-                beginpattern = beginpattern77
-            else:
-                beginpattern = beginpattern90
+            if istop:
+                strictf77 = 0
+                sourcecodeform = 'fix'
+                if Path(currentfilename).suffix.lower() in COMMON_FIXED_EXTENSIONS and \
+                        not (_has_f90_header(l) or _has_fix_header(l)):
+                    strictf77 = 1
+                elif is_free_format(currentfilename) and not _has_fix_header(l):
+                    sourcecodeform = 'free'
+                if strictf77:
+                    beginpattern = beginpattern77
+                else:
+                    beginpattern = beginpattern90
             outmess(f"\tReading file {currentfilename!r} "
                     f"(format:{sourcecodeform}{',strict' if strictf77 else ''})\n")
 
