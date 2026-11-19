@@ -358,12 +358,22 @@ class Expr:
             precedence = Precedence.PRODUCT if factors else Precedence.ATOM
         elif self.op is Op.APPLY:
             name, args, kwargs = self.data
+            fname = (name.data if isinstance(name, Expr)
+                     and name.op is Op.SYMBOL else name)
+            low = fname.lower() if isinstance(fname, str) else ''
             if name is ArithOp.DIV and language is Language.C:
                 numer, denom = [arg.tostring(Precedence.PRODUCT,
                                              language=language)
                                 for arg in args]
                 r = f'{numer} / {denom}'
                 precedence = Precedence.PRODUCT
+            elif (language is Language.C and not kwargs
+                  and low == 'modulo' and len(args) == 2):
+                numer, denom = [arg.tostring(Precedence.TUPLE,
+                                             language=language)
+                                for arg in args]
+                r = f'f2py_modulo({numer}, {denom})'
+                precedence = Precedence.ATOM
             else:
                 args = [arg.tostring(Precedence.TUPLE, language=language)
                         for arg in args]

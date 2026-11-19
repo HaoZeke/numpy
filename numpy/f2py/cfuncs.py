@@ -592,6 +592,12 @@ cppmacros["F2PY_THREAD_LOCAL_DECL"] = """
 """
 ################# C functions ###############
 
+needs['f2py_modulo'] = ['arrayobject.h']
+cfuncs['f2py_modulo'] = """
+static inline npy_intp f2py_modulo(npy_intp a, npy_intp p) {
+    npy_intp r = a % p;
+    return (r && ((r < 0) != (p < 0))) ? r + p : r;
+}"""
 cfuncs['calcarrindex'] = """
 static int calcarrindex(int *i,PyArrayObject *arr) {
     int k,ii = i[0];

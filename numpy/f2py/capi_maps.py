@@ -295,6 +295,11 @@ def getarrdims(a, var, verbose=0):
         ret['rank'] = '0'
         ret['dims'] = ''
     elif isarray(var):
+        for d in var['dimension']:
+            if isinstance(d, str) and 'f2py_modulo(' in d:
+                from .cfuncs import append_needs
+                append_needs('f2py_modulo')
+                break
         dim = copy.copy(var['dimension'])
         ret['size'] = '*'.join(dim)
         try:
