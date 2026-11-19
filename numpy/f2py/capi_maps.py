@@ -47,6 +47,7 @@ c2py_map = {'double': 'float',
             'int': 'int',                              # forced casting
             'long': 'int',
             'long_long': 'long',
+            'npy_intp': 'int',
             'unsigned': 'int',                         # forced casting
             'complex_float': 'complex',                # forced casting
             'complex_double': 'complex',
@@ -68,6 +69,7 @@ c2capi_map = {'double': 'NPY_DOUBLE',
                 'long': 'NPY_LONG',
                 'unsigned_long': 'NPY_ULONG',
                 'long_long': 'NPY_LONGLONG',
+                'npy_intp': 'NPY_INTP',
                 'unsigned_long_long': 'NPY_ULONGLONG',
                 'complex_float': 'NPY_CFLOAT',
                 'complex_double': 'NPY_CDOUBLE',
@@ -88,6 +90,7 @@ c2pycode_map = {'double': 'd',
                 'long': 'l',
                 'unsigned_long': 'L',
                 'long_long': 'q',
+                'npy_intp': 'p',
                 'unsigned_long_long': 'Q',
                 'complex_float': 'F',
                 'complex_double': 'D',
@@ -104,6 +107,7 @@ c2buildvalue_map = {'double': 'd',
                     'int': 'i',
                     'long': 'l',
                     'long_long': 'L',
+                    'npy_intp': 'n',
                     'complex_float': 'N',
                     'complex_double': 'N',
                     'complex_long_double': 'N',
@@ -236,6 +240,9 @@ def getctype(var):
                                 f'"{ctype}" (to override define {{{typespec!r}: '
                                 f'{{{kind!r}: "<C typespec>"}}}} '
                                 f'in {os.getcwd()}/.f2py_f2cmap file).\n')
+    elif (str(var.get('typespec', '')).lower() == 'type'
+          and str(var.get('typename') or '').lower() in ('c_ptr', 'c_funptr')):
+        return 'npy_intp'
     elif not isexternal(var):
         errmess(f'getctype: No C-type found in "{var}", assuming void.\n')
     return ctype

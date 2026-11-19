@@ -999,6 +999,23 @@ long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
 """
 
 
+cfuncs['npy_intp_from_pyobj'] = """
+static int
+npy_intp_from_pyobj(npy_intp* v, PyObject *obj, const char *errmess) {
+    *v = PyArray_PyIntAsIntp(obj);
+    if (*v == -1 && PyErr_Occurred()) {
+        PyErr_SetString(#modulename#_error, errmess);
+        return 0;
+    }
+    return 1;
+}
+"""
+
+cppmacros['pyobj_from_npy_intp1'] = r"""
+#define pyobj_from_npy_intp1(v) (PyLong_FromSsize_t((Py_ssize_t)(v)))
+"""
+
+
 needs['long_long_from_pyobj'] = ['long_long']
 cfuncs['long_long_from_pyobj'] = """
 static int
@@ -1313,6 +1330,10 @@ needs['try_pyarr_from_long_long'] = [
     'pyobj_from_long_long1', 'TRYPYARRAYTEMPLATE', 'long_long']
 cfuncs[
     'try_pyarr_from_long_long'] = 'static int try_pyarr_from_long_long(PyObject* obj,long_long* v) {\n    TRYPYARRAYTEMPLATE(long_long,\'L\');\n}\n'
+needs['try_pyarr_from_npy_intp'] = [
+    'pyobj_from_npy_intp1', 'TRYPYARRAYTEMPLATE']
+cfuncs[
+    'try_pyarr_from_npy_intp'] = 'static int try_pyarr_from_npy_intp(PyObject* obj,npy_intp* v) {\n    TRYPYARRAYTEMPLATE(npy_intp,\'p\');\n}\n'
 needs['try_pyarr_from_float'] = ['pyobj_from_float1', 'TRYPYARRAYTEMPLATE']
 cfuncs[
     'try_pyarr_from_float'] = 'static int try_pyarr_from_float(PyObject* obj,float* v) {\n    TRYPYARRAYTEMPLATE(float,\'f\');\n}\n'
