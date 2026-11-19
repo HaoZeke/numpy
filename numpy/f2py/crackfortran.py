@@ -3093,8 +3093,14 @@ def param_eval(v, g_params, params, dimspec=None):
         raise ValueError('param_eval: multidimensional array parameters '
                          f'{dimspec} not supported')
 
-    # Parse parameter value
-    v = (v[2:-2] if v.startswith('(/') else v).split(',')
+    # Parse parameter value.
+    if v.startswith('(/'):
+        v = v[2:-2]
+        m = re.match(
+            r'\s*[a-z]\w*\s*(\([^)]*\))?\s*::\s*(.*)\Z', v, re.I | re.S)
+        if m:
+            v = m.group(2)
+    v = v.split(',')
     v_eval = []
     for item in v:
         try:

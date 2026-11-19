@@ -119,3 +119,28 @@ class TestParameters(util.F2PyTest):
     def test_constant_array_delims(self):
         x = self.module.foo_array_delims()
         assert x == 9
+
+
+@pytest.mark.slow
+class TestArrayConstructorTypeSpec(util.F2PyTest):
+    code = """
+        subroutine typed_sum(x, result)
+          integer, parameter :: p(3) = (/ integer :: 4, 5, 6 /)
+          real, intent(in) :: x(p(1))
+          real, intent(out) :: result
+          result = sum(x)
+        end subroutine
+
+        subroutine kind_sum(x, result)
+          integer, parameter :: p(2) = (/ integer(kind=4) :: 8, 9 /)
+          real, intent(in) :: x(p(1))
+          real, intent(out) :: result
+          result = sum(x)
+        end subroutine
+    """
+    suffix = ".f90"
+
+    @pytest.mark.parametrize("func, n", [("typed_sum", 4), ("kind_sum", 8)])
+    def test_typed_constructor_extent(self, func, n):
+        x = np.arange(1, n + 1, dtype=np.float32)
+        assert getattr(self.module, func)(x) == n * (n + 1) / 2
