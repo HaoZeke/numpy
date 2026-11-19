@@ -119,3 +119,24 @@ class TestParameters(util.F2PyTest):
     def test_constant_array_delims(self):
         x = self.module.foo_array_delims()
         assert x == 9
+
+
+@pytest.mark.slow
+class TestArrayParameterIndex(util.F2PyTest):
+    code = """
+        subroutine indexed_sum(i, x, result)
+          integer, parameter :: p(3) = (/ 2, 4, 6 /)
+          integer, intent(in) :: i
+          real, intent(in) :: x(p(i))
+          real, intent(out) :: result
+          result = sum(x)
+        end subroutine
+
+    """
+    suffix = ".f90"
+
+    def test_indexed_extent(self):
+        x = np.arange(1, 5, dtype=np.float32)
+        assert self.module.indexed_sum(2, x) == 10
+        with pytest.raises(ValueError):
+            self.module.indexed_sum(2, x[:-1])

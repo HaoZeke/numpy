@@ -3166,13 +3166,19 @@ def param_parse(d, params):
     3
     """
     dname = d[:d.find("(")] if "(" in d else ""
-    if dname:
+    if dname and isinstance(params.get(dname), dict):
         # Text precedes the first "(", so this is array-parameter
         # indexing such as pa(1) or myparamarray(nested(dim)).
         ddims = d[d.find("(") + 1:d.rfind(")")]
         # the index is itself an expression over params; parse it recursively
-        index = int(param_parse(ddims, params))
-        return str(params[dname][index])
+        index = param_parse(ddims, params)
+        try:
+            return str(params[dname][int(index)])
+        except ValueError:
+            choices = ''.join(
+                f'{index}=={key}?{value}:'
+                for key, value in params[dname].items())
+            return f'({choices}0)'
     elif d in params:
         return str(params[d])
     else:
