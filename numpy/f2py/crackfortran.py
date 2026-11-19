@@ -155,6 +155,7 @@ except ImportError:
     charset_normalizer = None
 
 from . import __version__, symbolic
+from ._isocbind import isoc_kindmap
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -2531,6 +2532,8 @@ def get_parameters(vars, global_params={}):
                        ('selected_real_kind', _selected_real_kind_func), ]:
         if name not in g_params:
             g_params[name] = func
+    for name in isoc_kindmap:
+        g_params.setdefault(name, name)
     param_names = []
     for n in get_sorted_names(vars):
         if 'attrspec' in vars[n] and 'parameter' in vars[n]['attrspec']:
@@ -2572,7 +2575,7 @@ def get_parameters(vars, global_params={}):
                     is_replaced = len(v) < orig_v_len
 
             if not is_replaced:
-                if not selected_kind_re.match(v):
+                if not selected_kind_re.match(v) and v not in isoc_kindmap:
                     v_ = v.split('_')
                     # In case there are additive parameters
                     if len(v_) > 1:
