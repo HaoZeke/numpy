@@ -1249,11 +1249,22 @@ if (#varname#_cb.capi==Py_None) {
         if (f2py_success) { /* return written-back-to inplace array #varname# */
         Py_INCREF(#varname#_capi);
         Py_SETREF(capi_#varname#_as_array, (PyArrayObject*)#varname#_capi);"""},
+            {l_and(isstringarray, isintent_inout): """\
+        f2py_success = (PyArray_ResolveWritebackIfCopy(capi_#varname#_as_array) >= 0);
+        if (f2py_success) {"""},
             ],
-        'closepyobjfrom': {isintent_inplace: '    } /*if (f2py_success) of #varname# pyobjfrom*/'},
+        'closepyobjfrom': {
+            isintent_inplace: '    } /*if (f2py_success) of #varname# pyobjfrom*/',
+            l_and(isstringarray, isintent_inout):
+            '    } /*if (f2py_success) of #varname# pyobjfrom*/',
+        },
         'cleanupfrompyobj': [  # note that this list will be reversed
             ('    }  '
              '/* if (capi_#varname#_as_array == NULL) ... else of #varname# */'),
+            {l_and(isstringarray, isintent_inout): """\
+    if (!f2py_success) {
+        PyArray_DiscardWritebackIfCopy(capi_#varname#_as_array);
+    }"""},
             {l_not(l_or(isintent_out, isintent_hide)): """\
     if((PyObject *)capi_#varname#_as_array!=#varname#_capi) {
         Py_XDECREF(capi_#varname#_as_array); }"""},

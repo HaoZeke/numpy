@@ -876,6 +876,10 @@ ndarray_from_pyobj(const int type_num,
      */
     PyArrayObject *arr = NULL;
     int elsize = (elsize_ < 0 ? get_elsize(obj) : elsize_);
+    if (type_num == NPY_STRING && elsize_ < 0 && PyArray_Check(obj) &&
+            F2PY_IS_UNICODE_ARRAY((PyArrayObject *)obj)) {
+        elsize /= (int)sizeof(npy_ucs4);
+    }
     if (elsize < 0) {
       void *tp_name = GET_TP_NAME(obj);
       if (errmess == NULL) {
@@ -1005,6 +1009,14 @@ ndarray_from_pyobj(const int type_num,
             }
         }
         if (intent & F2PY_INTENT_INOUT) {
+            if (type_num == NPY_STRING && F2PY_IS_UNICODE_ARRAY(arr)) {
+                int flags = NPY_ARRAY_FORCECAST | NPY_ARRAY_WRITEBACKIFCOPY |
+                    ((intent & F2PY_INTENT_C) ? NPY_ARRAY_CARRAY
+                                              : NPY_ARRAY_FARRAY);
+                PyArrayObject *retarr = (PyArrayObject *)PyArray_FromArray(
+                    arr, descr, flags);
+                return retarr;
+            }
             /* Must use PyArray_IS*ARRAY because intent(inout) requires
              * writable input */
             PyObject *extra_msg;
