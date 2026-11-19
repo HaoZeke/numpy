@@ -1382,6 +1382,8 @@ def buildmodule(m, um):
                 del nb1['entry']
                 nb1['name'] = k
                 nb1['args'] = a
+                if 'saved_entry_interfaces' in nb:
+                    nb1['saved_interface'] = nb['saved_entry_interfaces'][k]
                 nb_list.append(nb1)
         for nb in nb_list:
             # requiresf90wrapper must be called before buildapi as it

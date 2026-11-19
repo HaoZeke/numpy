@@ -2294,6 +2294,12 @@ def analyzebody(block, args, tab=''):
                 continue
             b['saved_interface'] = crack2fortrangen(
                 b, '\n' + ' ' * 6, as_interface=True)
+            b['saved_entry_interfaces'] = {}
+            for k, a in b.get('entry', {}).items():
+                eb = dict(b, name=k, args=a)
+                del eb['entry']
+                b['saved_entry_interfaces'][k] = crack2fortrangen(
+                    eb, '\n' + ' ' * 6, as_interface=True)
 
         else:
             as_ = args
@@ -3375,7 +3381,7 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     mess = ''
     if 'from' in block and not as_interface:
         mess = f"! in {block['from']}"
-    if 'entry' in block:
+    if 'entry' in block and not as_interface:
         entry_stmts = ''
         for k, i in list(block['entry'].items()):
             entry_stmts = f"{entry_stmts}{tab + tabchar}entry {k}({','.join(i)})"
