@@ -2489,6 +2489,22 @@ def _kind_func(string):
     return 'kind(' + string + ')'
 
 
+def _eval_kind_expr(value, params):
+    if isinstance(value, str):
+        value = re.sub(
+            r'\bkind\s*\(\s*'
+            r'(?P<value>[-+]?(?:\d+(?:\.\d*)?|\d*\.\d+)'
+            r'(?:[edED][-+]?\d+)?)\s*\)',
+            lambda m: 'kind("' + m.group('value') + '")',
+            value,
+            flags=re.I,
+        )
+    try:
+        return eval(value, {'kind': _kind_func}, params)
+    except Exception:
+        return value
+
+
 def _selected_int_kind_func(r):
     # XXX: This should be processor dependent
     m = 10 ** r
@@ -2723,10 +2739,8 @@ def analyzevars(block):
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
                 l = vars[n]['kindselector']['kind']
-                try:
-                    l = str(eval(l, {}, params))
-                except Exception:
-                    pass
+                if isinstance(l, str):
+                    l = str(_eval_kind_expr(l, params))
                 vars[n]['kindselector']['kind'] = l
 
         dimension_exprs = {}
@@ -2995,11 +3009,8 @@ def analyzevars(block):
                             pass
                         if kindselect:
                             if 'kind' in kindselect:
-                                try:
-                                    kindselect['kind'] = eval(
-                                        kindselect['kind'], {}, params)
-                                except Exception:
-                                    pass
+                                kindselect['kind'] = str(_eval_kind_expr(
+                                    kindselect['kind'], params))
                             vars[n]['kindselector'] = kindselect
                         if charselect:
                             vars[n]['charselector'] = charselect
