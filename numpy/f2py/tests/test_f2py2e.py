@@ -781,6 +781,37 @@ def test_f2cmap(capfd, f2cmap_f90, monkeypatch):
         assert "Successfully applied user defined f2cmap changes" in out
 
 
+@pytest.mark.parametrize(
+    ("declaration", "f2cmap", "ctype"),
+    [
+        ("complex(CK)", "complex=dict(CK='complex_double')", "complex_double z;"),
+        ("logical(LK)", "logical=dict(LK='long_long')", "long_long z = 0;"),
+    ],
+)
+def test_f2cmap_kind_case(tmp_path, monkeypatch, declaration, f2cmap, ctype):
+    source = tmp_path / "source.f90"
+    fmap = tmp_path / "map"
+    source.write_text(
+        "subroutine mapped(n, z)\n"
+        "use iso_fortran_env, only: INT64\n"
+        "use kinds, only: CK, LK\n"
+        "integer(INT64), intent(out) :: n\n"
+        f"{declaration} :: z\n"
+        "end subroutine mapped\n"
+    )
+    fmap.write_text(f"dict({f2cmap})")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        f"f2py -m f2cmap_case {source} --f2cmap {fmap} --no-lower".split(),
+    )
+    with util.switchdir(tmp_path):
+        f2pycli()
+    csrc = (tmp_path / "f2cmap_casemodule.c").read_text()
+    assert ctype in csrc
+    assert "typedef long long long_long;" in csrc
+
+
 def test_quiet(capfd, hello_world_f90, monkeypatch):
     """Reduce verbosity
 
