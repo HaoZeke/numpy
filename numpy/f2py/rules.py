@@ -1562,6 +1562,14 @@ def buildapi(rout):
     args, depargs = getargs2(rout)
     capi_maps.depargs = depargs
     var = rout['vars']
+    for a in args:
+        intent = var[a].get('intent', [])
+        selector = var[a].get('charselector', {})
+        if (isintent_out(var[a]) and 'hide' not in intent and
+                not any(i.startswith('out=') for i in intent) and
+                not selector.get('f2py_len') and
+                (selector.get('*') == '(*)' or selector.get('len') == '*')):
+            intent.append('in')
 
     if ismoduleroutine(rout):
         module_name = rout['modulename']
