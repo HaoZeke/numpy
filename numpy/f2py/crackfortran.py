@@ -354,6 +354,20 @@ def is_free_format(fname):
     return result
 
 
+_bind_name_literal_re = re.compile(
+    r"\bbind\s*\(\s*c\s*,\s*name\s*=\s*"
+    r"(?P<q>['\"])(?P<label>.*?)(?P=q)", re.I)
+
+
+def _lowercase_statement(line):
+    lowered = line.lower()
+    match = _bind_name_literal_re.search(line)
+    if match:
+        start, end = match.span('label')
+        lowered = lowered[:start] + line[start:end] + lowered[end:]
+    return lowered
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -482,7 +496,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     l = '     ' + l[5:]
                     # f2py directives are already stripped by this point
                     if localdolowercase:
-                        finalline = ll.lower()
+                        finalline = _lowercase_statement(ll)
                     else:
                         finalline = ll
                     origfinalline = ll
@@ -512,7 +526,9 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 if localdolowercase:
                     # only skip lowering for C style constructs
                     # gh-2547, gh-27697, gh-26681, gh-28014
-                    finalline = ll.lower() if not (is_f2py_directive and iscstyledirective(ll)) else ll
+                    finalline = (_lowercase_statement(ll)
+                                 if not (is_f2py_directive and iscstyledirective(ll))
+                                 else ll)
                 else:
                     finalline = ll
                 origfinalline = ll
@@ -546,7 +562,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         l1 = ll
     # Last line should never have an f2py directive anyway
     if localdolowercase:
-        finalline = ll.lower()
+        finalline = _lowercase_statement(ll)
     else:
         finalline = ll
     origfinalline = ll
@@ -648,6 +664,13 @@ callfunpattern = re.compile(
     beforethisafter % ('', 'callfun', 'callfun', '.*'), re.I), 'callfun'
 commonpattern = re.compile(
     beforethisafter % ('', 'common', 'common', '.*'), re.I), 'common'
+bindpattern = re.compile(
+    beforethisafter % ('', 'bind', 'bind', '.*'), re.I), 'bind'
+_bind_stmt_re = re.compile(
+    r"\(\s*(?P<lang>[a-z_]+)\s*"
+    r"(?:,\s*name\s*=\s*(?P<q>['\"])(?P<cname>.*?)(?P=q)\s*)?"
+    r"\)\s*(?:::)?\s*(?P<ents>.*)\Z", re.I)
+_bind_common_re = re.compile(r"/\s*(?P<name>[a-z_]\w*)\s*/\s*\Z", re.I)
 usepattern = re.compile(
     beforethisafter % ('', 'use', 'use', '.*'), re.I), 'use'
 containspattern = re.compile(
@@ -781,7 +804,7 @@ def crackline(line, reset=0):
                 endifpattern, endpattern,
                 formatpattern,
                 beginpattern, functionpattern, subroutinepattern,
-                implicitpattern, typespattern, commonpattern,
+                implicitpattern, typespattern, commonpattern, bindpattern,
                 callpattern, usepattern, containspattern,
                 entrypattern,
                 f2pyenhancementspattern,
@@ -1515,6 +1538,18 @@ def analyzeline(m, case, line):
                     commonkey[c[0]].append(i)
         groupcache[groupcounter]['common'] = commonkey
         previous_context = ('common', bn, groupcounter)
+    elif case == 'bind':
+        spec = _bind_stmt_re.match(m.group('after').strip())
+        if spec and spec.group('lang').lower() == 'c':
+            commonbind = groupcache[groupcounter].get('commonbind')
+            if commonbind is None:
+                commonbind = {}
+                groupcache[groupcounter]['commonbind'] = commonbind
+            cname = spec.group('cname')
+            for ent in markoutercomma(spec.group('ents')).split('@,@'):
+                got = _bind_common_re.match(ent.strip())
+                if got:
+                    commonbind[got.group('name')] = cname
     elif case == 'use':
         m1 = re.match(
             r'\A\s*(?P<name>\b\w+\b)\s*((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z', m.group('after'), re.I)

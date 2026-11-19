@@ -20,19 +20,25 @@ from .crackfortran import rmbadname
 def findcommonblocks(block, top=1):
     ret = []
     if hascommon(block):
+        bindmap = block.get('commonbind') or {}
         for key, value in block['common'].items():
             vars_ = {v: block['vars'][v] for v in value}
-            ret.append((key, value, vars_))
+            cbind = bindmap[key] if key in bindmap else False
+            ret.append((key, value, vars_, cbind))
     elif hasbody(block):
         for b in block['body']:
             ret = ret + findcommonblocks(b, 0)
     if top:
         tret = []
-        names = []
+        index = {}
         for t in ret:
-            if t[0] not in names:
-                names.append(t[0])
+            prev = index.get(t[0])
+            if prev is None:
+                index[t[0]] = len(tret)
                 tret.append(t)
+            elif t[3] is not False and tret[prev][3] is False:
+                kept = tret[prev]
+                tret[prev] = (kept[0], kept[1], kept[2], t[3])
         return tret
     return ret
 
@@ -56,7 +62,7 @@ def buildhooks(m):
 
     def dadd(line, s=doc):
         s[0] = f'{s[0]}\n{line}'
-    for (name, vnames, vars) in findcommonblocks(m):
+    for (name, vnames, vars, cbind) in findcommonblocks(m):
         lower_name = name.lower()
         hnames, inames = [], []
         for n in vnames:
@@ -82,6 +88,11 @@ def buildhooks(m):
             fadd(f"common {','.join(vnames)}")
         else:
             fadd(f"common /{name}/ {','.join(vnames)}")
+            if cbind is not False:
+                if cbind:
+                    fadd(f'bind(c, name="{cbind}") :: /{name}/')
+                else:
+                    fadd(f'bind(c) :: /{name}/')
         fadd(f"call setupfunc({','.join(inames)})")
         fadd('end\n')
         cadd(f'static FortranDataDef f2py_{name}_def[] = {{')
