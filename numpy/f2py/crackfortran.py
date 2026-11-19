@@ -471,7 +471,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 origfinalline = ''
             else:
                 r = cont1.match(l)
-                if r:
+                if r and split_by_unquoted(l, '&')[1]:
                     l = r.group('line')  # Continuation follows ..
                 if cont:
                     ll = ll + cont2.match(l).group('line')

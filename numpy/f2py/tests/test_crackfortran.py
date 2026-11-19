@@ -571,3 +571,17 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+
+@pytest.mark.parametrize("quote", ["'", '"'])
+def test_fixed_form_trailing_ampersand(tmp_path, quote):
+    src = tmp_path / "amp.f"
+    src.write_text(
+        "      block data bd\n"
+        "      character*4 p\n"
+        "      parameter (" + 49 * " " + f"p={quote}AB&\n"
+        f"     &C{quote})\n"
+        "      end\n"
+    )
+    mod = crackfortran.crackfortran([str(src)])
+    assert mod[0]["vars"]["p"]["="] == "'ab&c'"
