@@ -205,6 +205,36 @@ def test_gen_pyf_stdout(capfd, hello_world_f90, monkeypatch):
         assert "function hi() ! in " in out
 
 
+@pytest.mark.parametrize(
+    ("length", "shown"),
+    [("n", "*(n)"), ("8", "*8")],
+)
+def test_pyf_character_length_roundtrip(tmp_path, monkeypatch, length, shown):
+    source = tmp_path / f"character_{length}.f90"
+    signature = tmp_path / f"character_{length}.pyf"
+    module_name = f"character_roundtrip_{length}"
+    source.write_text(f"""
+subroutine chars(n, dynamic)
+    integer, intent(in) :: n
+    character(len={length}), intent(out) :: dynamic
+    dynamic = 'x'
+end subroutine chars
+""")
+    monkeypatch.setattr(
+        sys, "argv",
+        f"f2py -m {module_name} -h {signature} {source}".split(),
+    )
+    with util.switchdir(tmp_path):
+        f2pycli()
+
+    assert f"character{shown} intent(out)" in signature.read_text()
+    direct = util.build_module(
+        [source], module_name=f"direct_{module_name}",
+    )
+    generated = util.build_module([signature, source], module_name=module_name)
+    assert generated.chars(3) == direct.chars(3)
+
+
 def test_gen_pyf_no_overwrite(capfd, hello_world_f90, monkeypatch):
     """Ensures that the CLI refuses to overwrite signature files
     CLI :: -h without --overwrite-signature

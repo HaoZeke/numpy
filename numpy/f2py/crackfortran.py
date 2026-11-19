@@ -3506,10 +3506,14 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         elif 'charselector' in vars[a]:
             selector = vars[a]['charselector']
         if '*' in selector:
-            if selector['*'] in ['*', ':']:
-                vardef = f"{vardef}*({selector['*']})"
+            # A bare star length is an integer literal. Names and
+            # expressions must be parenthesized, as in `character*(n)`.
+            length = selector['*']
+            if length in ['*', ':'] or not (
+                    str(length).isdigit() or str(length).startswith('(')):
+                vardef = f"{vardef}*({length})"
             else:
-                vardef = f"{vardef}*{selector['*']}"
+                vardef = f"{vardef}*{length}"
         elif 'len' in selector:
             vardef = f"{vardef}(len={selector['len']}"
             if 'kind' in selector:
