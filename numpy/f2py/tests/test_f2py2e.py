@@ -10,7 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from numpy.f2py.f2py2e import get_newer_options, main as f2pycli
+from numpy.f2py.f2py2e import (
+    filter_files,
+    get_newer_options,
+    main as f2pycli,
+)
 from numpy.testing._private.utils import NOGIL_BUILD
 
 from . import util
@@ -1035,3 +1039,14 @@ def test_npd_linker():
     """
     # TODO: populate
     pass
+
+
+@pytest.mark.parametrize(
+    ("prefix", "files", "expected", "rest"),
+    [
+        ("-L", ["-L", "path/to/lib", "source.f90"], ["path/to/lib"], ["source.f90"]),
+        ("-l", ["-l", "example.a"], ["example.a"], []),
+    ],
+)
+def test_filter_files_split_link_argument(prefix, files, expected, rest):
+    assert filter_files(prefix, "", files, remove_prefix=1) == (expected, rest)

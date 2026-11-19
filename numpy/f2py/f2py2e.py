@@ -521,9 +521,16 @@ def filter_files(prefix, suffix, files, remove_prefix=None):
         ind = len(prefix)
     else:
         ind = 0
-    for file in [x.strip() for x in files]:
+    it = iter(x.strip() for x in files)
+    for file in it:
         if match(file):
-            filtered.append(file[ind:])
+            val = file[ind:]
+            if remove_prefix and not suffix and not val:
+                val = next(it, None)
+                if val is None:
+                    rest.append(file)
+                    continue
+            filtered.append(val)
         else:
             rest.append(file)
     return filtered, rest
@@ -686,11 +693,11 @@ def run_compile():
     pyf_files, _sources = filter_files("", "[.]pyf([.]src|)", sources)
     sources = pyf_files + _sources
     modulename = validate_modulename(pyf_files, modulename)
-    extra_objects, sources = filter_files('', '[.](o|a|so|dylib)', sources)
     library_dirs, sources = filter_files('-L', '', sources, remove_prefix=1)
     libraries, sources = filter_files('-l', '', sources, remove_prefix=1)
     undef_macros, sources = filter_files('-U', '', sources, remove_prefix=1)
     define_macros, sources = filter_files('-D', '', sources, remove_prefix=1)
+    extra_objects, sources = filter_files('', '[.](o|a|so|dylib)', sources)
     for i in range(len(define_macros)):
         name_value = define_macros[i].split('=', 1)
         if len(name_value) == 1:
