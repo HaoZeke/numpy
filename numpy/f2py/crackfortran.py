@@ -600,7 +600,8 @@ groupbegins77 = r'program|block\s*data'
 beginpattern77 = re.compile(
     beforethisafter % ('', groupbegins77, groupbegins77, '.*'), re.I), 'begin'
 groupbegins90 = groupbegins77 + \
-    r'|module(?!\s*procedure)|python\s*module|(abstract|)\s*interface|'\
+    r'|module(?!\s*procedure)(?!.*\b(?:function|subroutine)\s+\w)'\
+    r'|python\s*module|(abstract|)\s*interface|'\
     r'type(?!\s*\()'
 beginpattern90 = re.compile(
     beforethisafter % ('', groupbegins90, groupbegins90, '.*'), re.I), 'begin'
