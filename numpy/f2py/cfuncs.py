@@ -62,6 +62,7 @@ includes['npy_math.h'] = '#include "numpy/npy_math.h"'
 
 includes['arrayobject.h'] = '#include "fortranobject.h"'
 includes['stdarg.h'] = '#include <stdarg.h>'
+includes['limits.h'] = '#include <limits.h>'
 
 ############# Type definitions ###############
 
@@ -873,12 +874,17 @@ char_from_pyobj(char* v, PyObject *obj, const char *errmess) {
 """
 
 
-needs['signed_char_from_pyobj'] = ['int_from_pyobj', 'signed_char']
+needs['signed_char_from_pyobj'] = ['int_from_pyobj', 'signed_char', 'limits.h']
 cfuncs['signed_char_from_pyobj'] = """
 static int
 signed_char_from_pyobj(signed_char* v, PyObject *obj, const char *errmess) {
     int i = 0;
     if (int_from_pyobj(&i, obj, errmess)) {
+        if (i < SCHAR_MIN || i > SCHAR_MAX) {
+            PyErr_Format(PyExc_OverflowError,
+                         "%s: %d out of range", errmess, i);
+            return 0;
+        }
         *v = (signed_char)i;
         return 1;
     }
@@ -887,12 +893,17 @@ signed_char_from_pyobj(signed_char* v, PyObject *obj, const char *errmess) {
 """
 
 
-needs['short_from_pyobj'] = ['int_from_pyobj']
+needs['short_from_pyobj'] = ['int_from_pyobj', 'limits.h']
 cfuncs['short_from_pyobj'] = """
 static int
 short_from_pyobj(short* v, PyObject *obj, const char *errmess) {
     int i = 0;
     if (int_from_pyobj(&i, obj, errmess)) {
+        if (i < SHRT_MIN || i > SHRT_MAX) {
+            PyErr_Format(PyExc_OverflowError,
+                         "%s: %d out of range", errmess, i);
+            return 0;
+        }
         *v = (short)i;
         return 1;
     }
