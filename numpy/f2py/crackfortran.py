@@ -1156,6 +1156,8 @@ def analyzeline(m, case, line):
         # end of creation
         if block == 'type':
             groupcache[groupcounter]['varnames'] = []
+            if attrs:
+                groupcache[groupcounter]['attrspec'] = list(attrs)
 
         if case in ['call', 'callfun']:  # set parents variables
             if name not in groupcache[groupcounter - 2]['externals']:
@@ -3382,7 +3384,10 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         body = body + entry_stmts
     if blocktype == 'block data' and name == '_BLOCK_DATA_':
         name = ''
-    ret = (f'{tab}{prefix}{blocktype} {name}{args}{result} '
+    opener = f'{blocktype} {name}'
+    if blocktype == 'type' and block.get('attrspec'):
+        opener = f"{blocktype}, {', '.join(block['attrspec'])} :: {name}"
+    ret = (f'{tab}{prefix}{opener}{args}{result} '
            f'{mess}{f2pyenhancements}{use}{vars}{common}{body}{tab}end '
            f'{blocktype} {name}')
     return ret
