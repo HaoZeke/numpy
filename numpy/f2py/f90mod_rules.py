@@ -211,7 +211,7 @@ def buildhooks(pymod):
                     ifargs.append(
                         func2subr.createsubrwrapper(b, signature=1))
                 else:
-                    fargs.append(b_name)
+                    fargs.append(getfortranname(b))
                     mfargs.append(fargs[-1])
                 api['externroutines'] = []
                 ar = applyrules(api, vrd)

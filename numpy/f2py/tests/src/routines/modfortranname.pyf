@@ -1,0 +1,16 @@
+python module modfortranname
+interface
+module modn
+subroutine pyinc(x, y)
+    fortranname incx
+    integer intent(in) :: x
+    integer intent(out) :: y
+end subroutine pyinc
+subroutine pyadd(a, b, c)
+    fortranname AddB
+    integer intent(in) :: a, b
+    integer intent(out) :: c
+end subroutine pyadd
+end module modn
+end interface
+end python module modfortranname
