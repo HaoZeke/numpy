@@ -211,8 +211,9 @@ def buildhooks(pymod):
                     ifargs.append(
                         func2subr.createsubrwrapper(b, signature=1))
                 else:
-                    fargs.append(b_name)
-                    mfargs.append(fargs[-1])
+                    if not isdummyroutine(b):
+                        fargs.append(b_name)
+                        mfargs.append(fargs[-1])
                 api['externroutines'] = []
                 ar = applyrules(api, vrd)
                 ar['docs'] = []
@@ -221,9 +222,12 @@ def buildhooks(pymod):
                 cadd(f'\t{{"{b_name}",-1,{{{{-1}}}},0,0,NULL,(void *)'
                       f'f2py_rout_#modulename#_{m_name}_{b_name},'
                       f'doc_f2py_rout_#modulename#_{m_name}_{b_name}}},')
-                sargs.append(f"char *{b_name}")
-                sargsp.append('char *')
-                iadd(f"\tf2py_{m_name}_def[i_f2py++].data = {b_name};")
+                if isdummyroutine(b) and not isfunction(b) and not wrap:
+                    iadd(f"\tf2py_{m_name}_def[i_f2py++].data = NULL;")
+                else:
+                    sargs.append(f"char *{b_name}")
+                    sargsp.append('char *')
+                    iadd(f"\tf2py_{m_name}_def[i_f2py++].data = {b_name};")
         cadd('\t{NULL}\n};\n')
         iadd('}')
         m_name = m['name']

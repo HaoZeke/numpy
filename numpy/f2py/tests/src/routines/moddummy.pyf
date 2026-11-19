@@ -1,0 +1,17 @@
+python module moddummy
+interface
+module modd
+subroutine add(a, b, c)
+    fortranname
+    callstatement { c = a + b; }
+    callprotoargument int*, int*, int*
+    integer intent(in) :: a, b
+    integer intent(out) :: c
+end subroutine add
+subroutine realinc(x, y)
+    integer intent(in) :: x
+    integer intent(out) :: y
+end subroutine realinc
+end module modd
+end interface
+end python module moddummy
