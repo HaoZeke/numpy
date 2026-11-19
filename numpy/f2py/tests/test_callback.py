@@ -260,3 +260,37 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestOptionalCallbackArray(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+subroutine run(fun, present)
+  external fun
+  integer, intent(in) :: present
+  interface
+    subroutine fun(first, second)
+      integer, intent(in), optional :: first(2), second(2)
+    end subroutine fun
+  end interface
+  if (present == 0) then
+    call fun(second=[6, 7])
+  else
+    call fun([4, 5], [6, 7])
+  end if
+end subroutine run
+"""
+
+    @pytest.mark.parametrize(
+        "present, expected", [(0, (None, [6, 7])), (1, ([4, 5], [6, 7]))]
+    )
+    def test_optional_array(self, present, expected):
+        seen = []
+        self.module.run(
+            lambda first=None, second=None: seen.append(
+                (None if first is None else first.tolist(), second.tolist())
+            ),
+            present,
+        )
+        assert seen == [expected]

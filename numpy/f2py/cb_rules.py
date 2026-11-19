@@ -453,7 +453,19 @@ cb_arg_rules = [
         '_depend': ''
     },
     {
+        'pyobjfrom': {l_and(isoptional, isintent_in): """\
+    if (cb->nofargs>capi_i && #varname_i# == NULL) {
+        Py_INCREF(Py_None);
+        if (CAPI_ARGLIST_SETITEM(capi_i++, Py_None))
+            goto capi_fail;
+    }"""},
+        '_check': isarray,
+        '_optional': '',
+    },
+    {
         'pyobjfrom': [{debugcapi: '    fprintf(stderr,"debug-capi:cb:#varname#\\n");'},
+                      {l_and(isoptional, isintent_in):
+                       '    if (#varname_i# != NULL) '},
                       {isintent_c: """\
     if (cb->nofargs>capi_i) {
         /* tmp_arr will be inserted to capi_arglist_list that will be
