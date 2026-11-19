@@ -1192,7 +1192,7 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                     dims[i] = 1;
             }
             else {
-                dims[i] = d ? d : 1;
+                dims[i] = d;
             }
             new_size *= dims[i];
         }
@@ -1209,7 +1209,7 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
             else
                 dims[i] = 1;
         if (free_axe >= 0) {
-            dims[free_axe] = arr_size / new_size;
+            dims[free_axe] = new_size ? arr_size / new_size : 1;
             new_size *= dims[free_axe];
         }
         if (new_size != arr_size) {
@@ -1258,7 +1258,7 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
         int effrank;
         npy_intp size;
         for (i = 0, effrank = 0; i < PyArray_NDIM(arr); ++i)
-            if (PyArray_DIM(arr, i) > 1)
+            if (PyArray_DIM(arr, i) != 1)
                 ++effrank;
         if (dims[rank - 1] >= 0)
             if (effrank > rank) {
@@ -1270,7 +1270,7 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
             }
 
         for (i = 0, j = 0; i < rank; ++i) {
-            while (j < PyArray_NDIM(arr) && PyArray_DIM(arr, j) < 2) ++j;
+            while (j < PyArray_NDIM(arr) && PyArray_DIM(arr, j) == 1) ++j;
             if (j >= PyArray_NDIM(arr))
                 d = 1;
             else
@@ -1295,7 +1295,7 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
 
         for (i = rank; i < PyArray_NDIM(arr);
              ++i) { /* [[1,2],[3,4]] -> [1,2,3,4] */
-            while (j < PyArray_NDIM(arr) && PyArray_DIM(arr, j) < 2) ++j;
+            while (j < PyArray_NDIM(arr) && PyArray_DIM(arr, j) == 1) ++j;
             if (j >= PyArray_NDIM(arr))
                 d = 1;
             else

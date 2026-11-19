@@ -1,6 +1,7 @@
 import os
 import tempfile
 
+import numpy as np
 import pytest
 
 from . import util
@@ -50,3 +51,29 @@ class TestF2cmapOption(TestAssumedShapeSumExample):
 
     def teardown_method(self):
         os.unlink(self.f2cmap_file.name)
+
+
+@pytest.mark.slow
+class TestZeroAxisRank(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+module m
+contains
+  subroutine shape3(a, shp)
+    integer, intent(in) :: a(:,:,:)
+    integer, intent(out) :: shp(3)
+    shp = shape(a)
+  end subroutine shape3
+end module m
+"""
+
+    @pytest.mark.parametrize(
+        "shape, expected",
+        [
+            ((0, 3), [0, 3, 1]),
+            ((1, 0, 2, 3), [0, 2, 3]),
+        ],
+    )
+    def test_zero_axis_rank_mismatch(self, shape, expected):
+        arr = np.zeros(shape, dtype=np.int32)
+        assert self.module.m.shape3(arr).tolist() == expected
