@@ -2719,6 +2719,9 @@ def analyzevars(block):
                 except Exception:
                     pass
                 vars[n]['charselector']['len'] = l
+            if '*' in vars[n]['charselector'] and n in block.get('commonvars', []):
+                vars[n]['charselector']['*'] = _eval_length(
+                    vars[n]['charselector']['*'], params)
 
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
