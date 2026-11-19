@@ -22,6 +22,11 @@ class TestIOSF(util.F2PyTest):
         exp_out = 3
         assert out == exp_out
 
+    @pytest.mark.parametrize("name", ["f_add_complex32", "f_add_complex64"])
+    def test_f_add_complex(self, name):
+        out = getattr(self.module.foddity, name)(1 + 2j, 3 + 4j)
+        assert out == 4 + 6j
+
     def test_wat(self):
         out = self.module.foddity.wat(1, 2)
         exp_out = 8
