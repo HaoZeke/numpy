@@ -17,6 +17,23 @@ from .auxfuncs import getuseblocks, hasbody, hascommon, hasnote, isintent_hide, 
 from .crackfortran import rmbadname
 
 
+def _static_extent(vnames, vars_):
+    total = 0
+    for name in vnames:
+        dims = vars_.get(name, {}).get('dimension')
+        if not dims:
+            total += 1
+            continue
+        count = 1
+        for dim in dims:
+            text = str(dim).strip()
+            if not text.isdigit():
+                return None
+            count *= int(text)
+        total += count
+    return total
+
+
 def findcommonblocks(block, top=1):
     ret = []
     if hascommon(block):
@@ -27,13 +44,18 @@ def findcommonblocks(block, top=1):
         for b in block['body']:
             ret = ret + findcommonblocks(b, 0)
     if top:
-        tret = []
-        names = []
-        for t in ret:
-            if t[0] not in names:
-                names.append(t[0])
-                tret.append(t)
-        return tret
+        chosen = {}
+        order = []
+        for name, vnames, vars_ in ret:
+            extent = _static_extent(vnames, vars_)
+            if name not in chosen:
+                order.append(name)
+                chosen[name] = (name, vnames, vars_, extent)
+                continue
+            prev_extent = chosen[name][3]
+            if extent is not None and (prev_extent is None or extent > prev_extent):
+                chosen[name] = (name, vnames, vars_, extent)
+        return [chosen[name][:3] for name in order]
     return ret
 
 
