@@ -2681,6 +2681,18 @@ def analyzevars(block):
             svars.append(n)
 
     params = get_parameters(vars, get_useparameters(block))
+    kind_params = dict(params)
+    parent = block.get('parent_block')
+    seen_parents = set()
+    parents = []
+    while isinstance(parent, dict) and id(parent) not in seen_parents:
+        seen_parents.add(id(parent))
+        if parent.get('block') == 'module':
+            parents.append(parent)
+        parent = parent.get('parent_block')
+    for parent in reversed(parents):
+        for key, value in get_parameters(parent.get('vars') or {}).items():
+            kind_params.setdefault(key, value)
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
     dep_matches = {}
@@ -2724,7 +2736,7 @@ def analyzevars(block):
             if 'kind' in vars[n]['kindselector']:
                 l = vars[n]['kindselector']['kind']
                 try:
-                    l = str(eval(l, {}, params))
+                    l = str(eval(str(l), {}, kind_params))
                 except Exception:
                     pass
                 vars[n]['kindselector']['kind'] = l
@@ -2996,11 +3008,16 @@ def analyzevars(block):
                         if kindselect:
                             if 'kind' in kindselect:
                                 try:
-                                    kindselect['kind'] = eval(
-                                        kindselect['kind'], {}, params)
+                                    kindselect['kind'] = str(eval(
+                                        str(kindselect['kind']), {}, kind_params))
                                 except Exception:
                                     pass
                             vars[n]['kindselector'] = kindselect
+                            rname = block.get('result')
+                            if (rname and rname in vars and rname != n
+                                    and not vars[rname].get('kindselector')):
+                                vars[rname]['kindselector'] = copy.copy(
+                                    kindselect)
                         if charselect:
                             vars[n]['charselector'] = charselect
                         if typename:
