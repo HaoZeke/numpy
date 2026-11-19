@@ -584,7 +584,7 @@ beforethisafter = r'\s*(?P<before>%s(?=\s*(\b(%s)\b)))'\
     r'\s*(?P<this>(\b(%s)\b))'\
     r'\s*(?P<after>%s)\s*\Z'
 ##
-fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|byte'
+fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|procedure(?=\s*\(\s*\))|byte'
 typespattern = re.compile(
     beforethisafter % ('', fortrantypes, fortrantypes, '.*'), re.I), 'type'
 typespattern4implicit = re.compile(beforethisafter % (
@@ -1600,10 +1600,15 @@ def cracktypespec0(typespec, ll):
     if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type']:
         selector = d['this']
         ll = d['after']
+    elif typespec == 'procedure':
+        ll = d['after']
+        typespec = None
     i = ll.find('::')
     if i >= 0:
         attr = ll[:i].strip()
         ll = ll[i + 2:]
+    if typespec is None:
+        attr = ('external, ' + attr) if attr else 'external'
     return typespec, selector, attr, ll
 
 
@@ -1712,6 +1717,9 @@ def updatevars(typespec, selector, attrspec, entitydecl):
                 f'updatevars: no name pattern found for entity={repr(e)}. Skipping.\n')
             continue
         ename = rmbadname1(m.group('name'))
+        if (typespec is None and attrspec and 'external' in attrspec
+                and ename not in groupcache[groupcounter].get('args', [])):
+            continue
         edecl = {}
         if ename in groupcache[groupcounter]['vars']:
             edecl = groupcache[groupcounter]['vars'][ename].copy()
