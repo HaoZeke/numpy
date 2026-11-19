@@ -7,7 +7,7 @@ import pytest
 
 import numpy as np
 import numpy.testing as npt
-from numpy.f2py._backends._meson import MesonTemplate
+from numpy.f2py._backends._meson import MesonTemplate, _get_flags
 
 from . import util
 
@@ -317,3 +317,20 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+@pytest.mark.parametrize(
+    ("fc_flags", "expected"),
+    [
+        (
+            ["--f90flags=-D VALA=10 -D VALB=32"],
+            ["-D", "VALA=10", "-D", "VALB=32"],
+        ),
+        (
+            [r'--f77flags=-I"C:\Program Files\inc"'],
+            [r"-IC:\Program Files\inc"],
+        ),
+    ],
+)
+def test_meson_fortran_flag_tokens(fc_flags, expected):
+    assert _get_flags(fc_flags) == expected

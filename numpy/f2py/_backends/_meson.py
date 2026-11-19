@@ -1,6 +1,7 @@
 import errno
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -248,9 +249,20 @@ def _get_flags(fc_flags):
     for flag in fc_flags:
         match_result = flag_pattern.match(flag)
         if match_result:
-            values = match_result.group(2).strip().split()
-            values = [val.strip("'\"") for val in values]
+            raw = match_result.group(2).strip()
+            lexer = shlex.shlex(raw, posix=True)
+            lexer.whitespace_split = True
+            lexer.escape = ""
+            values = list(lexer)
+            if (
+                len(values) == 1
+                and len(raw) >= 2
+                and raw[0] == raw[-1]
+                and raw[0] in ("'", '"')
+            ):
+                lexer = shlex.shlex(values[0], posix=True)
+                lexer.whitespace_split = True
+                lexer.escape = ""
+                values = list(lexer)
             flag_values.extend(values)
-    # Hacky way to preserve order of flags
-    unique_flags = list(dict.fromkeys(flag_values))
-    return unique_flags
+    return flag_values
