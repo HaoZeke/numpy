@@ -12,6 +12,8 @@ __version__ = "$Revision: 1.27 $"[10:-1]
 
 f2py_version = 'See `f2py -v`'
 
+import copy
+
 import numpy as np
 
 from . import capi_maps, func2subr
@@ -192,7 +194,17 @@ def buildhooks(pymod):
             dadd('\\end{description}')
         if hasbody(m):
             m_name = m['name']
+            routines = []
             for b in m['body']:
+                if not b.get('public_entry'):
+                    routines.append(b)
+                for k, a in (b.get('entry') or {}).items():
+                    nb = copy.deepcopy(b)
+                    del nb['entry']
+                    nb['name'] = k
+                    nb['args'] = a
+                    routines.append(nb)
+            for b in routines:
                 b_name = b['name']
                 if not isroutine(b):
                     outmess("f90mod_rules.buildhooks:"

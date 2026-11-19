@@ -2271,6 +2271,14 @@ def analyzebody(block, args, tab=''):
 
     setmesstext(block)
 
+    public_entries = {
+        name
+        for routine in block['body']
+        for name in routine.get('entry', {})
+        if 'public' in block['vars'].get(name, {}).get('attrspec', [])
+    }
+    for name in public_entries:
+        del block['vars'][name]
     maybe_private = {
         key: value
         for key, value in block['vars'].items()
@@ -2286,7 +2294,8 @@ def analyzebody(block, args, tab=''):
             else:
                 as_ = b['args']
             # Add private members to skipfuncs for gh-23879
-            if b['name'] in maybe_private.keys():
+            b['public_entry'] = public_entries.intersection(b.get('entry', {}))
+            if b['name'] in maybe_private.keys() and not b['public_entry']:
                 skipfuncs.append(b['name'])
             if b['name'] in skipfuncs:
                 continue
