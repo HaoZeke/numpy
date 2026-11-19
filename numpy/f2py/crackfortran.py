@@ -951,6 +951,9 @@ nameargspattern = re.compile(
 operatorpattern = re.compile(
     r'\s*(?P<scheme>(operator|assignment))'
     r'@\(@\s*(?P<name>[^)]+)\s*@\)@\s*\Z', re.I)
+dtiopattern = re.compile(
+    r'\s*(?P<spec>read|write)\s*'
+    r'@\(@\s*(?P<form>formatted|unformatted)\s*@\)@\s*\Z', re.I)
 callnameargspattern = re.compile(
     r'\s*(?P<name>\b[\w$]+\b)\s*@\(@\s*(?P<args>.*)\s*@\)@\s*\Z', re.I)
 real16pattern = re.compile(
@@ -1053,7 +1056,17 @@ def analyzeline(m, case, line):
             args = []
             result = None
         else:
-            name, args, result, bindcline = _resolvenameargspattern(m.group('after'))
+            mdt = None
+            if block == 'interface':
+                mdt = dtiopattern.match(markouterparen(m.group('after') or ''))
+            if mdt:
+                spec = mdt.group('spec').lower()
+                form = mdt.group('form').lower()
+                name = f"{spec}({form})"
+                args, result, bindcline = [], None, None
+            else:
+                name, args, result, bindcline = _resolvenameargspattern(
+                    m.group('after'))
         if name is None:
             if block == 'block data':
                 name = '_BLOCK_DATA_'
