@@ -426,7 +426,7 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                                             fp->defs[i].rank, F2PY_INTENT_IN,
                                             v)) == NULL)
                     return -1;
-                (*(fp->defs[i].func))(&fp->defs[i].rank, PyArray_DIMS(arr),
+                (*(fp->defs[i].func))(&fp->defs[i].rank, dims,
                                       set_data, &flag);
             }
             else { /* deallocate */
@@ -447,7 +447,7 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
         if (fp->defs[i].data !=
             NULL) { /* copy Python object to Fortran array */
             npy_intp s = PyArray_MultiplyList(fp->defs[i].dims.d,
-                                              PyArray_NDIM(arr));
+                                              fp->defs[i].rank);
             if (s == -1)
                 s = PyArray_MultiplyList(PyArray_DIMS(arr), PyArray_NDIM(arr));
             if (s < 0 || (memcpy(fp->defs[i].data, PyArray_DATA(arr),

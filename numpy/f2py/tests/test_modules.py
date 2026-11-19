@@ -1,6 +1,8 @@
 import textwrap
 
+import numpy as np
 import pytest
+from numpy.testing import assert_array_equal
 
 from . import util
 
@@ -101,3 +103,30 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+class TestSetattrRank(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+module m
+  integer :: fixed(2, 2, 2) = 0
+  integer, allocatable :: alloc(:,:,:)
+end module m
+"""
+
+    @pytest.mark.parametrize(
+        "attr, shape",
+        [
+            ("fixed", (1, 2, 2, 2)),
+            ("alloc", (2, 2)),
+        ],
+    )
+    def test_setattr_rank_mismatch(self, attr, shape):
+        vals = np.arange(1, int(np.prod(shape)) + 1, dtype=np.int32)
+        arr = vals.reshape(shape, order="F")
+        setattr(self.module.m, attr, arr)
+        got = getattr(self.module.m, attr)
+        expected_shape = (2, 2, 2) if attr == "fixed" else (2, 2, 1)
+        assert got.shape == expected_shape
+        assert_array_equal(got, arr.reshape(expected_shape, order="F"))
