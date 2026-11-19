@@ -2505,22 +2505,40 @@ def _selected_int_kind_func(r):
     return -1
 
 
-def _selected_real_kind_func(p, r=0, radix=0):
+def _selected_real_kind_func(p=0, r=0, radix=0):
     # XXX: This should be processor dependent
     # This is only verified for 0 <= p <= 20, possibly good for p <= 33 and above
-    if p < 7:
-        return 4
-    if p < 16:
-        return 8
     machine = platform.machine().lower()
-    if machine.startswith(('aarch64', 'alpha', 'arm64', 'loongarch', 'mips', 'power', 'ppc', 'riscv', 's390x', 'sparc')):
-        if p <= 33:
-            return 16
+    has_extended = not machine.startswith((
+        'aarch64', 'alpha', 'arm64', 'loongarch', 'mips', 'power', 'ppc',
+        'riscv', 's390x', 'sparc'))
+    if p < 7:
+        pk = 4
+    elif p < 16:
+        pk = 8
+    elif not has_extended:
+        pk = 16 if p <= 33 else -1
     elif p < 19:
-        return 10
+        pk = 10
     elif p <= 33:
-        return 16
-    return -1
+        pk = 16
+    else:
+        pk = -1
+    if r <= 37:
+        rk = 4
+    elif r <= 307:
+        rk = 8
+    elif r <= 4931:
+        rk = 10 if has_extended else 16
+    else:
+        rk = -2
+    if pk < 0 and rk < 0:
+        return -4
+    if pk < 0:
+        return pk
+    if rk < 0:
+        return rk
+    return pk if pk >= rk else rk
 
 
 def get_parameters(vars, global_params={}):
