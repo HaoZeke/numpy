@@ -365,6 +365,24 @@ class Expr:
                 r = f'{numer} / {denom}'
                 precedence = Precedence.PRODUCT
             else:
+                if language is Language.C and not kwargs and len(args) == 1:
+                    fname = (name.data if isinstance(name, Expr)
+                             and name.op is Op.SYMBOL else name)
+                    section = args[0]
+                    if (isinstance(fname, str) and fname.lower() == 'size'
+                            and section.op is Op.APPLY
+                            and isinstance(section.data[0], Expr)
+                            and section.data[0].op is Op.SYMBOL
+                            and not section.data[2]):
+                        subs = section.data[1]
+                        colon = [i for i, sub in enumerate(subs)
+                                 if sub.op is Op.SYMBOL and ':' in sub.data]
+                        if colon:
+                            if (len(colon) != 1 or subs[colon[0]].data != ':'):
+                                raise NotImplementedError(
+                                    'SIZE of an array section with bounds or '
+                                    'strides is unsupported')
+                            args = section.data[0], as_integer(colon[0] + 1)
                 args = [arg.tostring(Precedence.TUPLE, language=language)
                         for arg in args]
                 args += [k + '=' + v.tostring(Precedence.NONE)
