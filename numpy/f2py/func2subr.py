@@ -337,6 +337,11 @@ def assubr(rout):
             if flag:
                 fvar['intent'].append(f'out={rname}')
         rout['args'][:] = [fname] + rout['args']
+        if ismoduleroutine(rout):
+            for arg in rout['args'][1:]:
+                attrspec = rout['vars'][arg].get('attrspec', [])
+                if 'value' in attrspec:
+                    attrspec.remove('value')
         return rout, createfuncwrapper(rout)
     if issubroutine_wrap(rout):
         fortranname = getfortranname(rout)
