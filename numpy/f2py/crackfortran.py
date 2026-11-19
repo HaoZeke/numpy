@@ -2821,7 +2821,8 @@ def analyzevars(block):
                                     a, b = dsize.linear_solve(s)
 
                                     def solve_v(s, a=a, b=b):
-                                        return (s - b) / a
+                                        numer, denom = symbolic.as_numer_denom(a)
+                                        return (s - b) * denom / numer
 
                                     all_symbols = set(a.symbols())
                                     all_symbols.update(b.symbols())

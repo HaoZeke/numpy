@@ -259,7 +259,8 @@ class TestSymbolic(util.F2PyTest):
             ArithOp.DIV, 5 * y, 4 * x)
         assert ((15 * x / 6) / 5) == as_apply(ArithOp.DIV, x,
                                               as_number(2)), (15 * x / 6) / 5
-        assert (x / (5 / x)) == as_apply(ArithOp.DIV, x**2, as_number(5))
+        assert (x / (5 / x)) == as_apply(
+            ArithOp.DIV, x, as_apply(ArithOp.DIV, as_number(5), x))
 
         assert (x / 2.0) == Expr(Op.TERMS, {x: 0.5})
 

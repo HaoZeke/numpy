@@ -359,9 +359,14 @@ class Expr:
         elif self.op is Op.APPLY:
             name, args, kwargs = self.data
             if name is ArithOp.DIV and language is Language.C:
-                numer, denom = [arg.tostring(Precedence.PRODUCT,
-                                             language=language)
-                                for arg in args]
+                numer = args[0].tostring(Precedence.PRODUCT,
+                                         language=language)
+                denom_prec = Precedence.PRODUCT
+                if (args[1].op is Op.APPLY
+                        and args[1].data[0] is ArithOp.DIV
+                        and not args[1].data[2]):
+                    denom_prec = Precedence.ATOM
+                denom = args[1].tostring(denom_prec, language=language)
                 r = f'{numer} / {denom}'
                 precedence = Precedence.PRODUCT
             else:
@@ -875,9 +880,7 @@ def normalize(obj):
             return as_apply(ArithOp.DIV, numer, denom)
 
         if t2.op is Op.APPLY and t2.data[0] is ArithOp.DIV:
-            numer = t2.data[1][1] * t1 * c1
-            denom = t2.data[1][0] * c2
-            return as_apply(ArithOp.DIV, numer, denom)
+            return as_apply(ArithOp.DIV, dividend, divisor)
 
         d = dict(as_factors(t1).data)
         for b, e in as_factors(t2).data.items():
