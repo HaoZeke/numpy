@@ -2597,9 +2597,14 @@ def get_parameters(vars, global_params={}):
                 outmess(f'get_parameters[TODO]: '
                         f'implement evaluation of complex expression {v}\n')
 
-            dimspec = ([s.removeprefix('dimension').strip()
-                        for s in vars[n]['attrspec']
-                       if s.startswith('dimension')] or [None])[0]
+            dims = [s.removeprefix('dimension').strip()
+                    for s in vars[n]['attrspec']
+                    if s.startswith('dimension')]
+            if not dims and vars[n].get('dimension'):
+                # A module parameter is read again after analyzevars has
+                # moved dimension(...) onto this list.
+                dims = [f"({','.join(vars[n]['dimension'])})"]
+            dimspec = (dims or [None])[0]
 
             # Handle _dp for gh-6624
             # Also fixes gh-20460
@@ -2612,6 +2617,9 @@ def get_parameters(vars, global_params={}):
             except Exception as msg:
                 params[n] = v
                 outmess(f'get_parameters: got "{msg}" on {n!r}\n')
+            shape = _parameter_shape(dimspec, params)
+            if shape is not None:
+                params.setdefault(_F2PY_SHAPES, {})[n.lower()] = shape
 
             if isstring(vars[n]) and isinstance(params[n], int):
                 params[n] = chr(params[n])
@@ -2622,6 +2630,64 @@ def get_parameters(vars, global_params={}):
             print(vars[n])
             outmess(f'get_parameters:parameter {n!r} does not have value?!\n')
     return params
+
+
+_F2PY_SHAPES = '_f2py_parameter_shapes'
+_size_param_re = re.compile(
+    r'size\s*\(\s*([A-Za-z]\w*)\s*(?:,\s*(.*?)\s*)?\)',
+    re.I)
+
+
+def _parameter_shape(dimspec, params):
+    # Explicit extents only. An implied shape (``*``) is not counted.
+    if (not dimspec or len(dimspec) < 2 or dimspec[0] != '('
+            or dimspec[-1] != ')'):
+        return None
+    shape = []
+    for dim in markoutercomma(dimspec[1:-1]).split('@,@'):
+        bounds = [b.strip() for b in dim.split(':')]
+        try:
+            if len(bounds) == 1:
+                if bounds[0] == '*':
+                    return None
+                extent = int(_eval_scalar(param_parse(bounds[0], params),
+                                          params))
+            elif len(bounds) == 2:
+                if '*' in bounds:
+                    return None
+                extent = (int(_eval_scalar(param_parse(bounds[1], params),
+                                           params))
+                          - int(_eval_scalar(param_parse(bounds[0], params),
+                                             params)) + 1)
+            else:
+                return None
+        except (TypeError, ValueError, IndexError, KeyError):
+            return None
+        if extent < 0:
+            return None
+        shape.append(extent)
+    return shape or None
+
+
+def _parameter_size(match, params):
+    shape = (params.get(_F2PY_SHAPES) or {}).get(match.group(1).lower())
+    if not shape:
+        return None
+    dim = match.group(2)
+    if dim is None:
+        total = 1
+        for part in shape:
+            total *= part
+        return str(total)
+    try:
+        idx = int(_eval_scalar(param_parse(dim, params), params))
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    # 0 and negative values are legal Python indexes and illegal
+    # Fortran dimensions, so they must not select an extent.
+    if 1 <= idx <= len(shape):
+        return str(shape[idx - 1])
+    return None
 
 
 def _eval_length(length, params):
@@ -3165,6 +3231,13 @@ def param_parse(d, params):
     >>> param_parse(d, params)
     3
     """
+    size_match = _size_param_re.fullmatch(d.strip())
+    if size_match:
+        size = _parameter_size(size_match, params)
+        if size is not None:
+            return size
+    d = _size_param_re.sub(
+        lambda match: _parameter_size(match, params) or match.group(), d)
     dname = d[:d.find("(")] if "(" in d else ""
     if dname:
         # Text precedes the first "(", so this is array-parameter
@@ -3177,6 +3250,8 @@ def param_parse(d, params):
         return str(params[d])
     else:
         for p in params:
+            if p == _F2PY_SHAPES:
+                continue
             re_1 = re.compile(
                 r'(?P<before>.*?)\b' + p + r'\b(?P<after>.*)', re.I
             )
