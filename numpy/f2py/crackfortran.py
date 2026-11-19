@@ -1229,6 +1229,7 @@ def analyzeline(m, case, line):
         edecl = groupcache[groupcounter]['vars']
         ll = m.group('after').strip()
         i = ll.find('::')
+        has_double_colon = i >= 0
         if i < 0 and case == 'intent':
             i = markouterparen(ll).find('@)@') - 2
             ll = ll[:i + 1] + '::' + ll[i + 1:]
@@ -1244,10 +1245,14 @@ def analyzeline(m, case, line):
             pl = ll[:i].strip()
             ll = ll[i + 2:]
         ch = markoutercomma(pl).split('@,@')
+        extra_attr = []
         if len(ch) > 1:
             pl = ch[0]
-            outmess("analyzeline: cannot handle multiple attributes without "
-                    f"type specification. Ignoring {','.join(ch[1:])!r}.\n")
+            if case == 'intent' and has_double_colon:
+                extra_attr = [a.strip() for a in ch[1:]]
+            else:
+                outmess("analyzeline: cannot handle multiple attributes without "
+                        f"type specification. Ignoring {','.join(ch[1:])!r}.\n")
         last_name = None
 
         for e in [x.strip() for x in markoutercomma(ll).split('@,@')]:
@@ -1294,6 +1299,13 @@ def analyzeline(m, case, line):
                 edecl[k]['attrspec'].append(ap)
             else:
                 edecl[k]['attrspec'] = [ap]
+            edecl[k]['attrspec'].extend(extra_attr)
+            if case == 'intent' and m1.group('after'):
+                m2 = lenarraypattern.match(
+                    markouterparen(m1.group('after')))
+                if (m2 and m2.group('init') is not None
+                        and '=' not in edecl[k]):
+                    edecl[k]['='] = unmarkouterparen(m2.group('init'))
             if case == 'external':
                 if groupcache[groupcounter]['block'] == 'program':
                     outmess('analyzeline: ignoring program arguments\n')
