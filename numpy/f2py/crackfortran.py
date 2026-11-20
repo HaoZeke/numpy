@@ -632,6 +632,8 @@ publicpattern = re.compile(
     beforethisafter % ('', 'public', 'public', '.*'), re.I), 'public'
 privatepattern = re.compile(
     beforethisafter % ('', 'private', 'private', '.*'), re.I), 'private'
+protectedpattern = re.compile(
+    beforethisafter % ('', 'protected', 'protected', '.*'), re.I), 'protected'
 intrinsicpattern = re.compile(
     beforethisafter % ('', 'intrinsic', 'intrinsic', '.*'), re.I), 'intrinsic'
 intentpattern = re.compile(beforethisafter % (
@@ -777,6 +779,7 @@ def crackline(line, reset=0):
     for pat in [dimensionpattern, externalpattern, intentpattern, optionalpattern,
                 requiredpattern,
                 parameterpattern, datapattern, publicpattern, privatepattern,
+                protectedpattern,
                 intrinsicpattern,
                 endifpattern, endpattern,
                 formatpattern,
@@ -1225,7 +1228,7 @@ def analyzeline(m, case, line):
         last_name = updatevars(typespec, selector, attr, edecl)
         if last_name is not None:
             previous_context = ('variable', last_name, groupcounter)
-    elif case in ['dimension', 'intent', 'optional', 'required', 'external', 'public', 'private', 'intrinsic']:
+    elif case in ['dimension', 'intent', 'optional', 'required', 'external', 'public', 'private', 'protected', 'intrinsic']:
         edecl = groupcache[groupcounter]['vars']
         ll = m.group('after').strip()
         i = ll.find('::')
@@ -1288,7 +1291,7 @@ def analyzeline(m, case, line):
                     else:
                         errmess(f'analyzeline: intent(callback) {k} is already'
                                 ' in argument list\n')
-            if case in ['optional', 'required', 'public', 'external', 'private', 'intrinsic']:
+            if case in ['optional', 'required', 'public', 'external', 'private', 'protected', 'intrinsic']:
                 ap = case
             if 'attrspec' in edecl[k]:
                 edecl[k]['attrspec'].append(ap)

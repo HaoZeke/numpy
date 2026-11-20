@@ -2,6 +2,8 @@ import textwrap
 
 import pytest
 
+import numpy as np
+
 from . import util
 
 
@@ -86,6 +88,122 @@ class TestAllocatableCharacterArray(util.F2PyTest):
         names = mod.names
         assert names.shape == (3,)
         assert names.dtype.kind == 'U' or names.dtype.kind == 'S'
+
+
+@pytest.mark.slow
+class TestPointerModuleArray(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+        module pointer_module
+          logical(kind=1), pointer :: values(:)
+          integer, pointer :: scalar
+          integer, pointer :: locked(:)
+          character(len=:), pointer :: name
+          protected :: locked
+          integer, target :: storage(6)
+          integer, pointer :: view(:)
+          integer, target :: cell
+          integer, pointer :: cell_p
+          integer, allocatable, target :: heap(:)
+        contains
+          subroutine associate_view()
+            storage = [1, 2, 3, 4, 5, 6]
+            view => storage
+            cell = 5
+            cell_p => cell
+          end subroutine associate_view
+          subroutine associate_stride()
+            storage = [1, 2, 3, 4, 5, 6]
+            view => storage(1:6:2)
+          end subroutine associate_stride
+          subroutine associate_section()
+            storage = [1, 2, 3, 4, 5, 6]
+            view => storage(2:5)
+          end subroutine associate_section
+          subroutine associate_empty()
+            view => storage(1:0)
+          end subroutine associate_empty
+          subroutine free_view()
+            deallocate(view)
+          end subroutine free_view
+          subroutine associate_heap()
+            allocate(heap(6))
+            heap = [1, 2, 3, 4, 5, 6]
+            view => heap
+          end subroutine associate_heap
+        end module pointer_module
+    """
+
+    def test_array_pointer(self):
+        mod = self.module.pointer_module
+        assert mod.values is None
+        mod.values = np.array([True, False, True])
+        assert np.array_equal(mod.values, [1, 0, 1])
+        with pytest.raises(ValueError, match="cannot be reallocated"):
+            mod.values = True
+        mod.values = None
+        assert mod.values is None
+        mod.values = True
+        assert np.array_equal(mod.values, [1])
+
+    def test_scalar_pointer(self):
+        mod = self.module.pointer_module
+        assert mod.scalar is None
+        mod.scalar = 4
+        assert mod.scalar == 4
+        with pytest.raises(ValueError, match="too many axes"):
+            mod.scalar = np.array([1, 2])
+        mod.scalar = None
+        assert mod.scalar is None
+
+    def test_delete_raises(self):
+        mod = self.module.pointer_module
+        with pytest.raises(AttributeError):
+            del mod.values
+
+    def test_target_pointer(self):
+        mod = self.module.pointer_module
+        mod.associate_view()
+        assert np.array_equal(mod.view, [1, 2, 3, 4, 5, 6])
+        with pytest.raises(ValueError, match="cannot be reallocated"):
+            mod.view = np.zeros(2, dtype=np.int32)
+        mod.view = np.array([9, 8, 7, 6, 5, 4], dtype=np.int32)
+        assert np.array_equal(mod.storage, [9, 8, 7, 6, 5, 4])
+        mod.cell_p = 11
+        assert mod.cell == 11
+        mod.view = None
+        mod.cell_p = None
+        assert mod.view is None
+        assert mod.cell_p is None
+        assert np.array_equal(mod.storage, [9, 8, 7, 6, 5, 4])
+        assert mod.cell == 11
+
+    def test_freed_block_not_reused(self):
+        mod = self.module.pointer_module
+        mod.view = np.arange(6, dtype=np.int32)
+        mod.free_view()
+        mod.associate_heap()
+        mod.view = None
+        assert np.array_equal(mod.heap, [1, 2, 3, 4, 5, 6])
+
+    def test_strided_pointer_raises(self):
+        mod = self.module.pointer_module
+        mod.associate_stride()
+        with pytest.raises(ValueError, match="not contiguous"):
+            mod.view
+        with pytest.raises(ValueError, match="not contiguous"):
+            mod.view = np.array([1, 3, 5], dtype=np.int32)
+        mod.view = None
+        assert mod.view is None
+        assert np.array_equal(mod.storage, [1, 2, 3, 4, 5, 6])
+        mod.associate_section()
+        assert np.array_equal(mod.view, [2, 3, 4, 5])
+        mod.view = np.array([7, 7, 7, 7], dtype=np.int32)
+        assert np.array_equal(mod.storage, [1, 7, 7, 7, 7, 6])
+        mod.associate_empty()
+        assert mod.view.size == 0
+        mod.view = None
+        assert mod.view is None
 
 
 @pytest.mark.slow

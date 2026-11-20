@@ -302,6 +302,26 @@ set_data(char *d, npy_intp *f)
     /* printf("set_data: d=%p,f=%d\n",d,*f); */
 }
 
+/* Pointer hooks report -2 for a noncontiguous target and -1 when the
+   shape differs from the associated target, which they cannot resize. */
+static int
+pointer_hook_error(int flag)
+{
+    const char *msg;
+    if (flag >= 0) {
+        return 0;
+    }
+    if (flag == -2) {
+        msg = "Fortran pointer target is not contiguous";
+    }
+    else {
+        msg = "Fortran pointer is associated with storage"
+              " that cannot be reallocated";
+    }
+    PyErr_SetString(PyExc_ValueError, msg);
+    return 1;
+}
+
 static PyObject *
 fortran_getattr(PyFortranObject *fp, char *name)
 {
@@ -340,6 +360,9 @@ fortran_getattr(PyFortranObject *fp, char *name)
             save_def = &fp->defs[i];
             (*(fp->defs[i].func))(&fp->defs[i].rank, fp->defs[i].dims.d,
                                   set_data, &flag);
+            if (pointer_hook_error(flag)) {
+                return NULL;
+            }
             if (flag == 2)
                 k = fp->defs[i].rank + 1;
             else
@@ -409,6 +432,11 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
          i++)
         ;
     if (j == 0) {
+        if (v == NULL) {
+            PyErr_SetString(PyExc_AttributeError,
+                            "cannot delete fortran attribute");
+            return -1;
+        }
         if (fp->defs[i].rank == -1) {
             PyErr_SetString(PyExc_AttributeError,
                             "over-writing fortran routine");
@@ -418,6 +446,7 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
             npy_intp dims[F2PY_MAX_DIMS];
             int k;
             save_def = &fp->defs[i];
+            if (fp->defs[i].rank == 0) dims[0] = v != Py_None;
             if (v != Py_None) { /* set new value (reallocate if needed --
                                    see f2py generated code for more
                                    details ) */
@@ -426,14 +455,20 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                                             fp->defs[i].rank, F2PY_INTENT_IN,
                                             v)) == NULL)
                     return -1;
-                (*(fp->defs[i].func))(&fp->defs[i].rank, PyArray_DIMS(arr),
-                                      set_data, &flag);
+                (*(fp->defs[i].func))(&fp->defs[i].rank, dims, set_data,
+                                      &flag);
             }
             else { /* deallocate */
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = 0;
                 (*(fp->defs[i].func))(&fp->defs[i].rank, dims, set_data,
                                       &flag);
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = -1;
+            }
+            if (pointer_hook_error(flag)) {
+                if (arr != NULL && (PyObject *)arr != v) {
+                    Py_DECREF(arr);
+                }
+                return -1;
             }
             memcpy(fp->defs[i].dims.d, dims,
                    fp->defs[i].rank * sizeof(npy_intp));
@@ -1260,7 +1295,7 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
         for (i = 0, effrank = 0; i < PyArray_NDIM(arr); ++i)
             if (PyArray_DIM(arr, i) > 1)
                 ++effrank;
-        if (dims[rank - 1] >= 0)
+        if (rank == 0 || dims[rank - 1] >= 0)
             if (effrank > rank) {
                 PyErr_Format(PyExc_ValueError,
                              "too many axes: %d (effrank=%d), "
@@ -1300,7 +1335,9 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                 d = 1;
             else
                 d = PyArray_DIM(arr, j++);
-            dims[rank - 1] *= d;
+            if (rank > 0) {
+                dims[rank - 1] *= d;
+            }
         }
         for (i = 0, size = 1; i < rank; ++i) size *= dims[i];
         if (size != arr_size) {

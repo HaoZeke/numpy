@@ -78,6 +78,56 @@ fgetdims2_sa = """\
       flag = 2
       call f2pysetdata(d,allocated(d))"""
 
+fsetdata_pointer = f"""\
+      flag = 1
+      call f2pysetdata(d,merge(1_{np.intp().itemsize},0_{np.intp().itemsize},associated(d)))"""
+
+fgetdims0_pointer = f"""\
+      external f2pysetdata
+      integer r
+      integer({np.intp().itemsize}) s(*)
+      if (associated(d).and.s(1).eq.0) nullify(d)
+      if (.not.associated(d).and.s(1).gt.0) allocate(d)
+""" + fsetdata_pointer
+
+
+def _pointer_array_hook(rank):
+    # None disassociates the pointer and never frees its target. A shape
+    # change cannot reallocate storage this hook did not allocate, and a
+    # noncontiguous target is a temporary at the f2pysetdata call.
+    alloc_args = ','.join(f's({i})' for i in range(1, int(rank) + 1))
+    return f"""\
+      external f2pysetdata
+      logical ns
+      integer r,i
+      integer({np.intp().itemsize}) s(*)
+      ns = .false.
+      if (associated(d).and.s(1).eq.0) nullify(d)
+      if (associated(d)) then
+        if (size(d).gt.0.and..not.is_contiguous(d)) then
+          flag = -2
+          return
+        end if
+        do i=1,r
+          if ((size(d,i).ne.s(i)).and.(s(i).ge.0)) then
+            ns = .true.
+          end if
+        end do
+        if (ns) then
+          flag = -1
+          return
+        end if
+      end if
+      if ((.not.associated(d)).and.(s(1).ge.1)) then
+        allocate(d({alloc_args}))
+      end if
+      if (associated(d)) then
+        do i=1,r
+          s(i) = size(d,i)
+        end do
+      end if
+""" + fsetdata_pointer
+
 
 def buildhooks(pymod):
     from . import rules
@@ -167,7 +217,12 @@ def buildhooks(pymod):
                 if isinstance(note, list):
                     note = '\n'.join(note)
                 dadd(f'--- {note}')
-            if isallocatable(var):
+            attrspec = var.get('attrspec', [])
+            charsel = var.get('charselector') or {}
+            # Protected and deferred length pointers cannot be allocated here
+            pointer = ('pointer' in attrspec and 'protected' not in attrspec
+                       and ':' not in charsel.get('len', '') + charsel.get('*', ''))
+            if isallocatable(var) or pointer:
                 fargs.append(f"f2py_{m['name']}_getdims_{n}")
                 efargs.append(fargs[-1])
                 sargs.append(
@@ -177,11 +232,16 @@ def buildhooks(pymod):
                 fadd(f'subroutine {fargs[-1]}(r,s,f2pysetdata,flag)')
                 fadd(f"use {m['name']}, only: d => {undo_rmbadname1(n)}\n")
                 fadd('integer flag\n')
-                fhooks[0] = fhooks[0] + fgetdims1
-                dms = range(1, int(dm['rank']) + 1)
-                alloc_args = ','.join(f's({i})' for i in dms)
-                fadd(f' allocate(d({alloc_args}))\n')
-                fhooks[0] = fhooks[0] + use_fgetdims2
+                if pointer and int(dm['rank']) == 0:
+                    fhooks[0] = fhooks[0] + fgetdims0_pointer
+                elif pointer:
+                    fhooks[0] = fhooks[0] + _pointer_array_hook(dm['rank'])
+                else:
+                    fhooks[0] = fhooks[0] + fgetdims1
+                    dms = range(1, int(dm['rank']) + 1)
+                    alloc_args = ','.join(f's({i})' for i in dms)
+                    fadd(f' allocate(d({alloc_args}))\n')
+                    fhooks[0] = fhooks[0] + use_fgetdims2
                 fadd(f'end subroutine {fargs[-1]}')
             else:
                 fargs.append(n)
