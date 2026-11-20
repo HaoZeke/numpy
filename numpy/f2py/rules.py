@@ -1382,6 +1382,30 @@ def buildmodule(m, um):
                 del nb1['entry']
                 nb1['name'] = k
                 nb1['args'] = a
+                valid = set(a) | set(nb1.get('commonvars', []))
+                cleared = False
+                for v in valid:
+                    var = nb1['vars'].get(v, {})
+                    deps = var.get('depend')
+                    if deps and any(d not in valid for d in deps):
+                        var.pop('depend', None)
+                        var.pop('check', None)
+                        if '=' in var:
+                            del var['=']
+                            attrs = var.get('attrspec')
+                            if attrs and 'optional' in attrs:
+                                attrs.remove('optional')
+                        cleared = True
+                if cleared:
+                    from . import crackfortran
+                    nb1.pop('prefix', None)
+                    for arg in a:
+                        var = nb1['vars'].get(arg, {})
+                        if 'dimension' in var and 'check' not in var:
+                            dim = f"dimension({','.join(var.pop('dimension'))})"
+                            var.setdefault('attrspec', []).append(dim)
+                    nb1['vars'] = crackfortran.analyzevars(nb1)
+                    nb1['sortvars'] = crackfortran.sortvarnames(nb1['vars'])
                 nb_list.append(nb1)
         for nb in nb_list:
             # requiresf90wrapper must be called before buildapi as it
