@@ -2306,7 +2306,7 @@ def analyzebody(block, args, tab=''):
             usermodules.append(b)
         else:
             if b['block'] == 'module':
-                f90modulevars[b['name']] = b['vars']
+                f90modulevars[b['name'].lower()] = b['vars']
             body.append(b)
     return body
 
