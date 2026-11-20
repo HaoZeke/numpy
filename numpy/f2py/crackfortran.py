@@ -354,6 +354,52 @@ def is_free_format(fname):
     return result
 
 
+_fixed_form_keywords = frozenset((
+    'abstract automatic block blockdata byte call callfun character common '
+    'complex contains data dimension do double doublecomplex doubleprecision '
+    'doubleprecisioncomplex elemental end endblockdata endfunction '
+    'endinterface endmodule endprogram endpythonmodule endsubroutine entry '
+    'external format fortranname function implicit impure integer interface '
+    'intrinsic logical module moduleprocedure optional parameter precision '
+    'private procedure program public pure python real recursive required '
+    'static subroutine threadsafe to type undefined use virtual'
+).split())
+
+_fixed_cont_skip = re.compile(
+    r'\s*(?:callstatement|callprotoargument|usercode|pymethoddef)\b', re.I)
+_fixed_cont_note = re.compile(r'\bnote\s*\(', re.I)
+_fixed_cont_name_prefix = re.compile(
+    r'(?:[(,=/]|::|\b(?:call|entry|fortranname|function|program|subroutine))$',
+    re.I)
+
+
+def _fixed_cont_in_note(body):
+    """True when body ends inside an unclosed note( attribute."""
+    return any(1 + body.count('(', m.end()) > body.count(')', m.end())
+               for m in _fixed_cont_note.finditer(body))
+
+
+def _fixed_cont_splits_name(head, tail):
+    """True when a column 6 continuation should drop trailing blanks."""
+    if (not head.endswith(' ') or not tail
+            or not (tail[0].isalnum() or tail[0] == '_')):
+        return False
+    body = head.rstrip(' ')
+    if (_fixed_cont_skip.match(body)
+            or re.search(r"['\"]", _quoted_string_re.sub('', body))
+            or _fixed_cont_in_note(body)):
+        return False
+    word = re.search(r'(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)$', body)
+    if not word:
+        return False
+    before = body[:word.start()].rstrip()
+    if not before or before.endswith(';'):
+        return False
+    if word.group(1).lower() in _fixed_form_keywords:
+        return bool(_fixed_cont_name_prefix.search(before))
+    return True
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -466,7 +512,10 @@ def readfortrancode(ffile, dowithline=show, istop=1):
 
             if (not cont or strictf77) and (len(l) > 5 and not l[5] == ' '):
                 # Continuation of a previous line
-                ll = ll + l[6:]
+                tail = l[6:]
+                if _fixed_cont_splits_name(ll, tail):
+                    ll = ll.rstrip(' ')
+                ll = ll + tail
                 finalline = ''
                 origfinalline = ''
             else:
