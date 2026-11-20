@@ -139,6 +139,7 @@ TODO:
     The above may be solved by creating appropriate preprocessor program, for example.
 
 """
+import ast
 import codecs
 import copy
 import fileinput
@@ -2572,11 +2573,10 @@ def get_parameters(vars, global_params={}):
                     is_replaced = len(v) < orig_v_len
 
             if not is_replaced:
-                if not selected_kind_re.match(v):
-                    v_ = v.split('_')
-                    # In case there are additive parameters
-                    if len(v_) > 1:
-                        v = ''.join(v_[:-1]).lower().replace(v_[-1].lower(), '')
+                v = re.sub(
+                    r'(?<![\w.])(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?'
+                    r'|\.\d+(?:[eE][+-]?\d+)?)_(?:\d+|[a-zA-Z]\w*)\b',
+                    r'\1', v)
 
             # Currently this will not work for complex numbers.
             # There is missing code for extracting a complex number,
@@ -3108,6 +3108,86 @@ def param_eval(v, g_params, params, dimspec=None):
     return p
 
 
+def _fold_array_param_expr(d, params):
+    """Substitute parameter values and array elements into a dimension."""
+    unsupported = re.compile(r'\*\*|(?<![\w.])\d+_(?:\d+|[a-zA-Z])').search
+    if unsupported(d):
+        return None
+
+    def wrap(elem):
+        return f'({elem})' if re.search(r'[^\w.]', elem) else elem
+
+    def eval_int(node):
+        if isinstance(node, ast.Constant) and type(node.value) is int:
+            return node.value
+        if isinstance(node, ast.UnaryOp) and isinstance(
+                node.op, (ast.UAdd, ast.USub)):
+            v = eval_int(node.operand)
+            return -v if isinstance(node.op, ast.USub) else v
+        if isinstance(node, ast.BinOp) and isinstance(
+                node.op, (ast.Add, ast.Sub, ast.Mult)):
+            l, r = eval_int(node.left), eval_int(node.right)
+            return (l + r if isinstance(node.op, ast.Add) else
+                    l - r if isinstance(node.op, ast.Sub) else l * r)
+        raise ValueError
+
+    arrays, scalars = {}, {}
+    for k, v in {k.lower(): v for k, v in params.items()}.items():
+        t = v.strip() if isinstance(v, str) else ''
+        if isinstance(v, dict):
+            arrays[k] = v
+        elif t.startswith('(/') and t.endswith('/)'):
+            inner = t[2:-2].strip()
+            parts = ([p.strip() for p in markoutercomma(inner).split('@,@')]
+                     if inner else [])
+            arrays[k] = dict(enumerate(parts, 1))
+        else:
+            scalars[k] = str(v)
+
+    scalar_re = (
+        re.compile(r'\b(' + '|'.join(map(re.escape, scalars)) + r')\b', re.I)
+        if scalars else None)
+
+    def sub_scalars(s):
+        if not scalar_re:
+            return s
+        return scalar_re.sub(lambda m: wrap(scalars[m.group(1).lower()]), s)
+
+    d = sub_scalars(d)
+    ref = (re.compile(r'\b(' + '|'.join(map(re.escape, arrays)) + r')\s*\(', re.I)
+           if arrays else None)
+    seen = {d}
+    while ref:
+        found = False
+        for match in reversed(list(ref.finditer(d))):
+            depth, end = 1, match.end()
+            while end < len(d) and depth:
+                depth += (d[end] == '(') - (d[end] == ')')
+                end += 1
+            if depth:
+                continue
+            try:
+                idx = eval_int(ast.parse(
+                    d[match.end():end - 1].strip(), mode='eval').body)
+                elem = sub_scalars(
+                    str(arrays[match.group(1).lower()][idx])).strip()
+                ast.parse(elem, mode='eval')
+                if unsupported(elem):
+                    raise ValueError
+            except (KeyError, SyntaxError, ValueError):
+                continue
+            nxt = d[:match.start()] + wrap(elem) + d[end:]
+            if nxt in seen:
+                continue
+            seen.add(nxt)
+            d, found = nxt, True
+            break
+        if not found:
+            break
+
+    return None if ref and ref.search(d) else d
+
+
 def param_parse(d, params):
     """Recursively parse array dimensions.
 
@@ -3165,6 +3245,9 @@ def param_parse(d, params):
     >>> param_parse(d, params)
     3
     """
+    folded = _fold_array_param_expr(d, params)
+    if folded is not None:
+        return folded
     dname = d[:d.find("(")] if "(" in d else ""
     if dname:
         # Text precedes the first "(", so this is array-parameter

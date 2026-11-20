@@ -119,3 +119,22 @@ class TestParameters(util.F2PyTest):
     def test_constant_array_delims(self):
         x = self.module.foo_array_delims()
         assert x == 9
+
+    def test_constant_array_expression(self):
+        sizes = (5, 6, 6, 6, 5, 5)
+        arrs = [np.zeros(n, dtype=np.float32) for n in sizes]
+        self.module.foo_array_expression(*arrs)
+        for i, arr in enumerate(arrs, 1):
+            assert np.all(arr == i)
+        for i in range(len(arrs)):
+            short = list(arrs)
+            short[i] = arrs[i][:-1]
+            with pytest.raises(ValueError):
+                self.module.foo_array_expression(*short)
+
+    def test_constant_array_expression_use(self):
+        x = np.zeros(5, dtype=np.float32)
+        self.module.foo_array_expression_use(x)
+        assert np.all(x == 7)
+        with pytest.raises(ValueError):
+            self.module.foo_array_expression_use(x[:-1])

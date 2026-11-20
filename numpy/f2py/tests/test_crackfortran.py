@@ -556,6 +556,20 @@ class TestParamParseNestedParens:
         assert crackfortran.param_parse(
             "myparamarray(nested(dim))", params) == "20"
 
+    def test_array_expression_folding(self):
+        assert crackfortran.param_parse(
+            "PA(1) + 1", {"PA": {1: 3}}) == "3 + 1"
+        assert crackfortran.param_parse(
+            "1 + dims(2)", {"dims": "(/3,3/)"}) == "1 + 3"
+        assert crackfortran.param_parse(
+            "dims(1) * 2", {"dims": "(/ 1 + 1, 3 /)"}) == "(1 + 1) * 2"
+        assert crackfortran.param_parse(
+            "dims(1)", {"dims": "(/ max(1, 2), 3 /)"}) == "(max(1, 2))"
+        assert crackfortran.param_parse(
+            "n + 1", {"N": 5, "n": 3}) == "3 + 1"
+        assert crackfortran._fold_array_param_expr(
+            "n(1) + 1", {"n": {1: "[3"}}) is None
+
     def test_dimension_substituted_in_module(self):
         fpath = util.getpath("tests", "src", "crackfortran", "gh28095.f90")
         mod = crackfortran.crackfortran([str(fpath)])

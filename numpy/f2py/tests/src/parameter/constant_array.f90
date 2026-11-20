@@ -43,3 +43,39 @@ subroutine foo_array_delims(x)
 
   return
 end subroutine
+
+subroutine foo_array_expression(x, y, z, w, q, u)
+  implicit none
+  integer, parameter :: k = 1
+  integer, parameter :: dims(2) = (/ 2, 3 /)
+  integer, parameter :: idx(2) = (/ 1, 2 /)
+  integer, parameter :: lo(2) = (/ -1, 2 /)
+  integer, parameter :: a(-1:1) = (/ 5, 6, 7 /)
+  integer, parameter :: b(2) = (/ -1, 1 /)
+  integer(4), parameter :: kd(2) = (/ 2_4, 3_4 /)
+  real, intent(inout) :: x(dims(1) + dims(2))
+  real, intent(inout) :: y(dims(idx(k + 1)) * 2)
+  real, intent(inout) :: z(2 * (lo(2) - lo(1)))
+  real, intent(inout) :: w(a(1 + b(1)))
+  real, intent(inout) :: q(dims((1 + 1)) + dims(1))
+  real, intent(inout) :: u(kd(1) + kd(2))
+
+  x = x + 1
+  y = y + 2
+  z = z + 3
+  w = w + 4
+  q = q + 5
+  u = u + 6
+end subroutine
+
+module parameter_array_expression_module
+  integer, parameter :: mdims(2) = (/ 2, 3 /)
+end module
+
+subroutine foo_array_expression_use(x)
+  use parameter_array_expression_module, only: mdims
+  implicit none
+  real, intent(inout) :: x(mdims(1) + mdims(2))
+
+  x = x + 7
+end subroutine
