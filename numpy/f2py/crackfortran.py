@@ -2648,6 +2648,14 @@ def _eval_scalar(value, params):
     return value
 
 
+def _is_c_int_poly(parts, c_vars):
+    # symbolic drops division and kind suffixes, so screen the Fortran text
+    text = ' '.join(parts)
+    return (re.fullmatch(r'[\w\s()+*-]*', text) and '**' not in text
+            and all(w in c_vars or w.isdigit()
+                    for w in re.findall(r'\w+', text)))
+
+
 def analyzevars(block):
     """
     Sets correct dimension information for each variable/parameter
@@ -2693,6 +2701,7 @@ def analyzevars(block):
                 dep_matches[n]
             except KeyError:
                 dep_matches[n] = re.compile(rf'.*\b{v}\b', re.I).match
+    shared_extents = []
     for n in svars:
         if n[0] in list(attrrules.keys()):
             vars[n] = setattrspec(vars[n], attrrules[n[0]])
@@ -2730,6 +2739,7 @@ def analyzevars(block):
                 vars[n]['kindselector']['kind'] = l
 
         dimension_exprs = {}
+        dimension_parts = {}
         if 'attrspec' in vars[n]:
             attr = vars[n]['attrspec']
             attr.reverse()
@@ -2844,6 +2854,7 @@ def analyzevars(block):
                         # means. We'll let the compiler validate the
                         # definiteness of such symbols.
                         dimension_exprs[d] = solver_and_deps
+                        dimension_parts[len(vars[n]['dimension'])] = dl
                     vars[n]['dimension'].append(d)
 
         if 'check' not in vars[n] and 'args' in block and n in block['args']:
@@ -2932,6 +2943,13 @@ def analyzevars(block):
                                 vars[v]['depend'] = list(set(v_deps))
                             if n not in v_deps:
                                 n_deps.append(v)
+                    if n_is_input and i in dimension_parts:
+                        check = f'shape({n}, {i}) == {d}'
+                        if check not in n_checks:
+                            shared_extents.append(
+                                (n, i, d, dimension_parts[i],
+                                 list(coeffs_and_deps))
+                            )
             elif isstring(vars[n]):
                 if 'charselector' in vars[n]:
                     if '*' in vars[n]['charselector']:
@@ -2967,6 +2985,82 @@ def analyzevars(block):
                     del vars[n]['depend']
             if isscalar(vars[n]):
                 vars[n]['='] = _eval_scalar(vars[n]['='], params)
+
+    # -h writes some extents lossily (2*(n/2) becomes n), so only trust
+    # extents read from Fortran source
+    if shared_extents and '.pyf:' not in block.get('from', '') + ':':
+        c_vars = {
+            v for v in vars
+            if v in block['args']
+            and isscalar(vars[v])
+            and not isintent_callback(vars[v])
+            and not (isintent_hide(vars[v]) and '=' not in vars[v])
+        }
+
+        def expr_deps(src):
+            deps = list(vars[src].get('depend', []))
+            if '=' in vars[src] and not isstring(vars[src]):
+                rhs = mask_string_literals(vars[src]['='])
+                deps.extend(w for w, m in dep_matches.items()
+                            if w != src and m(rhs))
+            for chk in vars[src].get('check', []):
+                masked = mask_string_literals(chk)
+                deps.extend(w for w, m in dep_matches.items()
+                            if w != src and m(masked))
+            return deps
+
+        def reaches(src, target, seen):
+            if src == target:
+                return True
+            if src in seen or src not in vars:
+                return False
+            seen.add(src)
+            return any(reaches(w, target, seen) for w in expr_deps(src))
+
+        def reaches_cycle(start):
+            state = {}
+
+            def dfs(u):
+                st = state.get(u, 0)
+                if st == 1:
+                    return True
+                if st == 2 or u not in vars:
+                    return False
+                state[u] = 1
+                for w in vars[u].get('depend', []):
+                    if w != u and dfs(w):
+                        return True
+                state[u] = 2
+                return False
+
+            return dfs(start)
+
+        for n, i, d, parts, needed in shared_extents:
+            if len(needed) <= 1 or not _is_c_int_poly(parts, c_vars):
+                continue
+            if any(reaches_cycle(v) for v in needed):
+                continue
+            owners = [v for v in needed
+                      if '=' in vars[v] and v in block['args']
+                      and n in vars[v].get('depend', [])]
+            if not owners:
+                continue
+            # pick by name: a signature file written by -h lists sizes in
+            # another order
+            owner = min((o for o in owners
+                         if not any(reaches(v, o, set())
+                                    for v in needed
+                                    if v != o)),
+                        default=None)
+            if owner:
+                check = f'shape({n}, {i}) == {d}'
+                checks = vars[owner].setdefault('check', [])
+                if check not in checks:
+                    checks.append(check)
+                owner_deps = vars[owner]['depend']
+                for v in needed:
+                    if v != owner and v not in owner_deps:
+                        owner_deps.append(v)
 
     for n in list(vars.keys()):
         if n == block['name']:  # n is block name
