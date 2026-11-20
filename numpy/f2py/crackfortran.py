@@ -426,11 +426,38 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             l = l[:-1]
         # Do not lower for directives, gh-2547, gh-27697, gh-26681
         is_f2py_directive = False
+        if sourcecodeform == 'fix' and l[:1] in ('*', 'c', '!', 'C', '#'):
+            if l[1:5].lower() == 'f2py':  # f2py directive
+                l = '     ' + l[5:]
+                is_f2py_directive = True
+            else:  # Skip comment line
+                cont = False
+                continue
         # Unconditionally remove comments
-        (l, rl) = split_by_unquoted(l, '!')
+        ls = l.lstrip()
+        if (sourcecodeform == 'fix' and (not cont or strictf77)
+                and l[:5].strip() == '' and len(l) > 5
+                and l[5] not in (' ', '0')):
+            quote = _open_quote(ll)
+            l_body, rl = split_by_unquoted(quote + l[6:], '!')
+            l = l[:6] + l_body[len(quote):]
+        elif ls.startswith('!'):
+            if ls[:5].lower() == '!f2py':  # f2py directive
+                is_f2py_directive = True
+                quote = _open_quote(ll) if cont else ''
+                l_body, _ = split_by_unquoted(quote + ls[5:], '!')
+                l = l[:len(l) - len(ls)] + '     ' + l_body[len(quote):]
+                rl = ''
+            else:
+                l, rl = '', ls
+        else:
+            quote = _open_quote(ll) if cont else ''
+            (l, rl) = split_by_unquoted(quote + l, '!')
+            l = l[len(quote):]
         l += ' '
         if rl[:5].lower() == '!f2py':  # f2py directive
-            l, _ = split_by_unquoted(l + 4 * ' ' + rl[5:], '!')
+            rl_body, _ = split_by_unquoted(rl[5:], '!')
+            l = l + 4 * ' ' + rl_body
             is_f2py_directive = True
         if l.strip() == '':  # Skip empty line
             if sourcecodeform == 'free':
@@ -448,15 +475,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 cont = False
             continue
         if sourcecodeform == 'fix':
-            if l[0] in ['*', 'c', '!', 'C', '#']:
-                if l[1:5].lower() == 'f2py':  # f2py directive
-                    l = '     ' + l[5:]
-                    is_f2py_directive = True
-                else:  # Skip comment line
-                    cont = False
-                    is_f2py_directive = False
-                    continue
-            elif strictf77:
+            if strictf77 and not is_f2py_directive:
                 if len(l) > 72:
                     l = l[:72]
             if l[0] not in spacedigits:
@@ -680,6 +699,18 @@ def split_by_unquoted(line, characters):
         d = m.groupdict()
         return (d["before"], d["after"])
     return (line, "")
+
+
+def _open_quote(line):
+    """Return the unclosed quote delimiter ("'" or '"') in *line*, or ''."""
+    quote = ''
+    for ch in line:
+        if quote:
+            if ch == quote:
+                quote = ''
+        elif ch in '\'"':
+            quote = ch
+    return quote
 
 
 _quoted_string_re = re.compile(

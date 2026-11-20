@@ -399,6 +399,65 @@ class TestFortranReader(util.F2PyTest):
         mod = crackfortran.crackfortran([str(f_path)])
         assert mod[0]['name'] == 'foo'
 
+    @pytest.mark.parametrize("ext, code", [
+        (".f90", ("subroutine foo(n)\n"
+                  "  character(len=*), parameter :: p = 'x&\n"
+                  "      &!y'; integer, intent(out) :: n\n"
+                  "end subroutine foo\n")),
+        (".f90", ("subroutine foo(n)\n"
+                  "  character(len=*), parameter :: p = 'x&\n"
+                  "  ! comment between continuation lines\n"
+                  "      &!y'; integer, intent(out) :: n\n"
+                  "end subroutine foo\n")),
+        (".f90", ("subroutine foo(n)\n"
+                  "  character(len=*), parameter :: p = 'x&\n"
+                  "      &!y' !f2py ; integer, intent(out) :: n\n"
+                  "end subroutine foo\n")),
+        (".f90", ("subroutine foo(n)\n"
+                  "!f2py character(len=*), parameter :: p = 'x&\n"
+                  "!f2py &!y'; integer, intent(out) :: n\n"
+                  "end subroutine foo\n")),
+        (".f", ("      subroutine foo(n)\n"
+                "      character*4 p\n"
+                "      parameter (p = 'ab\n"
+                "     &!c'); integer, intent(out) :: n\n"
+                "      end\n")),
+        (".f", ("      subroutine foo(n)\n"
+                "      character*4 p\n"
+                "      parameter (p = 'ab\n"
+                "     '!c'); integer, intent(out) :: n\n"
+                "      end\n")),
+        (".f", ("      subroutine foo(n)\n"
+                "cf2py character*4 p\n"
+                "cf2py parameter (p = 'ab\n"
+                "cf2py&!c'); integer, intent(out) :: n\n"
+                "      end\n")),
+    ])
+    def test_bang_in_continued_string(self, tmp_path, ext, code):
+        f_path = tmp_path / f"foo{ext}"
+        f_path.write_text(code)
+        mod = crackfortran.crackfortran([str(f_path)])
+        assert 'out' in mod[0]['vars']['n']['intent']
+
+    def test_continued_string_comment_and_directive_length(self, tmp_path):
+        f_path = tmp_path / "foo.f90"
+        f_path.write_text(
+            "subroutine foo(a, b)\n"
+            "  character(len=*), parameter :: p = 'x&\n"
+            "  ! don't break continuation\n"
+            "      &!y'\n"
+            "  integer, parameter :: m = len(p)\n"
+            "  real, intent(out) :: a(m)\n"
+            "!f2py character(len=*), parameter :: q = 'x&\n"
+            "!f2py &!y'\n"
+            "!f2py integer, parameter :: k = len(q)\n"
+            "!f2py real, intent(out) :: b(k)\n"
+            "end subroutine foo\n"
+        )
+        mod = crackfortran.crackfortran([str(f_path)])
+        assert mod[0]['vars']['a']['dimension'] == ['3']
+        assert mod[0]['vars']['b']['dimension'] == ['3']
+
 
 @pytest.mark.slow
 class TestUnicodeComment(util.F2PyTest):
