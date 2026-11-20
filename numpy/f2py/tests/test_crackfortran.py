@@ -329,7 +329,7 @@ class TestStringLiteralDepend:
         _, depargs = getargs2(probe)
         capi_maps.depargs = depargs
         work_dims = capi_maps.getarrdims("work", probe["vars"]["work"])
-        assert work_dims["setdims"] == "#varname#_Dims[0]=3 * n"
+        assert work_dims["setdims"] == "#varname#_Dims[0]=(npy_intp)(3) * (npy_intp)(n)"
         assert capi_maps.getarrdims("a", probe["vars"]["a"])["setdims"] == ""
 
     def test_true_cycle_does_not_recurse(self, tmp_path, capsys):

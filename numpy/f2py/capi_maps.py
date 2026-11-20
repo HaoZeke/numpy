@@ -284,6 +284,67 @@ def getstrlength(var):
     return len
 
 
+_intp_token = re.compile(r'\b(?:\d+|[A-Za-z_]\w*)\b')
+_shape_eq = re.compile(
+    r'^(\s*shape\s*\([^,()]*,\s*[^)]*\)\s*==\s*)(.*)$', re.I | re.S)
+
+
+def _as_intp(expr):
+    if any(ch in expr for ch in "'\"?"):
+        return expr
+    parts = []
+    i = 0
+    n = len(expr)
+    depth = 0
+    call_until = []
+    pending_call = False
+    while i < n:
+        ch = expr[i]
+        if ch == '(':
+            depth += 1
+            if pending_call:
+                call_until.append(depth)
+                pending_call = False
+            parts.append(ch)
+            i += 1
+            continue
+        if ch == ')':
+            if call_until and call_until[-1] == depth:
+                call_until.pop()
+            depth -= 1
+            parts.append(ch)
+            i += 1
+            continue
+        m = _intp_token.match(expr, i)
+        if m is None:
+            parts.append(ch)
+            i += 1
+            continue
+        tok = m.group(0)
+        j = m.end()
+        k = j
+        while k < n and expr[k] in ' \t':
+            k += 1
+        if k < n and expr[k] == '(':
+            parts.append(tok)
+            pending_call = True
+            i = j
+            continue
+        if call_until:
+            parts.append(tok)
+        else:
+            parts.append(f'(npy_intp)({tok})')
+        i = j
+    return ''.join(parts)
+
+
+def widen_size_check(expr):
+    m = _shape_eq.match(expr)
+    if not m:
+        return expr
+    return m.group(1) + _as_intp(m.group(2))
+
+
 def getarrdims(a, var, verbose=0):
     ret = {}
     if isstring(var) and not isarray(var):
@@ -320,14 +381,14 @@ def getarrdims(a, var, verbose=0):
         for d in dim:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
-                ret['setdims'] = f"{ret['setdims']}#varname#_Dims[{i}]={d},"
+                ret['setdims'] = f"{ret['setdims']}#varname#_Dims[{i}]={_as_intp(d)},"
         if ret['setdims']:
             ret['setdims'] = ret['setdims'][:-1]
         ret['cbsetdims'], i = '', -1
         for d in var['dimension']:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
-                ret['cbsetdims'] = f"{ret['cbsetdims']}#varname#_Dims[{i}]={d},"
+                ret['cbsetdims'] = f"{ret['cbsetdims']}#varname#_Dims[{i}]={_as_intp(d)},"
             elif isintent_in(var):
                 outmess('getarrdims:warning: assumed shape array, using 0 '
                         f'instead of {d!r}\n')

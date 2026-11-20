@@ -1621,7 +1621,7 @@ def buildapi(rout):
                     break
         if 'check' in var[a]:
             for c in var[a]['check']:
-                vrd['check'] = c
+                vrd['check'] = capi_maps.widen_size_check(c)
                 ar = applyrules(check_rules, vrd, var[a])
                 rd = dictappend(rd, ar)
     if isinstance(rd['cleanupfrompyobj'], list):
