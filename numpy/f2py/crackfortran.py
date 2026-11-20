@@ -292,6 +292,12 @@ _has_f_header = re.compile(r'-\*-\s*fortran\s*-\*-', re.I).search
 _has_f90_header = re.compile(r'-\*-\s*f90\s*-\*-', re.I).search
 _has_fix_header = re.compile(r'-\*-\s*fix\s*-\*-', re.I).search
 _free_f90_start = re.compile(r'[^c*]\s*[^\s\d\t]', re.I).match
+# Column 1 c/C is a fixed-form comment unless it is one of these
+# free-form statements.
+_col1_c_statement = re.compile(
+    r'(?i)c(?:\s*=|all\b|ase\b|haracter\b|lose\b|ommon\b|omplex\b|'
+    r'ontains\b|ontinue\b|ycle\b|lass\b)'
+).match
 
 # Extensions
 COMMON_FREE_EXTENSIONS = ['.f90', '.f95', '.f03', '.f08']
@@ -339,18 +345,70 @@ def is_free_format(fname):
     with openhook(fname, 'r') as fhandle:
         line = fhandle.readline()
         n = 15  # the number of non-comment lines to scan for hints
+        fixed_header = False
         if _has_f_header(line):
-            n = 0
+            if result:
+                # A free-form suffix stays free unless a later line is
+                # fixed-form only: a column-6 continuation or a
+                # column-1 comment.
+                fixed_header = True
+            else:
+                n = 0
+            line = fhandle.readline()
         elif _has_f90_header(line):
             n = 0
             result = True
+        saw_fixed = False
+        prev_amp = False
         while n > 0 and line:
             if line[0] != '!' and line.strip():
+                if fixed_header and line[0] in 'cC*':
+                    # cf2py is a directive. A keyword or `c =` at
+                    # column 1 is free-form code, not a comment.
+                    directive = line[1:5].lower() == 'f2py'
+                    if not directive and _col1_c_statement(line):
+                        result = True
+                        saw_fixed = False
+                        break
+                    if not directive:
+                        saw_fixed = True
+                    prev_amp = False
+                    line = fhandle.readline()
+                    continue
                 n -= 1
-                if (line[0] != '\t' and _free_f90_start(line[:5])) or line[-2:-1] == '&':
+                col6 = (
+                    len(line) > 5
+                    and line[:5] == 5 * ' '
+                    and line[5] in '&*$123456789'
+                )
+                ends_amp = line[-2:-1] == '&'
+                # A mark in column 6 is a fixed continuation, not a
+                # free-form trailing ampersand.
+                amp_hint = ends_amp and not (
+                    fixed_header and col6 and not prev_amp)
+                if (line[0] != '\t' and _free_f90_start(line[:5])) or amp_hint:
                     result = True
+                    saw_fixed = False
                     break
+                if fixed_header and line.lstrip()[:1] != '!':
+                    head = line[:5]
+                    labeled = (
+                        len(line) > 5
+                        and any(ch.isdigit() for ch in head)
+                        and all(ch in ' 0123456789' for ch in head)
+                    )
+                    if col6 and not prev_amp:
+                        saw_fixed = True
+                    elif line.startswith(6 * ' ') or labeled:
+                        pass
+                    else:
+                        result = True
+                        saw_fixed = False
+                        break
+                prev_amp = ends_amp
             line = fhandle.readline()
+        if fixed_header and saw_fixed:
+            result = False
     return result
 
 

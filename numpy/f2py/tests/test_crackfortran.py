@@ -399,6 +399,30 @@ class TestFortranReader(util.F2PyTest):
         mod = crackfortran.crackfortran([str(f_path)])
         assert mod[0]['name'] == 'foo'
 
+    @pytest.mark.parametrize(
+        ("suffix", "header"),
+        [
+            (".f90", "! -*- fortran -*-"),
+            (".f95", "C -*- fortran -*-"),
+        ],
+    )
+    def test_fortran_header_fixed_form(self, tmp_path, suffix, header):
+        f_path = tmp_path / f"fixed{suffix}"
+        f_path.write_text(
+            f"{header}\n"
+            "      subroutine add_one(\n"
+            "     & x, y)\n"
+            "      integer x, y\n"
+            "cf2py intent(in) x\n"
+            "cf2py intent(out) y\n"
+            "      y = x + 1\n"
+            "      end\n"
+        )
+        crackfortran.reset_global_f2py_vars()
+        mod = crackfortran.crackfortran([str(f_path)])
+        assert mod[0]["name"] == "add_one"
+        assert mod[0]["vars"]["y"]["intent"] == ["out"]
+
 
 @pytest.mark.slow
 class TestUnicodeComment(util.F2PyTest):
