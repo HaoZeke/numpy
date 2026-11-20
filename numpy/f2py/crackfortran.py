@@ -3364,14 +3364,25 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         common = common2fortran(block['common'], tab + tabchar)
     if name == 'unknown_interface':
         name = ''
+    blockvars = block['vars']
     result = ''
     if 'result' in block:
-        result = f" result ({block['result']})"
-        if block['result'] not in argsl:
-            argsl.append(block['result'])
+        resname = block['result']
+        result = f" result ({resname})"
+        if resname not in argsl:
+            argsl.append(resname)
+        if (as_interface and blocktype == 'function'
+                and 'typespec' not in blockvars.get(resname, {})
+                and 'typespec' in blockvars.get(name, {})):
+            blockvars = dict(blockvars)
+            blockvars[resname] = appenddecl(
+                dict(blockvars.get(resname, {})), blockvars[name], force=0)
+    elif as_interface and blocktype == 'function' and name in blockvars:
+        if name not in argsl:
+            argsl.append(name)
     body = crack2fortrangen(block['body'], tab + tabchar, as_interface=as_interface)
     vars = vars2fortran(
-        block, block['vars'], argsl, tab + tabchar, as_interface=as_interface)
+        block, blockvars, argsl, tab + tabchar, as_interface=as_interface)
     mess = ''
     if 'from' in block and not as_interface:
         mess = f"! in {block['from']}"
@@ -3441,7 +3452,7 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
     ret = ''
     nout = []
     for a in args:
-        if a in block['vars']:
+        if a in vars:
             nout.append(a)
     if 'commonvars' in block:
         for a in block['commonvars']:

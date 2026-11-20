@@ -50,3 +50,41 @@ class TestF2cmapOption(TestAssumedShapeSumExample):
 
     def teardown_method(self):
         os.unlink(self.f2cmap_file.name)
+
+
+@pytest.mark.slow
+class TestAssumedShapeFunctionType(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+integer function count_items(b)
+  double precision, intent(in) :: b(:)
+  count_items = size(b)
+end function
+
+double precision function idx_sum(b)
+  double precision, intent(in) :: b(:)
+  idx_sum = sum(b)
+end function
+
+logical function has_items(b)
+  double precision, intent(in) :: b(:)
+  has_items = size(b) > 0
+end function
+
+integer function count_result(b) result(r)
+  double precision, intent(in) :: b(:)
+  r = size(b)
+end function
+"""
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("count_items", 3),
+            ("idx_sum", 6.0),
+            ("has_items", 1),
+            ("count_result", 3),
+        ],
+    )
+    def test_function_return_type(self, name, expected):
+        assert getattr(self.module, name)([1.0, 2.0, 3.0]) == expected
