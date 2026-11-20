@@ -845,6 +845,10 @@ def crackline(line, reset=0):
         if not skipemptyends:
             expectbegin = 1
     elif pat[1] == 'begin':
+        after = (m.group('after') or '').lstrip()
+        this = (m.group('this') or '').lower()
+        if this == 'type' and after[:1] == '=':
+            return
         if 0 <= skipblocksuntil <= groupcounter:
             groupcounter = groupcounter + 1
             return
