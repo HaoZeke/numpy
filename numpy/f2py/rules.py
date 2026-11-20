@@ -764,14 +764,19 @@ aux_rules = [
         'frompyobj': ['    /* Processing auxiliary variable #varname# */',
                       {debugcapi: '    fprintf(stderr,"#vardebuginfo#\\n");'}, ],
         'cleanupfrompyobj': '    /* End of cleaning variable #varname# */',
+        '_depend': '',
         'need': typedef_need_dict,
     },
     # Scalars (not complex)
     {  # Common
         'decl': '    #ctype# #varname# = 0;',
         'need': {hasinitvalue: 'math.h'},
+        '_check': l_and(isscalar, l_not(iscomplex)),
+    },
+    {
         'frompyobj': {hasinitvalue: '    #varname# = #init#;'},
         '_check': l_and(isscalar, l_not(iscomplex)),
+        '_depend': '',
     },
     {
         'return': ',#varname#',
@@ -783,8 +788,12 @@ aux_rules = [
     # Complex scalars
     {  # Common
         'decl': '    #ctype# #varname#;',
-        'frompyobj': {hasinitvalue: '    #varname#.r = #init.r#, #varname#.i = #init.i#;'},
         '_check': iscomplex
+    },
+    {
+        'frompyobj': {hasinitvalue: '    #varname#.r = #init.r#, #varname#.i = #init.i#;'},
+        '_check': iscomplex,
+        '_depend': '',
     },
     # String
     {  # Common
@@ -1560,8 +1569,11 @@ stnd = {1: 'st', 2: 'nd', 3: 'rd', 4: 'th', 5: 'th',
 def buildapi(rout):
     rout, wrap = func2subr.assubr(rout)
     args, depargs = getargs2(rout)
-    capi_maps.depargs = depargs
     var = rout['vars']
+    indep_aux = [a for a in depargs
+                 if isintent_aux(var[a]) and not var[a].get('depend')]
+    depargs = indep_aux + [a for a in depargs if a not in indep_aux]
+    capi_maps.depargs = depargs
 
     if ismoduleroutine(rout):
         module_name = rout['modulename']
@@ -1585,6 +1597,7 @@ def buildapi(rout):
         vrd = capi_maps.sign2map(a, var[a])
         if isintent_aux(var[a]):
             _rules = aux_rules
+            vrd['nth'] = 'auxiliary'
         else:
             _rules = arg_rules
             if not isintent_hide(var[a]):
