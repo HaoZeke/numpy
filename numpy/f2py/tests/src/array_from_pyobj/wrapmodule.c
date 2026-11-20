@@ -59,10 +59,13 @@ static PyObject *f2py_rout_wrap_call(PyObject *capi_self,
         goto fail;
     }
   }
-  capi_arr_tmp = ndarray_from_pyobj(type_num,elsize,dims,rank,intent|F2PY_INTENT_OUT,arr_capi,"wrap.call failed");
+  capi_arr_tmp = ndarray_from_pyobj(type_num,elsize,dims,rank,intent,arr_capi,"wrap.call failed");
   if (capi_arr_tmp == NULL) {
     free(dims);
     return NULL;
+  }
+  if ((PyObject *)capi_arr_tmp == arr_capi && !(intent & F2PY_INTENT_OUT)) {
+    Py_INCREF(capi_arr_tmp);
   }
   capi_buildvalue = Py_BuildValue("N",capi_arr_tmp);
   free(dims);

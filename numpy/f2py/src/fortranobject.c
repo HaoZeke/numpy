@@ -993,7 +993,8 @@ ndarray_from_pyobj(const int type_num,
             PyArray_ITEMSIZE(arr) == elsize &&
             ARRAY_ISCOMPATIBLE(arr,type_num) &&
             F2PY_CHECK_ALIGNMENT(arr, intent)) {
-            if ((intent & F2PY_INTENT_INOUT || intent & F2PY_INTENT_INPLACE)
+            if ((intent & (F2PY_INTENT_INOUT | F2PY_INTENT_INPLACE |
+                           F2PY_INTENT_OUT))
               ? ((intent & F2PY_INTENT_C) ? PyArray_ISCARRAY(arr) : PyArray_ISFARRAY(arr))
               : ((intent & F2PY_INTENT_C) ? PyArray_ISCARRAY_RO(arr) : PyArray_ISFARRAY_RO(arr))) {
                 if ((intent & F2PY_INTENT_OUT)) {

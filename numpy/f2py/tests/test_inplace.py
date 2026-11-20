@@ -47,3 +47,37 @@ class TestInplace(util.F2PyTest):
         ffunc = getattr(self.module, func)
         with pytest.raises(ValueError, match="input.*not compatible"):
             ffunc(np.array([1 + 1j]))
+
+
+@pytest.mark.slow
+class TestInOutReadOnly(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+    subroutine bump_f(a, m, n)
+      integer, intent(in) :: m, n
+      real(8) :: a(m, n)
+    !f2py intent(in,out) :: a
+      a = a + 1.0d0
+    end subroutine bump_f
+
+    subroutine bump_c(a, m, n)
+      integer, intent(in) :: m, n
+      real(8) :: a(m, n)
+    !f2py intent(in,out,c) :: a
+      a = a + 1.0d0
+    end subroutine bump_c
+    """
+
+    @pytest.mark.parametrize(("func", "order"), [
+        ("bump_f", "F"),
+        ("bump_c", "C"),
+    ])
+    def test_readonly_in_out_copies(self, func, order):
+        orig = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64, order=order)
+        arr = orig.copy(order=order)
+        arr.flags.writeable = False
+        out = getattr(self.module, func)(arr)
+        assert_array_equal(arr, orig)
+        assert_array_equal(out, orig + 1.0)
+        assert out is not arr
+        assert out.flags.writeable
