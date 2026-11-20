@@ -506,6 +506,7 @@ The following attributes can be used by F2PY.
   * If ``intent(copy)`` or ``intent(overwrite)`` is used, then an additional
     optional argument is introduced with a name ``overwrite_<argument name>``
     and a default value 0 or 1, respectively.
+    If both are given, ``intent(copy)`` takes precedence.
 
     * ``intent(inout,inplace)`` is ``intent(inplace)``;
 

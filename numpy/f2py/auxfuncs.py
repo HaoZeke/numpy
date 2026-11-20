@@ -500,7 +500,7 @@ def isintent_copy(var):
 
 
 def isintent_overwrite(var):
-    return 'overwrite' in var.get('intent', [])
+    return 'overwrite' in var.get('intent', []) and not isintent_copy(var)
 
 
 def isintent_callback(var):
