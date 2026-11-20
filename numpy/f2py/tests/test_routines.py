@@ -27,3 +27,19 @@ class TestRenamedSubroutine(util.F2PyTest):
     def test_renamed_subroutine(self):
         assert dir(self.module)
         assert self.module.subrout_default(200, 12) == 212
+
+
+@pytest.mark.slow
+class TestRenamedAssumedShape(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "routines", "assumed.f90"),
+        util.getpath("tests", "src", "routines", "assumed.pyf"),
+    ]
+    module_name = "assumed"
+
+    def test_renamed_assumed_shape(self):
+        assert self.module.renamed_sum([1.0, 2.0, 3.0]) == 6.0
+
+    def test_mixed_case_fortranname(self):
+        assert self.module.py_sum([1.0, 2.0, 3.0]) == 6.0
+        assert self.module.py_sum._cpointer is not None

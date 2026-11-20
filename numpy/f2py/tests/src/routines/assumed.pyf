@@ -1,0 +1,14 @@
+python module assumed
+    interface
+        subroutine renamed_sum(a, s)
+            fortranname shape_sum
+            real*8 dimension(:), intent(in) :: a
+            real*8 intent(out) :: s
+        end subroutine renamed_sum
+        subroutine py_sum(a, s)
+            fortranname SumArr
+            real*8 dimension(:), intent(in) :: a
+            real*8 intent(out) :: s
+        end subroutine py_sum
+    end interface
+end python module assumed

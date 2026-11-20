@@ -596,9 +596,9 @@ rout_rules = [
         },
         'initf2pywraphook': {l_not(l_or(ismoduleroutine, isdummyroutine)): '''
     {
-      extern void #F_FUNC#(#name_lower#,#NAME#)(void);
+      extern void #F_FUNC#(#fortranname_lower#,#FORTRANNAME#)(void);
       PyObject* o = PyDict_GetItemString(d,"#name#");
-      tmp = F2PyCapsule_FromVoidPtr((void*)#F_FUNC#(#name_lower#,#NAME#),NULL);
+      tmp = F2PyCapsule_FromVoidPtr((void*)#F_FUNC#(#fortranname_lower#,#FORTRANNAME#),NULL);
       PyObject_SetAttrString(o,"_cpointer", tmp);
       Py_DECREF(tmp);
       s = PyUnicode_FromString("#name#");

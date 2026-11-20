@@ -600,6 +600,8 @@ def routsign2map(rout):
            'endtitle': gentitle(f'end of {name}'),
            'fortranname': fname,
            'FORTRANNAME': fname.upper(),
+           # F_FUNC's first argument is the lowercase linker symbol.
+           'fortranname_lower': fname.lower(),
            'callstatement': getcallstatement(rout) or '',
            'usercode': getusercode(rout) or '',
            'usercode1': getusercode1(rout) or '',

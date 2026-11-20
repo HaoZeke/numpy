@@ -3346,7 +3346,9 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         if block['block'] == 'function' or argsl:
             args = f"({','.join(argsl)})"
     f2pyenhancements = ''
-    if 'f2pyenhancements' in block:
+    if as_interface and blocktype == 'subroutine':
+        name = getfortranname(block)
+    elif 'f2pyenhancements' in block:
         for k in list(block['f2pyenhancements'].keys()):
             f2pyenhancements = (f"{f2pyenhancements}{tab + tabchar}{k} "
                                 f"{block['f2pyenhancements'][k]}")
