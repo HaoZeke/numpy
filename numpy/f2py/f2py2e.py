@@ -705,33 +705,41 @@ def run_compile():
         if not pyf_files:
             outmess('Using meson backend\nWill pass --lower to f2py\nSee https://numpy.org/doc/stable/f2py/buildtools/meson.html\n')
             f2py_flags.append('--lower')
-            run_main(f" {' '.join(f2py_flags)} -m {modulename} {' '.join(sources)}".split())
+            modules = run_main(
+                f" {' '.join(f2py_flags)} -m {modulename} {' '.join(sources)}".split()
+            )
         else:
-            run_main(f" {' '.join(f2py_flags)} {' '.join(pyf_files)}".split())
+            modules = run_main(
+                f" {' '.join(f2py_flags)} {' '.join(pyf_files)}".split()
+            )
 
     # Order matters here, includes are needed for run_main above
     include_dirs, _, sources = get_newer_options(sources)
     # Now use the builder
-    builder = build_backend(
-        modulename,
-        sources,
-        extra_objects,
-        build_dir,
-        include_dirs,
-        library_dirs,
-        libraries,
-        define_macros,
-        undef_macros,
-        f2py_flags,
-        sysinfo_flags,
-        fc_flags,
-        flib_flags,
-        setup_flags,
-        remove_build_dir,
-        {"dependencies": dependencies},
-    )
+    for module_name in modules:
+        module_build_dir = build_dir
+        if len(modules) > 1:
+            module_build_dir = os.path.join(build_dir, module_name)
+        builder = build_backend(
+            module_name,
+            sources,
+            extra_objects,
+            module_build_dir,
+            include_dirs,
+            library_dirs,
+            libraries,
+            define_macros,
+            undef_macros,
+            f2py_flags,
+            sysinfo_flags,
+            fc_flags,
+            flib_flags,
+            setup_flags,
+            remove_build_dir,
+            {"dependencies": dependencies},
+        )
 
-    builder.compile()
+        builder.compile()
 
 
 def validate_modulename(pyf_files, modulename='untitled'):

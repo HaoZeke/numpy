@@ -234,6 +234,56 @@ def test_untitled_cli(capfd, hello_world_f90, monkeypatch):
         out, _ = capfd.readouterr()
         assert "untitledmodule.c" in out
 
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("module_name", "routine_name", "result"),
+    [("pyf_one", "first", 3), ("pyf_two", "second", 5)],
+)
+def test_multiple_pyf_modules(tmp_path, monkeypatch, module_name,
+                              routine_name, result):
+    if not util.has_fortran_compiler():
+        pytest.skip("CLI command needs a Fortran compiler")
+
+    source = tmp_path / "routines.f90"
+    source.write_text(textwrap.dedent("""
+        subroutine first(value)
+            integer, intent(out) :: value
+            value = 3
+        end subroutine
+
+        subroutine second(value)
+            integer, intent(out) :: value
+            value = 5
+        end subroutine
+    """))
+    signature = tmp_path / "routines.pyf"
+    signature.write_text(textwrap.dedent("""
+        python module pyf_one
+            interface
+                subroutine first(value)
+                    integer intent(out) :: value
+                end subroutine first
+            end interface
+        end python module pyf_one
+
+        python module pyf_two
+            interface
+                subroutine second(value)
+                    integer intent(out) :: value
+                end subroutine second
+            end interface
+        end python module pyf_two
+    """))
+    subprocess.check_call(
+        [sys.executable, "-m", "numpy.f2py", "-c", str(signature), str(source)],
+        cwd=tmp_path,
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    module = __import__(module_name)
+    assert getattr(module, routine_name)() == result
+
+
 @pytest.mark.slow
 def test_no_distutils_backend(capfd, hello_world_f90, monkeypatch):
     """Check that distutils backend and related options fail
