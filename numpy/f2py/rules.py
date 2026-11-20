@@ -1382,6 +1382,8 @@ def buildmodule(m, um):
                 del nb1['entry']
                 nb1['name'] = k
                 nb1['args'] = a
+                if 'externals' in nb1:
+                    nb1['externals'] = [e for e in nb1['externals'] if e in a]
                 nb_list.append(nb1)
         for nb in nb_list:
             # requiresf90wrapper must be called before buildapi as it
