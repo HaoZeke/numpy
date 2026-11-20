@@ -142,6 +142,7 @@ TODO:
 import codecs
 import copy
 import fileinput
+import keyword
 import os
 import platform
 import re
@@ -1340,7 +1341,7 @@ def analyzeline(m, case, line):
                     initexpr = initexpr[1:].lower().replace('d', 'e').\
                         replace(',', '+1j*(')
             try:
-                v = eval(initexpr, {}, params)
+                v = _eval_param_expr(initexpr, {}, params)
             except (SyntaxError, NameError, TypeError) as msg:
                 errmess(f'analyzeline: Failed to evaluate {initexpr!r}. '
                         f'Ignoring: {msg}\n')
@@ -2607,8 +2608,12 @@ def get_parameters(vars, global_params={}):
                 v = 8
             elif real8pattern.search(v):
                 v = 4
+            eval_params = (
+                {k: val for k, val in params.items() if k not in ('True', 'False')}
+                if islogical(vars[n]) else params
+            )
             try:
-                params[n] = param_eval(v, g_params, params, dimspec=dimspec)
+                params[n] = param_eval(v, g_params, eval_params, dimspec=dimspec)
             except Exception as msg:
                 params[n] = v
                 outmess(f'get_parameters: got "{msg}" on {n!r}\n')
@@ -2622,6 +2627,30 @@ def get_parameters(vars, global_params={}):
             print(vars[n])
             outmess(f'get_parameters:parameter {n!r} does not have value?!\n')
     return params
+
+
+_param_token_re = re.compile(
+    r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|(?<!\.)\b[A-Za-z_]\w*\b"
+)
+
+
+def _eval_param_expr(expr, g_params, params):
+    if isinstance(expr, str):
+        kw_names = [k for k in params if keyword.iskeyword(k)]
+        if kw_names:
+            aliases = {}
+            local_params = dict(params)
+            for k in kw_names:
+                alias = f'_f2py_kw_{k}'
+                while alias in local_params or alias in g_params:
+                    alias = '_' + alias
+                aliases[k] = alias
+                local_params[alias] = params[k]
+            expr = _param_token_re.sub(
+                lambda m: aliases.get(m.group(0), m.group(0)), expr
+            )
+            params = local_params
+    return eval(expr, g_params, params)
 
 
 def _eval_length(length, params):
@@ -2638,7 +2667,7 @@ def _eval_scalar(value, params):
         value = value.split('_')[0]
     try:
         # TODO: use symbolic from PR #19805
-        value = eval(value, {}, params)
+        value = _eval_param_expr(value, {}, params)
         value = (repr if isinstance(value, str) else str)(value)
     except (NameError, SyntaxError, TypeError):
         return value
@@ -2715,7 +2744,7 @@ def analyzevars(block):
             if 'len' in vars[n]['charselector']:
                 l = vars[n]['charselector']['len']
                 try:
-                    l = str(eval(l, {}, params))
+                    l = str(_eval_param_expr(l, {}, params))
                 except Exception:
                     pass
                 vars[n]['charselector']['len'] = l
@@ -2724,7 +2753,7 @@ def analyzevars(block):
             if 'kind' in vars[n]['kindselector']:
                 l = vars[n]['kindselector']['kind']
                 try:
-                    l = str(eval(l, {}, params))
+                    l = str(_eval_param_expr(l, {}, params))
                 except Exception:
                     pass
                 vars[n]['kindselector']['kind'] = l
@@ -2996,7 +3025,7 @@ def analyzevars(block):
                         if kindselect:
                             if 'kind' in kindselect:
                                 try:
-                                    kindselect['kind'] = eval(
+                                    kindselect['kind'] = _eval_param_expr(
                                         kindselect['kind'], {}, params)
                                 except Exception:
                                     pass
@@ -3067,7 +3096,7 @@ def param_eval(v, g_params, params, dimspec=None):
     """
     if dimspec is None:
         try:
-            p = eval(v, g_params, params)
+            p = _eval_param_expr(v, g_params, params)
         except Exception as msg:
             p = v
             outmess(f'param_eval: got "{msg}" on {v!r}\n')
@@ -3098,7 +3127,7 @@ def param_eval(v, g_params, params, dimspec=None):
     v_eval = []
     for item in v:
         try:
-            item = eval(item, g_params, params)
+            item = _eval_param_expr(item, g_params, params)
         except Exception as msg:
             outmess(f'param_eval: got "{msg}" on {item!r}\n')
         v_eval.append(item)

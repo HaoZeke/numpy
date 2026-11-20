@@ -51,3 +51,21 @@ class TestKind(util.F2PyTest):
             assert selectedrealkind(i) == selected_real_kind(
                 i
             ), f"selectedrealkind({i}): expected {selected_real_kind(i)!r} but got {selectedrealkind(i)!r}"
+
+
+class TestKindKeywordName(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "kind", "keyword_name.f90")]
+
+    @pytest.mark.parametrize("name, arg, expected",
+                             [("half_is", 30000, 15000),
+                              ("prefix_is", 30000, 15000),
+                              ("third_in", 1.0, 1 / 3)])
+    def test_kind_named_like_python_keyword(self, name, arg, expected):
+        assert getattr(self.module.keyword_funcs, name)(arg) == expected
+
+    @pytest.mark.parametrize("name", ["third_expr", "third_derived"])
+    def test_keyword_kind_expressions(self, name):
+        assert getattr(self.module, name)(1.0) == 1 / 3
+
+    def test_keyword_char_len(self):
+        assert self.module.echo_len(b"abcde") == b"abcde"
