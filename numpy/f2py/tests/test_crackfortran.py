@@ -528,6 +528,22 @@ class TestParamEval:
                       dimspec=dimspec)
 
 
+class TestParameterIntrinsicCall:
+    def test_character_parameter_max(self, tmp_path):
+        fpath = tmp_path / "charmax.f90"
+        fpath.write_text("""
+subroutine charmax(c)
+  character(len=1) a, b, m
+  parameter (a = 'x', b = 'y')
+  parameter (m = max(a, b))
+  character(len=1), intent(out) :: c
+  c = m
+end subroutine
+""")
+        mod = crackfortran.crackfortran([str(fpath)])
+        assert mod[0]["name"] == "charmax"
+
+
 class TestParamParseNestedParens:
     # issue gh-28095: grouping parens in a dimension expression such as
     # (mx_supply_curves + mx_intl_curves) must fold to a concrete size,

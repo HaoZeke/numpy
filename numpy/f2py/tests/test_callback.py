@@ -260,3 +260,112 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestCallbackIntrinsicArg(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+subroutine call_size(f, b, c)
+  external f
+  double precision, intent(in) :: b(:)
+  double precision, intent(out) :: c
+  call f(b, size(b), c)
+end subroutine
+
+subroutine call_ubound(f, b, c)
+  external f
+  double precision, intent(in) :: b(:)
+  double precision, intent(out) :: c
+  call f(b, ubound(b, 1), c)
+end subroutine
+
+integer function call_size_function(f, b, n)
+  integer f
+  external f
+  integer, intent(in) :: n
+  double precision, intent(in) :: b(n)
+  call_size_function = f(size(b))
+end function
+
+subroutine call_int_kind8(f, x, c)
+  external f
+  double precision, intent(in) :: x
+  integer(8), intent(out) :: c
+  call f(int(x, kind=8), c)
+end subroutine
+
+subroutine call_mod_real(f, x, c)
+  external f
+  real, intent(in) :: x
+  real, intent(out) :: c
+  call f(mod(x, 2.0), c)
+end subroutine
+
+subroutine call_mod_real8(f, x, c)
+  external f
+  real(8), intent(in) :: x
+  real(8), intent(out) :: c
+  call f(mod(x, 2.0_8), c)
+end subroutine
+
+subroutine call_max_real(f, a, b, c)
+  external f
+  real, intent(in) :: a, b
+  real, intent(out) :: c
+  call f(max(a, b), c)
+end subroutine
+
+subroutine call_size_array(f, size, n, c)
+  external f
+  integer, intent(in) :: n
+  double precision, intent(in) :: size(n)
+  double precision, intent(out) :: c
+  call f(size(2), c)
+end subroutine
+
+subroutine call_size_times_real(f, b, c)
+  external f
+  double precision, intent(in) :: b(:)
+  double precision, intent(out) :: c
+  call f(size(b) * (2.5), c)
+end subroutine
+
+subroutine call_array_and_element(f, a, c)
+  external f
+  double precision, intent(in) :: a(3)
+  double precision, intent(out) :: c
+  call f(a, a(2), c)
+end subroutine
+"""
+
+    @pytest.mark.parametrize("name", ["call_size", "call_ubound"])
+    def test_integer_intrinsic_argument(self, name):
+        assert getattr(self.module, name)(lambda b, n: n, [1.0, 2.0, 3.0]) == 3
+
+    def test_integer_intrinsic_function_argument(self):
+        assert self.module.call_size_function(lambda n: n, [1.0, 2.0, 3.0]) == 3
+
+    def test_integer_intrinsic_kind8(self):
+        assert self.module.call_int_kind8(lambda n: n, 5.0e9) == 5_000_000_000
+
+    def test_arg_typed_intrinsics(self):
+        assert self.module.call_mod_real(lambda v: v, 5.0) == 1.0
+        assert self.module.call_mod_real8(lambda v: v, 5.5) == 1.5
+        assert self.module.call_max_real(lambda v: v, 2.5, 5.5) == 5.5
+
+    def test_user_array_named_size(self):
+        assert self.module.call_size_array(lambda v: v, [1.5, 2.5, 3.5]) == 2.5
+
+    def test_compound_expression_argument(self):
+        assert self.module.call_size_times_real(lambda v: v, [1.0, 2.0, 3.0]) == 7.5
+
+    def test_array_argument_keeps_dimension(self):
+        seen = []
+
+        def f(a, a2):
+            seen.append((list(a), a2))
+            return a2
+
+        assert self.module.call_array_and_element(f, [1.0, 2.0, 3.0]) == 2.0
+        assert seen == [([1.0, 2.0, 3.0], 2.0)]

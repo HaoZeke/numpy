@@ -699,15 +699,6 @@ def mask_string_literals(expr):
     return _quoted_string_re.sub("''", expr)
 
 
-def _simplifyargs(argsline):
-    a = []
-    for n in markoutercomma(argsline).split('@,@'):
-        for r in '(),':
-            n = n.replace(r, '_')
-        a.append(n)
-    return ','.join(a)
-
-
 crackline_re_1 = re.compile(r'\s*(?P<result>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bind_1 = re.compile(r'\s*(?P<bind>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bindlang = re.compile(r'\s*bind\(\s*(?P<lang>[^,]+)\s*,\s*name\s*=\s*"(?P<lang_name>[^"]+)"\s*\)', re.I)
@@ -807,7 +798,7 @@ def crackline(line, reset=0):
                     markouterparen(line), re.I)
                 if m1:
                     m2 = re_1.match(m1.group('before'))
-                    a = _simplifyargs(m1.group('args'))
+                    a = m1.group('args')
                     if m2:
                         line = f"callfun {name}({a}) result ({m2.group('result')})"
                     else:
@@ -952,7 +943,8 @@ operatorpattern = re.compile(
     r'\s*(?P<scheme>(operator|assignment))'
     r'@\(@\s*(?P<name>[^)]+)\s*@\)@\s*\Z', re.I)
 callnameargspattern = re.compile(
-    r'\s*(?P<name>\b[\w$]+\b)\s*@\(@\s*(?P<args>.*)\s*@\)@\s*\Z', re.I)
+    r'\s*(?P<name>\b[\w$]+\b)\s*@\(@\s*(?P<args>(?:(?!@\)@).)*?)\s*@\)@'
+    r'(?:\s*result\s*@\(@\s*(?P<result>\b[\w$]+\b)\s*@\)@)?\s*\Z', re.I)
 real16pattern = re.compile(
     r'([-+]?(?:\d+(?:\.\d*)?|\d*\.\d+))[dD]((?:[-+]?\d+)?)')
 real8pattern = re.compile(
@@ -1000,7 +992,7 @@ def _resolvenameargspattern(line):
         return name, [], None, None
     m1 = callnameargspattern.match(line)
     if m1:
-        return m1.group('name'), m1.group('args'), None, None
+        return m1.group('name'), m1.group('args'), m1.group('result'), None
     return None, [], None, None
 
 
@@ -3255,6 +3247,91 @@ determineexprtype_re_3 = re.compile(
     r'\A[+-]?[\d.]+[-\d+de.]*(_(?P<name>\w+)|)\Z', re.I)
 determineexprtype_re_4 = re.compile(r'\A\(.*\)\Z', re.I)
 determineexprtype_re_5 = re.compile(r'\A(?P<name>\w+)\s*\(.*?\)\s*\Z', re.I)
+_integer_intrinsics = frozenset((
+    'size', 'lbound', 'ubound', 'count', 'ceiling', 'floor', 'scan', 'verify',
+    'len', 'len_trim', 'index', 'int', 'nint', 'ichar', 'iachar', 'kind'))
+_arg_typed_intrinsics = frozenset(('mod', 'modulo', 'max', 'min'))
+_kind_kw_re = re.compile(r'\Akind\s*=\s*(?P<kind>\w+)\Z', re.I)
+_dp_lit_re = re.compile(r'\A[+-]?(?:\d+(?:\.\d*)?|\.\d+)d[+-]?\d+\Z', re.I)
+
+
+def _is_single_call(expr):
+    """Return True when the opening '(' closes at the final ')'."""
+    start = expr.find('(')
+    if start < 0 or not expr.endswith(')'):
+        return False
+    depth = 0
+    i = start
+    n = len(expr)
+    while i < n:
+        c = expr[i]
+        if c in "\"'":
+            quote = c
+            i += 1
+            while i < n:
+                if expr[i] == quote:
+                    if i + 1 < n and expr[i + 1] == quote:
+                        i += 2
+                        continue
+                    break
+                i += 1
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return i == n - 1
+        i += 1
+    return False
+
+
+def _integer_intrinsic_typespec(expr, vars):
+    inner = expr[expr.find('(') + 1:expr.rfind(')')]
+    for part in markoutercomma(inner).split('@,@'):
+        m = _kind_kw_re.match(part.strip())
+        if m:
+            k = m.group('kind')
+            if k.isdigit() or k in vars or k.lower() in vars:
+                return {'typespec': 'integer', 'kindselector': {'kind': k}}
+    return {'typespec': 'integer'}
+
+
+def _arg_typespec(expr, vars, rules):
+    """Infer numeric type of mod, modulo, max, or min from its arguments."""
+    inner = expr[expr.find('(') + 1:expr.rfind(')')]
+    rank = {
+        ('integer', False): 1,
+        ('integer', True): 2,
+        ('real', False): 3,
+        ('real', True): 4,
+        ('double precision', False): 4,
+        ('double precision', True): 4,
+        ('complex', False): 5,
+        ('complex', True): 6,
+        ('double complex', False): 6,
+        ('double complex', True): 6,
+    }
+    best_rank = 0
+    best_type = {'typespec': 'integer'}
+    for part in markoutercomma(inner).split('@,@'):
+        part = part.strip()
+        if not part:
+            continue
+        if _dp_lit_re.match(part):
+            t = {'typespec': 'double precision'}
+        else:
+            t = determineexprtype(part, vars, rules) or {}
+        spec = t.get('typespec')
+        ks = t.get('kindselector')
+        kind_val = str(ks.get('kind', ks.get('*', ''))).strip() if ks else ''
+        is_wide = kind_val in ('8', '16')
+        r = rank.get((spec, is_wide), 0)
+        if r > best_rank or (r == best_rank and ks and 'kindselector' not in best_type):
+            best_rank = r
+            best_type = {'typespec': spec}
+            if ks:
+                best_type['kindselector'] = dict(ks)
+    return best_type
 
 
 def _ensure_exprdict(r):
@@ -3264,6 +3341,8 @@ def _ensure_exprdict(r):
         return {'typespec': 'real'}
     if isinstance(r, complex):
         return {'typespec': 'complex'}
+    if isinstance(r, str):
+        return {'typespec': 'character'}
     if isinstance(r, dict):
         return r
     raise AssertionError(repr(r))
@@ -3298,12 +3377,24 @@ def determineexprtype(expr, vars, rules={}):
         m = determineexprtype_re_5.match(expr)
         if m:
             rn = m.group('name')
-            t = determineexprtype(m.group('name'), vars, rules)
+            low = rn.lower()
+            mapped = badnames.get(low, low)
+            is_user_var = rn in vars or low in vars or mapped in vars
+            if not is_user_var and _is_single_call(expr):
+                if low in _integer_intrinsics:
+                    return _integer_intrinsic_typespec(expr, vars)
+                if low in _arg_typed_intrinsics:
+                    return _arg_typespec(expr, vars, rules)
+            lookup = (rn if rn in vars else
+                      low if low in vars else
+                      mapped if mapped in vars else rn)
+            t = determineexprtype(lookup, vars, rules)
             if t and 'attrspec' in t:
+                t = dict(t)
                 del t['attrspec']
             if not t:
-                if rn[0] in rules:
-                    return _ensure_exprdict(rules[rn[0]])
+                if rules and low[0] in rules:
+                    return _ensure_exprdict(rules[low[0]])
     if expr[0] in '\'"':
         return {'typespec': 'character', 'charselector': {'*': '*'}}
     if not t:
