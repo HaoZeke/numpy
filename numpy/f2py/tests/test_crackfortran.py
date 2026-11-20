@@ -399,6 +399,56 @@ class TestFortranReader(util.F2PyTest):
         mod = crackfortran.crackfortran([str(f_path)])
         assert mod[0]['name'] == 'foo'
 
+    @pytest.mark.parametrize("ext, code, expected", [
+        (".f90", ("subroutine foo(x)\n"
+                  "  integer, parameter :: m = len('a\tb')\n"
+                  "  real, intent(out) :: x(m)\n"
+                  "end subroutine foo\n"),
+         ['3']),
+        (".f", ("\tsubroutine foo(x)\n"
+                "\tinteger m\n"
+                "\tparameter (m = len(\"a\tb\"))\n"
+                "\treal x(m)\n"
+                "\tend\n"),
+         ['3']),
+        (".f90", ("subroutine foo(x)\n"
+                  "  integer, parameter :: m = len('a\t&\n"
+                  "      &b')\n"
+                  "  real, intent(out) :: x(m)\n"
+                  "end subroutine foo\n"),
+         ['3']),
+        (".f90", ("subroutine foo(x)\n"
+                  "  integer, parameter :: m = len('a&\n"
+                  "      &b') + len('c\td')\n"
+                  "  real, intent(out) :: x(m)\n"
+                  "end subroutine foo\n"),
+         ['5']),
+        (".f90", ("subroutine foo(x)\n"
+                  "  integer, parameter :: m = len('a&\n"
+                  "       &\tb')\n"
+                  "  real, intent(out) :: x(m)\n"
+                  "end subroutine foo\n"),
+         ['3']),
+        (".f", ("      subroutine foo(x)\n"
+                "      integer m\n"
+                "      parameter (m = len('a\n"
+                "     &\tb'))\n"
+                "      real x(m)\n"
+                "      end\n"),
+         ['4']),
+        (".f", ("      subroutine foo(x)\n"
+                "      integer m\n"
+                "      parameter (m = " + " " * 35 + "len('a'\t) + 100)\n"
+                "      real x(m)\n"
+                "      end\n"),
+         ['101']),
+    ])
+    def test_tab_in_string(self, tmp_path, ext, code, expected):
+        f_path = tmp_path / f"foo{ext}"
+        f_path.write_text(code)
+        mod = crackfortran.crackfortran([str(f_path)])
+        assert mod[0]['vars']['x']['dimension'] == expected
+
 
 @pytest.mark.slow
 class TestUnicodeComment(util.F2PyTest):

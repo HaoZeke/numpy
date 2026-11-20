@@ -418,7 +418,24 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             outmess(f"\tReading file {currentfilename!r} "
                     f"(format:{sourcecodeform}{',strict' if strictf77 else ''})\n")
 
-        l = l.expandtabs().replace('\xa0', ' ')
+        if '\t' in l:
+            if (sourcecodeform == 'fix' and (not cont or strictf77)
+                    and len(l) > 5 and l[5] not in (' ', '0', '\t')
+                    and (l[:5] == '     '
+                         or (l[0] in ('*', 'c', '!', 'C', '#')
+                             and l[1:5].lower() == 'f2py'))):
+                l = l[:6] + _expand_tabs_outside_quotes(
+                    l[6:], _open_quote(ll), col=6)
+            elif cont and not l.lstrip().startswith('!'):
+                l = _expand_tabs_outside_quotes(l, _open_quote(ll))
+            elif cont and l.lstrip()[:5].lower() == '!f2py':
+                idx = l.lower().index('!f2py') + 5
+                prefix = l[:idx].expandtabs()
+                l = prefix + _expand_tabs_outside_quotes(
+                    l[idx:], _open_quote(ll), col=len(prefix))
+            else:
+                l = _expand_tabs_outside_quotes(l)
+        l = l.replace('\xa0', ' ')
         # Get rid of newline characters
         while not l == '':
             if l[-1] not in "\n\r\f":
@@ -680,6 +697,43 @@ def split_by_unquoted(line, characters):
         d = m.groupdict()
         return (d["before"], d["after"])
     return (line, "")
+
+
+def _open_quote(line):
+    """Return the unclosed quote delimiter ("'" or '"') in *line*, or ''."""
+    quote = ''
+    for ch in line:
+        if quote:
+            if ch == quote:
+                quote = ''
+        elif ch in '\'"':
+            quote = ch
+    return quote
+
+
+def _expand_tabs_outside_quotes(line, quote='', col=0):
+    """Expand tabs outside Fortran character literals, preserving tab stops."""
+    if '\t' not in line:
+        return line
+    out = []
+    for ch in line:
+        if quote:
+            out.append(ch)
+            col += 1
+            if ch == quote:
+                quote = ''
+        elif ch in '\'"':
+            quote = ch
+            out.append(ch)
+            col += 1
+        elif ch == '\t':
+            n = 8 - (col % 8)
+            out.append(' ' * n)
+            col += n
+        else:
+            out.append(ch)
+            col += 1
+    return ''.join(out)
 
 
 _quoted_string_re = re.compile(
