@@ -430,7 +430,7 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                                       set_data, &flag);
             }
             else { /* deallocate */
-                for (k = 0; k < fp->defs[i].rank; k++) dims[k] = 0;
+                for (k = 0; k < fp->defs[i].rank; k++) dims[k] = -2;
                 (*(fp->defs[i].func))(&fp->defs[i].rank, dims, set_data,
                                       &flag);
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = -1;

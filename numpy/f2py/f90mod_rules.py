@@ -44,6 +44,9 @@ fgetdims1 = f"""\
       logical ns
       integer r,i
       integer({np.intp().itemsize}) s(*)
+      if (s(1).lt.-1) then
+         if (allocated(d)) deallocate(d)
+      end if
       ns = .FALSE.
       if (allocated(d)) then
          do i=1,r
@@ -55,7 +58,7 @@ fgetdims1 = f"""\
             deallocate(d)
          end if
       end if
-      if ((.not.allocated(d)).and.(s(1).ge.1)) then"""
+      if ((.not.allocated(d)).and.(s(1).ge.0)) then"""
 
 fgetdims2 = """\
       end if
