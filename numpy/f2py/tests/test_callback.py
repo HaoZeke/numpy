@@ -1,5 +1,6 @@
 import math
 import platform
+import subprocess
 import sys
 import textwrap
 import threading
@@ -260,3 +261,61 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("via_pyf", [False, True])
+def test_same_name_module_callbacks(tmp_path, via_pyf):
+    src = tmp_path / "mods.f90"
+    src.write_text(textwrap.dedent("""\
+        module m1
+        contains
+          subroutine apply(f, x, y)
+            external f
+            integer, intent(in) :: x
+            integer, intent(out) :: y
+            integer :: f
+            y = f(x)
+          end subroutine apply
+          subroutine run(f, x, y)
+            external f
+            integer, intent(in) :: x
+            integer, intent(out) :: y
+            integer :: f
+            y = f(x)
+          end subroutine run
+        end module m1
+        module m2
+        contains
+          subroutine apply(f, x, y)
+            external f
+            real(8), intent(in) :: x
+            real(8), intent(out) :: y
+            real(8) :: f
+            y = f(x)
+          end subroutine apply
+          subroutine run(g, x, y)
+            external g
+            integer, intent(in) :: x
+            integer, intent(out) :: y
+            integer :: g
+            y = g(x)
+          end subroutine run
+        end module m2
+    """))
+    modname = f"same_name_cb_{int(via_pyf)}"
+    sources = [str(src)]
+    if via_pyf:
+        sig = tmp_path / f"{modname}.pyf"
+        subprocess.run(
+            [sys.executable, "-m", "numpy.f2py", "-m", modname, "-h", str(sig), str(src)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        sources = [str(sig), str(src)]
+    mod = util.build_module(sources, module_name=modname)
+    assert mod.m1.apply(lambda t: t + 1, 5) == 6
+    assert mod.m2.apply(lambda t: t + 1.5, 2.0) == 3.5
+    assert mod.m1.run(lambda t: t * 2, 4) == 8
+    assert mod.m2.run(lambda t: t * 3, 4) == 12
