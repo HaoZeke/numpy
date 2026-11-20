@@ -12,6 +12,8 @@ __version__ = "$Revision: 1.27 $"[10:-1]
 
 f2py_version = 'See `f2py -v`'
 
+import hashlib
+
 import numpy as np
 
 from . import capi_maps, func2subr
@@ -227,19 +229,23 @@ def buildhooks(pymod):
         cadd('\t{NULL}\n};\n')
         iadd('}')
         m_name = m['name']
+        init = f"f2pyinit{m_name}"
+        if len(init) > 63:
+            folded = f"f2pyinit{m_name.lower()}"
+            digest = hashlib.sha1(folded.encode('ascii')).hexdigest()[:8]
+            keep = 63 - len(digest) - 1
+            init = f"{folded[:keep]}_{digest}"
         sargs_str = ','.join(sargs)
         ihooks[0] = (f'static void f2py_setup_{m_name}({sargs_str}) '
                      f'{{\n\tint i_f2py=0;{ihooks[0]}')
-        if '_' in m_name:
+        if '_' in init:
             F_FUNC = 'F_FUNC_US'
         else:
             F_FUNC = 'F_FUNC'
         sargsp_str = ','.join(sargsp)
-        iadd(f'extern void {F_FUNC}(f2pyinit{m_name},'
-             f'F2PYINIT{m_name.upper()})(void (*)({sargsp_str}));')
+        iadd(f'extern void {F_FUNC}({init},{init.upper()})(void (*)({sargsp_str}));')
         iadd(f'static void f2py_init_{m_name}(void) {{')
-        iadd(f'\t{F_FUNC}(f2pyinit{m_name},'
-             f'F2PYINIT{m_name.upper()})(f2py_setup_{m_name});')
+        iadd(f'\t{F_FUNC}({init},{init.upper()})(f2py_setup_{m_name});')
         iadd('}\n')
         ret['f90modhooks'] = ret['f90modhooks'] + chooks + ihooks
         ret['initf90modhooks'] = [
@@ -251,10 +257,14 @@ def buildhooks(pymod):
             '\t}',
         ] + ret["initf90modhooks"]
         fadd('')
-        fadd(f"subroutine f2pyinit{m_name}(f2pysetupfunc)")
+        fadd(f"subroutine {init}(f2pysetupfunc)")
         if mfargs:
             for a in undo_rmbadname(mfargs):
-                fadd(f"use {m_name}, only : {a}")
+                line = f"use {m_name}, only : {a}"
+                if len(line) <= 132 and len(f"      {line}") > 72:
+                    fhooks[0] = f"{fhooks[0]}\n{line}"
+                else:
+                    fadd(line)
         if ifargs:
             fadd(' '.join(['interface'] + ifargs))
             fadd('end interface')
@@ -263,7 +273,7 @@ def buildhooks(pymod):
             for a in undo_rmbadname(efargs):
                 fadd(f'external {a}')
         fadd(f"call f2pysetupfunc({','.join(undo_rmbadname(fargs))})")
-        fadd(f"end subroutine f2pyinit{m_name}\n")
+        fadd(f"end subroutine {init}\n")
 
         dadd('\n'.join(ret['latexdoc']).replace(
             r'\subsection{', r'\subsubsection{'))
