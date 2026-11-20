@@ -3255,6 +3255,61 @@ determineexprtype_re_3 = re.compile(
     r'\A[+-]?[\d.]+[-\d+de.]*(_(?P<name>\w+)|)\Z', re.I)
 determineexprtype_re_4 = re.compile(r'\A\(.*\)\Z', re.I)
 determineexprtype_re_5 = re.compile(r'\A(?P<name>\w+)\s*\(.*?\)\s*\Z', re.I)
+_determineexprtype_logical_re = re.compile(
+    r'\.(?:and|or|not|eqv|neqv|eq|ne|lt|le|gt|ge)\.|==|/=|<=|>=|(?<!=)>|<',
+    re.I)
+
+
+def _mask_toplevel(expr):
+    """Blank quoted text and parenthesized groups.
+
+    A logical operator inside a call or a character literal does not
+    decide the type of the surrounding expression.
+    """
+    out = []
+    i = 0
+    n = len(expr)
+    while i < n:
+        c = expr[i]
+        if c in "\"'":
+            quote = c
+            i += 1
+            while i < n:
+                if expr[i] == quote:
+                    if i + 1 < n and expr[i + 1] == quote:
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            out.append("''")
+            continue
+        if c == '(':
+            depth = 1
+            i += 1
+            while i < n and depth:
+                if expr[i] in "\"'":
+                    quote = expr[i]
+                    i += 1
+                    while i < n:
+                        if expr[i] == quote:
+                            if i + 1 < n and expr[i + 1] == quote:
+                                i += 2
+                                continue
+                            i += 1
+                            break
+                        i += 1
+                    continue
+                if expr[i] == '(':
+                    depth += 1
+                elif expr[i] == ')':
+                    depth -= 1
+                i += 1
+            out.append('()')
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
 
 
 def _ensure_exprdict(r):
@@ -3273,6 +3328,10 @@ def determineexprtype(expr, vars, rules={}):
     if expr in vars:
         return _ensure_exprdict(vars[expr])
     expr = expr.strip()
+    bare = _mask_toplevel(expr)
+    if (bare.lower().startswith(('.true.', '.false.'))
+            or _determineexprtype_logical_re.search(bare)):
+        return {'typespec': 'logical'}
     if determineexprtype_re_1.match(expr):
         return {'typespec': 'complex'}
     m = determineexprtype_re_2.match(expr)

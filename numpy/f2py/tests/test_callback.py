@@ -260,3 +260,46 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestCallbackLogicalArgument(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+subroutine call_true(f, r)
+  external f
+  integer, intent(out) :: r
+  call f(.true., r)
+end subroutine
+
+subroutine call_and(f, r)
+  external f
+  integer, intent(out) :: r
+  call f(.true. .and. .not. .false., r)
+end subroutine
+
+subroutine call_cmp(f, r)
+  external f
+  integer, intent(out) :: r
+  call f(1 .gt. 0, r)
+end subroutine
+
+subroutine call_eq_op(f, r)
+  external f
+  integer, intent(out) :: r
+  call f(1 == 1, r)
+end subroutine
+
+integer function call_true_function(f)
+  integer f
+  external f
+  call_true_function = f(.true.)
+end function
+"""
+
+    @pytest.mark.parametrize(
+        "name",
+        ["call_true", "call_and", "call_cmp", "call_eq_op", "call_true_function"],
+    )
+    def test_logical_arguments(self, name):
+        assert getattr(self.module, name)(lambda flag: flag + 4) == 5

@@ -563,6 +563,15 @@ class TestParamParseNestedParens:
         assert vs["dimension"] == ["26", "1800"]
 
 
+@pytest.mark.parametrize(
+    "expr",
+    [".true.", ".false.", ".true._4", ".not.(.true. .and. .false.)", "a .eqv. b", "x < y"],
+)
+def test_determineexprtype_logical(expr):
+    got = crackfortran.determineexprtype(expr, {}, crackfortran.defaultimplicitrules)
+    assert got.get("typespec") == "logical"
+
+
 @pytest.mark.slow
 class TestLowerF2PYDirective(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "gh27697.f90")]
