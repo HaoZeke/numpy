@@ -590,6 +590,31 @@ def preparse_sysargv():
         "modulename": args.module_name,
     }
 
+def _backend_include_dirs(include_dirs, build_dir, remove_build_dir):
+    """Resolve include directories for the backend build."""
+    build_dir_path = Path(build_dir).resolve()
+    build_dir_exists = build_dir_path.is_dir()
+    backend_include_dirs = []
+    for path in include_dirs:
+        candidates = []
+        if not remove_build_dir and not os.path.isabs(path):
+            candidate = build_dir_path / path
+            if (candidate if build_dir_exists else candidate.resolve()).is_dir():
+                candidates.append(candidate.resolve())
+        resolved = Path(path).resolve()
+        if not candidates or resolved.is_dir():
+            candidates.append(resolved)
+        for directory in candidates:
+            inc = (
+                str(directory.relative_to(build_dir_path))
+                if directory.is_relative_to(build_dir_path)
+                else str(directory)
+            )
+            if inc not in backend_include_dirs:
+                backend_include_dirs.append(inc)
+    return backend_include_dirs
+
+
 def run_compile():
     """
     Do it all in one call!
@@ -714,13 +739,9 @@ def run_compile():
         else:
             run_main(f2py_flags + include_flags + pyf_files)
 
-    build_dir_path = Path(build_dir).resolve()
-    backend_include_dirs = [
-        str(inc_path.relative_to(build_dir_path))
-        if inc_path.is_relative_to(build_dir_path)
-        else str(inc_path)
-        for inc_path in (Path(path).resolve() for path in include_dirs)
-    ]
+    backend_include_dirs = _backend_include_dirs(
+        include_dirs, build_dir, remove_build_dir
+    )
     # Now use the builder
     builder = build_backend(
         modulename,

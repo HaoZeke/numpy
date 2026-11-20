@@ -716,16 +716,33 @@ def test_cli_obj(capfd, hello_world_f90, monkeypatch):
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("modname", "flag", "use_relative"),
+    ("modname", "flag", "use_relative", "build_dir", "files", "expected"),
     [
-        ("pyf_include_abs", "--include-paths", False),
-        ("pyf_include_rel", "-I", True),
+        ("pyf_include_abs", "--include-paths", False, None, {"include/step.inc": 1}, 2),
+        ("pyf_include_rel", "-I", True, None, {"include/step.inc": 1}, 2),
+        ("pyf_include_bd", "-I", True, "bd", {"bd/include/step.inc": 2}, 3),
+        (
+            "pyf_include_both", "-I", True, "bd",
+            {
+                "include/step.inc": 1,
+                "include/extra.inc": 10,
+                "bd/include/step.inc": 2,
+            },
+            13,
+        ),
     ],
 )
-def test_pyf_include_path(tmp_path, monkeypatch, modname, flag, use_relative):
+def test_pyf_include_path(
+    tmp_path, monkeypatch, modname, flag, use_relative,
+    build_dir, files, expected,
+):
+    for rel_path, step in files.items():
+        path = tmp_path / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"x = x + {step}\n")
     include_dir = tmp_path / "include"
-    include_dir.mkdir()
-    (include_dir / "part.pyf").write_text(
+    pyf_dir = include_dir if include_dir.is_dir() else tmp_path
+    (pyf_dir / "part.pyf").write_text(
         "subroutine plusone(x)\n"
         "    integer intent(in,out) :: x\n"
         "end subroutine plusone\n"
@@ -737,26 +754,55 @@ def test_pyf_include_path(tmp_path, monkeypatch, modname, flag, use_relative):
         "    end interface\n"
         f"end python module {modname}\n"
     )
+    extra = "    include 'extra.inc'\n" if "include/extra.inc" in files else ""
     (tmp_path / "plusone.f90").write_text(
         "subroutine plusone(x)\n"
         "    integer, intent(inout) :: x\n"
-        "    x = x + 1\n"
+        "    include 'step.inc'\n"
+        f"{extra}"
         "end subroutine plusone\n"
     )
     inc_arg = "include" if use_relative else str(include_dir)
+    argv = [
+        "f2py", "-c", "-m", modname, "module.pyf", "plusone.f90",
+        flag, inc_arg, "--backend", "meson",
+    ]
+    if build_dir is not None:
+        argv.extend(["--build-dir", build_dir])
     monkeypatch.chdir(tmp_path)
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "f2py", "-c", "-m", modname, "module.pyf", "plusone.f90",
-            flag, inc_arg, "--backend", "meson",
-        ],
-    )
+    monkeypatch.setattr(sys, "argv", argv)
     compiler_check_f2pycli()
     mod = __import__(modname)
-    assert mod.plusone(1) == 2
+    assert mod.plusone(1) == expected
+
+
+@pytest.mark.slow
+def test_parent_include_path_with_build_dir(tmp_path, monkeypatch):
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "step.inc").write_text("y = y + 1\n")
+    (tmp_path / "step.inc").write_text("y = y + 10\n")
+    (tmp_path / "extra.inc").write_text("y = y + 2\n")
+    (work_dir / "plusone.f90").write_text(
+        "subroutine plusone(x, y)\n"
+        "    integer, intent(in) :: x\n"
+        "    integer, intent(out) :: y\n"
+        "    y = x\n"
+        "    include 'step.inc'\n"
+        "    include 'extra.inc'\n"
+        "end subroutine plusone\n"
+    )
+    monkeypatch.chdir(work_dir)
+    monkeypatch.syspath_prepend(str(work_dir))
+    monkeypatch.setattr(sys, "argv", [
+        "f2py", "-c", "-m", "pyf_include_parent",
+        "plusone.f90", "-I", "..", "--backend", "meson",
+        "--build-dir", "bd",
+    ])
+    compiler_check_f2pycli()
+    mod = __import__("pyf_include_parent")
+    assert mod.plusone(1) == 4
 
 
 def test_inclpath(monkeypatch):
