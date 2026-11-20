@@ -337,6 +337,8 @@ fortran_getattr(PyFortranObject *fp, char *name)
             if (fp->defs[i].func == NULL)
                 return NULL;
             for (k = 0; k < fp->defs[i].rank; ++k) fp->defs[i].dims.d[k] = -1;
+            if (fp->defs[i].rank == 0 && fp->defs[i].elsize < 0)
+                fp->defs[i].dims.d[0] = -1;
             save_def = &fp->defs[i];
             (*(fp->defs[i].func))(&fp->defs[i].rank, fp->defs[i].dims.d,
                                   set_data, &flag);
@@ -345,8 +347,11 @@ fortran_getattr(PyFortranObject *fp, char *name)
             else
                 k = fp->defs[i].rank;
             if (fp->defs[i].data != NULL) { /* array is allocated */
+                int elsize = fp->defs[i].elsize;
+                if (fp->defs[i].rank == 0 && elsize < 0)
+                    elsize = (int)fp->defs[i].dims.d[0];
                 PyArray_Descr *descr = get_descr_from_type_and_elsize(
-                        fp->defs[i].type, fp->defs[i].elsize);
+                        fp->defs[i].type, elsize);
                 if (descr == NULL)
                     return NULL;
                 PyObject *v = PyArray_NewFromDescr(
@@ -418,6 +423,33 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
             npy_intp dims[F2PY_MAX_DIMS];
             int k;
             save_def = &fp->defs[i];
+            if (fp->defs[i].rank == 0 && fp->defs[i].elsize < 0) {
+                if (v != Py_None) {
+                    dims[0] = -1;
+                    if ((arr = ndarray_from_pyobj(fp->defs[i].type, -1, dims,
+                                                  0, F2PY_INTENT_IN, v,
+                                                  NULL)) == NULL)
+                        return -1;
+                    dims[0] = PyArray_ITEMSIZE(arr);
+                    (*(fp->defs[i].func))(&fp->defs[i].rank, dims, set_data,
+                                          &flag);
+                    if (fp->defs[i].data != NULL &&
+                        memcpy(fp->defs[i].data, PyArray_DATA(arr),
+                               (size_t)PyArray_NBYTES(arr)) == NULL) {
+                        if ((PyObject *)arr != v)
+                            Py_DECREF(arr);
+                        return -1;
+                    }
+                    if ((PyObject *)arr != v)
+                        Py_DECREF(arr);
+                }
+                else {
+                    dims[0] = 0;
+                    (*(fp->defs[i].func))(&fp->defs[i].rank, dims, set_data,
+                                          &flag);
+                }
+                return 0;
+            }
             if (v != Py_None) { /* set new value (reallocate if needed --
                                    see f2py generated code for more
                                    details ) */

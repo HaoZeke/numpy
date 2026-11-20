@@ -101,3 +101,29 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+class TestScalarDeferredCharacter(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+module m
+  character(len=:), allocatable :: s
+contains
+  subroutine put(n)
+    integer, intent(in) :: n
+    if (allocated(s)) deallocate(s)
+    allocate(character(len=n) :: s)
+    s = repeat('q', n)
+  end subroutine put
+end module
+"""
+
+    @pytest.mark.parametrize("n", [4, 2])
+    def test_scalar_deferred_character(self, n):
+        self.module.m.put(n)
+        got = self.module.m.s
+        assert got.shape == ()
+        assert got.tobytes() == b"q" * n
+        self.module.m.s = b"z" * n
+        assert self.module.m.s.tobytes() == b"z" * n
