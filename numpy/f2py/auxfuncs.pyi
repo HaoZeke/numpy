@@ -53,6 +53,7 @@ __all__ = [
     "isinteger",
     "isintent_aux",
     "isintent_c",
+    "isintent_cache",
     "isintent_callback",
     "isintent_copy",
     "isintent_dict",
