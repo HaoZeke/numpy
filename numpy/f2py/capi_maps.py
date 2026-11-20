@@ -429,6 +429,9 @@ def getarrdocsign(a, var):
     return sig
 
 
+_exp_d_literal = re.compile(r'(?<![\w.])(\d+\.?\d*|\.\d+)[dD]([-+]?\d+)')
+
+
 def getinit(a, var):
     if isstring(var):
         init, showinit = '""', "''"
@@ -437,11 +440,13 @@ def getinit(a, var):
     if hasinitvalue(var):
         init = var['=']
         showinit = init
+        if not isstring(var):
+            init = _exp_d_literal.sub(r'\1e\2', init)
         if iscomplex(var) or iscomplexarray(var):
             ret = {}
 
             try:
-                v = var["="]
+                v = init
                 if ',' in v:
                     ret['init.r'], ret['init.i'] = markoutercomma(
                         v[1:-1]).split('@,@')
