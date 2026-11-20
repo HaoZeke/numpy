@@ -15,6 +15,7 @@ from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
     getfortranname,
+    isdummyroutine,
     isexternal,
     isfunction,
     isfunction_wrap,
@@ -337,6 +338,8 @@ def assubr(rout):
             if flag:
                 fvar['intent'].append(f'out={rname}')
         rout['args'][:] = [fname] + rout['args']
+        if isdummyroutine(rout):
+            return rout, ''
         return rout, createfuncwrapper(rout)
     if issubroutine_wrap(rout):
         fortranname = getfortranname(rout)
