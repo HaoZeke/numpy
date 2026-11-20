@@ -534,13 +534,13 @@ cppmacros['CHECKARRAY'] = """
 cppmacros['CHECKSTRING'] = """
 #define CHECKSTRING(check,tcheck,name,show,var)\\
     if (!(check)) {\\
-        PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, slen(var), var);\\
+        PyErr_Format(#modulename#_error, \"(%s) failed for \"name\": \"show, tcheck, slen(var), var);\\
         /*goto capi_fail;*/\\
     } else """
 cppmacros['CHECKSCALAR'] = """
 #define CHECKSCALAR(check,tcheck,name,show,var)\\
     if (!(check)) {\\
-        PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, var);\\
+        PyErr_Format(#modulename#_error, \"(%s) failed for \"name\": \"show, tcheck, var);\\
         /*goto capi_fail;*/\\
     } else """
 # cppmacros['CHECKDIMS']="""

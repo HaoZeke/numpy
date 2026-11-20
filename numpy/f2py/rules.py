@@ -1317,30 +1317,30 @@ if (#varname#_cb.capi==Py_None) {
 
 check_rules = [
     {
-        'frompyobj': {debugcapi: '    fprintf(stderr,\"debug-capi:Checking `#check#\'\\n\");'},
+        'frompyobj': {debugcapi: '    fprintf(stderr,\"debug-capi:Checking `%s\'\\n\",\"#tcheck#\");'},
         'need': 'len..'
     }, {
-        'frompyobj': '    CHECKSCALAR(#check#,\"#check#\",\"#nth# #varname#\",\"#varshowvalue#\",#varname#) {',
-        'cleanupfrompyobj': '    } /*CHECKSCALAR(#check#)*/',
+        'frompyobj': '    CHECKSCALAR(#check#,\"#tcheck#\",\"#nth# #varname#\",\"#varshowvalue#\",#varname#) {',
+        'cleanupfrompyobj': '    } /*CHECKSCALAR(#ccheck#)*/',
         'need': 'CHECKSCALAR',
         '_check': l_and(isscalar, l_not(iscomplex)),
         '_break': ''
     }, {
-        'frompyobj': '    CHECKSTRING(#check#,\"#check#\",\"#nth# #varname#\",\"#varshowvalue#\",#varname#) {',
-        'cleanupfrompyobj': '    } /*CHECKSTRING(#check#)*/',
+        'frompyobj': '    CHECKSTRING(#check#,\"#tcheck#\",\"#nth# #varname#\",\"#varshowvalue#\",#varname#) {',
+        'cleanupfrompyobj': '    } /*CHECKSTRING(#ccheck#)*/',
         'need': 'CHECKSTRING',
         '_check': isstring,
         '_break': ''
     }, {
         'need': 'CHECKARRAY',
-        'frompyobj': '    CHECKARRAY(#check#,\"#check#\",\"#nth# #varname#\") {',
-        'cleanupfrompyobj': '    } /*CHECKARRAY(#check#)*/',
+        'frompyobj': '    CHECKARRAY(#check#,\"#tcheck#\",\"#nth# #varname#\") {',
+        'cleanupfrompyobj': '    } /*CHECKARRAY(#ccheck#)*/',
         '_check': isarray,
         '_break': ''
     }, {
         'need': 'CHECKGENERIC',
-        'frompyobj': '    CHECKGENERIC(#check#,\"#check#\",\"#nth# #varname#\") {',
-        'cleanupfrompyobj': '    } /*CHECKGENERIC(#check#)*/',
+        'frompyobj': '    CHECKGENERIC(#check#,\"#tcheck#\",\"#nth# #varname#\") {',
+        'cleanupfrompyobj': '    } /*CHECKGENERIC(#ccheck#)*/',
     }
 ]
 
@@ -1622,6 +1622,8 @@ def buildapi(rout):
         if 'check' in var[a]:
             for c in var[a]['check']:
                 vrd['check'] = c
+                vrd['tcheck'] = c.replace('\\', '\\\\').replace('"', '\\"')
+                vrd['ccheck'] = c.replace('*/', '* /')
                 ar = applyrules(check_rules, vrd, var[a])
                 rd = dictappend(rd, ar)
     if isinstance(rd['cleanupfrompyobj'], list):
