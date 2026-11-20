@@ -3362,7 +3362,7 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     common = ''
     if 'common' in block:
         common = common2fortran(block['common'], tab + tabchar)
-    if name == 'unknown_interface':
+    if name in ('unknown_interface', 'unknown_abstract_interface'):
         name = ''
     result = ''
     if 'result' in block:
@@ -3382,9 +3382,10 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
         body = body + entry_stmts
     if blocktype == 'block data' and name == '_BLOCK_DATA_':
         name = ''
+    endblocktype = 'interface' if blocktype == 'abstract interface' else blocktype
     ret = (f'{tab}{prefix}{blocktype} {name}{args}{result} '
            f'{mess}{f2pyenhancements}{use}{vars}{common}{body}{tab}end '
-           f'{blocktype} {name}')
+           f'{endblocktype} {name}')
     return ret
 
 
