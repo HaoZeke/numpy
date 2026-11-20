@@ -1,5 +1,6 @@
 import textwrap
 
+import numpy as np
 import pytest
 
 from . import util
@@ -101,3 +102,34 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+class TestModuleWrapperArgName(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+    module m
+    contains
+      function scale(m, x) result(r)
+        integer, intent(in) :: m
+        real(8), intent(in) :: x(m)
+        real(8) :: r(m)
+        r = x * 2.0d0
+      end function scale
+
+      subroutine bump(m)
+        real(8), intent(inout) :: m(:)
+        m = m + 1.0d0
+      end subroutine bump
+    end module m
+    """
+
+    @pytest.mark.parametrize("routine", ["scale", "bump"])
+    def test_arg_same_name_as_module(self, routine):
+        arr = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+        if routine == "scale":
+            got = self.module.m.scale(arr)
+            np.testing.assert_allclose(got, [2.0, 4.0, 6.0])
+        else:
+            self.module.m.bump(arr)
+            np.testing.assert_allclose(arr, [2.0, 3.0, 4.0])

@@ -10,6 +10,7 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
+import re
 
 from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
@@ -92,6 +93,45 @@ def useiso_fortran_env(rout):
             return True
     return useisof
 
+def _wrapper_arg_map(vars, args, modulename):
+    modlow = modulename.lower()
+    used = {k.lower() for k in vars} | {a.lower() for a in args} | {modlow}
+    amap = {}
+    for a in args:
+        if a.lower() == modlow:
+            cand = f'f2py_{a}'
+            while cand.lower() in used:
+                cand = f'{cand}_'
+            used.add(cand.lower())
+            amap[a] = cand
+    return amap
+
+
+def _rename_var_exprs(vars, a, amap):
+    if not amap or a not in vars:
+        return vars
+    v = vars[a]
+    if 'dimension' not in v and 'charselector' not in v:
+        return vars
+
+    def sub(expr):
+        s = str(expr)
+        for old, new in amap.items():
+            s = re.sub(rf'\b{re.escape(old)}\b', new, s, flags=re.I)
+        return s
+
+    vcopy = dict(v)
+    if 'dimension' in v:
+        vcopy['dimension'] = [sub(d) for d in v['dimension']]
+    if 'charselector' in v:
+        cs = dict(v['charselector'])
+        for k in ('len', '*'):
+            if k in cs:
+                cs[k] = sub(cs[k])
+        vcopy['charselector'] = cs
+    return {**vars, a: vcopy}
+
+
 def createfuncwrapper(rout, signature=0):
     assert isfunction(rout)
 
@@ -125,7 +165,17 @@ def createfuncwrapper(rout, signature=0):
     else:
         args = [newname] + rout['args']
 
-    l_tmpl = var2fixfortran(vars, name, '@@@NAME@@@', f90mode)
+    amap = {}
+    if f90mode:
+        # gh-23598 fix warning
+        # Essentially, this gets called again with modules where the name of the
+        # function is added to the arguments, which is not required, and removed
+        args = [arg for arg in args if arg != name]
+        rout['args'] = args
+        amap = _wrapper_arg_map(vars, args[1:], rout['modulename'])
+
+    l_tmpl = var2fixfortran(
+        _rename_var_exprs(vars, name, amap), name, '@@@NAME@@@', f90mode)
     if l_tmpl[:13] == 'character*(*)':
         if f90mode:
             l_tmpl = 'character(len=10)' + l_tmpl[13:]
@@ -140,14 +190,8 @@ def createfuncwrapper(rout, signature=0):
 
     useisoc = useiso_c_binding(rout)
     useisof = useiso_fortran_env(rout)
-    sargs = ', '.join(args)
     if f90mode:
-        # gh-23598 fix warning
-        # Essentially, this gets called again with modules where the name of the
-        # function is added to the arguments, which is not required, and removed
-        sargs = sargs.replace(f"{name}, ", '')
-        args = [arg for arg in args if arg != name]
-        rout['args'] = args
+        sargs = ', '.join(amap.get(a, a) for a in args)
         add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
         if not signature:
             add(f"use {rout['modulename']}, only : {fortranname}")
@@ -156,6 +200,7 @@ def createfuncwrapper(rout, signature=0):
         if useisof:
             add('use iso_fortran_env')
     else:
+        sargs = ', '.join(args)
         add(f'subroutine f2pywrap{name} ({sargs})')
         if useisoc:
             add('use iso_c_binding')
@@ -174,24 +219,30 @@ def createfuncwrapper(rout, signature=0):
     dumped_args = []
     for a in args:
         if isexternal(vars[a]):
-            add(f'external {a}')
+            add(f'external {amap.get(a, a)}')
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(var2fixfortran(
+                _rename_var_exprs(vars, a, amap), a, amap.get(a, a),
+                f90mode=f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
         if isintent_in(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(var2fixfortran(
+                _rename_var_exprs(vars, a, amap), a, amap.get(a, a),
+                f90mode=f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
-        add(var2fixfortran(vars, a, f90mode=f90mode))
+        add(var2fixfortran(
+            _rename_var_exprs(vars, a, amap), a, amap.get(a, a),
+            f90mode=f90mode))
 
     add(l1)
     if rl is not None:
@@ -206,7 +257,7 @@ def createfuncwrapper(rout, signature=0):
             add(rout['saved_interface'].lstrip())
             add('end interface')
 
-    sargs = ', '.join([a for a in args if a not in extra_args])
+    sargs = ', '.join([amap.get(a, a) for a in args if a not in extra_args])
 
     if not signature:
         if islogicalfunction(rout):
@@ -250,7 +301,8 @@ def createsubrwrapper(rout, signature=0):
 
     useisoc = useiso_c_binding(rout)
     useisof = useiso_fortran_env(rout)
-    sargs = ', '.join(args)
+    amap = _wrapper_arg_map(vars, args, rout['modulename']) if f90mode else {}
+    sargs = ', '.join(amap.get(a, a) for a in args)
     if f90mode:
         add(f"subroutine f2pywrap_{rout['modulename']}_{name} ({sargs})")
         if useisoc:
@@ -276,18 +328,22 @@ def createsubrwrapper(rout, signature=0):
     dumped_args = []
     for a in args:
         if isexternal(vars[a]):
-            add(f'external {a}')
+            add(f'external {amap.get(a, a)}')
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(var2fixfortran(
+                _rename_var_exprs(vars, a, amap), a, amap.get(a, a),
+                f90mode=f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
             continue
-        add(var2fixfortran(vars, a, f90mode=f90mode))
+        add(var2fixfortran(
+            _rename_var_exprs(vars, a, amap), a, amap.get(a, a),
+            f90mode=f90mode))
 
     if need_interface:
         if f90mode:
@@ -301,7 +357,7 @@ def createsubrwrapper(rout, signature=0):
                 add(line)
             add('end interface')
 
-    sargs = ', '.join([a for a in args if a not in extra_args])
+    sargs = ', '.join([amap.get(a, a) for a in args if a not in extra_args])
 
     if not signature:
         add(f'call {fortranname}({sargs})')
