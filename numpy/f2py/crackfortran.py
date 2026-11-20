@@ -310,7 +310,11 @@ def openhook(filename, mode):
     # Correctly handles comments or late stage unicode characters
     # gh-22871
     if charset_normalizer is not None:
-        encoding = charset_normalizer.from_path(filename).best().encoding
+        best = charset_normalizer.from_path(filename).best()
+        encoding = (
+            'utf_8_sig' if best.encoding == 'utf_8' and best.bom
+            else best.encoding
+        )
     else:
         # hint: install charset_normalizer for correct encoding handling
         # No need to read the whole file for trying with startswith

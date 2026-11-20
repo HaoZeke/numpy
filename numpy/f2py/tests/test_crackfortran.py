@@ -399,6 +399,38 @@ class TestFortranReader(util.F2PyTest):
         mod = crackfortran.crackfortran([str(f_path)])
         assert mod[0]['name'] == 'foo'
 
+    @pytest.mark.parametrize(
+        ("suffix", "code"),
+        [
+            (
+                ".f90",
+                (
+                    "subroutine foo(x)\n"
+                    "  integer, intent(out) :: x\n"
+                    "  x = 7\n"
+                    "end subroutine foo\n"
+                ),
+            ),
+            (
+                ".f",
+                (
+                    "      subroutine foo(x)\n"
+                    "      integer x\n"
+                    "cf2py intent(out) x\n"
+                    "      x = 7\n"
+                    "      end\n"
+                ),
+            ),
+        ],
+    )
+    def test_utf8_bom(self, tmp_path, suffix, code):
+        f_path = tmp_path / f"bom{suffix}"
+        f_path.write_bytes(code.encode("utf-8-sig"))
+        crackfortran.reset_global_f2py_vars()
+        mod = crackfortran.crackfortran([str(f_path)])
+        assert mod[0]["name"] == "foo"
+        assert mod[0]["vars"]["x"]["intent"] == ["out"]
+
 
 @pytest.mark.slow
 class TestUnicodeComment(util.F2PyTest):
