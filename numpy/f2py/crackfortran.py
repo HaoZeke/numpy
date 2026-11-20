@@ -3436,6 +3436,87 @@ def true_intent_list(var):
     return ret
 
 
+_fortran_ident_re = re.compile(
+    r"'[^']*'|\"[^\"]*\"|\.[A-Za-z]\w*\.|%[A-Za-z]\w*"
+    r"|[A-Za-z]\w*\s*=(?!=)|[bBoOzZ](?=['\"])"
+    r"|(?:\d+\.\d*|\.\d+|\d+)(?:[eEdD][+-]?\d+)?(?:_([A-Za-z]\w*))?"
+    r"|([A-Za-z]\w*)"
+)
+
+
+def _var_expr_names(var):
+    exprs = []
+    for key in ('kindselector', 'charselector'):
+        if key in var:
+            exprs.extend(str(v) for v in var[key].values())
+    if 'dimension' in var:
+        exprs.extend(str(d) for d in var['dimension'])
+    for attr in var.get('attrspec', []):
+        if attr[:9].lower() == 'dimension':
+            rest = attr[9:].strip()
+            if rest.startswith('(') and rest.endswith(')'):
+                exprs.append(rest[1:-1])
+    if '=' in var:
+        exprs.append(str(var['=']))
+    names = set()
+    for expr in exprs:
+        for kind_name, ident in _fortran_ident_re.findall(expr):
+            name = kind_name or ident
+            if name:
+                names.add(name.lower())
+    return names
+
+
+def _add_interface_params(vars, nout):
+    nout_set = set(nout)
+    params = {
+        a.lower(): a
+        for a in vars
+        if a not in nout_set
+        and 'typespec' in vars[a]
+        and '=' in vars[a]
+        and 'parameter' in vars[a].get('attrspec', [])
+    }
+    if not params:
+        return nout
+    refs = {a: _var_expr_names(vars[a]) for a in nout if a in vars}
+    needed = set()
+    queue = [a for a in nout if a in vars]
+    while queue:
+        cur = queue.pop()
+        for name in refs[cur]:
+            param = params.get(name)
+            if param is not None and param not in needed:
+                needed.add(param)
+                refs[param] = _var_expr_names(vars[param])
+                queue.append(param)
+    if not needed:
+        return nout
+    needed_list = [a for a in vars if a in needed]
+    pool = {a.lower(): a for a in needed_list}
+    for a in nout:
+        pool.setdefault(a.lower(), a)
+    ordered = []
+    visited = set()
+    visiting = set()
+
+    def visit(a):
+        if a in visited or a in visiting:
+            return
+        visiting.add(a)
+        for name in refs.get(a, ()):
+            dep = pool.get(name)
+            if dep is not None and dep != a:
+                visit(dep)
+        visiting.remove(a)
+        visited.add(a)
+        ordered.append(a)
+
+    for a in needed_list + nout:
+        visit(a)
+    return ordered
+
+
 def vars2fortran(block, vars, args, tab='', as_interface=False):
     setmesstext(block)
     ret = ''
@@ -3457,6 +3538,8 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         for a in list(vars.keys()):
             if a not in nout:
                 nout.append(a)
+    else:
+        nout = _add_interface_params(vars, nout)
     for a in nout:
         if 'depend' in vars[a]:
             for d in vars[a]['depend']:
