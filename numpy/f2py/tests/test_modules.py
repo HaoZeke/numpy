@@ -89,6 +89,25 @@ class TestAllocatableCharacterArray(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestAllocatableStatement(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+module allocstmt
+  real :: b(:)
+  real :: c
+  allocatable :: b
+  allocatable :: c(:)
+end module allocstmt
+"""
+
+    @pytest.mark.parametrize("name", ["b", "c"])
+    def test_allocatable_statement(self, name):
+        mod = self.module.allocstmt
+        setattr(mod, name, [1.0, 2.0, 3.0])
+        assert getattr(mod, name).tolist() == [1.0, 2.0, 3.0]
+
+
+@pytest.mark.slow
 class TestUsedModule(util.F2PyTest):
     module_name = "fmath"
     sources = [

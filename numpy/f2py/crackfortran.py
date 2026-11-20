@@ -628,6 +628,8 @@ optionalpattern = re.compile(
     beforethisafter % ('', 'optional', 'optional', '.*'), re.I), 'optional'
 requiredpattern = re.compile(
     beforethisafter % ('', 'required', 'required', '.*'), re.I), 'required'
+allocatablepattern = re.compile(beforethisafter % (
+    '', 'allocatable', 'allocatable', '.*'), re.I), 'allocatable'
 publicpattern = re.compile(
     beforethisafter % ('', 'public', 'public', '.*'), re.I), 'public'
 privatepattern = re.compile(
@@ -775,7 +777,7 @@ def crackline(line, reset=0):
         return
     flag = 0
     for pat in [dimensionpattern, externalpattern, intentpattern, optionalpattern,
-                requiredpattern,
+                requiredpattern, allocatablepattern,
                 parameterpattern, datapattern, publicpattern, privatepattern,
                 intrinsicpattern,
                 endifpattern, endpattern,
@@ -1225,7 +1227,7 @@ def analyzeline(m, case, line):
         last_name = updatevars(typespec, selector, attr, edecl)
         if last_name is not None:
             previous_context = ('variable', last_name, groupcounter)
-    elif case in ['dimension', 'intent', 'optional', 'required', 'external', 'public', 'private', 'intrinsic']:
+    elif case in ['dimension', 'intent', 'optional', 'required', 'allocatable', 'external', 'public', 'private', 'intrinsic']:
         edecl = groupcache[groupcounter]['vars']
         ll = m.group('after').strip()
         i = ll.find('::')
@@ -1268,6 +1270,11 @@ def analyzeline(m, case, line):
                 edecl[k] = {}
             if case == 'dimension':
                 ap = case + m1.group('after')
+            if case == 'allocatable':
+                ap = case
+                if m1.group('after'):
+                    edecl[k].setdefault('attrspec', []).append(
+                        'dimension' + m1.group('after'))
             if case == 'intent':
                 ap = m.group('this') + pl
                 if _intentcallbackpattern.match(ap):
