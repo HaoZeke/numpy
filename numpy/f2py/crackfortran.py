@@ -2648,6 +2648,18 @@ def _eval_scalar(value, params):
     return value
 
 
+def _eval_selector(expr, params):
+    eval_params = {
+        k.lower(): (v.__getitem__ if isinstance(v, dict) else v)
+        for k, v in params.items()
+    }
+    try:
+        res = eval(expr.lower(), {}, eval_params)
+    except Exception:
+        return expr
+    return expr if callable(res) else str(res)
+
+
 def analyzevars(block):
     """
     Sets correct dimension information for each variable/parameter
@@ -2714,20 +2726,12 @@ def analyzevars(block):
         if 'charselector' in vars[n]:
             if 'len' in vars[n]['charselector']:
                 l = vars[n]['charselector']['len']
-                try:
-                    l = str(eval(l, {}, params))
-                except Exception:
-                    pass
-                vars[n]['charselector']['len'] = l
+                vars[n]['charselector']['len'] = _eval_selector(l, params)
 
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
                 l = vars[n]['kindselector']['kind']
-                try:
-                    l = str(eval(l, {}, params))
-                except Exception:
-                    pass
-                vars[n]['kindselector']['kind'] = l
+                vars[n]['kindselector']['kind'] = _eval_selector(l, params)
 
         dimension_exprs = {}
         if 'attrspec' in vars[n]:
