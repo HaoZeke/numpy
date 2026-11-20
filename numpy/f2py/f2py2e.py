@@ -15,6 +15,7 @@ import os
 import pprint
 import re
 import sys
+from pathlib import Path
 
 from numpy.f2py._backends import f2py_build_generator
 
@@ -683,6 +684,7 @@ def run_compile():
         del sys.argv[i + 1], sys.argv[i]
         sources = sys.argv[1:]
 
+    include_dirs, _, sources = get_newer_options(sources)
     pyf_files, _sources = filter_files("", "[.]pyf([.]src|)", sources)
     sources = pyf_files + _sources
     modulename = validate_modulename(pyf_files, modulename)
@@ -700,24 +702,32 @@ def run_compile():
         else:
             print('Invalid use of -D:', name_value)
 
+    include_flags = [
+        flag for path in include_dirs for flag in ("-I", path)
+    ]
     # Construct wrappers / signatures / things
     if backend_key == 'meson':
         if not pyf_files:
             outmess('Using meson backend\nWill pass --lower to f2py\nSee https://numpy.org/doc/stable/f2py/buildtools/meson.html\n')
             f2py_flags.append('--lower')
-            run_main(f" {' '.join(f2py_flags)} -m {modulename} {' '.join(sources)}".split())
+            run_main(f2py_flags + include_flags + ["-m", modulename] + sources)
         else:
-            run_main(f" {' '.join(f2py_flags)} {' '.join(pyf_files)}".split())
+            run_main(f2py_flags + include_flags + pyf_files)
 
-    # Order matters here, includes are needed for run_main above
-    include_dirs, _, sources = get_newer_options(sources)
+    build_dir_path = Path(build_dir).resolve()
+    backend_include_dirs = [
+        str(inc_path.relative_to(build_dir_path))
+        if inc_path.is_relative_to(build_dir_path)
+        else str(inc_path)
+        for inc_path in (Path(path).resolve() for path in include_dirs)
+    ]
     # Now use the builder
     builder = build_backend(
         modulename,
         sources,
         extra_objects,
         build_dir,
-        include_dirs,
+        backend_include_dirs,
         library_dirs,
         libraries,
         define_macros,

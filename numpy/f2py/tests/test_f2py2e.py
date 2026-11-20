@@ -714,6 +714,51 @@ def test_cli_obj(capfd, hello_world_f90, monkeypatch):
             assert f"'''{obj}'''" in mbld
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("modname", "flag", "use_relative"),
+    [
+        ("pyf_include_abs", "--include-paths", False),
+        ("pyf_include_rel", "-I", True),
+    ],
+)
+def test_pyf_include_path(tmp_path, monkeypatch, modname, flag, use_relative):
+    include_dir = tmp_path / "include"
+    include_dir.mkdir()
+    (include_dir / "part.pyf").write_text(
+        "subroutine plusone(x)\n"
+        "    integer intent(in,out) :: x\n"
+        "end subroutine plusone\n"
+    )
+    (tmp_path / "module.pyf").write_text(
+        f"python module {modname}\n"
+        "    interface\n"
+        "        include 'part.pyf'\n"
+        "    end interface\n"
+        f"end python module {modname}\n"
+    )
+    (tmp_path / "plusone.f90").write_text(
+        "subroutine plusone(x)\n"
+        "    integer, intent(inout) :: x\n"
+        "    x = x + 1\n"
+        "end subroutine plusone\n"
+    )
+    inc_arg = "include" if use_relative else str(include_dir)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "f2py", "-c", "-m", modname, "module.pyf", "plusone.f90",
+            flag, inc_arg, "--backend", "meson",
+        ],
+    )
+    compiler_check_f2pycli()
+    mod = __import__(modname)
+    assert mod.plusone(1) == 2
+
+
 def test_inclpath(monkeypatch):
     """Add to the include directories
 
