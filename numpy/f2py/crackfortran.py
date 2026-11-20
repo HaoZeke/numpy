@@ -584,7 +584,11 @@ beforethisafter = r'\s*(?P<before>%s(?=\s*(\b(%s)\b)))'\
     r'\s*(?P<this>(\b(%s)\b))'\
     r'\s*(?P<after>%s)\s*\Z'
 ##
-fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|byte'
+_intrinsic_types = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|byte'
+fortrantypes = (
+    rf'{_intrinsic_types}|type(?=\s*\([\w\s,=(*)]*\))'
+    rf'|procedure(?=\s*\(\s*(?:{_intrinsic_types})\b)'
+)
 typespattern = re.compile(
     beforethisafter % ('', fortrantypes, fortrantypes, '.*'), re.I), 'type'
 typespattern4implicit = re.compile(beforethisafter % (
@@ -1222,6 +1226,15 @@ def analyzeline(m, case, line):
     elif case == 'type':
         typespec, selector, attr, edecl = cracktypespec0(
             block, m.group('after'))
+        if block.strip().lower() == 'procedure':
+            args = set(groupcache[groupcounter].get('args', []))
+            edecl = ', '.join(
+                e for e in (x.strip() for x in markoutercomma(edecl).split('@,@'))
+                if (m1 := namepattern.match(e))
+                and rmbadname1(m1.group('name')) in args
+            )
+            if not edecl:
+                return
         last_name = updatevars(typespec, selector, attr, edecl)
         if last_name is not None:
             previous_context = ('variable', last_name, groupcounter)
@@ -1583,6 +1596,7 @@ def appendmultiline(group, context_name, ml):
 def cracktypespec0(typespec, ll):
     selector = None
     attr = None
+    is_proc = False
     if re.match(r'double\s*complex', typespec, re.I):
         typespec = 'double complex'
     elif re.match(r'double\s*precision', typespec, re.I):
@@ -1597,13 +1611,23 @@ def cracktypespec0(typespec, ll):
     d = m1.groupdict()
     for k in list(d.keys()):
         d[k] = unmarkouterparen(d[k])
-    if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type']:
+    if typespec == 'procedure':
+        is_proc = True
+        inner = d['this'].strip()[1:-1].strip()
+        m2 = typespattern[0].match(inner)
+        if m2:
+            typespec, selector, _, _ = cracktypespec0(
+                m2.group('this'), m2.group('after'))
+        ll = d['after']
+    elif typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type']:
         selector = d['this']
         ll = d['after']
     i = ll.find('::')
     if i >= 0:
         attr = ll[:i].strip()
         ll = ll[i + 2:]
+    if is_proc:
+        attr = f'external, {attr}' if attr else 'external'
     return typespec, selector, attr, ll
 
 
