@@ -37,6 +37,11 @@ def findcommonblocks(block, top=1):
     return ret
 
 
+def declarescommon(block, name):
+    return name in (block.get('common') or {}) or any(
+        declarescommon(b, name) for b in block.get('body') or [])
+
+
 def buildhooks(m):
     ret = {'commonhooks': [], 'initcommonhooks': [],
            'docs': ['"COMMON blocks:\\n"']}
@@ -73,7 +78,9 @@ def buildhooks(m):
             outmess(f'\t\tConstructing COMMON block support for "{name}"...\n\t\t  '
                     f'{inames_str}\n')
         fadd(f'subroutine f2pyinit{name}(setupfunc)')
-        for usename in getuseblocks(m):
+        units = [{'body': [b for b in inner['body'] if declarescommon(b, name)]}
+                 for inner in m['body']]
+        for usename in getuseblocks({'body': units}):
             fadd(f'use {usename}')
         fadd('external setupfunc')
         for n in vnames:
