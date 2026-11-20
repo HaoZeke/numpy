@@ -3347,9 +3347,10 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
             args = f"({','.join(argsl)})"
     f2pyenhancements = ''
     if 'f2pyenhancements' in block:
-        for k in list(block['f2pyenhancements'].keys()):
-            f2pyenhancements = (f"{f2pyenhancements}{tab + tabchar}{k} "
-                                f"{block['f2pyenhancements'][k]}")
+        for k, v in block['f2pyenhancements'].items():
+            for item in (v if isinstance(v, list) else [v]):
+                f2pyenhancements = (f"{f2pyenhancements}{tab + tabchar}{k} "
+                                    f"{item}")
     intent_lst = block.get('intent', [])[:]
     if blocktype == 'function' and 'callback' in intent_lst:
         intent_lst.remove('callback')
