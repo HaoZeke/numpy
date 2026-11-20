@@ -417,7 +417,8 @@ def hasexternals(rout):
 
 def isthreadsafe(rout):
     return 'f2pyenhancements' in rout and \
-           'threadsafe' in rout['f2pyenhancements']
+           'threadsafe' in rout['f2pyenhancements'] and \
+           not hasexternals(rout)
 
 
 def hasvariables(rout):
