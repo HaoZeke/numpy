@@ -56,6 +56,12 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
         if f90mode:
             if selector['*'] in ['*', ':', '(*)']:
                 vardef = f'{vardef}(len=*)'
+            elif vardef == 'complex':
+                sel = str(selector['*']).strip()
+                if sel.isdigit() and int(sel) > 0 and int(sel) % 2 == 0:
+                    vardef = f'{vardef}({lk}={int(sel) // 2})'
+                else:
+                    vardef = f'{vardef}*{sel}'
             else:
                 vardef = f"{vardef}({lk}={selector['*']})"
         elif selector['*'] in ['*', ':']:

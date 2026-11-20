@@ -65,3 +65,26 @@ class TestFReturnComplex(TestReturnComplex):
     def test_all_f90(self, name):
         self.check_function(getattr(self.module.f90_return_complex, name),
                             name)
+
+
+@pytest.mark.slow
+class TestF90ReturnComplexStar(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+    module f90_complex_star
+      contains
+        complex*8 function t8(value)
+          complex*8, intent(in) :: value
+          t8 = value * (2.0, 0.0)
+        end function t8
+        complex*16 function t16(value)
+          complex*16, intent(in) :: value
+          t16 = value * (2.0d0, 0.0d0)
+        end function t16
+    end module f90_complex_star
+    """
+
+    @pytest.mark.parametrize("name", ["t8", "t16"])
+    def test_complex_star(self, name):
+        fn = getattr(self.module.f90_complex_star, name)
+        assert fn(1.5 + 2.5j) == pytest.approx(3.0 + 5.0j)
