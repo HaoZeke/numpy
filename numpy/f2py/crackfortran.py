@@ -354,6 +354,18 @@ def is_free_format(fname):
     return result
 
 
+def _splits_digits(head, tail):
+    """Whether `tail` continues a number that ends `head` on a column 6 line.
+
+    Every line read gets one trailing blank, which would split the number.
+    """
+    if not (head.endswith(' ') and '0' <= head[-2:-1] <= '9'
+            and '0' <= tail[:1] <= '9'):
+        return False
+    # keep the text of a character constant as it is
+    return not re.search('[\'"]', _quoted_string_re.sub('', head))
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -466,6 +478,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
 
             if (not cont or strictf77) and (len(l) > 5 and not l[5] == ' '):
                 # Continuation of a previous line
+                if _splits_digits(ll, l[6:]):
+                    ll = ll[:-1]
                 ll = ll + l[6:]
                 finalline = ''
                 origfinalline = ''
