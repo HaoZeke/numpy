@@ -793,7 +793,6 @@ def crackline(line, reset=0):
             break
         flag = flag + 1
     if not m:
-        re_1 = crackline_re_1
         if 0 <= skipblocksuntil <= groupcounter:
             return
         if 'externals' in groupcache[groupcounter]:
@@ -806,12 +805,8 @@ def crackline(line, reset=0):
                     rf'(?P<before>[^"]*)\b{name}\b\s*@\(@(?P<args>[^@]*)@\)@.*\Z',
                     markouterparen(line), re.I)
                 if m1:
-                    m2 = re_1.match(m1.group('before'))
                     a = _simplifyargs(m1.group('args'))
-                    if m2:
-                        line = f"callfun {name}({a}) result ({m2.group('result')})"
-                    else:
-                        line = f'callfun {name}({a})'
+                    line = f'callfun {name}({a})'
                     m = callfunpattern[0].match(line)
                     if not m:
                         outmess(
@@ -1162,11 +1157,12 @@ def analyzeline(m, case, line):
                 groupcache[groupcounter - 2]['externals'].append(name)
             groupcache[groupcounter]['vars'] = copy.deepcopy(
                 groupcache[groupcounter - 2]['vars'])
-            try:
-                del groupcache[groupcounter]['vars'][name][
-                    groupcache[groupcounter]['vars'][name]['attrspec'].index('external')]
-            except Exception:
-                pass
+            if 'implicit' in groupcache[groupcounter - 2]:
+                groupcache[groupcounter]['implicit'] = copy.deepcopy(
+                    groupcache[groupcounter - 2]['implicit'])
+            attrs = groupcache[groupcounter]['vars'].get(name, {}).get('attrspec')
+            while attrs and 'external' in attrs:
+                attrs.remove('external')
         if block in ['function', 'subroutine']:  # set global attributes
             # name is fortran name
             if bindcline:
