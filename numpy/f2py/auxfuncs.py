@@ -999,7 +999,7 @@ def process_f2cmap_dict(f2cmap_all, new_map, c2py_map, verbose=False):
 
     new_map_lower = {}
     for k, d1 in new_map.items():
-        d1_lower = {k1.lower(): v1 for k1, v1 in d1.items()}
+        d1_lower = {str(k1).lower(): v1 for k1, v1 in d1.items()}
         new_map_lower[k.lower()] = d1_lower
 
     for k, d1 in new_map_lower.items():
