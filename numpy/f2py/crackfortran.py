@@ -354,6 +354,23 @@ def is_free_format(fname):
     return result
 
 
+_bind_cname_re = re.compile(
+    r"""(?P<head>\bbind\s*\([^)]*?\bname\s*=\s*)(?P<q>['"])(?P<name>.*?)(?P=q)""",
+    re.I)
+
+
+def _lower_line(line):
+    parts = []
+    pos = 0
+    for match in _bind_cname_re.finditer(line):
+        parts.append(line[pos:match.start()].lower())
+        parts.append(match.group('head').lower())
+        parts.append(match.group('q') + match.group('name') + match.group('q'))
+        pos = match.end()
+    parts.append(line[pos:].lower())
+    return ''.join(parts)
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -482,7 +499,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     l = '     ' + l[5:]
                     # f2py directives are already stripped by this point
                     if localdolowercase:
-                        finalline = ll.lower()
+                        finalline = _lower_line(ll)
                     else:
                         finalline = ll
                     origfinalline = ll
@@ -512,7 +529,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 if localdolowercase:
                     # only skip lowering for C style constructs
                     # gh-2547, gh-27697, gh-26681, gh-28014
-                    finalline = ll.lower() if not (is_f2py_directive and iscstyledirective(ll)) else ll
+                    finalline = ll if (is_f2py_directive and iscstyledirective(ll)) else _lower_line(ll)
                 else:
                     finalline = ll
                 origfinalline = ll
@@ -546,7 +563,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         l1 = ll
     # Last line should never have an f2py directive anyway
     if localdolowercase:
-        finalline = ll.lower()
+        finalline = _lower_line(ll)
     else:
         finalline = ll
     origfinalline = ll
@@ -710,7 +727,9 @@ def _simplifyargs(argsline):
 
 crackline_re_1 = re.compile(r'\s*(?P<result>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bind_1 = re.compile(r'\s*(?P<bind>\b[a-z]+\w*\b)\s*=.*', re.I)
-crackline_bindlang = re.compile(r'\s*bind\(\s*(?P<lang>[^,]+)\s*,\s*name\s*=\s*"(?P<lang_name>[^"]+)"\s*\)', re.I)
+crackline_bindlang = re.compile(
+    r"""\s*bind\(\s*(?P<lang>[^,]+)\s*,\s*name\s*=\s*(?P<q>['"])(?P<lang_name>.*?)(?P=q)\s*\)""",
+    re.I)
 
 def crackline(line, reset=0):
     """
@@ -3567,6 +3586,31 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
 post_processing_hooks = []
 
 
+def _apply_bindc(block, in_module=False):
+    if isinstance(block, list):
+        for item in block:
+            _apply_bindc(item, in_module)
+        return
+    if not isinstance(block, dict):
+        return
+    in_module = in_module or block.get('block') == 'module'
+    for child in block.get('body') or []:
+        _apply_bindc(child, in_module)
+    if in_module or block.get('block') not in ('function', 'subroutine'):
+        return
+    spec = (block.get('bindlang') or {}).get(block.get('name') or '', {})
+    if str(spec.get('lang', '')).strip().lower() != 'c':
+        return
+    cname = spec.get('name')
+    if not cname:
+        return
+    enh = block.setdefault('f2pyenhancements', {})
+    enh.setdefault('fortranname', cname)
+    intent = block.setdefault('intent', [])
+    if 'c' not in intent:
+        intent.append('c')
+
+
 def crackfortran(files):
     global usermodules, post_processing_hooks
 
@@ -3581,6 +3625,8 @@ def crackfortran(files):
         postlist = traverse(postlist, hook)
     outmess('Post-processing (stage 2)...\n', 0)
     postlist = postcrack2(postlist)
+    for block in usermodules + postlist:
+        _apply_bindc(block)
     return usermodules + postlist
 
 
