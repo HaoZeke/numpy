@@ -571,3 +571,11 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+
+class TestEvalCharlen:
+    def test_non_int_param_not_quoted(self):
+        assert crackfortran._eval_charlen("n", {"n": "int32"}) == "n"
+        assert crackfortran._eval_charlen("n", {"n": True}) == "n"
+        assert crackfortran._eval_charlen("2*n", {"n": 3}) == "6"
+        assert crackfortran._eval_charlen("2_4*n", {"n": 3}) == "6"

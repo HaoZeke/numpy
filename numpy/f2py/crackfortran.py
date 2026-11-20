@@ -181,6 +181,7 @@ beginpattern = ''
 currentfilename = ''
 expectbegin = 1
 f90modulevars = {}
+_f90moduleuses = {}
 filepositiontext = ''
 gotnextfile = 1
 groupcache = None
@@ -199,7 +200,8 @@ usermodules = []
 
 def reset_global_f2py_vars():
     global groupcounter, grouplist, neededmodule, expectbegin
-    global skipblocksuntil, usermodules, f90modulevars, gotnextfile
+    global skipblocksuntil, usermodules, f90modulevars, _f90moduleuses
+    global gotnextfile
     global filepositiontext, currentfilename, skipfunctions, skipfuncs
     global onlyfuncs, include_paths, previous_context
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
@@ -225,6 +227,7 @@ def reset_global_f2py_vars():
     skipblocksuntil = -1
     usermodules = []
     f90modulevars = {}
+    _f90moduleuses = {}
     gotnextfile = 1
     filepositiontext = ''
     currentfilename = ''
@@ -1990,7 +1993,7 @@ def get_usedict(block):
     return usedict
 
 
-def get_useparameters(block, param_map=None):
+def get_useparameters(block, param_map=None, seen=frozenset()):
     global f90modulevars
 
     if param_map is None:
@@ -2000,24 +2003,54 @@ def get_useparameters(block, param_map=None):
         return param_map
     for usename, mapping in list(usedict.items()):
         usename = usename.lower()
+        if usename in seen:
+            continue
         if usename not in f90modulevars:
             outmess(f'get_useparameters: no module {usename} info used by '
                     f'{block.get("name")}\n')
             continue
         mvars = f90modulevars[usename]
-        params = get_parameters(mvars)
+        muse = _f90moduleuses.get(usename)
+        base = (
+            get_useparameters({'name': usename, 'use': muse},
+                              seen=seen | {usename})
+            if muse else {}
+        )
+        params = get_parameters(mvars, base)
         if not params:
             continue
-        # XXX: apply mapping
-        if mapping:
-            errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
+        renamed = mapping.get('map', {})
+        imported = dict(params)
+        for local, remote in renamed.items():
+            if remote.lower() in imported:
+                params[local] = params[local.lower()] = imported[remote.lower()]
+        # A scope keeps one record per module, so a second USE of the same
+        # module may have imported what this ONLY list leaves out. Such
+        # names only fill gaps.
+        listed = {k.lower() for k in renamed} if mapping.get('only') else None
         for k, v in list(params.items()):
-            if k in param_map:
+            if listed is not None and k.lower() not in listed:
+                param_map.setdefault(k, v)
+                continue
+            if k in param_map and param_map[k] != v:
                 outmess(f'get_useparameters: overriding parameter {k!r} with'
                         f' value from module {usename!r}\n')
             param_map[k] = v
 
     return param_map
+
+
+_kind_suffix_re = re.compile(r'\b(\d+)_\w+')
+
+
+def _eval_charlen(length, params):
+    try:
+        val = eval(_kind_suffix_re.sub(r'\1', length), {}, params)
+    except Exception:
+        return length
+    if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
+        return str(val)
+    return length
 
 
 def postcrack2(block, tab='', param_map=None):
@@ -2034,18 +2067,40 @@ def postcrack2(block, tab='', param_map=None):
 
     if param_map is None:
         param_map = get_useparameters(block)
+    elif 'use' in block:
+        param_map = get_useparameters(block, copy.copy(param_map))
 
-    if param_map is not None and 'vars' in block:
+    child_map = param_map
+    if param_map and 'vars' in block:
         vars = block['vars']
-        for n in list(vars.keys()):
-            var = vars[n]
-            if 'kindselector' in var:
-                kind = var['kindselector']
-                if 'kind' in kind:
-                    val = kind['kind']
-                    if val in param_map:
-                        kind['kind'] = param_map[val]
-    new_body = [postcrack2(b, tab=tab + '\t', param_map=param_map)
+        non_params = {
+            k.lower() for k, v in vars.items()
+            if 'parameter' not in v.get('attrspec', ())
+        }
+        scoped = {
+            k: v for k, v in param_map.items() if k.lower() not in non_params
+        }
+        if scoped:
+            params = get_parameters(vars, scoped)
+            if block.get('block') == 'module':
+                child_map = params
+            for var in vars.values():
+                kind = var.get('kindselector')
+                if kind and 'kind' in kind and kind['kind'] in scoped:
+                    val = scoped[kind['kind']]
+                    kind['kind'] = (
+                        str(val)
+                        if isinstance(val, int) and not isinstance(val, bool)
+                        else val
+                    )
+                char = var.get('charselector')
+                if char:
+                    key = '*' if '*' in char else (
+                        'len' if 'len' in char else None
+                    )
+                    if key is not None:
+                        char[key] = _eval_charlen(char[key], params)
+    new_body = [postcrack2(b, tab=tab + '\t', param_map=child_map)
                 for b in block['body']]
     block['body'] = new_body
 
@@ -2307,6 +2362,8 @@ def analyzebody(block, args, tab=''):
         else:
             if b['block'] == 'module':
                 f90modulevars[b['name']] = b['vars']
+                if 'use' in b:
+                    _f90moduleuses[b['name'].lower()] = b['use']
             body.append(b)
     return body
 

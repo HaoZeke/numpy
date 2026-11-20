@@ -101,3 +101,41 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+class TestUsedCharacterLength(util.F2PyTest):
+    sources = [
+        util.getpath("tests", "src", "modules", "use_charlen", "user.f90"),
+        util.getpath("tests", "src", "modules", "use_charlen", "nested.f90"),
+        util.getpath("tests", "src", "modules", "use_charlen", "renamed.f90"),
+        util.getpath("tests", "src", "modules", "use_charlen", "params.f90"),
+    ]
+
+    @pytest.mark.parametrize(
+        "modname,attr,value",
+        [
+            ("u", "name", b"hello"),
+            ("u", "tiny", b"ab"),
+            ("u", "doubled", b"abcd"),
+            ("u", "scaled", b"wxyz"),
+            ("u", "starred", b"world"),
+            ("ur", "name", b"hello"),
+            ("ur_swap", "long_s", b"hello"),
+            ("ur_swap", "short_s", b"ab"),
+            ("ur_twice", "s", b"hello"),
+            ("ur_twice", "t", b"ab"),
+            ("ur_collide", "first", b"abc"),
+            ("ur_collide_rev", "last", b"abc"),
+            ("u_nested", "reexported", b"hello"),
+            ("u_nested", "derived", b"0123456789"),
+        ],
+    )
+    def test_module_variable_length(self, modname, attr, value):
+        got = getattr(getattr(self.module, modname), attr)
+        assert got.dtype.itemsize == len(value)
+        assert got.tobytes() == value
+
+    def test_contained_subroutine_length(self):
+        assert self.module.u.get_name() == b"hello"
+        assert self.module.u.echo(2) == b"ab"
