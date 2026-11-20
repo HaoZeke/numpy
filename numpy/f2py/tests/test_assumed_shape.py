@@ -50,3 +50,34 @@ class TestF2cmapOption(TestAssumedShapeSumExample):
 
     def teardown_method(self):
         os.unlink(self.f2cmap_file.name)
+
+
+@pytest.mark.slow
+class TestInterfaceBoundDeclOrder(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+    subroutine sum_lo_hi(a, lo, hi, b, res)
+      implicit none
+      integer, intent(in) :: lo, hi
+      real(8), intent(in) :: a(lo:hi)
+      real(8), intent(in) :: b(:)
+      real(8), intent(out) :: res
+      res = a(lo) + a(hi) + sum(b)
+    end subroutine sum_lo_hi
+
+    subroutine sum_zero_hi(a, hi, b, res)
+      implicit none
+      integer, intent(in) :: hi
+      real(8), intent(in) :: a(0:hi)
+      real(8), intent(in) :: b(:)
+      real(8), intent(out) :: res
+      res = a(0) + a(hi) + sum(b)
+    end subroutine sum_zero_hi
+    """
+
+    @pytest.mark.parametrize(("func", "args"), [
+        ("sum_lo_hi", ([10.0, 20.0, 30.0], -1, 1, [1.0, 2.0])),
+        ("sum_zero_hi", ([10.0, 20.0, 30.0], [1.0, 2.0])),
+    ])
+    def test_interface_declares_bounds_first(self, func, args):
+        assert getattr(self.module, func)(*args) == 43.0

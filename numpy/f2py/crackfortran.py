@@ -3457,6 +3457,21 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         for a in list(vars.keys()):
             if a not in nout:
                 nout.append(a)
+    else:
+        externals = block.get('externals', ())
+
+        def _iface_order(a):
+            v = vars.get(a, {})
+            if ('dimension' in v
+                    or any(s.lstrip().lower().startswith('dimension')
+                           for s in v.get('attrspec', ()))):
+                return 2
+            if (v.get('typespec') == 'integer'
+                    and not isexternal(v) and a not in externals):
+                return 0
+            return 1
+
+        nout.sort(key=_iface_order)
     for a in nout:
         if 'depend' in vars[a]:
             for d in vars[a]['depend']:
