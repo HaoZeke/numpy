@@ -3506,7 +3506,10 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         elif 'charselector' in vars[a]:
             selector = vars[a]['charselector']
         if '*' in selector:
-            if selector['*'] in ['*', ':']:
+            if vardef == 'character' and 'kind' in selector:
+                length = '*' if selector['*'] == '(*)' else selector['*']
+                vardef = f"{vardef}(len={length},kind={selector['kind']})"
+            elif selector['*'] in ['*', ':']:
                 vardef = f"{vardef}*({selector['*']})"
             else:
                 vardef = f"{vardef}*{selector['*']}"
