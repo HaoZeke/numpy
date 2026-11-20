@@ -32,6 +32,7 @@ __all__ = [
 
 
 depargs = []
+routvars = {}
 lcb_map = {}
 lcb2_map = {}
 # forced casting: mainly caused by the fact that Python or Numeric
@@ -304,6 +305,7 @@ def getarrdims(a, var, verbose=0):
         ret['dims'] = ','.join(dim)
         ret['rank'] = repr(len(dim))
         ret['rank*[-1]'] = repr(len(dim) * [-1])[1:-1]
+        late = []
         for i in range(len(dim)):  # solve dim for dependencies
             v = []
             if dim[i] in depargs:
@@ -312,10 +314,10 @@ def getarrdims(a, var, verbose=0):
                 for va in depargs:
                     if re.match(rf'.*?\b{va}\b.*', dim[i]):
                         v.append(va)
-            for va in v:
-                if depargs.index(va) > depargs.index(a):
-                    dim[i] = '*'
-                    break
+            later = [va for va in v if depargs.index(va) > depargs.index(a)]
+            if later:
+                late.append((i, dim[i], later))
+                dim[i] = '*'
         ret['setdims'], i = '', -1
         for d in dim:
             i = i + 1
@@ -323,6 +325,23 @@ def getarrdims(a, var, verbose=0):
                 ret['setdims'] = f"{ret['setdims']}#varname#_Dims[{i}]={d},"
         if ret['setdims']:
             ret['setdims'] = ret['setdims'][:-1]
+        if late and isoptional(var):
+            for i, expr, deps in late:
+                conv = []
+                for va in deps:
+                    spec = routvars.get(va, {})
+                    ctype = getctype(spec) if spec else 'void'
+                    if (isintent_hide(spec) or not isscalar(spec)
+                            or spec.get('typespec') != 'integer'
+                            or ctype == 'void'):
+                        break
+                    conv.append(f"{va}_capi != Py_None && "
+                                f"{ctype}_from_pyobj(&{va},{va}_capi,\"{va}\")")
+                else:
+                    ret['setdims'] = (
+                        f"if (#varname#_capi == Py_None && {' && '.join(conv)}) "
+                        f"#varname#_Dims[{i}]={expr}; {ret['setdims']}"
+                    ).strip()
         ret['cbsetdims'], i = '', -1
         for d in var['dimension']:
             i = i + 1

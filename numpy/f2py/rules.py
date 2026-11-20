@@ -1581,6 +1581,7 @@ def buildapi(rout):
     # Args
     nth, nthk = 0, 0
     savevrd = {}
+    capi_maps.routvars = var
     for a in args:
         vrd = capi_maps.sign2map(a, var[a])
         if isintent_aux(var[a]):
@@ -1605,6 +1606,7 @@ def buildapi(rout):
                 rd = dictappend(rd, ar)
                 if '_break' in r:
                     break
+    capi_maps.routvars = {}
     for a in depargs:
         if isintent_aux(var[a]):
             _rules = aux_rules
