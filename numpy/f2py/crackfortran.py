@@ -1187,8 +1187,13 @@ def analyzeline(m, case, line):
                         groupcache[groupcounter]['vars'][name] = appenddecl(
                             groupcache[groupcounter]['vars'][name], groupcache[groupcounter]['vars'][result])
             # if groupcounter>1: # name is interfaced
+            renamed = groupcache[groupcounter]['name']
+            if renamed != name:
+                enh = groupcache[groupcounter].setdefault('f2pyenhancements', {})
+                enh.setdefault('fortranname', name)
             try:
-                groupcache[groupcounter - 2]['interfaced'].append(name)
+                groupcache[groupcounter - 2]['interfaced'].append(
+                    name if bindcline else renamed)
             except Exception:
                 pass
         if block == 'function':
