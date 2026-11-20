@@ -1319,6 +1319,10 @@ cfuncs[
 needs['try_pyarr_from_double'] = ['pyobj_from_double1', 'TRYPYARRAYTEMPLATE']
 cfuncs[
     'try_pyarr_from_double'] = 'static int try_pyarr_from_double(PyObject* obj,double* v) {\n    TRYPYARRAYTEMPLATE(double,\'d\');\n}\n'
+needs['try_pyarr_from_long_double'] = [
+    'pyobj_from_long_double1', 'TRYPYARRAYTEMPLATE', 'long_double']
+cfuncs[
+    'try_pyarr_from_long_double'] = 'static int try_pyarr_from_long_double(PyObject* obj,long_double* v) {\n    TRYPYARRAYTEMPLATE(long_double,\'g\');\n}\n'
 needs['try_pyarr_from_complex_float'] = [
     'pyobj_from_complex_float1', 'TRYCOMPLEXPYARRAYTEMPLATE', 'complex_float']
 cfuncs[
@@ -1327,6 +1331,11 @@ needs['try_pyarr_from_complex_double'] = [
     'pyobj_from_complex_double1', 'TRYCOMPLEXPYARRAYTEMPLATE', 'complex_double']
 cfuncs[
     'try_pyarr_from_complex_double'] = 'static int try_pyarr_from_complex_double(PyObject* obj,complex_double* v) {\n    TRYCOMPLEXPYARRAYTEMPLATE(double,NPY_CDOUBLE);\n}\n'
+needs['try_pyarr_from_complex_long_double'] = [
+    'pyobj_from_complex_long_double1', 'TRYCOMPLEXPYARRAYTEMPLATE',
+    'complex_long_double', 'long_double']
+cfuncs[
+    'try_pyarr_from_complex_long_double'] = 'static int try_pyarr_from_complex_long_double(PyObject* obj,complex_long_double* v) {\n    TRYCOMPLEXPYARRAYTEMPLATE(long_double,NPY_CLONGDOUBLE);\n}\n'
 
 
 needs['create_cb_arglist'] = ['CFUNCSMESS', 'PRINTPYOBJERR', 'MINMAX']

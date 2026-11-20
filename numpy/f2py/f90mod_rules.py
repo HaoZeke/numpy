@@ -109,6 +109,11 @@ def buildhooks(pymod):
             var = m['vars'][n]
 
             if (n not in notvars and isvariable(var)) and (not l_or(isintent_hide, isprivate)(var)):
+                try:
+                    capi_maps.getctype(var)
+                except ValueError as msg:
+                    outmess(f"\t\t\tSkipping {n} in module {m['name']}: {msg}\n")
+                    continue
                 onlyvars.append(n)
                 mfargs.append(n)
         outmess(f"\t\tConstructing F90 module support for \"{m['name']}\"...\n")
@@ -136,6 +141,7 @@ def buildhooks(pymod):
             s[0] = f'{s[0]}\n{line}'
 
         vrd = capi_maps.modsign2map(m)
+        doc_before = doc[0]
         cadd(f"static FortranDataDef f2py_{m['name']}_def[] = {{")
         dadd(f"\\subsection{{Fortran 90/95 module \\texttt{{{m['name']}}}}}\n")
         if hasnote(m):
@@ -198,9 +204,15 @@ def buildhooks(pymod):
                     outmess("f90mod_rules.buildhooks:"
                             f" skipping {b['block']} {b_name}\n")
                     continue
-                modobjs.append(f"{b_name}()")
                 b['modulename'] = m_name
-                api, wrap = rules.buildapi(b)
+                try:
+                    api, wrap = rules.buildapi(b)
+                except ValueError as msg:
+                    if 'not supported' not in str(msg):
+                        raise
+                    outmess(f'\t\t\tSkipping {b_name} in module {m_name}: {msg}\n')
+                    continue
+                modobjs.append(f"{b_name}()")
                 if isfunction(b):
                     fhooks[0] = fhooks[0] + wrap
                     fargs.append(f"f2pywrap_{m_name}_{b_name}")
@@ -224,6 +236,12 @@ def buildhooks(pymod):
                 sargs.append(f"char *{b_name}")
                 sargsp.append('char *')
                 iadd(f"\tf2py_{m_name}_def[i_f2py++].data = {b_name};")
+        if not modobjs:
+            doc[0] = doc_before
+            outmess(
+                f"\t\t\tSkipping {m['name']} since there are no public vars/func in this module...\n"
+            )
+            continue
         cadd('\t{NULL}\n};\n')
         iadd('}')
         m_name = m['name']

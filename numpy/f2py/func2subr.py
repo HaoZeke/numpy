@@ -92,6 +92,33 @@ def useiso_fortran_env(rout):
             return True
     return useisof
 
+
+def _strip_kind(var):
+    return {k: v for k, v in var.items() if k != 'kindselector'}
+
+
+def _add_scalar_decl(add, vars, a, f90mode, signature, narrow_temps):
+    from . import capi_maps
+    if capi_maps.unmapped_int_logical_scalar(vars[a]):
+        add(var2fixfortran({a: _strip_kind(vars[a])}, a, f90mode=f90mode))
+        if not signature:
+            tmp = f'f2py_kd_{a}'
+            add(var2fixfortran(vars, a, fa=tmp, f90mode=f90mode))
+            narrow_temps.append((a, tmp))
+    else:
+        add(var2fixfortran(vars, a, f90mode=f90mode))
+
+
+def _add_narrowed_call(add, args, extra_args, narrow_temps, stmt):
+    for a, tmp in narrow_temps:
+        add(f'{tmp} = {a}')
+    repl = dict(narrow_temps)
+    sargs = ', '.join(repl.get(a, a) for a in args if a not in extra_args)
+    add(stmt.format(sargs=sargs))
+    for a, tmp in narrow_temps:
+        add(f'{a} = {tmp}')
+
+
 def createfuncwrapper(rout, signature=0):
     assert isfunction(rout)
 
@@ -135,7 +162,11 @@ def createfuncwrapper(rout, signature=0):
         if charselect.get('*', '') == '(*)':
             charselect['*'] = '10'
 
+    from . import capi_maps
     l1 = l_tmpl.replace('@@@NAME@@@', newname)
+    if capi_maps.unmapped_int_logical_scalar(vars[name]):
+        l1 = var2fixfortran({newname: _strip_kind(vars[name])},
+                            newname, f90mode=f90mode)
     rl = None
 
     useisoc = useiso_c_binding(rout)
@@ -172,6 +203,7 @@ def createfuncwrapper(rout, signature=0):
 
     args = args[1:]
     dumped_args = []
+    narrow_temps = []
     for a in args:
         if isexternal(vars[a]):
             add(f'external {a}')
@@ -180,7 +212,7 @@ def createfuncwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            _add_scalar_decl(add, vars, a, f90mode, signature, narrow_temps)
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
@@ -206,13 +238,12 @@ def createfuncwrapper(rout, signature=0):
             add(rout['saved_interface'].lstrip())
             add('end interface')
 
-    sargs = ', '.join([a for a in args if a not in extra_args])
-
     if not signature:
         if islogicalfunction(rout):
-            add(f'{newname} = .not.(.not.{fortranname}({sargs}))')
+            stmt = f'{newname} = .not.(.not.{fortranname}({{sargs}}))'
         else:
-            add(f'{newname} = {fortranname}({sargs})')
+            stmt = f'{newname} = {fortranname}({{sargs}})'
+        _add_narrowed_call(add, args, extra_args, narrow_temps, stmt)
     if f90mode:
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:
@@ -274,6 +305,7 @@ def createsubrwrapper(rout, signature=0):
                 add(line)
 
     dumped_args = []
+    narrow_temps = []
     for a in args:
         if isexternal(vars[a]):
             add(f'external {a}')
@@ -282,7 +314,7 @@ def createsubrwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            _add_scalar_decl(add, vars, a, f90mode, signature, narrow_temps)
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
@@ -301,10 +333,11 @@ def createsubrwrapper(rout, signature=0):
                 add(line)
             add('end interface')
 
-    sargs = ', '.join([a for a in args if a not in extra_args])
-
     if not signature:
-        add(f'call {fortranname}({sargs})')
+        _add_narrowed_call(
+            add, args, extra_args, narrow_temps,
+            f'call {fortranname}({{sargs}})',
+        )
     if f90mode:
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:

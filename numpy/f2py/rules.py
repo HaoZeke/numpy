@@ -63,6 +63,7 @@ from . import (
     use_rules,
 )
 from .auxfuncs import (
+    _islong_doublearray,
     applyrules,
     debugcapi,
     dictappend,
@@ -682,12 +683,13 @@ rout_rules = [
             {l_and(debugcapi, l_not(iscomplexfunction)): '    fprintf(stderr,"#routdebugshowvalue#\\n",#name#_return_value);'}],
         'pyobjfrom': {iscomplexfunction: '    #name#_return_value_capi = pyobj_from_#ctype#1(#name#_return_value);'},
         'need': [{l_not(isdummyroutine): 'F_FUNC'},
-                 {iscomplexfunction: 'pyobj_from_#ctype#1'},
+                 {l_or(iscomplexfunction, islong_doublefunction): 'pyobj_from_#ctype#1'},
                  {islong_longfunction: 'long_long'},
                  {islong_doublefunction: 'long_double'}],
         'returnformat': {l_not(isintent_hide): '#rformat#'},
         'return': {iscomplexfunction: ',#name#_return_value_capi',
-                   l_not(l_or(iscomplexfunction, isintent_hide)): ',#name#_return_value'},
+                   l_and(islong_doublefunction, l_not(isintent_hide)): ',pyobj_from_#ctype#1(#name#_return_value)',
+                   l_not(l_or(iscomplexfunction, islong_doublefunction, isintent_hide)): ',#name#_return_value'},
         '_check': l_and(isfunction, l_not(isstringfunction), l_not(isfunction_wrap))
     }, {  # String function # in use for --no-wrap
         'declfortranroutine': 'extern void #F_FUNC#(#fortranname#,#FORTRANNAME#)(#callprotoargument#);',
@@ -743,6 +745,7 @@ rout_rules = [
 
 typedef_need_dict = {islong_long: 'long_long',
                      islong_double: 'long_double',
+                     _islong_doublearray: 'long_double',
                      islong_complex: 'complex_long_double',
                      isunsigned_char: 'unsigned_char',
                      isunsigned_short: 'unsigned_short',
@@ -774,7 +777,9 @@ aux_rules = [
         '_check': l_and(isscalar, l_not(iscomplex)),
     },
     {
-        'return': ',#varname#',
+        'return': {l_not(islong_double): ',#varname#',
+                   islong_double: ',pyobj_from_#ctype#1(#varname#)'},
+        'need': {islong_double: 'pyobj_from_#ctype#1'},
         'docstrout': '#pydocsignout#',
         'docreturn': '#outvarname#,',
         'returnformat': '#varrformat#',
@@ -971,7 +976,9 @@ if (#varname#_cb.capi==Py_None) {
         'decl': '    #ctype# #varname# = 0;',
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"#vardebugshowvalue#\\n",#varname#);'},
         'callfortran': {l_or(isintent_c, isattr_value): '#varname#,', l_not(l_or(isintent_c, isattr_value)): '&#varname#,'},
-        'return': {isintent_out: ',#varname#'},
+        'return': {l_and(isintent_out, l_not(islong_double)): ',#varname#',
+                   l_and(isintent_out, islong_double): ',pyobj_from_#ctype#1(#varname#)'},
+        'need': {l_and(isintent_out, islong_double): 'pyobj_from_#ctype#1'},
         '_check': l_and(isscalar, l_not(iscomplex))
     }, {
         'need': {hasinitvalue: 'math.h'},
@@ -1403,7 +1410,13 @@ def buildmodule(m, um):
                     # only f77 wrappers
                     outmess(f'    Maybe empty "{m_name}-f2pywrappers.f"\n')
                     Path(f'{b_path}/{m_name}-f2pywrappers.f').touch()
-            api, wrap = buildapi(nb)
+            try:
+                api, wrap = buildapi(nb)
+            except ValueError as msg:
+                if 'not supported' not in str(msg):
+                    raise
+                outmess(f'\t\tSkipping {nb["name"]}: {msg}\n')
+                continue
             if wrap:
                 if isf90:
                     funcwrappers2.append(wrap)
@@ -1432,8 +1445,9 @@ def buildmodule(m, um):
 
     needs = cfuncs.get_needs()
     # Add mapped definitions
-    needs['typedefs'] += [cvar for cvar in capi_maps.f2cmap_mapped  #
-                          if cvar in typedef_need_dict.values()]
+    for cvar in capi_maps.f2cmap_mapped:
+        if cvar in typedef_need_dict.values() and cvar not in needs['typedefs']:
+            needs['typedefs'].append(cvar)
     code = {}
     for n in needs.keys():
         code[n] = []
@@ -1558,6 +1572,15 @@ stnd = {1: 'st', 2: 'nd', 3: 'rd', 4: 'th', 5: 'th',
 
 
 def buildapi(rout):
+    prev_intent_c = capi_maps._in_intent_c
+    capi_maps._in_intent_c = bool(isintent_c(rout))
+    try:
+        return _buildapi(rout)
+    finally:
+        capi_maps._in_intent_c = prev_intent_c
+
+
+def _buildapi(rout):
     rout, wrap = func2subr.assubr(rout)
     args, depargs = getargs2(rout)
     capi_maps.depargs = depargs

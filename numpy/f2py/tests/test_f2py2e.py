@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import numpy as np
 from numpy.f2py.f2py2e import get_newer_options, main as f2pycli
 from numpy.testing._private.utils import NOGIL_BUILD
 
@@ -779,6 +780,40 @@ def test_f2cmap(capfd, f2cmap_f90, monkeypatch):
         assert "Mapping \"real(kind=real64)\" to \"double\"" in out
         assert "Mapping \"integer(kind=int64)\" to \"long_long\"" in out
         assert "Successfully applied user defined f2cmap changes" in out
+
+
+@pytest.mark.slow
+class TestLongDoubleKinds(util.F2PyTest):
+    suffix = ".f90"
+    ld = "10" if np.finfo(np.longdouble).nmant == 63 else "c_long_double"
+    code = textwrap.dedent(f"""\
+        subroutine add_ld(a, c, n)
+          use iso_c_binding, only: c_long_double
+          integer, intent(in) :: n
+          real(kind={ld}), intent(in) :: a(n)
+          real(kind={ld}), intent(out) :: c(n)
+          c = a + 0.25
+        end subroutine add_ld
+        """)
+
+    def test_real_long_double(self):
+        a = np.array([1.5, 2.5], dtype=np.longdouble)
+        assert np.all(self.module.add_ld(a) == a + 0.25)
+
+
+@pytest.mark.slow
+class TestWideIntegerScalars(util.F2PyTest):
+    suffix = ".f90"
+    code = textwrap.dedent("""\
+        subroutine i16_in_out(x, y)
+          integer(kind=16), intent(in) :: x
+          integer(kind=16), intent(out) :: y
+          y = x / 2
+        end subroutine i16_in_out
+        """)
+
+    def test_negative_half(self):
+        assert self.module.i16_in_out(-5) == -2
 
 
 def test_quiet(capfd, hello_world_f90, monkeypatch):

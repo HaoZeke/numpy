@@ -29,7 +29,8 @@ __all__ = [
     'iscomplexarray', 'iscomplexfunction', 'iscomplexfunction_warn',
     'isdouble', 'isdummyroutine', 'isexternal', 'isfunction',
     'isfunction_wrap', 'isint1', 'isint1array', 'isinteger', 'isintent_aux',
-    'isintent_c', 'isintent_callback', 'isintent_copy', 'isintent_dict',
+    'isintent_c', 'isintent_cache', 'isintent_callback', 'isintent_copy',
+    'isintent_dict',
     'isintent_hide', 'isintent_in', 'isintent_inout', 'isintent_inplace',
     'isintent_nothide', 'isintent_out', 'isintent_overwrite', 'islogical',
     'islogicalfunction', 'islong_complex', 'islong_double',
@@ -215,18 +216,48 @@ def isdouble(var):
     return get_kind(var) == '8'
 
 
+def _is_long_double_kind(var):
+    from . import capi_maps
+    if str(var.get('typespec', '')).lower() != 'real':
+        return False
+    ks = var.get('kindselector') or {}
+    kind = str(ks.get('*', ks.get('kind', ''))).strip()
+    ctype = capi_maps.f2cmap_all['real'].get(kind)
+    if ctype is None:
+        ctype = capi_maps._same_width_input_ctype(var, 'real', kind)
+    return ctype == 'long_double'
+
+
 def islong_double(var):
-    if not isscalar(var):
-        return 0
-    if not var.get('typespec') == 'real':
-        return 0
-    return get_kind(var) == '16'
+    return isscalar(var) and _is_long_double_kind(var)
+
+
+def _islong_doublearray(var):
+    return isarray(var) and _is_long_double_kind(var)
 
 
 def islong_complex(var):
     if not iscomplex(var):
         return 0
-    return get_kind(var) == '32'
+    from . import capi_maps
+    ks = var.get('kindselector') or {}
+    if '*' in ks:
+        kind = str(ks['*']).strip()
+        ctype = capi_maps.f2cmap_all['complex'].get(kind)
+    elif 'kind' in ks:
+        kind = str(ks['kind']).strip()
+        ctype = capi_maps.f2cmap_all['complexkind'].get(kind)
+        if ctype is None and (
+            not kind.lstrip('+-').isdigit()
+            or ('complex', kind.lower()) in capi_maps.f2cmap_user
+        ):
+            ctype = capi_maps.f2cmap_all['complex'].get(kind)
+    else:
+        kind = ''
+        ctype = capi_maps.f2cmap_all['complex'].get('')
+    if ctype is None:
+        ctype = capi_maps._same_width_input_ctype(var, 'complex', kind)
+    return ctype == 'complex_long_double'
 
 
 def iscomplexarray(var):
@@ -312,7 +343,17 @@ def issubroutine(rout):
 def issubroutine_wrap(rout):
     if isintent_c(rout):
         return 0
-    return issubroutine(rout) and hasassumedshape(rout)
+    if not issubroutine(rout):
+        return 0
+    if hasassumedshape(rout):
+        return 1
+    # Imported lazily: capi_maps imports this module while it loads.
+    from . import capi_maps
+    for arg in rout.get('args', []):
+        var = rout.get('vars', {}).get(arg)
+        if capi_maps.unmapped_int_logical_scalar(var):
+            return 1
+    return 0
 
 def isattr_value(var):
     return 'value' in var.get('attrspec', [])

@@ -60,10 +60,21 @@ def buildhooks(m):
         lower_name = name.lower()
         hnames, inames = [], []
         for n in vnames:
+            try:
+                capi_maps.getctype(vars[n])
+            except ValueError as msg:
+                outmess(f'\t\tHiding {n} in COMMON block "{name}": {msg}\n')
+                hnames.append(n)
+                continue
             if isintent_hide(vars[n]):
                 hnames.append(n)
             else:
                 inames.append(n)
+        if not inames:
+            outmess(
+                f'\t\tSkipping COMMON block "{name}" since all members are hidden.\n'
+            )
+            continue
         hnames_str = ','.join(hnames)
         inames_str = ','.join(inames)
         if hnames:

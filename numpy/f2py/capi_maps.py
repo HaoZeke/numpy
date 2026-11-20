@@ -14,6 +14,8 @@ import copy
 import os
 import re
 
+import numpy as np
+
 from . import cb_rules
 from ._isocbind import iso_c2py_map, iso_c_binding_map, isoc_c2pycode_map
 from ._isofenv import iso_fortran_env_map
@@ -98,6 +100,7 @@ c2pycode_map = {'double': 'd',
 # https://docs.python.org/3/c-api/arg.html#building-values
 c2buildvalue_map = {'double': 'd',
                     'float': 'f',
+                    'long_double': 'N',
                     'char': 'b',
                     'signed_char': 'b',
                     'short': 'h',
@@ -111,17 +114,15 @@ c2buildvalue_map = {'double': 'd',
                     'character': 'c'}
 
 f2cmap_all = {'real': {'': 'float', '4': 'float', '8': 'double',
-                       '12': 'long_double', '16': 'long_double'},
+                       '12': 'long_double'},
               'integer': {'': 'int', '1': 'signed_char', '2': 'short',
                           '4': 'int', '8': 'long_long',
                           '-1': 'unsigned_char', '-2': 'unsigned_short',
                           '-4': 'unsigned', '-8': 'unsigned_long_long'},
               'complex': {'': 'complex_float', '8': 'complex_float',
-                          '16': 'complex_double', '24': 'complex_long_double',
-                          '32': 'complex_long_double'},
+                          '16': 'complex_double', '24': 'complex_long_double'},
               'complexkind': {'': 'complex_float', '4': 'complex_float',
-                              '8': 'complex_double', '12': 'complex_long_double',
-                              '16': 'complex_long_double'},
+                              '8': 'complex_double', '12': 'complex_long_double'},
               'logical': {'': 'int', '1': 'char', '2': 'short', '4': 'int',
                           '8': 'long_long'},
               'double complex': {'': 'complex_double'},
@@ -129,20 +130,41 @@ f2cmap_all = {'real': {'': 'float', '4': 'float', '8': 'double',
               'byte': {'': 'char'},
               }
 
+# Kind 10 is x87 extended precision and kind 16 a 128 bit format, so map
+# only the kind whose format matches the C long double.
+_ld = np.finfo(np.longdouble)
+_ld_kind = 10 if _ld.nmant == 63 else None
+if _ld.bits == 128 and _ld.nmant > 63:
+    _ld_kind = 16
+if _ld_kind:
+    f2cmap_all['real'][str(_ld_kind)] = 'long_double'
+    f2cmap_all['complex'][str(2 * _ld_kind)] = 'complex_long_double'
+    f2cmap_all['complexkind'][str(_ld_kind)] = 'complex_long_double'
+_quad_kinds = frozenset({'real128', 'c_float128', 'c_float128_complex'})
+
 # Add ISO_C handling
 c2pycode_map.update(isoc_c2pycode_map)
 c2py_map.update(iso_c2py_map)
 f2cmap_all, _ = process_f2cmap_dict(f2cmap_all, iso_c_binding_map, c2py_map)
 f2cmap_all, _ = process_f2cmap_dict(f2cmap_all, iso_fortran_env_map, c2py_map)
+# complex(<real_kind>) stores the real kind name while the ISO maps only
+# list *_complex names under the complex type.
+f2cmap_all['complexkind'].update({
+    'c_double': 'complex_double',
+    'c_long_double': 'complex_long_double',
+    'real64': 'complex_double',
+})
 # End ISO_C handling
 f2cmap_default = copy.deepcopy(f2cmap_all)
 
 f2cmap_mapped = []
+f2cmap_user = set()
 
 def load_f2cmap_file(f2cmap_file):
-    global f2cmap_all, f2cmap_mapped
+    global f2cmap_all, f2cmap_mapped, f2cmap_user
 
     f2cmap_all = copy.deepcopy(f2cmap_default)
+    f2cmap_user = set()
 
     if f2cmap_file is None:
         # Default value
@@ -160,6 +182,11 @@ def load_f2cmap_file(f2cmap_file):
         with open(f2cmap_file) as f:
             d = eval(f.read().lower(), {}, {})
         f2cmap_all, f2cmap_mapped = process_f2cmap_dict(f2cmap_all, d, c2py_map, True)
+        f2cmap_user = {
+            (k.lower(), str(k1).lower())
+            for k, d1 in d.items() for k1, v1 in d1.items()
+            if v1 in c2py_map
+        }
         outmess('Successfully applied user defined f2cmap changes\n')
     except Exception as msg:
         errmess(f'Failed to apply user defined f2cmap changes: {msg}. Skipping.\n')
@@ -188,10 +215,55 @@ cformat_map = {'double': '%g',
 # Auxiliary functions
 
 
-def getctype(var):
-    """
-    Determines C type
-    """
+def unmapped_int_logical_scalar(var):
+    """True when a scalar integer or logical kind has no C type."""
+    if not var or not isscalar(var):
+        return False
+    typespec = str(var.get('typespec', '')).lower()
+    if typespec not in ('integer', 'logical'):
+        return False
+    selector = var.get('kindselector') or {}
+    kind = str(selector.get('*', selector.get('kind', ''))).strip()
+    if not kind.lstrip('+-').isdigit():
+        return False
+    return kind not in f2cmap_all.get(typespec, {})
+
+
+def _keep_narrow_fallback(var):
+    # Integer and logical scalars keep the default C type: Fortran wrappers
+    # narrow routine arguments, other uses read the low order bytes.
+    return (not isarray(var)
+            and str(var.get('typespec', '')).lower() in ('integer', 'logical'))
+
+
+# Set while a callback or intent(c) routine signature is built.
+_in_callback = False
+_in_intent_c = False
+
+
+def _same_width_input_ctype(var, typespec, kind):
+    # Scalar inputs, hidden/cache/aux work arrays and callback arguments
+    # keep the historical same-width C type when long double is 16 bytes.
+    # intent(c) routines target C long double directly on any platform.
+    if var is None:
+        return None
+    if not _in_intent_c:
+        if (_ld.dtype.itemsize != 16 or isintent_out(var)
+                or isintent_inout(var) or isintent_inplace(var)):
+            return None
+        if isarray(var) and not (
+                isintent_hide(var) or isintent_cache(var)
+                or isintent_aux(var) or _in_callback):
+            return None
+    kind = str(kind).strip().lower()
+    if typespec == 'real' and (kind == '16' or kind in _quad_kinds):
+        return 'long_double'
+    if typespec == 'complex' and (kind in {'16', '32'} or kind in _quad_kinds):
+        return 'complex_long_double'
+    return None
+
+
+def _getctype(var, allow_input_fallback=True):
     ctype = 'void'
     if isfunction(var):
         if 'result' in var:
@@ -199,7 +271,7 @@ def getctype(var):
         else:
             a = var['name']
         if a in var['vars']:
-            return getctype(var['vars'][a])
+            return _getctype(var['vars'][a], allow_input_fallback=_in_intent_c)
         else:
             errmess(f'getctype: function {a} has no return value?!\n')
     elif issubroutine(var):
@@ -219,26 +291,57 @@ def getctype(var):
                 except KeyError:
                     raw_typespec = var['typespec']
                     star = var['kindselector']['*']
-                    errmess(f'getctype: "{raw_typespec} * {star}" not supported.\n')
+                    msg = f'getctype: "{raw_typespec} * {star}" not supported.'
+                    fallback = (_same_width_input_ctype(var, typespec, star)
+                                if allow_input_fallback else None)
+                    if fallback:
+                        ctype = fallback
+                    elif not _keep_narrow_fallback(var):
+                        raise ValueError(msg) from None
+                    else:
+                        errmess(msg + '\n')
             elif 'kind' in var['kindselector']:
+                kind = str(var['kindselector']['kind']).strip()
                 if typespec + 'kind' in f2cmap_all:
                     f2cmap = f2cmap_all[typespec + 'kind']
                 try:
-                    ctype = f2cmap[var['kindselector']['kind']]
+                    ctype = f2cmap[kind]
                 except KeyError:
                     if typespec in f2cmap_all:
                         f2cmap = f2cmap_all[typespec]
-                    try:
-                        ctype = f2cmap[str(var['kindselector']['kind'])]
-                    except KeyError:
-                        kind = var['kindselector']['kind']
-                        errmess(f'getctype: "{typespec}({kind=})" is mapped to C '
-                                f'"{ctype}" (to override define {{{typespec!r}: '
-                                f'{{{kind!r}: "<C typespec>"}}}} '
-                                f'in {os.getcwd()}/.f2py_f2cmap file).\n')
+                    kind_lower = kind.lower()
+                    # A numeric or 128-bit named kind may use a user mapping,
+                    # not a default byte-length entry such as complex*16.
+                    known_unmapped = (kind.lstrip('+-').isdigit()
+                                      or kind_lower in _quad_kinds)
+                    if (known_unmapped
+                            and (typespec, kind_lower) not in f2cmap_user
+                            and not _keep_narrow_fallback(var)):
+                        fallback = (_same_width_input_ctype(var, typespec, kind)
+                                    if allow_input_fallback else None)
+                        if not fallback:
+                            raise ValueError(
+                                f'getctype: "{typespec}({kind=})" not supported.'
+                            ) from None
+                        ctype = fallback
+                    else:
+                        try:
+                            ctype = f2cmap[kind]
+                        except KeyError:
+                            errmess(f'getctype: "{typespec}({kind=})" is mapped to C '
+                                    f'"{ctype}" (to override define {{{typespec!r}: '
+                                    f'{{{kind!r}: "<C typespec>"}}}} '
+                                    f'in {os.getcwd()}/.f2py_f2cmap file).\n')
     elif not isexternal(var):
         errmess(f'getctype: No C-type found in "{var}", assuming void.\n')
     return ctype
+
+
+def getctype(var):
+    """
+    Determines C type
+    """
+    return _getctype(var)
 
 
 def f2cexpr(expr):
@@ -624,6 +727,19 @@ def routsign2map(rout):
                                 ln = k
                                 break
                     lcb_map[ln] = un[1]
+            if u in cb_rules.cb_skipped:
+                externals = rout.get('externals', [])
+                for cname, reason in cb_rules.cb_skipped[u].items():
+                    ln = cname
+                    if 'map' in rout['use'][u]:
+                        for k, v in rout['use'][u]['map'].items():
+                            if v == cname:
+                                ln = k
+                                break
+                    if ln in externals:
+                        raise ValueError(
+                            f'call-back "{cname}" not supported: {reason}'
+                        )
     elif rout.get('externals'):
         externals = rout['externals']
         errmess(f"routsign2map: Confused: function {ret['name']} has externals "
@@ -635,8 +751,8 @@ def routsign2map(rout):
         else:
             a = rout['name']
         ret['rname'] = a
+        ret['ctype'] = getctype(rout)
         ret['pydocsign'], ret['pydocsignout'] = getpydocsign(a, rout)
-        ret['ctype'] = getctype(rout['vars'][a])
         if hasresultnote(rout):
             ret['resultnote'] = rout['vars'][a]['note']
             rout['vars'][a]['note'] = ['See elsewhere.']

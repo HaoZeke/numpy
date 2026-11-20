@@ -510,20 +510,42 @@ cb_arg_rules = [
 
 ################## Build call-back module #############
 cb_map = {}
+cb_skipped = {}
 
 
 def buildcallbacks(m):
     cb_map[m['name']] = []
+    cb_skipped[m['name']] = {}
     for bi in m['body']:
         if bi['block'] == 'interface':
             for b in bi['body']:
                 if b:
-                    buildcallback(b, m['name'])
+                    try:
+                        buildcallback(b, m['name'])
+                    except ValueError as msg:
+                        if 'not supported' not in str(msg):
+                            raise
+                        outmess(f'\tSkipping call-back {b["name"]}: {msg}\n')
+                        cb_skipped[m['name']][b['name']] = str(msg)
                 else:
                     errmess(f"warning: empty body for {m['name']}\n")
 
 
 def buildcallback(rout, um):
+    from . import capi_maps
+
+    prev_cb = capi_maps._in_callback
+    prev_intent_c = capi_maps._in_intent_c
+    capi_maps._in_callback = True
+    capi_maps._in_intent_c = bool(isintent_c(rout))
+    try:
+        _buildcallback(rout, um)
+    finally:
+        capi_maps._in_callback = prev_cb
+        capi_maps._in_intent_c = prev_intent_c
+
+
+def _buildcallback(rout, um):
     from . import capi_maps
 
     outmess(f"    Constructing call-back function \"cb_{rout['name']}_in_{um}\"\n")
@@ -532,7 +554,6 @@ def buildcallback(rout, um):
     var = rout['vars']
     vrd = capi_maps.cb_routsign2map(rout, um)
     rd = dictappend({}, vrd)
-    cb_map[um].append([rout['name'], rd['name']])
     for r in cb_rout_rules:
         if ('_check' in r and r['_check'](rout)) or ('_check' not in r):
             ar = applyrules(r, vrd, rout)
@@ -638,6 +659,7 @@ def buildcallback(rout, um):
     cfuncs.typedefs_generated[rd['name'] + '_typedef'] = ar['cbtypedefs']
     ar['need'].append(rd['name'] + '_typedef')
     cfuncs.needs[rd['name']] = ar['need']
+    cb_map[um].append([rout['name'], rd['name']])
 
     capi_maps.lcb2_map[rd['name']] = {'maxnofargs': ar['maxnofargs'],
                                       'nofoptargs': ar['nofoptargs'],
