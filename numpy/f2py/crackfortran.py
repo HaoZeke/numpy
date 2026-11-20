@@ -699,15 +699,6 @@ def mask_string_literals(expr):
     return _quoted_string_re.sub("''", expr)
 
 
-def _simplifyargs(argsline):
-    a = []
-    for n in markoutercomma(argsline).split('@,@'):
-        for r in '(),':
-            n = n.replace(r, '_')
-        a.append(n)
-    return ','.join(a)
-
-
 crackline_re_1 = re.compile(r'\s*(?P<result>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bind_1 = re.compile(r'\s*(?P<bind>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bindlang = re.compile(r'\s*bind\(\s*(?P<lang>[^,]+)\s*,\s*name\s*=\s*"(?P<lang_name>[^"]+)"\s*\)', re.I)
@@ -807,7 +798,7 @@ def crackline(line, reset=0):
                     markouterparen(line), re.I)
                 if m1:
                     m2 = re_1.match(m1.group('before'))
-                    a = _simplifyargs(m1.group('args'))
+                    a = m1.group('args')
                     if m2:
                         line = f"callfun {name}({a}) result ({m2.group('result')})"
                     else:
@@ -952,7 +943,8 @@ operatorpattern = re.compile(
     r'\s*(?P<scheme>(operator|assignment))'
     r'@\(@\s*(?P<name>[^)]+)\s*@\)@\s*\Z', re.I)
 callnameargspattern = re.compile(
-    r'\s*(?P<name>\b[\w$]+\b)\s*@\(@\s*(?P<args>.*)\s*@\)@\s*\Z', re.I)
+    r'\s*(?P<name>\b[\w$]+\b)\s*@\(@\s*(?P<args>.*?)\s*@\)@'
+    r'\s*(result\s*@\(@\s*(?P<result>\b[\w$]+\b)\s*@\)@)?\s*\Z', re.I)
 real16pattern = re.compile(
     r'([-+]?(?:\d+(?:\.\d*)?|\d*\.\d+))[dD]((?:[-+]?\d+)?)')
 real8pattern = re.compile(
@@ -1000,7 +992,7 @@ def _resolvenameargspattern(line):
         return name, [], None, None
     m1 = callnameargspattern.match(line)
     if m1:
-        return m1.group('name'), m1.group('args'), None, None
+        return m1.group('name'), m1.group('args'), m1.group('result'), None
     return None, [], None, None
 
 

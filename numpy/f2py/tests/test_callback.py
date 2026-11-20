@@ -249,6 +249,29 @@ class TestGH25211(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestCallbackArrayElementArg(util.F2PyTest):
+    code = """
+      function getx(fun, x)
+      external fun
+      real*8 x(3), fun, getx
+      getx = fun(x(2))
+      end
+      function geta(fun, a)
+      external fun
+      real*8 a(2,2), fun, geta
+      geta = fun(a(1,2))
+      end
+    """
+
+    @pytest.mark.parametrize("name, arg", [
+        ("getx", [1.5, 7.25, 3.0]),
+        ("geta", [[1.5, 7.25], [3.0, 4.0]]),
+    ])
+    def test_array_element_arg(self, name, arg):
+        assert getattr(self.module, name)(lambda v: v, arg) == 7.25
+
+
+@pytest.mark.slow
 @pytest.mark.xfail(condition=(platform.system().lower() == 'darwin'),
                    run=False,
                    reason="Callback aborts cause CI failures on macOS")
