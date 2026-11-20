@@ -241,6 +241,31 @@ def getctype(var):
     return ctype
 
 
+_LEN_TRIM_RE = re.compile(
+    r'\b(?:len\s*\(\s*trim\s*\(\s*(?P<len_arg>[A-Za-z_]\w*)\s*\)\s*\)'
+    r'|len_trim\s*\(\s*(?P<trim_arg>[A-Za-z_]\w*)\s*\))',
+    re.IGNORECASE,
+)
+
+
+def rewrite_len_trim(expr, vars, args):
+    """Rewrite len(trim(s)) and len_trim(s) of string arguments as C calls."""
+    if 'trim' not in expr.lower():
+        return expr
+
+    def repl(m):
+        arg = m.group('len_arg') or m.group('trim_arg')
+        if arg not in args:
+            return m.group(0)
+        if isstring(vars[arg]):
+            return f'f2py_len_trim_str({arg})'
+        if ischaracter(vars[arg]):
+            return f'f2py_len_trim_char({arg})'
+        return m.group(0)
+
+    return _LEN_TRIM_RE.sub(repl, expr)
+
+
 def f2cexpr(expr):
     """Rewrite Fortran expression as f2py supported C expression.
 

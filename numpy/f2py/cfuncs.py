@@ -592,6 +592,18 @@ cppmacros["F2PY_THREAD_LOCAL_DECL"] = """
 """
 ################# C functions ###############
 
+needs['f2py_len_trim'] = ['arrayobject.h', 'len..']
+cfuncs['f2py_len_trim'] = """
+static inline npy_intp f2py_len_trim(const char *s, npy_intp n) {
+    if (s == NULL || n <= 0)
+        return 0;
+    while (n > 0 && s[n - 1] == ' ')
+        n--;
+    return n;
+}
+#define f2py_len_trim_str(s) f2py_len_trim((s), slen(s))
+#define f2py_len_trim_char(c) f2py_len_trim(&(c), 1)
+"""
 cfuncs['calcarrindex'] = """
 static int calcarrindex(int *i,PyArrayObject *arr) {
     int k,ii = i[0];

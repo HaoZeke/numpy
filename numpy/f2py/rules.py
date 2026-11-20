@@ -1605,12 +1605,21 @@ def buildapi(rout):
                 rd = dictappend(rd, ar)
                 if '_break' in r:
                     break
-    for a in depargs:
+
+    def rewrite_lt(expr, avail):
+        new = capi_maps.rewrite_len_trim(expr, var, avail)
+        if new != expr:
+            cfuncs.append_needs('f2py_len_trim')
+        return new
+
+    for i, a in enumerate(depargs):
         if isintent_aux(var[a]):
             _rules = aux_rules
         else:
             _rules = arg_rules
         vrd = savevrd[a]
+        if 'setdims' in vrd:
+            vrd['setdims'] = rewrite_lt(vrd['setdims'], depargs[:i])
         for r in _rules:
             if '_depend' not in r:
                 continue
@@ -1621,7 +1630,7 @@ def buildapi(rout):
                     break
         if 'check' in var[a]:
             for c in var[a]['check']:
-                vrd['check'] = c
+                vrd['check'] = rewrite_lt(c, depargs[:i + 1])
                 ar = applyrules(check_rules, vrd, var[a])
                 rd = dictappend(rd, ar)
     if isinstance(rd['cleanupfrompyobj'], list):
