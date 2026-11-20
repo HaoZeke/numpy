@@ -1826,6 +1826,9 @@ def updatevars(typespec, selector, attrspec, entitydecl):
 
                 if 'array' in d1:
                     dm = f"dimension({d1['array']})"
+                    stmt_dims = [a for a in attrspec or [] if a[:9] == 'dimension']
+                    edecl['attrspec'] = [a for a in edecl.get('attrspec') or []
+                                         if a not in stmt_dims]
                     if 'attrspec' not in edecl or (not edecl['attrspec']):
                         edecl['attrspec'] = [dm]
                     else:
