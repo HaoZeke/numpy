@@ -2107,9 +2107,10 @@ def postcrack(block, args=None, tab=''):
             mname = name + '__user__routines'
         else:
             mname = 'unknown__user__routines'
-        if mname in userisdefined:
+        used_names = set(userisdefined) | {m.get('name') for m in usermodules}
+        if mname in used_names:
             i = 1
-            while f"{mname}_{i}" in userisdefined:
+            while f"{mname}_{i}" in used_names:
                 i = i + 1
             mname = f"{mname}_{i}"
         interface = {'block': 'interface', 'body': [],
