@@ -2,6 +2,8 @@ import textwrap
 
 import pytest
 
+from numpy.f2py.f2py2e import run_main
+
 from . import util
 
 
@@ -101,3 +103,27 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("mod_name", ["MyMod", "My_Mod"])
+def test_mixed_case_module_signature(tmp_path, mod_name):
+    name = f"mixed_case_{mod_name.lower()}"
+    src = tmp_path / f"{name}.f90"
+    src.write_text(textwrap.dedent(f"""
+        module {mod_name}
+          integer :: Count = 3
+        contains
+          function Twice(X) result(Y)
+            real(8), intent(in) :: X
+            real(8) :: Y
+            Y = 2 * X
+          end function Twice
+        end module {mod_name}
+        """))
+    pyf = tmp_path / f"{name}.pyf"
+    run_main(["-h", str(pyf), "-m", name, "--no-lower", str(src)])
+    ext = util.build_module([str(pyf), str(src)], module_name=name)
+    mod = getattr(ext, mod_name)
+    assert mod.Count == 3
+    assert mod.Twice(1.25) == 2.5

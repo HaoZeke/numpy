@@ -235,10 +235,10 @@ def buildhooks(pymod):
         else:
             F_FUNC = 'F_FUNC'
         sargsp_str = ','.join(sargsp)
-        iadd(f'extern void {F_FUNC}(f2pyinit{m_name},'
+        iadd(f'extern void {F_FUNC}(f2pyinit{m_name.lower()},'
              f'F2PYINIT{m_name.upper()})(void (*)({sargsp_str}));')
         iadd(f'static void f2py_init_{m_name}(void) {{')
-        iadd(f'\t{F_FUNC}(f2pyinit{m_name},'
+        iadd(f'\t{F_FUNC}(f2pyinit{m_name.lower()},'
              f'F2PYINIT{m_name.upper()})(f2py_setup_{m_name});')
         iadd('}\n')
         ret['f90modhooks'] = ret['f90modhooks'] + chooks + ihooks
