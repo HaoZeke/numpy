@@ -10,6 +10,7 @@ terms of the NumPy License.
 NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 """
 import copy
+import re
 
 from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
@@ -124,6 +125,8 @@ def createfuncwrapper(rout, signature=0):
         args = [newname] + rout['args'][1:]
     else:
         args = [newname] + rout['args']
+    if need_interface:
+        saved_interface = _ordered_interface(rout['saved_interface'], vars)
 
     l_tmpl = var2fixfortran(vars, name, '@@@NAME@@@', f90mode)
     if l_tmpl[:13] == 'character*(*)':
@@ -166,7 +169,7 @@ def createfuncwrapper(rout, signature=0):
             rl = l_tmpl.replace('@@@NAME@@@', '') + ' ' + fortranname
 
     if need_interface:
-        for line in rout['saved_interface'].split('\n'):
+        for line in saved_interface.split('\n'):
             if line.lstrip().startswith('use ') and '__user__' not in line:
                 add(line)
 
@@ -182,15 +185,9 @@ def createfuncwrapper(rout, signature=0):
         if isscalar(vars[a]):
             add(var2fixfortran(vars, a, f90mode=f90mode))
             dumped_args.append(a)
-    for a in args:
-        if a in dumped_args:
-            continue
-        if isintent_in(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
-            dumped_args.append(a)
-    for a in args:
-        if a in dumped_args:
-            continue
+    remaining = [a for a in args if a not in dumped_args]
+    remaining.sort(key=lambda a: not isintent_in(vars[a]))
+    for a in _decl_order(vars, remaining):
         add(var2fixfortran(vars, a, f90mode=f90mode))
 
     add(l1)
@@ -203,7 +200,7 @@ def createfuncwrapper(rout, signature=0):
             pass
         else:
             add('interface')
-            add(rout['saved_interface'].lstrip())
+            add(saved_interface.lstrip())
             add('end interface')
 
     sargs = ', '.join([a for a in args if a not in extra_args])
@@ -218,6 +215,48 @@ def createfuncwrapper(rout, signature=0):
     else:
         add('end')
     return ret[0]
+
+
+def _decl_order(vars, args):
+    names = {}
+    for a in args:
+        sel = vars[a].get('charselector') or {}
+        exprs = [*vars[a].get('dimension', []), sel.get('len', ''),
+                 sel.get('*', '')]
+        names[a] = {n for e in exprs
+                    for n in re.findall(r'[a-z_]\w*', str(e).lower())}
+    remaining = list(args)
+    while remaining:
+        a = next((a for a in remaining
+                  if not names[a] & {b.lower() for b in remaining if b != a}),
+                 remaining[0])
+        remaining.remove(a)
+        yield a
+
+
+_BLOCK = re.compile(
+    r'(?:abstract\s+)?interface\b|type\s+\w+\s*$|subroutine\b|function\b',
+    re.I)
+
+
+def _ordered_interface(interface, vars):
+    lines = interface.split('\n')
+    head = next(i for i, line in enumerate(lines)
+                if _BLOCK.match(line.strip()))
+    decls = {}
+    varnames = {key.lower(): key for key in vars}
+    for i in range(head + 1, len(lines)):
+        line = lines[i]
+        stripped = line.strip()
+        if _BLOCK.match(stripped):
+            break
+        match = re.search(r'::\s*([a-z_]\w*)\s*$', stripped, re.I)
+        if match and (name := varnames.get(match[1].lower())) is not None:
+            decls[name] = i
+    text = {name: lines[i] for name, i in decls.items()}
+    for i, name in zip(decls.values(), _decl_order(vars, list(decls))):
+        lines[i] = text[name]
+    return '\n'.join(lines)
 
 
 def createsubrwrapper(rout, signature=0):
@@ -247,6 +286,8 @@ def createsubrwrapper(rout, signature=0):
     f90mode = ismoduleroutine(rout)
 
     args = rout['args']
+    if need_interface:
+        saved_interface = _ordered_interface(rout['saved_interface'], vars)
 
     useisoc = useiso_c_binding(rout)
     useisof = useiso_fortran_env(rout)
@@ -269,7 +310,7 @@ def createsubrwrapper(rout, signature=0):
             add(f'external {fortranname}')
 
     if need_interface:
-        for line in rout['saved_interface'].split('\n'):
+        for line in saved_interface.split('\n'):
             if line.lstrip().startswith('use ') and '__user__' not in line:
                 add(line)
 
@@ -284,9 +325,7 @@ def createsubrwrapper(rout, signature=0):
         if isscalar(vars[a]):
             add(var2fixfortran(vars, a, f90mode=f90mode))
             dumped_args.append(a)
-    for a in args:
-        if a in dumped_args:
-            continue
+    for a in _decl_order(vars, [a for a in args if a not in dumped_args]):
         add(var2fixfortran(vars, a, f90mode=f90mode))
 
     if need_interface:
@@ -295,7 +334,7 @@ def createsubrwrapper(rout, signature=0):
             pass
         else:
             add('interface')
-            for line in rout['saved_interface'].split('\n'):
+            for line in saved_interface.split('\n'):
                 if line.lstrip().startswith('use ') and '__user__' in line:
                     continue
                 add(line)

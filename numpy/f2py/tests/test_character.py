@@ -3,6 +3,7 @@ import textwrap
 import pytest
 
 import numpy as np
+from numpy.f2py import crackfortran, func2subr
 from numpy.f2py.tests import util
 from numpy.testing import assert_array_equal, assert_equal, assert_raises
 
@@ -642,3 +643,94 @@ class TestBCCharHandling(util.F2PyTest):
     def test_gh25286(self):
         info = self.module.charint('T')
         assert info == 2
+
+
+@pytest.mark.slow
+class TestSubrWrapperDeclOrder(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+    module m
+    contains
+      subroutine copy_str(out, x)
+        character(len=*), intent(in) :: x(:)
+        character(len=len(x)), intent(out) :: out(size(x))
+        out = x
+      end subroutine copy_str
+
+      subroutine match_str(a, b, eq)
+        character(len=*), intent(in) :: b(:)
+        character(len=len(b)), intent(in) :: a(size(b))
+        logical, intent(out) :: eq
+        eq = all(a == b)
+      end subroutine match_str
+
+      subroutine match_len(a, b, eq)
+        character(len=*), intent(in) :: b(:)
+        character(len=len(b)), intent(in) :: a(2)
+        logical, intent(out) :: eq
+        eq = all(a == b(1:2))
+      end subroutine match_len
+
+      function match_function(a, b) result(eq)
+        character(len=*), intent(in) :: b(:)
+        character(len=len(b)), intent(in) :: a(2)
+        logical :: eq
+        eq = all(a == b(1:2))
+      end function match_function
+    end module m
+    """
+
+    @pytest.mark.parametrize("case", ["out", "in", "len", "function"])
+    def test_char_array_decl_order(self, case):
+        arr = np.array([b"abcde", b"12345"], dtype="|S5")
+        if case == "out":
+            assert_array_equal(self.module.m.copy_str(arr), arr)
+        elif case == "in":
+            assert bool(self.module.m.match_str(arr, arr))
+        elif case == "function":
+            assert bool(self.module.m.match_function(arr, arr))
+        else:
+            assert bool(self.module.m.match_len(arr, arr))
+
+
+@pytest.mark.slow
+class TestExternalSubrWrapperDeclOrder(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+    subroutine copy_external(out, x)
+      character(len=*), intent(in) :: x(:)
+      character(len=len(x)), intent(out) :: out(size(x))
+      out = x
+    end subroutine copy_external
+
+    subroutine copy_with_type(out, x)
+      type point
+        real :: x
+        real :: y
+      end type point
+      real, intent(in) :: x(:)
+      real, intent(out) :: out(size(x))
+      out = x
+    end subroutine copy_with_type
+    """
+
+    def test_build(self):
+        assert self.module is not None
+
+
+def test_subr_wrapper_decl_order_case(tmp_path, monkeypatch):
+    fpath = tmp_path / "upper.f90"
+    fpath.write_text(textwrap.dedent("""
+        module m
+        contains
+          subroutine s(OUT, X)
+            character(len=*), intent(in) :: X(:)
+            character(len=len(X)), intent(out) :: OUT(size(X))
+          end subroutine s
+        end module m
+        """))
+    monkeypatch.setattr(crackfortran, "dolowercase", 0)
+    rout = crackfortran.crackfortran([str(fpath)])[0]["body"][0]
+    wrapper = func2subr.createsubrwrapper(rout)
+    assert wrapper.index("X(f2py_X_d0)") < wrapper.index("OUT(size(X))")
+    assert wrapper.index(":: X") < wrapper.index(":: OUT")
