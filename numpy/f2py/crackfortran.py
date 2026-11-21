@@ -354,6 +354,62 @@ def is_free_format(fname):
     return result
 
 
+_fixed_form_keywords = frozenset((
+    'associate block byte call character complex critical data do double '
+    'doublecomplex doubleprecision doubleprecisioncomplex elemental enum '
+    'forall function go if impure integer interface logical module '
+    'non_recursive precision procedure program pure python real recursive '
+    'select simple stop submodule subroutine team to type where while'
+).split())
+_fixed_cont_skip = re.compile(
+    r'\s*(?:callstatement|callprotoargument|usercode|pymethoddef)\b', re.I)
+_fixed_cont_tok = re.compile(
+    r"""'[^']*'|"[^"]*"|['"]|;|(?<![A-Za-z0-9_.])(\d+)h"""
+    r'|(?<![A-Za-z0-9_])note\s*\(|[()]',
+    re.I)
+_fixed_cont_word = re.compile(r'(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*$')
+_fixed_cont_name_prefix = re.compile(
+    r'(?:[(,=/]|::|\b(?:call|entry|fortranname|function|program|subroutine))$',
+    re.I)
+
+
+def _fixed_cont_splits_name(head, tail):
+    """Whether a column 6 continuation `tail` continues a name ending `head`."""
+    if not (head.endswith(' ') and tail and (tail[0].isalnum() or tail[0] == '_')):
+        return False
+    body = head.rstrip(' ')
+    word = _fixed_cont_word.search(body)
+    if not word:
+        return False
+    pos = stmt_start = note_depth = 0
+    while m := _fixed_cont_tok.search(body, pos):
+        tok = m.group(0)
+        pos = m.end()
+        if tok[0] in "'\"":
+            if len(tok) == 1:
+                return False
+        elif note_depth:
+            note_depth += tok.endswith('(') - (tok == ')')
+        elif tok == ';':
+            stmt_start = pos
+        elif m.group(1):
+            count = int(m.group(1))
+            if count:
+                pos += count
+                if pos >= len(body):
+                    return False
+        elif len(tok) > 1:
+            note_depth = 1
+    if note_depth or _fixed_cont_skip.match(body, stmt_start):
+        return False
+    before = body[stmt_start:word.start()].rstrip()
+    if not before:
+        return False
+    if word.group().lower() in _fixed_form_keywords:
+        return bool(_fixed_cont_name_prefix.search(before))
+    return True
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -466,7 +522,10 @@ def readfortrancode(ffile, dowithline=show, istop=1):
 
             if (not cont or strictf77) and (len(l) > 5 and not l[5] == ' '):
                 # Continuation of a previous line
-                ll = ll + l[6:]
+                tail = l[6:]
+                if _fixed_cont_splits_name(ll, tail):
+                    ll = ll.rstrip(' ')
+                ll = ll + tail
                 finalline = ''
                 origfinalline = ''
             else:
