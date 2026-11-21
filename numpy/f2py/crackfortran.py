@@ -3286,6 +3286,8 @@ def determineexprtype(expr, vars, rules={}):
         if 'name' in m.groupdict() and m.group('name'):
             outmess(
                 f'determineexprtype: selected kind types not supported ({repr(expr)})\n')
+        if real16pattern.fullmatch(expr.split('_')[0]):
+            return {'typespec': 'real', 'kindselector': {'kind': '8'}}
         return {'typespec': 'real'}
     for op in ['+', '-', '*', '/']:
         for e in [x.strip() for x in markoutercomma(expr, comma=op).split('@' + op + '@')]:

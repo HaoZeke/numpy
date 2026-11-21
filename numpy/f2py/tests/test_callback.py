@@ -235,6 +235,27 @@ class TestGH18335(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestCallbackDoubleLiteral(util.F2PyTest):
+    suffix = ".f"
+    code = """
+      double precision function one(fun)
+      external fun
+      double precision fun
+      one = fun(1d0)
+      end
+      double precision function thirty(fun)
+      external fun
+      double precision fun
+      thirty = fun(3d1)
+      end
+"""
+
+    @pytest.mark.parametrize("name, expected", [("one", 2.0), ("thirty", 31.0)])
+    def test_literal_argument(self, name, expected):
+        assert getattr(self.module, name)(lambda x: x + 1) == expected
+
+
+@pytest.mark.slow
 class TestGH25211(util.F2PyTest):
     sources = [util.getpath("tests", "src", "callback", "gh25211.f"),
                util.getpath("tests", "src", "callback", "gh25211.pyf")]
