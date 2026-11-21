@@ -53,3 +53,28 @@ class TestFReturnInteger(TestReturnInteger):
     def test_all_f90(self, name):
         self.check_function(getattr(self.module.f90_return_integer, name),
                             name)
+
+
+@pytest.mark.slow
+class TestInt1Inout(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+subroutine inc_i1(x)
+    integer(kind=1), intent(inout) :: x
+    x = x + 1_1
+end subroutine inc_i1
+
+subroutine cb_i1(f, x, y)
+    integer(kind=1), intent(in) :: x
+    integer(kind=1), intent(out) :: y
+    integer(kind=1), external :: f
+    y = f(x)
+end subroutine cb_i1
+"""
+
+    @pytest.mark.parametrize("dtype", ["int8", object])
+    def test_inout_scalar(self, dtype):
+        x = array(5, dtype=dtype)
+        self.module.inc_i1(x)
+        assert x == 6
+        assert self.module.cb_i1(lambda v: v + 1, 5) == 6
