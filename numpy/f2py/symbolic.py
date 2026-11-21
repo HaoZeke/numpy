@@ -27,6 +27,8 @@ NO WARRANTY IS EXPRESSED OR IMPLIED.  USE AT YOUR OWN RISK.
 __all__ = ['Expr']
 
 
+import ast
+import operator
 import re
 import warnings
 from enum import Enum
@@ -785,6 +787,103 @@ class Expr:
             raise RuntimeError(f'not a {symbol}-linear equation:'
                                f' {a} * {symbol} + {b} == {self}')
         return a, b
+
+
+def _c_divides_by_zero(expr, size):
+    """Return whether the C integer expr divides by a constant zero.
+
+    Return None when a divisor is not built from integers, size and
+    + - * / ().
+    """
+    try:
+        tree = ast.parse(expr.replace(size, '_s'), mode='eval')
+    except (SyntaxError, RecursionError, MemoryError):
+        return None
+    ops = {ast.Add: operator.add, ast.Sub: operator.sub,
+           ast.Mult: operator.mul,
+           ast.Div: lambda a, b: -(-a // b) if (a < 0) != (b < 0) else a // b}
+
+    def value(node):
+        if isinstance(node, ast.Constant) and type(node.value) is int:
+            return node.value
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            return -value(node.operand)
+        if isinstance(node, ast.BinOp):
+            return ops[type(node.op)](value(node.left), value(node.right))
+        raise KeyError(node)
+
+    try:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                if value(node.right) == 0:
+                    return True
+    except ZeroDivisionError:
+        return True
+    except (KeyError, RecursionError):
+        return None
+    return False
+
+
+def _c_floor(num, den):
+    # C text of floor(num / den) for den > 0 and any sign of num.
+    if den == 1:
+        return f'({num})'
+    return f'((({num}) - (({num}) % {den} + {den}) % {den}) / {den})'
+
+
+def div_extent_init(dsize, symbol, init, size):
+    """Return the C initializer of symbol from the array extent size.
+
+    For an affine integer quotient, return the root closest to zero when
+    init divides by zero or fails the extent check. Otherwise return init.
+    """
+    offset = 0
+    quotient = None
+    for term, coefficient in as_terms(dsize).data.items():
+        if term.op is Op.INTEGER:
+            offset += coefficient * term.data[0]
+            continue
+        numer, denom = as_numer_denom(term)
+        if (quotient is not None or abs(coefficient) != 1
+                or denom.op is not Op.INTEGER or denom.data[0] in (0, 1)):
+            return init
+        quotient = coefficient, numer, denom
+    if quotient is None:
+        return init
+    coefficient, numer, denom = quotient
+    try:
+        p, q = numer.linear_solve(symbol)
+    except RuntimeError:
+        return init
+    if (p.op is not Op.INTEGER or q.op is not Op.INTEGER
+            or p.data[0] == 0):
+        return init
+    p, q, d = coefficient * p.data[0], coefficient * q.data[0], denom.data[0]
+    if d < 0:
+        p, q, d = -p, -q, -d
+
+    def plus(k):
+        return f' + {k}' if k > 0 else f' - {-k}' if k else ''
+
+    # Roots satisfy lo <= p * symbol + q <= hi. Solve with |p| and negate
+    # the root when p < 0.
+    wide_size = f'(0LL + {size})'
+    target = f'({wide_size}{plus(-offset)})'
+    lo = f'{d} * {target} - {d - 1} * ({target} <= 0)'
+    hi = f'{d} * {target} + {d - 1} * ({target} >= 0)'
+    first = '-' + _c_floor(f'{q} - ({lo})', abs(p))
+    last = _c_floor(f'{hi}{plus(-q)}', abs(p))
+    root = f'({last} < 0 ? {last} : {first} < 0 ? 0 : {first})'
+    if p < 0:
+        root = f'-{root}'
+    zero = _c_divides_by_zero(init, size)
+    if zero is None:
+        return init
+    if zero:
+        return root
+    wide_init = init.replace(size, wide_size)
+    check = f'(({p}LL * ({wide_init}){plus(q)}) / {d}{plus(offset)})'
+    return f'({check} == {size} ? {wide_init} : {root})'
 
 
 def normalize(obj):

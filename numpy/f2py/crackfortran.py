@@ -2730,6 +2730,7 @@ def analyzevars(block):
                 vars[n]['kindselector']['kind'] = l
 
         dimension_exprs = {}
+        dimension_sizes = {}
         if 'attrspec' in vars[n]:
             attr = vars[n]['attrspec']
             attr.reverse()
@@ -2844,6 +2845,7 @@ def analyzevars(block):
                         # means. We'll let the compiler validate the
                         # definiteness of such symbols.
                         dimension_exprs[d] = solver_and_deps
+                        dimension_sizes[d] = dsize
                     vars[n]['dimension'].append(d)
 
         if 'check' not in vars[n] and 'args' in block and n in block['args']:
@@ -2890,6 +2892,9 @@ def analyzevars(block):
                                     f'shape({n}, {i})'))
                                 init = init.tostring(
                                     language=symbolic.Language.C)
+                                init = symbolic.div_extent_init(
+                                    dimension_sizes[d], symbolic.as_symbol(v),
+                                    init, f'shape({n}, {i})')
                                 vars[v]['='] = init
                                 # n needs to be initialized before v. So,
                                 # making v dependent on n and on any
