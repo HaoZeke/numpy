@@ -764,14 +764,19 @@ aux_rules = [
         'frompyobj': ['    /* Processing auxiliary variable #varname# */',
                       {debugcapi: '    fprintf(stderr,"#vardebuginfo#\\n");'}, ],
         'cleanupfrompyobj': '    /* End of cleaning variable #varname# */',
+        '_depend': '',
         'need': typedef_need_dict,
     },
     # Scalars (not complex)
     {  # Common
         'decl': '    #ctype# #varname# = 0;',
         'need': {hasinitvalue: 'math.h'},
+        '_check': l_and(isscalar, l_not(iscomplex)),
+    },
+    {
         'frompyobj': {hasinitvalue: '    #varname# = #init#;'},
         '_check': l_and(isscalar, l_not(iscomplex)),
+        '_depend': '',
     },
     {
         'return': ',#varname#',
@@ -783,8 +788,12 @@ aux_rules = [
     # Complex scalars
     {  # Common
         'decl': '    #ctype# #varname#;',
-        'frompyobj': {hasinitvalue: '    #varname#.r = #init.r#, #varname#.i = #init.i#;'},
         '_check': iscomplex
+    },
+    {
+        'frompyobj': {hasinitvalue: '    #varname#.r = #init.r#, #varname#.i = #init.i#;'},
+        '_check': iscomplex,
+        '_depend': '',
     },
     # String
     {  # Common
@@ -1581,10 +1590,13 @@ def buildapi(rout):
     # Args
     nth, nthk = 0, 0
     savevrd = {}
+    auxfirst = {a for a in args
+                if isintent_aux(var[a]) and not var[a].get('depend')}
     for a in args:
         vrd = capi_maps.sign2map(a, var[a])
         if isintent_aux(var[a]):
             _rules = aux_rules
+            vrd['nth'] = 'auxiliary'
         else:
             _rules = arg_rules
             if not isintent_hide(var[a]):
@@ -1598,7 +1610,7 @@ def buildapi(rout):
                 vrd['nth'] = 'hidden'
         savevrd[a] = vrd
         for r in _rules:
-            if '_depend' in r:
+            if '_depend' in r and a not in auxfirst:
                 continue
             if ('_check' in r and r['_check'](var[a])) or ('_check' not in r):
                 ar = applyrules(r, vrd, var[a])
@@ -1612,7 +1624,7 @@ def buildapi(rout):
             _rules = arg_rules
         vrd = savevrd[a]
         for r in _rules:
-            if '_depend' not in r:
+            if '_depend' not in r or a in auxfirst:
                 continue
             if ('_check' in r and r['_check'](var[a])) or ('_check' not in r):
                 ar = applyrules(r, vrd, var[a])
