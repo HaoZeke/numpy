@@ -374,6 +374,23 @@ class TestLdaBeforeNRuntime(util.F2PyTest):
 
 
 @pytest.mark.slow
+class TestIntrinsicTypeSpec(util.F2PyTest):
+    suffix = ".f90"
+    code = textwrap.dedent("""
+        subroutine ti(n, x, y)
+          type(integer), intent(in) :: n
+          type(real(8)), intent(in) :: x(n)
+          type(real(kind=8)), intent(out) :: y
+          y = sum(x) + n
+        end subroutine
+        """)
+
+    @pytest.mark.parametrize("x, expected", [([1, 2, 3], 9.0), ([0.5], 1.5)])
+    def test_type_intrinsic(self, x, expected):
+        assert self.module.ti(np.array(x, dtype=np.float64)) == expected
+
+
+@pytest.mark.slow
 class TestEval(util.F2PyTest):
     def test_eval_scalar(self):
         eval_scalar = crackfortran._eval_scalar

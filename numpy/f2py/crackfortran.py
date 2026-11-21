@@ -1600,6 +1600,12 @@ def cracktypespec0(typespec, ll):
     if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type']:
         selector = d['this']
         ll = d['after']
+    if typespec == 'type':
+        m2 = re.match(r'\(\s*(?P<spec>integer|real|complex|logical|character'
+                      r'|double\s*precision|double\s*complex)\b(?P<sel>.*)\)\Z',
+                      selector.strip(), re.I)
+        if m2:
+            return cracktypespec0(m2.group('spec'), m2.group('sel') + ll)
     i = ll.find('::')
     if i >= 0:
         attr = ll[:i].strip()
