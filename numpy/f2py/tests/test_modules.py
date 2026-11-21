@@ -101,3 +101,34 @@ class TestUsedModule(util.F2PyTest):
         assert self.module.useops.sum_and_double(3, 7) == 20
         assert "mathops" in compiled_mods
         assert self.module.mathops.add(3, 7) == 10
+
+
+@pytest.mark.slow
+class TestNoWrapF90Function(util.F2PyTest):
+    suffix = ".f90"
+    options = ["--no-wrap-functions"]
+    code = """
+function isum(a)
+    integer, intent(in) :: a(:)
+    integer :: isum
+    isum = sum(a)
+end function isum
+
+module mfun
+contains
+    integer function mod_add(x)
+        integer, intent(in) :: x
+        mod_add = x + 1
+    end function mod_add
+end module mfun
+"""
+
+    @pytest.mark.parametrize(
+        "call, expected",
+        [
+            (lambda m: m.mfun.mod_add(5), 6),
+            (lambda m: m.isum([1, 2, 3]), 6),
+        ],
+    )
+    def test_nowrap_f90_functions(self, call, expected):
+        assert call(self.module) == expected
