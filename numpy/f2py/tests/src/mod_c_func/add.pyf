@@ -1,0 +1,14 @@
+python module mod_c_func
+interface
+module m
+function add(x)
+    intent(c) add
+    integer intent(c) :: x
+    integer intent(c) :: add
+    threadsafe
+    callprotoargument int
+    callstatement { add_return_value = x + 1; }
+end function add
+end module m
+end interface
+end python module mod_c_func
