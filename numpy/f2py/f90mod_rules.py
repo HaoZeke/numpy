@@ -79,6 +79,39 @@ fgetdims2_sa = """\
       call f2pysetdata(d,allocated(d))"""
 
 
+def _body_has_routine(m):
+    if not hasbody(m):
+        return False
+    return any(isroutine(b) for b in m['body'])
+
+
+def _wraps_derived(m, onlyvars):
+    body = m['body'] if hasbody(m) else []
+    for b in body:
+        if not isroutine(b):
+            continue
+        names = list(b.get('args') or [])
+        if isfunction(b):
+            names.append(b.get('result') or b['name'])
+        variables = b.get('vars') or {}
+        for name in names:
+            var = variables.get(name) or {}
+            if not isinstance(var, dict):
+                continue
+            if var.get('typespec') == 'type':
+                return True
+            if var.get('typespec') and capi_maps.getctype(var) == 'void':
+                return True
+    modvars = m.get('vars') or {}
+    for n in onlyvars:
+        var = modvars.get(n) or {}
+        if not isinstance(var, dict):
+            continue
+        if var.get('typespec') == 'type' or capi_maps.getctype(var) == 'void':
+            return True
+    return False
+
+
 def buildhooks(pymod):
     from . import rules
     ret = {'f90modhooks': [], 'initf90modhooks': [], 'body': [],
@@ -120,8 +153,9 @@ def buildhooks(pymod):
         if m['name'] in usenames and containscommon(m):
             outmess(f"\t\t\tSkipping {m['name']} since it is in 'use' and contains a common block...\n")
             continue
-        # skip modules with derived types
-        if m['name'] in usenames and containsderivedtypes(m):
+        if (m['name'] in usenames and containsderivedtypes(m)
+                and (not _body_has_routine(m)
+                     or _wraps_derived(m, onlyvars))):
             outmess(f"\t\t\tSkipping {m['name']} since it is in 'use' and contains a derived type...\n")
             continue
         if onlyvars:
