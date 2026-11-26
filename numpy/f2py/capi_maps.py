@@ -437,6 +437,12 @@ def getinit(a, var):
     if hasinitvalue(var):
         init = var['=']
         showinit = init
+        if isarray(var) and var.get('typespec') == 'logical':
+            token = init.strip().lower()
+            if token == '.true.':
+                init = '1'
+            elif token == '.false.':
+                init = '0'
         if iscomplex(var) or iscomplexarray(var):
             ret = {}
 
