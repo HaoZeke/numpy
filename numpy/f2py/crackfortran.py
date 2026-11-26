@@ -650,6 +650,8 @@ commonpattern = re.compile(
     beforethisafter % ('', 'common', 'common', '.*'), re.I), 'common'
 usepattern = re.compile(
     beforethisafter % ('', 'use', 'use', '.*'), re.I), 'use'
+importpattern = re.compile(
+    beforethisafter % ('', 'import', 'import', '.*'), re.I), 'import'
 containspattern = re.compile(
     beforethisafter % ('', 'contains', 'contains', ''), re.I), 'contains'
 formatpattern = re.compile(
@@ -782,7 +784,7 @@ def crackline(line, reset=0):
                 formatpattern,
                 beginpattern, functionpattern, subroutinepattern,
                 implicitpattern, typespattern, commonpattern,
-                callpattern, usepattern, containspattern,
+                callpattern, usepattern, importpattern, containspattern,
                 entrypattern,
                 f2pyenhancementspattern,
                 multilinepattern,
@@ -1547,6 +1549,10 @@ def analyzeline(m, case, line):
         else:
             print(m.groupdict())
             outmess('analyzeline: Could not crack the use statement.\n')
+    elif case == 'import':
+        after = m.group('after').strip()
+        stmt = 'import' if not after else f'import {after}'
+        groupcache[groupcounter].setdefault('imports', []).append(stmt)
     elif case in ['f2pyenhancements']:
         if 'f2pyenhancements' not in groupcache[groupcounter]:
             groupcache[groupcounter]['f2pyenhancements'] = {}
@@ -3359,6 +3365,9 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     use = ''
     if 'use' in block:
         use = use2fortran(block['use'], tab + tabchar)
+    imports = ''
+    for stmt in block.get('imports', []):
+        imports = f'{imports}{tab + tabchar}{stmt}'
     common = ''
     if 'common' in block:
         common = common2fortran(block['common'], tab + tabchar)
@@ -3383,7 +3392,7 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     if blocktype == 'block data' and name == '_BLOCK_DATA_':
         name = ''
     ret = (f'{tab}{prefix}{blocktype} {name}{args}{result} '
-           f'{mess}{f2pyenhancements}{use}{vars}{common}{body}{tab}end '
+           f'{mess}{f2pyenhancements}{use}{imports}{vars}{common}{body}{tab}end '
            f'{blocktype} {name}')
     return ret
 
