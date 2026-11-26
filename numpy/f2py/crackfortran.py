@@ -448,7 +448,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 cont = False
             continue
         if sourcecodeform == 'fix':
-            if l[0] in ['*', 'c', '!', 'C', '#']:
+            if l[0] in ['*', 'c', '!', 'C', '#'] or (
+                    l[0] in 'dD' and len(l) > 1 and l[1] in ' 0123456789'):
                 if l[1:5].lower() == 'f2py':  # f2py directive
                     l = '     ' + l[5:]
                     is_f2py_directive = True

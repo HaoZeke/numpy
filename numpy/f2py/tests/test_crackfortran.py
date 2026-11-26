@@ -571,3 +571,20 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("mark", ["D", "d"])
+def test_fixed_form_debug_comment(mark):
+    code = (
+        f"{mark}     a = 0\n"
+        "      subroutine s(a)\n"
+        "      integer a\n"
+        "Cf2py intent(out) a\n"
+        "      a = 4\n"
+        f"{mark}     a = 0\n"
+        "      end\n"
+    )
+    mod = util.build_code(
+        code, options=["--f77flags=-fd-lines-as-comments"])
+    assert int(mod.s()) == 4
