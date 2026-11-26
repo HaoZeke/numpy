@@ -2523,6 +2523,58 @@ def _selected_real_kind_func(p, r=0, radix=0):
     return -1
 
 
+_kind_call_re = re.compile(r'\bkind\s*\(\s*(?P<value>.*)\s*\)', re.I)
+_selected_int_kind_re = re.compile(
+    r'\bselected_int_kind\s*\(\s*(?P<value>.*)\s*\)', re.I)
+_selected_kind_re = re.compile(
+    r'\bselected_(int|real)_kind\s*\(\s*(?P<value>.*)\s*\)', re.I)
+_kind_inquiry_re = re.compile(
+    r'\b(?:selected_(?:int|real)_kind|kind)\s*\(', re.I)
+_portable_int_kind_re = re.compile(r'(?<![\w.])([+-]?\d+_\d+)\b')
+
+
+def _normalize_kind_expr(v, kind=None, *, extent=False):
+    # A portable integer kind suffix (10_8) is the literal value.
+    # kind() and selected_*_kind() stay written in an extent: the
+    # kind number depends on the processor.
+    if not isinstance(v, str):
+        return v
+    if extent:
+        if _kind_inquiry_re.search(v):
+            return v
+        return _portable_int_kind_re.sub(
+            lambda m: _normalize_kind_expr(m.group(1)), v)
+
+    v = _kind_call_re.sub(r'kind("\1")', v)
+    v = _selected_int_kind_re.sub(r'selected_int_kind(\1)', v)
+
+    literal = re.fullmatch(r'\s*([+-]?)(\d+)_\d+\s*', v)
+    if literal is not None:
+        return literal.group(1) + literal.group(2)
+
+    # We need to act according to the data.
+    # The easy case is if the data has a kind-specifier,
+    # then we may easily remove those specifiers.
+    # However, it may be that the user uses other specifiers...(!)
+    is_replaced = False
+    if kind is not None:
+        # Remove kind specifier (including those defined
+        # by parameters)
+        orig_v_len = len(v)
+        v = v.replace('_' + kind, '')
+        # Again, this will be true if even a single specifier
+        # has been replaced, see comment above.
+        is_replaced = len(v) < orig_v_len
+
+    if not is_replaced:
+        if not _selected_kind_re.match(v):
+            v_ = v.split('_')
+            # In case there are additive parameters
+            if len(v_) > 1:
+                v = ''.join(v_[:-1]).lower().replace(v_[-1].lower(), '')
+    return v
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2535,11 +2587,6 @@ def get_parameters(vars, global_params={}):
     for n in get_sorted_names(vars):
         if 'attrspec' in vars[n] and 'parameter' in vars[n]['attrspec']:
             param_names.append(n)
-    kind_re = re.compile(r'\bkind\s*\(\s*(?P<value>.*)\s*\)', re.I)
-    selected_int_kind_re = re.compile(
-        r'\bselected_int_kind\s*\(\s*(?P<value>.*)\s*\)', re.I)
-    selected_kind_re = re.compile(
-        r'\bselected_(int|real)_kind\s*\(\s*(?P<value>.*)\s*\)', re.I)
     for n in param_names:
         if '=' in vars[n]:
             v = vars[n]['=']
@@ -2552,31 +2599,11 @@ def get_parameters(vars, global_params={}):
                 ]:
                     v = v.replace(*repl)
 
-            v = kind_re.sub(r'kind("\1")', v)
-            v = selected_int_kind_re.sub(r'selected_int_kind(\1)', v)
-
-            # We need to act according to the data.
-            # The easy case is if the data has a kind-specifier,
-            # then we may easily remove those specifiers.
-            # However, it may be that the user uses other specifiers...(!)
-            is_replaced = False
-
-            if 'kindselector' in vars[n]:
-                # Remove kind specifier (including those defined
-                # by parameters)
-                if 'kind' in vars[n]['kindselector']:
-                    orig_v_len = len(v)
-                    v = v.replace('_' + vars[n]['kindselector']['kind'], '')
-                    # Again, this will be true if even a single specifier
-                    # has been replaced, see comment above.
-                    is_replaced = len(v) < orig_v_len
-
-            if not is_replaced:
-                if not selected_kind_re.match(v):
-                    v_ = v.split('_')
-                    # In case there are additive parameters
-                    if len(v_) > 1:
-                        v = ''.join(v_[:-1]).lower().replace(v_[-1].lower(), '')
+            kind = None
+            if ('kindselector' in vars[n]
+                    and 'kind' in vars[n]['kindselector']):
+                kind = vars[n]['kindselector']['kind']
+            v = _normalize_kind_expr(v, kind)
 
             # Currently this will not work for complex numbers.
             # There is missing code for extracting a complex number,
@@ -2786,6 +2813,7 @@ def analyzevars(block):
                 ):
                     # d is the expression inside the dimension declaration
                     # Evaluate `d` with respect to params
+                    d = _normalize_kind_expr(d, extent=True)
                     try:
                         # the dimension for this variable depends on a
                         # previously defined parameter
