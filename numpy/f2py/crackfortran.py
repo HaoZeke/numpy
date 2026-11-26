@@ -2044,7 +2044,10 @@ def postcrack2(block, tab='', param_map=None):
                 if 'kind' in kind:
                     val = kind['kind']
                     if val in param_map:
-                        kind['kind'] = param_map[val]
+                        folded = param_map[val]
+                        if 'f2pykind' not in kind and str(folded) != str(val):
+                            kind['f2pykind'] = val
+                        kind['kind'] = folded
     new_body = [postcrack2(b, tab=tab + '\t', param_map=param_map)
                 for b in block['body']]
     block['body'] = new_body
@@ -2724,10 +2727,13 @@ def analyzevars(block):
             if 'kind' in vars[n]['kindselector']:
                 l = vars[n]['kindselector']['kind']
                 try:
-                    l = str(eval(l, {}, params))
+                    folded = str(eval(l, {}, params))
                 except Exception:
-                    pass
-                vars[n]['kindselector']['kind'] = l
+                    folded = None
+                if folded is not None:
+                    if folded != l:
+                        vars[n]['kindselector']['f2pykind'] = l
+                    vars[n]['kindselector']['kind'] = folded
 
         dimension_exprs = {}
         if 'attrspec' in vars[n]:
