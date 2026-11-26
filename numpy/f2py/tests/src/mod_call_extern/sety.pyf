@@ -1,0 +1,15 @@
+python module mod_call_extern
+interface
+module m
+subroutine sety(y, x)
+    intent(c) sety
+    integer intent(c,out) :: y
+    integer intent(c) :: x
+    threadsafe
+    fortranname sety_c
+    callprotoargument int*,int
+    callstatement { sety_c(&y, x); }
+end subroutine sety
+end module m
+end interface
+end python module mod_call_extern

@@ -503,7 +503,8 @@ rout_rules = [
         'functype': 'void',
         'declfortranroutine': {l_and(l_not(l_or(ismoduleroutine, isintent_c)), l_not(isdummyroutine)): 'extern void #F_FUNC#(#fortranname#,#FORTRANNAME#)(#callprotoargument#);',
                                l_and(l_not(ismoduleroutine), isintent_c, l_not(isdummyroutine)): 'extern void #fortranname#(#callprotoargument#);',
-                               ismoduleroutine: '',
+                               l_and(ismoduleroutine, isintent_c, l_not(isdummyroutine)): 'extern void #fortranname#(#callprotoargument#);',
+                               l_and(ismoduleroutine, l_not(isintent_c)): '',
                                isdummyroutine: ''
                                },
         'routine_def': {
@@ -644,6 +645,7 @@ rout_rules = [
     }, {  # Scalar function
         'declfortranroutine': {l_and(l_not(l_or(ismoduleroutine, isintent_c)), l_not(isdummyroutine)): 'extern #ctype# #F_FUNC#(#fortranname#,#FORTRANNAME#)(#callprotoargument#);',
                                l_and(l_not(ismoduleroutine), isintent_c, l_not(isdummyroutine)): 'extern #ctype# #fortranname#(#callprotoargument#);',
+                               l_and(ismoduleroutine, isintent_c, l_not(isdummyroutine)): 'extern #ctype# #fortranname#(#callprotoargument#);',
                                isdummyroutine: ''
                                },
         'routine_def': {

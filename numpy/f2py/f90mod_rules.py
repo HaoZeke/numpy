@@ -213,7 +213,9 @@ def buildhooks(pymod):
                 else:
                     fargs.append(b_name)
                     mfargs.append(fargs[-1])
-                api['externroutines'] = []
+                # intent(c) keeps externroutines because C calls fortranname.
+                if not isintent_c(b):
+                    api['externroutines'] = []
                 ar = applyrules(api, vrd)
                 ar['docs'] = []
                 ar['docshort'] = []
