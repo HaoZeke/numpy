@@ -75,7 +75,8 @@ Usage:
      D = B['vars'][<variable name>] =
      {'typespec'[,'attrspec','kindselector','charselector','=','typename']}
      D['typespec'] = 'byte' | 'character' | 'complex' | 'double complex' |
-                     'double precision' | 'integer' | 'logical' | 'real' | 'type'
+                     'double precision' | 'integer' | 'logical' | 'real' | 'type' |
+                     'class'
      D['attrspec'] --- list of attributes (e.g. 'dimension(<arrayspec>)',
                        'external','intent(in|out|inout|hide|c|callback|cache|aligned4|aligned8|aligned16)',
                        'optional','required', etc)
@@ -84,7 +85,7 @@ Usage:
      C = D['charselector'] = {['*','len','kind','f2py_len']}
                              (only if D['typespec']=='character')
      D['='] --- initialization expression string
-     D['typename'] --- name of the type if D['typespec']=='type'
+     D['typename'] --- name of the type if D['typespec'] is 'type' or 'class'
      D['dimension'] --- list of dimension bounds
      D['intent'] --- list of intent specifications
      D['depend'] --- list of variable names on which current variable depends on
@@ -584,7 +585,7 @@ beforethisafter = r'\s*(?P<before>%s(?=\s*(\b(%s)\b)))'\
     r'\s*(?P<this>(\b(%s)\b))'\
     r'\s*(?P<after>%s)\s*\Z'
 ##
-fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|byte'
+fortrantypes = r'character|logical|integer|real|complex|double\s*(precision\s*(complex|)|complex)|type(?=\s*\([\w\s,=(*)]*\))|class(?=\s*\([\w\s,=(*)]*\))|byte'
 typespattern = re.compile(
     beforethisafter % ('', fortrantypes, fortrantypes, '.*'), re.I), 'type'
 typespattern4implicit = re.compile(beforethisafter % (
@@ -1597,7 +1598,7 @@ def cracktypespec0(typespec, ll):
     d = m1.groupdict()
     for k in list(d.keys()):
         d[k] = unmarkouterparen(d[k])
-    if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type']:
+    if typespec in ['complex', 'integer', 'logical', 'real', 'character', 'type', 'class']:
         selector = d['this']
         ll = d['after']
     i = ll.find('::')
@@ -1896,7 +1897,7 @@ def cracktypespec(typespec, selector):
                     del charselect[k]
             for k, i in list(charselect.items()):
                 charselect[k] = rmbadname1(i)
-        elif typespec == 'type':
+        elif typespec in ['type', 'class']:
             typename = re.match(r'\s*\(\s*(?P<name>\w+)\s*\)', selector, re.I)
             if typename:
                 typename = typename.group('name')
