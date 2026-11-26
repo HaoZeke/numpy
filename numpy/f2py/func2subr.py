@@ -76,6 +76,19 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
         vardef = f"{vardef}({','.join(vars[a]['dimension'])})"
     return vardef
 
+
+def _decl_with_value(vars, a, f90mode, with_value):
+    decl = var2fixfortran(vars, a, f90mode=f90mode)
+    if not with_value or not decl or '::' in decl:
+        return decl
+    var = vars.get(a, {})
+    if var.get('typespec') in ('complex', 'double complex', 'character'):
+        return decl
+    if 'value' not in (var.get('attrspec') or []):
+        return decl
+    typ, name = decl.rsplit(' ', 1)
+    return f'{typ}, value :: {name}'
+
 def useiso_c_binding(rout):
     useisoc = False
     for value in rout['vars'].values():
@@ -117,6 +130,7 @@ def createfuncwrapper(rout, signature=0):
     name = rout['name']
     fortranname = getfortranname(rout)
     f90mode = ismoduleroutine(rout)
+    pass_value = need_interface and not f90mode
     newname = f'{name}f2pywrap'
 
     if newname not in vars:
@@ -180,7 +194,7 @@ def createfuncwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(_decl_with_value(vars, a, f90mode, pass_value))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
@@ -245,6 +259,7 @@ def createsubrwrapper(rout, signature=0):
     name = rout['name']
     fortranname = getfortranname(rout)
     f90mode = ismoduleroutine(rout)
+    pass_value = need_interface and not f90mode
 
     args = rout['args']
 
@@ -282,7 +297,7 @@ def createsubrwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(_decl_with_value(vars, a, f90mode, pass_value))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
