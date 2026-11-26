@@ -3550,7 +3550,7 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             v = vars[a]['=']
             if vars[a]['typespec'] in ['complex', 'double complex']:
                 try:
-                    v = eval(v)
+                    v = eval(v, {}, {})
                     v = f'({v.real},{v.imag})'
                 except Exception:
                     pass

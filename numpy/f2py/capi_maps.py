@@ -448,9 +448,15 @@ def getinit(a, var):
                 else:
                     v = eval(v, {}, {})
                     ret['init.r'], ret['init.i'] = str(v.real), str(v.imag)
-            except Exception:
-                raise ValueError(
-                    f'getinit: expected complex number `(r,i)\' but got `{init}\' as initial value of {a!r}.')
+            except Exception as exc:
+                expr = init.strip()
+                if ',' in expr or not isinstance(exc, NameError):
+                    raise ValueError(
+                        f'getinit: expected complex number `(r,i)\' but got `{init}\' as initial value of {a!r}.')
+                ret['init.r'] = f'({expr}).r'
+                ret['init.i'] = f'({expr}).i'
+                if not isarray(var):
+                    init = f"({ret['init.r']},{ret['init.i']})"
             if isarray(var):
                 init = f"(capi_c.r={ret['init.r']},capi_c.i={ret['init.i']},capi_c)"
         elif isstring(var):
