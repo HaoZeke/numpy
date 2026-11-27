@@ -358,6 +358,13 @@ class Expr:
             precedence = Precedence.PRODUCT if factors else Precedence.ATOM
         elif self.op is Op.APPLY:
             name, args, kwargs = self.data
+            if language is Language.C and args:
+                fname = (name.data if isinstance(name, Expr)
+                         and name.op is Op.SYMBOL else name)
+                if isinstance(fname, str) and fname.lower() == 'ceiling':
+                    inner = args[0].tostring(Precedence.ATOM,
+                                             language=language)
+                    return f'(npy_intp)ceil({inner})'
             if name is ArithOp.DIV and language is Language.C:
                 numer, denom = [arg.tostring(Precedence.PRODUCT,
                                              language=language)

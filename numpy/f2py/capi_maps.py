@@ -22,6 +22,7 @@ from ._isofenv import iso_fortran_env_map
 # As the needed functions cannot be determined by static inspection of the
 # code, it is safest to use import * pending a major refactoring of f2py.
 from .auxfuncs import *
+from . import cfuncs
 from .crackfortran import markoutercomma
 
 __all__ = [
@@ -296,6 +297,10 @@ def getarrdims(a, var, verbose=0):
         ret['dims'] = ''
     elif isarray(var):
         dim = copy.copy(var['dimension'])
+        for d in dim:
+            if isinstance(d, str) and 'ceil(' in d:
+                cfuncs.append_needs('math.h')
+                break
         ret['size'] = '*'.join(dim)
         try:
             ret['size'] = repr(eval(ret['size']))

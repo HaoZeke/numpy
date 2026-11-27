@@ -2810,6 +2810,9 @@ def analyzevars(block):
                         d1, d2 = map(symbolic.Expr.parse, dl)
                         dsize = d2 - d1 + 1
                         d = dsize.tostring(language=symbolic.Language.C)
+                        # A negative extent is an empty dimension.
+                        if 'ceil(' in d:
+                            d = f'(({d})<0?0:({d}))'
                         # find variables v that define d as a linear
                         # function, `d == a * v + b`, and store
                         # coefficients a and b for further analysis.

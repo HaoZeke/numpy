@@ -211,6 +211,17 @@ class TestSymbolic(util.F2PyTest):
         assert as_gt(x, y).tostring(language=language) == "x > y"
         assert as_ge(x, y).tostring(language=language) == "x >= y"
 
+        ceil_x = fromstring("ceiling(x)", language=Language.Fortran)
+        assert ceil_x.tostring(language=Language.C) == "(npy_intp)ceil(x)"
+        assert ceil_x.tostring(language=Language.Fortran) == "ceiling(x)"
+        ceil_kind = fromstring("ceiling(x, kind=4)", language=Language.Fortran)
+        assert ceil_kind.tostring(language=Language.C) == "(npy_intp)ceil(x)"
+        assert (ceil_kind.tostring(language=Language.Fortran)
+                == "ceiling(x, kind=4)")
+        ceil_pos = fromstring("ceiling(x, 4)", language=Language.Fortran)
+        assert ceil_pos.tostring(language=Language.C) == "(npy_intp)ceil(x)"
+        assert ceil_pos.tostring(language=Language.Fortran) == "ceiling(x, 4)"
+
     def test_operations(self):
         x = as_symbol("x")
         y = as_symbol("y")
