@@ -589,6 +589,19 @@ def preparse_sysargv():
         "modulename": args.module_name,
     }
 
+def _take_option(argv, flag):
+    if flag not in argv:
+        return argv, None
+    i = argv.index(flag)
+    if i + 1 >= len(argv):
+        return argv[:i] + argv[i + 1:], None
+    return argv[:i] + argv[i + 2:], argv[i + 1]
+
+
+def _signature_args(flags, sign_file, files):
+    return [*flags, '-h', sign_file, *files]
+
+
 def run_compile():
     """
     Do it all in one call!
@@ -683,6 +696,11 @@ def run_compile():
         del sys.argv[i + 1], sys.argv[i]
         sources = sys.argv[1:]
 
+    sources, sign_file = _take_option(sources, '-h')
+    extra_sig = []
+    if '--overwrite-signature' in sources:
+        extra_sig = ['--overwrite-signature']
+        sources = [s for s in sources if s != '--overwrite-signature']
     pyf_files, _sources = filter_files("", "[.]pyf([.]src|)", sources)
     sources = pyf_files + _sources
     modulename = validate_modulename(pyf_files, modulename)
@@ -705,8 +723,15 @@ def run_compile():
         if not pyf_files:
             outmess('Using meson backend\nWill pass --lower to f2py\nSee https://numpy.org/doc/stable/f2py/buildtools/meson.html\n')
             f2py_flags.append('--lower')
+            if sign_file:
+                run_main(_signature_args(
+                    [*f2py_flags, *extra_sig], sign_file,
+                    ['-m', modulename, *sources]))
             run_main(f" {' '.join(f2py_flags)} -m {modulename} {' '.join(sources)}".split())
         else:
+            if sign_file:
+                run_main(_signature_args(
+                    [*f2py_flags, *extra_sig], sign_file, pyf_files))
             run_main(f" {' '.join(f2py_flags)} {' '.join(pyf_files)}".split())
 
     # Order matters here, includes are needed for run_main above
