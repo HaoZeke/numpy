@@ -30,8 +30,9 @@ from numpy.testing import IS_IOS, IS_WASM, temppath
 #
 
 def check_language(lang, code_snippet=None):
+    # Skips belong in the session fixture. This runs on worker threads.
     if sys.platform == "win32":
-        pytest.skip("No Fortran tests on Windows (Issue #25134)", allow_module_level=True)
+        return False
     tmpdir = tempfile.mkdtemp()
     try:
         meson_file = os.path.join(tmpdir, "meson.build")
@@ -54,10 +55,10 @@ def check_language(lang, code_snippet=None):
                 capture_output=True,
             )
         except OSError:
-            pytest.skip("meson not present, skipping compiler dependent test", allow_module_level=True)
+            return False
         return runmeson.returncode == 0
     finally:
-        shutil.rmtree(tmpdir)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 fortran77_code = '''
@@ -104,21 +105,33 @@ class CompilerChecker:
             self.compilers_checked = True
 
 
-if not IS_WASM and not IS_IOS:
-    checker = CompilerChecker()
+# Do not probe on import. Collection imports this module (gh-25239).
+checker = CompilerChecker()
+
+
+def _probe_compilers():
+    if checker.compilers_checked or IS_WASM or IS_IOS:
+        return
+    if sys.platform == "win32" or shutil.which("meson") is None:
+        return
     checker.check_compilers()
 
+
 def has_c_compiler():
+    _probe_compilers()
     return checker.has_c
 
 def has_f77_compiler():
+    _probe_compilers()
     return checker.has_f77
 
 def has_f90_compiler():
+    _probe_compilers()
     return checker.has_f90
 
 def has_fortran_compiler():
-    return (checker.has_f90 and checker.has_f77)
+    _probe_compilers()
+    return checker.has_f90 and checker.has_f77
 
 
 #
@@ -372,10 +385,19 @@ class F2PyTest:
         cls = type(self)
         return f'_{cls.__module__.rsplit(".", 1)[-1]}_{cls.__name__}_ext_module'
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # setup_class reads the session fixture for classes that build.
+        if cls.code is not None or cls.sources is not None:
+            pytest.mark.usefixtures("check_compilers")(cls)
+
     @classmethod
     def setup_class(cls):
         if sys.platform == "win32":
             pytest.skip("Fails with MinGW64 Gfortran (Issue #9673)")
+        if cls.code is None and cls.sources is None:
+            return
+        # check_compilers (session) has already run for this class.
         F2PyTest._has_c_compiler = has_c_compiler()
         F2PyTest._has_f77_compiler = has_f77_compiler()
         F2PyTest._has_f90_compiler = has_f90_compiler()
