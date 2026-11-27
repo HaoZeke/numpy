@@ -23,6 +23,7 @@ from .auxfuncs import (
     islogicalfunction,
     ismoduleroutine,
     isscalar,
+    isscalarpointer,
     issubroutine,
     issubroutine_wrap,
     outmess,
@@ -235,6 +236,8 @@ def createsubrwrapper(rout, signature=0):
                 extra_args.append(dn)
                 vars[dn] = dv
                 v['dimension'][i] = dn
+    ptr_args = [a for a in rout['args']
+                if isscalarpointer(rout['vars'].get(a, {}))]
     rout['args'].extend(extra_args)
     need_interface = bool(extra_args)
 
@@ -247,6 +250,8 @@ def createsubrwrapper(rout, signature=0):
     f90mode = ismoduleroutine(rout)
 
     args = rout['args']
+    if ptr_args and not f90mode and rout.get('saved_interface'):
+        need_interface = True
 
     useisoc = useiso_c_binding(rout)
     useisof = useiso_fortran_env(rout)
@@ -289,6 +294,13 @@ def createsubrwrapper(rout, signature=0):
             continue
         add(var2fixfortran(vars, a, f90mode=f90mode))
 
+    for a in ptr_args:
+        add(f'target {a}')
+        if not signature:
+            decl = var2fixfortran(vars, a, fa='@', f90mode=True)
+            if decl.endswith('@'):
+                add(f'{decl[:-1].rstrip()}, pointer :: f2py_ptr_{a}')
+
     if need_interface:
         if f90mode:
             # f90 module already defines needed interface
@@ -304,7 +316,20 @@ def createsubrwrapper(rout, signature=0):
     sargs = ', '.join([a for a in args if a not in extra_args])
 
     if not signature:
-        add(f'call {fortranname}({sargs})')
+        if ptr_args:
+            names = []
+            for a in args:
+                if a in extra_args:
+                    continue
+                if a in ptr_args:
+                    names.append(f'f2py_ptr_{a}')
+                else:
+                    names.append(a)
+            for a in ptr_args:
+                add(f'f2py_ptr_{a} => {a}')
+            add(f"call {fortranname}({', '.join(names)})")
+        else:
+            add(f'call {fortranname}({sargs})')
     if f90mode:
         add(f"end subroutine f2pywrap_{rout['modulename']}_{name}")
     else:

@@ -634,6 +634,8 @@ privatepattern = re.compile(
     beforethisafter % ('', 'private', 'private', '.*'), re.I), 'private'
 intrinsicpattern = re.compile(
     beforethisafter % ('', 'intrinsic', 'intrinsic', '.*'), re.I), 'intrinsic'
+pointerpattern = re.compile(
+    beforethisafter % ('', 'pointer', 'pointer', '.*'), re.I), 'pointer'
 intentpattern = re.compile(beforethisafter % (
     '', 'intent|depend|note|check', 'intent|depend|note|check', r'\s*\(.*?\).*'), re.I), 'intent'
 parameterpattern = re.compile(
@@ -777,7 +779,7 @@ def crackline(line, reset=0):
     for pat in [dimensionpattern, externalpattern, intentpattern, optionalpattern,
                 requiredpattern,
                 parameterpattern, datapattern, publicpattern, privatepattern,
-                intrinsicpattern,
+                intrinsicpattern, pointerpattern,
                 endifpattern, endpattern,
                 formatpattern,
                 beginpattern, functionpattern, subroutinepattern,
@@ -1225,7 +1227,7 @@ def analyzeline(m, case, line):
         last_name = updatevars(typespec, selector, attr, edecl)
         if last_name is not None:
             previous_context = ('variable', last_name, groupcounter)
-    elif case in ['dimension', 'intent', 'optional', 'required', 'external', 'public', 'private', 'intrinsic']:
+    elif case in ['dimension', 'intent', 'optional', 'required', 'external', 'public', 'private', 'intrinsic', 'pointer']:
         edecl = groupcache[groupcounter]['vars']
         ll = m.group('after').strip()
         i = ll.find('::')
@@ -1288,8 +1290,16 @@ def analyzeline(m, case, line):
                     else:
                         errmess(f'analyzeline: intent(callback) {k} is already'
                                 ' in argument list\n')
-            if case in ['optional', 'required', 'public', 'external', 'private', 'intrinsic']:
+            if case in ['optional', 'required', 'public', 'external', 'private', 'intrinsic', 'pointer']:
                 ap = case
+            if case == 'pointer':
+                if k not in groupcache[groupcounter].get('args', []):
+                    if edecl[k] == {}:
+                        del edecl[k]
+                    continue
+                if 'pointer' in edecl[k].get('attrspec', []):
+                    last_name = k
+                    continue
             if 'attrspec' in edecl[k]:
                 edecl[k]['attrspec'].append(ap)
             else:

@@ -113,6 +113,23 @@ def isscalar(var):
     return not (isarray(var) or isstring(var) or isexternal(var))
 
 
+def isscalarpointer(var):
+    if 'pointer' not in var.get('attrspec', []):
+        return False
+    if not isscalar(var):
+        return False
+    return var.get('typespec') not in (None, 'character', 'type', 'byte')
+
+
+def haspointerscalar(rout):
+    vmap = rout.get('vars') or {}
+    for arg in rout.get('args') or []:
+        var = vmap.get(arg)
+        if isinstance(var, dict) and isscalarpointer(var):
+            return True
+    return False
+
+
 def iscomplex(var):
     return isscalar(var) and \
            var.get('typespec') in ['complex', 'double complex']
@@ -312,6 +329,8 @@ def issubroutine(rout):
 def issubroutine_wrap(rout):
     if isintent_c(rout):
         return 0
+    if issubroutine(rout) and haspointerscalar(rout):
+        return 1
     return issubroutine(rout) and hasassumedshape(rout)
 
 def isattr_value(var):
@@ -330,6 +349,8 @@ def hasassumedshape(rout):
 
 
 def requiresf90wrapper(rout):
+    if haspointerscalar(rout):
+        return True
     return ismoduleroutine(rout) or hasassumedshape(rout)
 
 
