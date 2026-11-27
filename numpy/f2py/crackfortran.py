@@ -3002,6 +3002,38 @@ def analyzevars(block):
                                     pass
                             vars[n]['kindselector'] = kindselect
                         if charselect:
+                            parent = block.get('parent_block')
+                            seen = set()
+                            hosts = []
+                            while (isinstance(parent, dict)
+                                   and id(parent) not in seen):
+                                if parent.get('block') in (
+                                        'interface', 'abstract interface'):
+                                    break
+                                seen.add(id(parent))
+                                hosts.append(parent)
+                                parent = parent.get('parent_block')
+                            acc = {}
+                            for host in reversed(hosts):
+                                acc = get_parameters(host.get('vars') or {},
+                                                     acc)
+                            cparams = dict(acc)
+                            cparams.update(params)
+                            for arg in block.get('args') or []:
+                                cparams.pop(arg, None)
+                                cparams.pop(arg.lower(), None)
+                            for key in ('len', '*'):
+                                raw = charselect.get(key)
+                                if not raw or raw in ('*', ':', '(*)', '(:)'):
+                                    continue
+                                try:
+                                    val = eval(raw, {}, cparams)
+                                except Exception:
+                                    continue
+                                if (isinstance(val, int)
+                                        and not isinstance(val, bool)
+                                        and val >= 0):
+                                    charselect[key] = str(val)
                             vars[n]['charselector'] = charselect
                         if typename:
                             vars[n]['typename'] = typename
