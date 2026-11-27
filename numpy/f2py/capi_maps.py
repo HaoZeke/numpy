@@ -241,6 +241,23 @@ def getctype(var):
     return ctype
 
 
+def scalar_char_len(expr, vars, var):
+    if (not isinstance(expr, str) or 'len' not in expr.lower()
+            or isstring(var) or isstringarray(var)
+            or iscomplex(var) or iscomplexarray(var)):
+        return expr
+
+    def repl(match):
+        name = match.group(1)
+        key = name if name in vars else name.lower()
+        target = vars.get(key)
+        if target is not None and isstring(target):
+            return f'slen({key})'
+        return match.group(0)
+
+    return re.sub(r'\blen\s*\(\s*([A-Za-z_]\w*)\s*\)', repl, expr, flags=re.I)
+
+
 def f2cexpr(expr):
     """Rewrite Fortran expression as f2py supported C expression.
 

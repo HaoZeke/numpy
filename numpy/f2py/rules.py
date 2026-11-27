@@ -1583,6 +1583,7 @@ def buildapi(rout):
     savevrd = {}
     for a in args:
         vrd = capi_maps.sign2map(a, var[a])
+        vrd['init'] = capi_maps.scalar_char_len(vrd['init'], var, var[a])
         if isintent_aux(var[a]):
             _rules = aux_rules
         else:
