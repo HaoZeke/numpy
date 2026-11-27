@@ -2715,6 +2715,9 @@ def analyzevars(block):
             if 'len' in vars[n]['charselector']:
                 l = vars[n]['charselector']['len']
                 try:
+                    if re.fullmatch(
+                            r'[A-Za-z]\w*\s*\(\s*-?\d+\s*\)', l.strip()):
+                        l = param_parse(l.strip(), params)
                     l = str(eval(l, {}, params))
                 except Exception:
                     pass
