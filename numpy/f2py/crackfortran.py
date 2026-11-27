@@ -354,6 +354,99 @@ def is_free_format(fname):
     return result
 
 
+def _fixed_col6_continuation(raw):
+    if not raw:
+        return False
+    line = raw.expandtabs().replace('\xa0', ' ')
+    while line and line[-1] in '\n\r\f':
+        line = line[:-1]
+    if not line.strip():
+        return False
+    body, _ = split_by_unquoted(line, '!')
+    if not body or body[0] in '*cC!#':
+        return False
+    return len(body) > 5 and body[5] != ' '
+
+
+def _fixed_comment_line(raw):
+    if not raw:
+        return False
+    line = raw.expandtabs().replace('\xa0', ' ')
+    while line and line[-1] in '\n\r\f':
+        line = line[:-1]
+    if not line or line[0] not in '*cC!#':
+        return False
+    return line[1:5].lower() != 'f2py'
+
+
+def _paren_depth(text):
+    depth = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in '\'"':
+            quote = c
+            i += 1
+            while i < n:
+                if text[i] == quote:
+                    if i + 1 < n and text[i + 1] == quote:
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+        i += 1
+    return depth
+
+
+def _unquoted_slash_count(text):
+    count = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in '\'"':
+            quote = c
+            i += 1
+            while i < n:
+                if text[i] == quote:
+                    if i + 1 < n and text[i + 1] == quote:
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == '/':
+            count += 1
+        i += 1
+    return count
+
+
+def _stmt_is_open(text):
+    stripped = text.rstrip()
+    if not stripped:
+        return False
+    # Even unquoted slashes end a data or common group, including a
+    # blank common name written as //. A trailing slash elsewhere,
+    # including concatenation, stays open.
+    if stripped[-1] == '/':
+        lead = re.match(r'[a-z]+', stripped.lstrip(), re.I)
+        keyword = lead.group(0).lower() if lead else ''
+        if keyword not in ('data', 'common') or (
+                _unquoted_slash_count(stripped) % 2 == 1):
+            return True
+    if stripped[-1] in ',(+-*=&':
+        return True
+    return _paren_depth(stripped) != 0
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -374,6 +467,10 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     # cont: set to True when the content of the last line read
     # indicates statement continuation
     cont = False
+    # True while ll is an f2py directive, including its continuations.
+    open_is_directive = False
+    # True while the last deferred directive still expects !f2py lines.
+    defer_cont = False
     finalline = ''
     ll = ''
     includeline = re.compile(
@@ -386,19 +483,88 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     ll, l1 = '', ''
     spacedigits = [' '] + [str(_m) for _m in range(10)]
     filepositiontext = ''
-    fin = fileinput.FileInput(ffile, openhook=openhook)
-    while True:
+    pending = []
+    deferred = []
+    # Free-form directive not yet queued. Its case is chosen when the
+    # following line is known, matching other free-form lines.
+    open_directive = None
+
+    def _bare_intent(text):
+        return re.fullmatch(
+            r'intent\s*\([^)]*\)', text.strip(), re.I) is not None
+
+    def _queue_open_directive(next_is_directive):
+        nonlocal open_directive
+        if open_directive is None:
+            return
+        extra = open_directive
+        open_directive = None
+        # Free form lowercases a finished line unless it is a C-style
+        # directive and the next line is an f2py directive. Fixed form
+        # lowercases every finished line.
+        if localdolowercase and not (
+                sourcecodeform == 'free' and next_is_directive
+                and iscstyledirective(extra)):
+            extra = extra.lower()
+        deferred.append(extra)
+
+    def _emit(line):
+        dowithline(line)
+        if not line.strip():
+            return
+        while deferred:
+            dowithline(deferred.pop(0))
+
+    def _defer_fixed(text):
+        if localdolowercase:
+            text = text.lower()
+        deferred.append(text)
+
+    def _defer_directive(text):
+        nonlocal defer_cont, open_directive
+        match = cont1.match(text)
+        if match:
+            text = match.group('line')
+        if defer_cont and open_directive is not None:
+            text = cont2.match(text).group('line')
+            open_directive = open_directive + text
+        else:
+            _queue_open_directive(True)
+            open_directive = text
+        defer_cont = match is not None
+
+    def _readline():
         try:
-            l = fin.readline()
+            return fin.readline()
         except UnicodeDecodeError as msg:
             raise Exception(
                 f'readfortrancode: reading {fin.filename()}#{fin.lineno()}'
                 f' failed with\n{msg}.\nIt is likely that installing charset_normalizer'
                 ' package will help f2py determine the input file encoding'
                 ' correctly.')
-        if not l:
-            break
-        if fin.isfirstline():
+
+    fin = fileinput.FileInput(ffile, openhook=openhook)
+
+    def _peek_fixed_after_comments():
+        skipped = []
+        while True:
+            raw = _readline()
+            if not raw:
+                return skipped, None, False
+            is_first = fin.isfirstline()
+            if is_first or not _fixed_comment_line(raw):
+                return skipped, raw, is_first
+            skipped.append((raw, False))
+
+    while True:
+        if pending:
+            l, do_init = pending.pop(0)
+        else:
+            l = _readline()
+            if not l:
+                break
+            do_init = fin.isfirstline()
+        if do_init:
             filepositiontext = ''
             currentfilename = fin.filename()
             gotnextfile = 1
@@ -426,9 +592,11 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             l = l[:-1]
         # Do not lower for directives, gh-2547, gh-27697, gh-26681
         is_f2py_directive = False
+        fixed_col1_directive = False
         # Unconditionally remove comments
         (l, rl) = split_by_unquoted(l, '!')
         l += ' '
+        code_text = l
         if rl[:5].lower() == '!f2py':  # f2py directive
             l, _ = split_by_unquoted(l + 4 * ' ' + rl[5:], '!')
             is_f2py_directive = True
@@ -452,6 +620,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 if l[1:5].lower() == 'f2py':  # f2py directive
                     l = '     ' + l[5:]
                     is_f2py_directive = True
+                    fixed_col1_directive = True
                 else:  # Skip comment line
                     cont = False
                     is_f2py_directive = False
@@ -463,6 +632,37 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 raise Exception('readfortrancode: Found non-(space,digit) char '
                                 'in the first column.\n\tAre you sure that '
                                 f'this code is in fix form?\n\tline={l!r}')
+
+            # A directive inside an unfinished statement is emitted
+            # after that statement, and a later column-6 line continues
+            # the statement. Comment lines between them are read again
+            # in order. A finished statement leaves the column-6 line
+            # on the directive.
+            if is_f2py_directive and _stmt_is_open(ll):
+                skipped, nxt, nxt_init = _peek_fixed_after_comments()
+                replayed = list(skipped)
+                if nxt is not None:
+                    replayed.append((nxt, nxt_init))
+                takes_cont = (nxt is not None and not nxt_init
+                              and _fixed_col6_continuation(nxt))
+                if takes_cont:
+                    has_fortran_text = (bool(code_text.strip())
+                                        and not fixed_col1_directive)
+                    if has_fortran_text:
+                        directive_line, _ = split_by_unquoted(
+                            '     ' + rl[5:], '!')
+                        _defer_fixed(directive_line)
+                        l = code_text
+                        if strictf77 and len(l) > 72:
+                            l = l[:72]
+                        is_f2py_directive = False
+                        pending[:0] = replayed
+                    else:
+                        _defer_fixed(l)
+                        pending[:0] = replayed
+                        continue
+                else:
+                    pending[:0] = replayed
 
             if (not cont or strictf77) and (len(l) > 5 and not l[5] == ' '):
                 # Continuation of a previous line
@@ -487,8 +687,36 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                         finalline = ll
                     origfinalline = ll
                     ll = l
+                    open_is_directive = is_f2py_directive
 
         elif sourcecodeform == 'free':
+            if not is_f2py_directive:
+                # A continued directive with no further !f2py line is
+                # unfinished. A bare intent() would apply to every
+                # argument, so drop that line.
+                if (defer_cont and open_directive is not None
+                        and _bare_intent(open_directive)):
+                    open_directive = None
+                else:
+                    _queue_open_directive(False)
+                defer_cont = False
+            elif defer_cont or (cont and not open_is_directive):
+                # Keep a directive off an open Fortran statement,
+                # including when the directive line ends with &.
+                # Later !f2py lines extend that deferred directive.
+                # Fortran text before !f2py stays on the statement.
+                if code_text.strip():
+                    directive_line, _ = split_by_unquoted(
+                        '     ' + rl[5:], '!')
+                    _defer_directive(directive_line)
+                    l = code_text
+                    is_f2py_directive = False
+                elif not open_is_directive or defer_cont:
+                    _defer_directive(l)
+                    continue
+            else:
+                # This directive was not joined to the deferred line.
+                _queue_open_directive(True)
             if not cont and ext == '.pyf' and mline_mark.match(l):
                 l = l + '\n'
                 while True:
@@ -517,6 +745,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     finalline = ll
                 origfinalline = ll
                 ll = l
+                open_is_directive = is_f2py_directive
             cont = (r is not None)
         else:
             raise ValueError(
@@ -542,7 +771,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     outmess(f'readfortrancode: could not find include file {fn!r} '
                             f'in {os.pathsep.join(include_dirs)}. Ignoring.\n')
         else:
-            dowithline(finalline)
+            _emit(finalline)
         l1 = ll
     # Last line should never have an f2py directive anyway
     if localdolowercase:
@@ -569,7 +798,12 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 outmess(f'readfortrancode: could not find include file {fn!r} '
                         f'in {os.pathsep.join(include_dirs)}. Ignoring.\n')
     else:
-        dowithline(finalline)
+        if (defer_cont and open_directive is not None
+                and _bare_intent(open_directive)):
+            open_directive = None
+        defer_cont = False
+        _queue_open_directive(False)
+        _emit(finalline)
     filepositiontext = ''
     fin.close()
     if istop:
