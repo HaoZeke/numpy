@@ -369,6 +369,13 @@ fortran_getattr(PyFortranObject *fp, char *name)
         PyObject *s = PyUnicode_FromStringAndSize(NULL, 0), *s2;
         if (!s) return NULL;
         for (i = 0; i < fp->len; i++) {
+            if (fp->defs[i].func != NULL && fp->defs[i].rank > 0) {
+                for (k = 0; k < fp->defs[i].rank; ++k)
+                    fp->defs[i].dims.d[k] = -1;
+                save_def = &fp->defs[i];
+                (*(fp->defs[i].func))(&fp->defs[i].rank,
+                                      fp->defs[i].dims.d, set_data, &flag);
+            }
             s2 = fortran_doc(fp->defs[i]);
             if (!s2) {
                 Py_DECREF(s);
@@ -376,10 +383,6 @@ fortran_getattr(PyFortranObject *fp, char *name)
             }
             PyUnicode_AppendAndDel(&s, s2);
             if (!s) return NULL;
-        }
-        if (PyDict_SetItemString(fp->dict, name, s)) {
-            Py_DECREF(s);
-            return NULL;
         }
         return s;
     }
