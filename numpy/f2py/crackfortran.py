@@ -1673,6 +1673,61 @@ def markinnerspaces(line):
     return fragment
 
 
+def _closing_slash(line):
+    """Index past a ``/init/`` opened at ``line[0]``, or 0 for division."""
+    depth = 0
+    i = 1
+    while i < len(line):
+        before, after = split_by_unquoted(line[i:], '/()')
+        if not after:
+            return 0
+        i += len(before)
+        if after[0] == '/' and depth == 0:
+            return i + 1
+        depth += (after[0] == '(') - (after[0] == ')')
+        if depth < 0:
+            return 0
+        i += 1
+    return 0
+
+
+def _protect_slash_inits(expr):
+    """Hide commas and spaces inside ``/init/`` from the entity splitter.
+
+    A slash after ``=`` is division, and a slash inside parentheses is
+    left in place, so those commas still separate entities.
+    """
+    out = []
+    depth = 0
+    assign = False
+    rest = expr
+    while rest:
+        before, after = split_by_unquoted(rest, '/()=,')
+        if not after:
+            out.append(before)
+            break
+        char = after[0]
+        if char == '/' and depth == 0 and not assign:
+            end = _closing_slash(after)
+            if end:
+                init = after[:end].replace(',', '@C@').replace(' ', '@_@')
+                out.append(before + init)
+                rest = after[end:]
+                continue
+        out.append(before + char)
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            if depth:
+                depth -= 1
+        elif char == '=' and depth == 0:
+            assign = True
+        elif char == ',' and depth == 0:
+            assign = False
+        rest = after[1:]
+    return ''.join(out)
+
+
 def updatevars(typespec, selector, attrspec, entitydecl):
     """
     Returns last_name, the variable name without special chars, parenthesis
@@ -1699,9 +1754,11 @@ def updatevars(typespec, selector, attrspec, entitydecl):
                 a = s + a[len(s):]
             l.append(a)
         attrspec = l
-    el = [x.strip() for x in markoutercomma(entitydecl).split('@,@')]
+    protected = _protect_slash_inits(entitydecl)
+    el = [x.strip() for x in markoutercomma(protected).split('@,@')]
     el1 = []
     for e in el:
+        e = e.replace('@C@', ',')
         for e1 in [x.strip() for x in markoutercomma(removespaces(markinnerspaces(e)), comma=' ').split('@ @')]:
             if e1:
                 el1.append(e1.replace('@_@', ' '))
