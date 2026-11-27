@@ -3671,6 +3671,42 @@ def traverse(obj, visit, parents=[], result=None, *args, **kwargs):
     return result_key, new_result
 
 
+_CALLSTMT_NOISE = re.compile(
+    r'\\(?:\r\n|\n)'
+    r'|//[^\n]*'
+    r'|/\*.*?(?:\*/|\Z)'
+    r'|"(?:\\.|[^"\\\n])*"?'
+    r"|'(?:\\.|[^'\\\n])*'?",
+    re.S)
+
+
+def _blank_callstmt(text):
+    """Same-length copy; comments, quotes, and line splices are spaces."""
+    return _CALLSTMT_NOISE.sub(lambda m: ' ' * len(m.group(0)), text)
+
+
+def _callstmt_assignment_target(text, start, end):
+    """True when ``text[start:end]`` opens a statement and one ``=`` follows."""
+    blank = _blank_callstmt(text)
+    if blank[start:end] != text[start:end]:
+        return False
+    j = start - 1
+    while j >= 0 and blank[j].isspace():
+        j -= 1
+    if j >= 0 and blank[j] not in ';{}':
+        return False
+    i = end
+    n = len(blank)
+    while i < n and blank[i].isspace():
+        i += 1
+    if i >= n or blank[i] != '=':
+        return False
+    i += 1
+    while i < n and blank[i].isspace():
+        i += 1
+    return i >= n or blank[i] != '='
+
+
 def character_backward_compatibility_hook(item, parents, result,
                                           *args, **kwargs):
     """Previously, Fortran character was incorrectly treated as
@@ -3713,12 +3749,20 @@ def character_backward_compatibility_hook(item, parents, result,
     elif key == 'callstatement':
         vars_dict = parents[-2][1]['vars']
         new_value = value
+
+        def prefix_argument(match):
+            if _callstmt_assignment_target(
+                    match.string, match.start(), match.end()):
+                return match.group(0)
+            return '&' + match.group(0)
+
         for varname, vd in vars_dict.items():
             if ischaracter(vd):
-                # replace all occurrences of `<varname>` with
-                # `&<varname>` in argument passing
+                # Leave a statement assignment unchanged. Every other
+                # use of the name gets one leading ampersand.
                 new_value = re.sub(
-                    r'(?<![&])\b' + varname + r'\b', '&' + varname, new_value)
+                    r'(?<![&])\b' + varname + r'\b',
+                    prefix_argument, new_value)
 
     if new_value is not None:
         if new_value != value:
