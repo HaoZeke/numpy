@@ -260,3 +260,41 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestGH24284(util.F2PyTest):
+    """An external that is only passed on needs the callee dummy's callback."""
+    sources = [util.getpath("tests", "src", "callback", "gh24284.f")]
+
+    def test_forward_matches_callee_argument(self):
+        seen = []
+
+        def fun(n):
+            seen.append(n)
+
+        self.module.parent(4, fun)
+        got = np.asarray(seen[0])
+        assert got.dtype.kind == "i" and got.item() == 4
+
+    def test_function_call_pass(self):
+        def fun(x):
+            return x + 1.0
+
+        assert self.module.fouter(fun) == 2.0
+
+
+@pytest.mark.slow
+class TestGH22451(util.F2PyTest):
+    """An external passed to another routine needs that dummy's callback."""
+    sources = [util.getpath("tests", "src", "callback", "gh22451.f90")]
+
+    def test_passed_external(self):
+        seen = []
+
+        def callback(value):
+            seen.append(value)
+            return value
+
+        assert self.module.fun2(0.0, callback) == 1
+        assert seen == [1]

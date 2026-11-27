@@ -1,6 +1,7 @@
 import contextlib
 import importlib
 import io
+import os
 import textwrap
 import time
 
@@ -571,3 +572,279 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+def _flat_blocks(nodes, acc=None):
+    if acc is None:
+        acc = []
+    if isinstance(nodes, dict):
+        nodes = [nodes]
+    for block in nodes or []:
+        if not isinstance(block, dict):
+            continue
+        acc.append(block)
+        _flat_blocks(block.get("body"), acc)
+    return acc
+def _callback_parts(blocks, module_name, callback_name):
+    module = next(block for block in blocks if block.get("name") == module_name)
+    for routine in _flat_blocks(module):
+        if (routine.get("name") == callback_name
+                and routine.get("block") in ("function", "subroutine")):
+            arg = routine["args"][0]
+            result = routine["vars"].get(routine.get("result") or routine["name"], {})
+            return (routine["block"], routine["vars"][arg]["typespec"],
+                    result.get("typespec"), routine.get("from"))
+    raise AssertionError(module_name)
+def _crack_sources(tmp_path, files, module=""):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    for name, body in files:
+        text = textwrap.dedent(body).lstrip("\n")
+        if not text.endswith("\n"):
+            text += "\n"
+        (tmp_path / name).write_text(text)
+    cwd = os.getcwd()
+    saved = crackfortran.f77modulename
+    os.chdir(tmp_path)
+    crackfortran.f77modulename = module
+    try:
+        return crackfortran.crackfortran([name for name, _body in files])
+    finally:
+        crackfortran.f77modulename = saved
+        os.chdir(cwd)
+def _real(name):
+    return (f"function {name}(cb) result(y)\nreal y, x\nexternal cb\n"
+            "y = cb(x)\nend\n")
+def _sub(name):
+    return (f"subroutine {name}(cb)\ninteger n\nexternal cb\n"
+            "call cb(n)\nend\n")
+def _mod(name, body, use=""):
+    return f"module {name}\n{use}contains\n{body}end\n"
+
+class TestPassedExternal:
+    def test_missing_interface_is_left_unset(self, tmp_path):
+        src = (
+            "function plain(a) result(r); implicit none; real(8) :: a, r; "
+            "r = a; end\nfunction forward_missing(cb) result(r); "
+            "implicit none; real(8), external :: cb, plain; real(8) :: r; "
+            "character(len=20) :: message; message = 'plain(cb)'; "
+            "r = plain(1.0d0); if (message == 'plain(cb)') r = r; end\n")
+        blocks = _crack_sources(tmp_path, [("a.f90", src)])
+        names = [block.get("name") for block in blocks]
+        assert "forward_missing__user__routines" not in names
+        missing = next(block for block in _flat_blocks(blocks)
+                       if block.get("name") == "forward_missing")
+        assert "cb" in missing["externals"]
+
+    def test_comment_does_not_copy_callback(self, tmp_path):
+        src = (
+            "function evil(cb) result(r)\nimplicit none\n"
+            "integer, external :: cb\ninteger :: r\nr = cb(3)\nend\n"
+            "function victim(cb) result(r)\nimplicit none\n"
+            "real(8), external :: cb\nreal(8) :: r\n"
+            "r = len('c:\\') ! call evil(cb)\nr = 1.0d0\nend\n"
+            "function keeps_own(cb) result(r)\nimplicit none\n"
+            "real(8), external :: cb\nreal(8) :: r, x\n"
+            "x = 1.0d0\nr = cb(x) ! call evil(cb)\nend\n")
+        blocks = _crack_sources(tmp_path, [("a.f90", src)])
+        names = [block.get("name") for block in blocks]
+        assert "victim__user__routines" not in names
+        evil = _callback_parts(blocks, "evil__user__routines", "cb")[1]
+        own = _callback_parts(blocks, "keeps_own__user__routines", "cb")[1]
+        assert (evil, own) == ("integer", "real")
+
+    def test_scope_and_order(self, tmp_path):
+        run = "subroutine run(fun)\nexternal fun\ncall apply(fun)\nend\n"
+        real_apply = "subroutine apply(cb)\nreal x\nexternal cb\nx = cb(x)\nend\n"
+        contained = _sub("apply") + _mod(
+            "m", "subroutine outer(fun)\nexternal fun\ncall apply(fun)\n"
+            "contains\n" + _real("apply") + "end\n")
+        decoy = _mod("decoy", _real("apply")) + (
+            "subroutine parent(fun)\nexternal fun\ncall apply(fun)\nend\n")
+        mods = _mod("m2", real_apply) + _mod("m1", run + _sub("apply"))
+        iface = (
+            "subroutine run(fun)\nexternal fun\ninterface\n"
+            "subroutine fun(n)\ninteger n\nend\nend interface\nend\n")
+        si, fr = ("subroutine", "integer"), ("function", "real")
+        jobs = (
+            ("contained", [("a.f90", contained)],
+             (("outer__user__routines", fr),)),
+            ("decoy", [("caller.f90", decoy), ("impl.f90", _sub("apply"))],
+             (("parent__user__routines", si),)),
+            ("mods", [("mods.f90", mods)], (("run__user__routines", si),)),
+            ("fwd", [("a.f90", run + _sub("apply")), ("b.f90", run + real_apply)],
+             (("run__user__routines", si), ("run__user__routines_1", fr))),
+            ("ord", [("a.f90", run + real_apply), ("b.f90", iface)],
+             (("run__user__routines", si), ("run__user__routines_1", fr))),
+        )
+        for tag, files, expects in jobs:
+            blocks = _crack_sources(tmp_path / tag, files)
+            for mod, sig in expects:
+                got = _callback_parts(blocks, mod, "fun")
+                assert got[:2] == sig, (tag, got)
+
+    def test_keyword_uses_interface(self, tmp_path):
+        src = (
+            "subroutine apply(cb1, cb2); integer n; real x; external cb1, cb2; "
+            "call cb1(n); x = cb2(x); end\n"
+            "subroutine parent(fun, ident); external fun, ident; interface\n"
+            "subroutine apply(cb2, cb1); external cb2, cb1; end; end interface\n"
+            "call apply(cb1=fun, cb2=ident); end\n")
+        blocks = _crack_sources(tmp_path, [("kw.f90", src)])
+        fun = _callback_parts(blocks, "parent__user__routines", "fun")
+        ident = _callback_parts(blocks, "parent__user__routines", "ident")
+        assert fun[:2] == ("function", "real")
+        assert ident[:2] == ("subroutine", "integer")
+
+    def test_rename_keeps_dummy_type(self, tmp_path):
+        src = (
+            "function apply(cb, fun); double precision apply; integer fun; "
+            "external cb; apply = cb(fun); end\n"
+            "function parent(fun); double precision parent; external fun; "
+            "parent = apply(fun); end\n")
+        blocks = _crack_sources(tmp_path, [("a.f90", src)])
+        parent = _callback_parts(blocks, "parent__user__routines", "fun")
+        apply = _callback_parts(blocks, "apply__user__routines", "cb")
+        assert parent[:3] == ("function", "integer", "double precision")
+        assert apply[1] == "integer"
+
+    def test_renamed_dummy_rewrites_dimension(self, tmp_path):
+        src = (
+            "subroutine apply(cb, n); integer n; real p(n); character(len=n) :: s; "
+            "character*(n) u(2); character*8 :: t = 'n'; real x(a % n); real z(a% n); "
+            "real w(a %n); real c(a%n); real y(n$); external cb\n!f2py check(m % n) p\n"
+            "!f2py check(s=='n') s\ncall cb(n, p, s, u, t, x, z, w, c, y); end\n"
+            "subroutine parent(n); external n; call apply(n, m); end\n"
+            "subroutine applyi(cb, in); integer, intent(in) :: in, m; external cb; "
+            "call cb(in, m); end\nsubroutine parenti(in); external in; "
+            "call applyi(in, m); end\nsubroutine bapply(cb, size); integer size\n"
+            "real p(size); real q(2 * size); real x(a % size); external cb\n"
+            "!f2py check(size>0) size\ncall cb(size, p, q, x); end\n"
+            "subroutine bparent(size); external size; call bapply(size, m); end\n")
+        flat = _flat_blocks(_crack_sources(tmp_path, [("a.f90", src)]))
+        v = next(b["vars"] for b in flat if b.get("name") == "n")
+        sv = next(b["vars"] for b in flat if b.get("name") == "size_bn")
+        mvar = next(b["vars"]["m"] for b in flat if b.get("name") == "in")
+        assert (v["p"]["dimension"], v["x"]["dimension"], v["z"]["dimension"],
+                v["w"]["dimension"], v["c"]["dimension"], v["y"]["dimension"],
+                v["s"]["charselector"].get("len"), v["u"]["charselector"].get("*"),
+                v["t"].get("="), v["s"].get("check"), v["p"].get("check"),
+                mvar["intent"], sv["p"]["dimension"], sv["q"]["dimension"],
+                sv["x"]["dimension"], sv["size_bn_1"].get("check")) == (
+            ["n_1"], ["a % n"], ["a% n"], ["a %n"], ["a%n"], ["n$"],
+            "n_1", "(n_1)", "'n'", ["s=='n'"], ["m % n"], ["in"],
+            ["size_bn_1"], ["2 * size_bn_1"], ["a % size"], ["size_bn_1>0"])
+
+    def test_association_order(self, tmp_path):
+        A, O, S, B = (_sub(n) for n in ("apply", "other", "size", "bee"))
+        a, o, x, c = (_real(n) for n in ("apply", "other", "x", "cee"))
+        M = _mod
+        P = lambda use="", call="apply", ext="external fun\n": (
+            f"subroutine parent(fun)\n{use}{ext}call {call}(fun)\nend\n")
+        IF = ("interface\nfunction apply(cb) result(y)\ninterface\n"
+              "function cb(x) result(z)\nreal z, x\nend\nend interface\n"
+              "real y\nend\nend interface\n")
+        LS = ("interface\nsubroutine apply(cb)\ninterface\n"
+              "subroutine cb(n)\ninteger n\nend\nend interface\n"
+              "end\nend interface\n")
+        LP = "private\n" + IF + "public :: apply\n"
+        LSp = LS + "private :: apply\n"
+        IFACE = ("subroutine parent(fun)\nexternal fun\ninterface\n"
+                 "function apply(cb) result(y)\nreal y\nexternal cb\nend\n"
+                 "end interface\ncall apply(fun)\nend\n")
+        DIR = (
+            "subroutine parent(fun)\nuse m\nexternal fun\ninteger n\n"
+            "call fun(n)\ncall apply(fun)\nend\n")
+        si, fr = ("subroutine", "integer"), ("function", "real")
+
+        def check(tag, source, sig, origin="", lower=1):
+            saved = crackfortran.dolowercase
+            crackfortran.dolowercase = lower
+            try:
+                blocks = _crack_sources(tmp_path / tag, [("a.f90", source)])
+            finally:
+                crackfortran.dolowercase = saved
+            if sig is None:
+                names = [b.get("name") or "" for b in _flat_blocks(blocks)]
+                ended = "parent__user__routines"
+                assert not any(n.endswith(ended) for n in names), tag
+                return
+            got = _callback_parts(blocks, "parent__user__routines", "fun")
+            assert got[:2] == sig, (tag, got)
+            if origin:
+                assert origin in (got[3] or ""), (tag, got)
+
+        check("ext", A + M("m", a + P(ext="external fun, apply\n")), si)
+        check("iface", a + M("m", A + IFACE), fr)
+        check("none", M("m", A + P(ext="external fun, apply\n")), None)
+        check("host", M("other", a) + M("m", A + P("use other\n")), fr)
+        check("kept", M("src", a + O) + M("host", P("use src, only: other\n"),
+            "use src\n"), fr)
+        check("ren", M("m", A + o) + P("use m, only: apply => other\n"), fr)
+        check("bare", M("m", o) + P("use m, apply => other\n"), fr)
+        check("loc", M("m", a) + P("use m, only: local => apply\n", "local"), fr)
+        check("amb", M("m", A + o) + P("use m, apply => other\n"), None)
+        check("omod", M("src", A) + M("othermod", a) + M("host",
+            P("use othermod, only: apply\n"), "use src\n"), fr)
+        check("oren", M("src", A + o) + M("host", P("use src, only: apply => other\n"),
+            "use src\n"), fr)
+        check("work", M("other", A) + M("worker", a) + M("host", P("use worker\n"),
+            "use other\n"), fr)
+        check("hloc", M("m", a) + M("host", P("use m\n", "local"),
+            "use m, only: local => apply\n"), fr)
+        check("hbare", A + M("m", o) + M("host", P("use m\n"),
+            "use m, only: apply => other\n"), fr)
+        check("beta", M("alpha", A) + M("beta", o) + M("host",
+            P("use beta, only: apply => other\n"), "use alpha\n"), fr)
+        check("hidef", O + M("m", o) + P("use m, apply => other\n", "other"), si)
+        check("hideh", M("m", o) + M("host", O + P("use m, apply => other\n", "other")),
+            si)
+        check("bn", M("m", S) + P("use m, only: size\n", "size"), si)
+        check("msize", A + M("size", a) + P("use size\n"), fr)
+        check("pub", A + M("m", a, "private\npublic :: apply\n") + P("use m\n"), fr)
+        check("reonly", A + M("m",
+            a + O) + P("use m, only: apply\nuse m, only: other\n"), fr)
+        check("rebare", O + M("m", o + A) + P("use m\nuse m, only: apply\n", "other"),
+            fr)
+        check("onlyo", A + M("m", a + O) + P("use m, only: other\n"), si)
+        check("miss", "module m\ninteger :: k\nend\n" + A + P("use m, only: apply\n"),
+            None)
+        check("unseen", M("host", A + P("use externalmod, only: apply\n")), None)
+        check("ifaceu", M("m", "\n", IF) + M("host", A + P("use m, only: apply\n")), fr)
+        check("swap", M("m", A + o) + P("use m, apply => other, other => apply\n"), fr)
+        check("direct", M("m", a) + A + DIR, si, "parent")
+        check("sib", M("m", A + P(), "private :: apply\n"), si)
+        check("latepub", A + M("m", "\n", LP) + P("use m\n"), fr)
+        check("latepriv", a + M("m", "\n", LSp) + P("use m\n"), fr)
+        check("hostif", M("m", P(), LS), si)
+        check("caseuse", A + M("size", a) + P("use SIZE\n"), fr, lower=0)
+        check("caseonly", A + M("m", a,
+            "private\npublic :: APPLY\n") + P("use m, only: APPLY\n"), fr, lower=0)
+        both = "use m, only: a => x, b => x\n"
+        for call in ("a", "b"):
+            check(f"both{call}", M("m", x) + P(both, call), fr)
+        check("reamb", M("m",
+            B + c) + P("use m, only: apply => bee\nuse m, only: apply => cee\n"), None)
+        check("renonly", M("m",
+            A + o) + P("use m, apply => other\nuse m, only: apply\n"), None)
+        check("reid", M("m",
+            o) + P("use m, only: apply => other\nuse m, only: apply => other\n"), fr)
+        check("mixuse", A + M("m", a) + P("use m, only: local => apply\nuse M\n"), si,
+            "a.f90:apply:unknown_interface", 0)
+        check("locif", (
+            "subroutine parent(fun)\nexternal fun\ninterface\n"
+            "subroutine apply(cb)\ninteger n\nexternal cb\ncall cb(n)\nend\n"
+            "end interface\ncall apply(fun)\nend\n"), si)
+
+    @pytest.mark.parametrize("body,expect", [
+        ("use kinds, only: wp => dp\nuse kinds\nreal(wp) :: x(:)\n",
+         ["use kinds, wp=>dp"]),
+        ("use kinds, wp => dp\nuse kinds, only: dp\nreal(dp) :: x(:)\n",
+         ["use kinds, wp=>dp,dp=>dp"]),
+    ], ids=["rename", "self"])
+    def test_bare_use_merges_with_only(self, tmp_path, body, expect):
+        src = ("module kinds\ninteger, parameter :: dp = kind(1.0d0)\nend\n"
+               + _mod("wrap", f"subroutine parent(x)\n{body}end\n"))
+        blocks = _crack_sources(tmp_path, [("a.f90", src)])
+        parent = next(b for b in _flat_blocks(blocks) if b.get("name") == "parent")
+        text = parent.get("saved_interface") or ""
+        uses = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("use ")]
+        assert uses == expect

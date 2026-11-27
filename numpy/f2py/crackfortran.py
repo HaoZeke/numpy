@@ -796,6 +796,7 @@ def crackline(line, reset=0):
         re_1 = crackline_re_1
         if 0 <= skipblocksuntil <= groupcounter:
             return
+        _note_passed_externals(line)
         if 'externals' in groupcache[groupcounter]:
             for name in groupcache[groupcounter]['externals']:
                 if name in invbadnames:
@@ -838,6 +839,8 @@ def crackline(line, reset=0):
                             f'{groupname[groupcounter]!r}\n\t{filepositiontext}')
         if skipblocksuntil == groupcounter:
             skipblocksuntil = -1
+        if groupcache[groupcounter].get('block') == 'module':
+            _seal_module(groupcache[groupcounter], grouplist[groupcounter])
         grouplist[groupcounter - 1].append(groupcache[groupcounter])
         grouplist[groupcounter - 1][-1]['body'] = grouplist[groupcounter]
         del grouplist[groupcounter]
@@ -864,6 +867,8 @@ def crackline(line, reset=0):
     else:
         if 0 <= skipblocksuntil <= groupcounter:
             return
+        if pat[1] == 'call':
+            _note_passed_externals(line)
         analyzeline(m, pat[1], line)
 
 
@@ -1153,6 +1158,13 @@ def analyzeline(m, case, line):
         groupcache[groupcounter]['interfaced'] = []
         groupcache[groupcounter]['vars'] = {}
         groupcache[groupcounter]['entry'] = {}
+        if block in ('function', 'subroutine'):
+            here, origin = groupcache[groupcounter], groupcache[groupcounter].get('from') or ''
+            rname, parent = here.get('name') or '', groupcache.get(groupcounter - 1) or {}
+            if parent.get('block') in ('module', 'function', 'subroutine', 'program') and (host := list(_host_uses.get(id(parent)) or []) + ([parent['use']] if parent.get('use') else [])):
+                _host_uses[id(here)] = host
+            if rname and '__user__' not in rname and 'unknown_interface' not in origin:
+                _routine_index.setdefault(_fid(rname), []).append(here)
         # end of creation
         if block == 'type':
             groupcache[groupcounter]['varnames'] = []
@@ -1523,27 +1535,27 @@ def analyzeline(m, case, line):
             if 'use' not in groupcache[groupcounter]:
                 groupcache[groupcounter]['use'] = {}
             name = m1.group('name')
-            groupcache[groupcounter]['use'][name] = {}
-            isonly = 0
+            slot = groupcache[groupcounter]['use']
+            name = next((k for k in slot if k.lower() == name.lower()), name); prev, isonly = slot.get(name), 0
+            slot[name] = prev or {}
             if 'list' in mm and mm['list'] is not None:
                 if 'notonly' in mm and mm['notonly'] is None:
                     isonly = 1
-                groupcache[groupcounter]['use'][name]['only'] = isonly
+                slot[name]['only'] = isonly if prev is None else (
+                    0 if not isonly or not prev.get('only') else prev.get('only'))
                 ll = [x.strip() for x in mm['list'].split(',')]
-                rl = {}
+                rl = dict((prev or {}).get('map') or {})
                 for l in ll:
-                    if '=' in l:
-                        m2 = re.match(
-                            r'\A\s*(?P<local>\b\w+\b)\s*=\s*>\s*(?P<use>\b\w+\b)\s*\Z', l, re.I)
-                        if m2:
-                            rl[m2.group('local').strip()] = m2.group(
-                                'use').strip()
-                        else:
-                            outmess(
-                                f'analyzeline: Not local=>use pattern found in {repr(l)}\n')
-                    else:
-                        rl[l] = l
-                    groupcache[groupcounter]['use'][name]['map'] = rl
+                    m2 = re.match(r'\A\s*(?P<local>\b\w+\b)\s*=\s*>\s*(?P<use>\b\w+\b)\s*\Z', l, re.I) if '=' in l else None
+                    if '=' in l and not m2:
+                        outmess(f'analyzeline: Not local=>use pattern found in {repr(l)}\n')
+                        continue
+                    local, use = (m2.group('local').strip(), m2.group('use').strip()) if m2 else (l, l)
+                    if any(k.lower() == local.lower() and str(v).lower() != use.lower() for k, v in rl.items()):
+                        slot[name].setdefault('clash', []).append(local)
+                    rl[local] = use
+                    slot[name]['map'] = rl
+            elif prev is not None: slot[name]['only'] = 0
         else:
             print(m.groupdict())
             outmess('analyzeline: Could not crack the use statement.\n')
@@ -1999,7 +2011,7 @@ def get_useparameters(block, param_map=None):
     if not usedict:
         return param_map
     for usename, mapping in list(usedict.items()):
-        usename = usename.lower()
+        usename = rmbadname1(usename.lower())
         if usename not in f90modulevars:
             outmess(f'get_useparameters: no module {usename} info used by '
                     f'{block.get("name")}\n')
@@ -2107,9 +2119,12 @@ def postcrack(block, args=None, tab=''):
             mname = name + '__user__routines'
         else:
             mname = 'unknown__user__routines'
-        if mname in userisdefined:
+        taken = set(userisdefined)
+        taken.update(mod.get('name') for mod in usermodules)
+        if ((name in getattr(_bind_passed_externals, 'names', ()) and
+             not block.pop('__prior_iface', None)) or mname in taken):
             i = 1
-            while f"{mname}_{i}" in userisdefined:
+            while f"{mname}_{i}" in taken:
                 i = i + 1
             mname = f"{mname}_{i}"
         interface = {'block': 'interface', 'body': [],
@@ -3411,7 +3426,9 @@ def use2fortran(use, tab=''):
         if 'map' in use[m] and use[m]['map']:
             c = ' '
             for k in list(use[m]['map'].keys()):
-                if k == use[m]['map'][k]:
+                renamed = any(str(a).lower() != str(b).lower() and str(b).lower() == str(k).lower() for a, b in use[m]['map'].items())
+                if not use[m].get('only') and str(k).lower() == str(use[m]['map'][k]).lower() and not renamed: continue
+                if use[m].get('only') and k == use[m]['map'][k]:
                     ret = f'{ret}{c}{k}'
                     c = ','
                 else:
@@ -3567,13 +3584,222 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
 post_processing_hooks = []
 
 
+_passed_notes, _routine_index, _host_uses = {}, {}, {}
+_bare_name = re.compile(r'\A[A-Za-z_][\w$]*\Z')
+_kw_actual = re.compile(r'\A([A-Za-z_][\w$]*)\s*=(.*)\Z', re.S)
+_fortran_literal = re.compile(
+    r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")|!.*|'(?:''|[^'])*$|\"(?:\"\"|[^\"])*$")
+def _fid(name):
+    return rmbadname1((name or '').lower())
+def _fortran_calls(line):  # blank quotes and ! comments; a backslash stays
+    marked = markouterparen(_fortran_literal.sub(lambda m: ' ' * len(m.group(0)), line)); calls = []
+    for match in re.finditer(r'([A-Za-z_][\w$]*)[ \t]*@\(@(.*?)@\)@', marked):
+        try:
+            parts = markoutercomma(match.group(2)).split('@,@')
+        except Exception:
+            continue
+        bound = []
+        for part in parts:
+            part = part.strip(); kw = _kw_actual.match(part); raw = kw.group(2).strip() if kw else part
+            bound.append((_fid(kw.group(1)) if kw else None, _fid(raw) if _bare_name.match(raw) else None))
+        calls.append((_fid(match.group(1)), bound))
+    return calls
+def _note_passed_externals(line):
+    block = groupcache.get(groupcounter) or {}
+    names = {_fid(n) for n in block.get('externals') or []}
+    if block.get('block') not in ('function', 'subroutine') or not names:
+        return
+    notes = _passed_notes.setdefault(id(block), [])
+    for callee, actuals in _fortran_calls(line):
+        item = (callee, tuple(actuals))
+        if callee and callee not in names and item not in notes and any(val in names for _k, val in actuals):
+            notes.append(item)
+def _origin(origin):
+    text = origin or ''
+    if text[:1] == ':':
+        colon = text.find(':', 1); text = text[colon + 1:] if colon >= 0 else ''
+    drive = len(text) > 2 and text[0].isalpha() and text[1] == ':' and text[2] in '\\/'
+    cut = text.find(':', 2 if drive else 0); key = text if cut < 0 else text[:cut]
+    if not key or key not in (origin or ''):
+        return key, (origin or '') if not key else ''
+    rest = (origin or '').split(key, 1)[1]
+    return key, rest[1:] if rest[:1] == ':' else rest
+def _seal_module(mod, body):
+    blank, named = [], {}
+    for key, info in (mod.get('vars') or {}).items():
+        spec = (info or {}).get('attrspec') or []
+        if key == '':
+            blank = spec
+        else:
+            named.setdefault(_fid(key), []).extend(spec)
+    def hidden(name):
+        attrs = named.get(_fid(name), []); return 'public' not in attrs and ('private' in attrs or 'private' in blank)
+    for block in body or []:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get('block')
+        procs = (block.get('body') or []) if kind == 'interface' else [block] if kind in ('function', 'subroutine') else []
+        for proc in procs:
+            if not isinstance(proc, dict) or proc.get('block') not in ('function', 'subroutine'):
+                continue
+            if kind == 'interface':
+                proc['__in_mod'] = mod.get('name'); rname = proc.get('name') or ''
+                if rname and '__user__' not in rname and proc not in (group := _routine_index.setdefault(_fid(rname), [])):
+                    group.append(proc)
+            if hidden(proc.get('name') or ''):
+                proc['__no_use'] = 1
+def _callback_proc(routine, dummy):
+    want = _fid(dummy)
+    for block in routine.get('body') or []:
+        body = (block.get('body') or []) if isinstance(block, dict) and block.get('block') == 'interface' else []
+        for proc in body:
+            if isinstance(proc, dict) and _fid(proc.get('name')) == want:
+                return proc
+    return None
+def _ext_name(caller, name):
+    attrs = [a for key, info in (caller.get('vars') or {}).items() if key and _fid(key) == name
+             for a in ((info or {}).get('attrspec') or [])]
+    return (name in {_fid(n) for n in caller.get('externals') or []} or 'external' in attrs or
+            name in {_fid(n) for n in caller.get('interfaced') or []} or _callback_proc(caller, name) is not None)
+def _in_mod(routines, mod, target):
+    mod, target = _fid(mod), _fid(target)
+    def ok(it):
+        scope = _origin(it.get('from') or '')[1]; head = scope.split(':', 1)[0] if scope else ''
+        return not it.get('__no_use') and (_fid(it.get('__in_mod') or '') == mod or (scope == head and _fid(head) == mod))
+    return [it for it in routines.get(target) or [] if ok(it)]
+def _use_callee(routines, name, caller):
+    name = _fid(name)
+    if _ext_name(caller, name):
+        return False
+    own = caller.get('use')
+    layers = ([own] if own else []) + list(reversed(_host_uses.get(id(caller)) or []))
+    for uses in layers:
+        matched, bad = [], False
+        for mod, info in (uses or {}).items():
+            info = info or {}
+            amap = {_fid(k): _fid(v) for k, v in (info.get('map') or {}).items()}
+            only = info.get('only')
+            if any(_fid(c) == name for c in info.get('clash') or ()):
+                bad = True; continue
+            if (only and name not in amap) or (not only and name not in amap and name in amap.values()):
+                continue
+            target = amap.get(name, name); hits = _in_mod(routines, mod, target)
+            if (not hits and (only or name in amap)) or (not only and target != name and hits
+                    and name not in amap.values() and _in_mod(routines, mod, name)):
+                bad = True; continue
+            matched.extend(hits)
+        if bad or matched:
+            return None if bad or len(matched) != 1 else matched[0]
+    return False
+def _choose_callee(routines, name, caller):
+    name, found = _fid(name), list(routines.get(_fid(name)) or [])
+    cfrom, cname = caller.get('from') or '', caller.get('name') or ''
+    cfile, cscope = _origin(cfrom)
+    pool = [it for it in found if not _origin(it.get('from') or '')[1]]
+    same = [it for it in pool if cfile and _origin(it.get('from') or '')[0] == cfile]
+    bare = (same or pool)[0] if len(same or pool) == 1 else None
+    if _ext_name(caller, name):
+        return bare
+    if cfrom and cname and (hit := [it for it in found if (it.get('from') or '') == f'{cfrom}:{cname}']):
+        return hit[0] if len(hit) == 1 else None
+    if (used := _use_callee(routines, name, caller)) is not False:
+        return used
+    best, nlen = [], -1
+    for it in found:
+        file, scope = _origin(it.get('from') or '')
+        if file == cfile and scope and (scope == cscope or cscope.startswith(scope + ':')) and len(scope) >= nlen:
+            best, nlen = ([it], len(scope)) if len(scope) > nlen else (best + [it], nlen)
+    if not best:
+        mod = _fid(cscope.split(':', 1)[0]) if cscope else ''
+        best = [it for it in found if mod and _fid(it.get('__in_mod') or '') == mod and _origin(it.get('from') or '')[0] == cfile]
+        if not best:
+            return bare
+    return best[0] if len(best) == 1 else None
+def _dummy_for(caller, callee, actuals, passed):
+    args = list(callee.get('args') or [])
+    proc = _callback_proc(caller, callee.get('name'))
+    names = args if proc is None else list(proc.get('args') or [])
+    folded, want, pos, keyed = [_fid(n) for n in names], _fid(passed), 0, 0
+    for key, val in actuals:
+        if key:
+            keyed = 1
+            if val == want and key in folded:
+                index = folded.index(key)
+                return names[index] if proc is None else args[index] if index < len(args) else None
+        elif not keyed and pos < len(args):
+            slot, pos = args[pos], pos + 1
+            if val == want:
+                return slot
+    return None
+def _resolve_callback(routine, dummy, routines, seen):
+    if (id(routine), dummy) in seen:
+        return None
+    seen.add((id(routine), dummy))
+    if (found := _callback_proc(routine, dummy)) is not None:
+        return found
+    for callee_name, actuals in _passed_notes.get(id(routine)) or []:
+        local = _callback_proc(routine, callee_name)
+        for callee in (local, _choose_callee(routines, callee_name, routine)):
+            target = callee and _dummy_for(routine, callee, actuals, dummy)
+            if target and (proc := _resolve_callback(callee, target, routines, seen)):
+                return proc
+    return None
+def _attach_callback(routine, ext, proc):
+    if _fid(ext) in {_fid(n) for n in routine.get('interfaced') or []} or _callback_proc(routine, ext):
+        return
+    copied = copy.deepcopy(proc); copied.pop('parent_block', None)
+    args, vars_ = copied.get('args') or [], copied.get('vars')
+    if isinstance(vars_, dict) and ext in args and ext in vars_ and copied.get('result') != ext:
+        i = 1
+        while (fresh := f'{ext}_{i}') in args or fresh in vars_:
+            i += 1
+        args[args.index(ext)] = fresh; vars_[fresh] = vars_.pop(ext)
+        word = re.compile(rf'(?<![\w$%])(?:{re.escape(ext)}|{re.escape(invbadnames.get(ext, ext))})(?![\w$])', re.I)
+        def sub(text):
+            parts = re.split(r"""('(?:''|[^'])*'|"(?:""|[^"])*")""", text)
+            def repl(m, s):
+                i = next((k for k in range(m.start() - 1, -1, -1) if not s[k].isspace()), -1); return m.group() if i >= 0 and s[i] == '%' else fresh
+            return ''.join(word.sub(lambda m, s=p: repl(m, s), p) if n % 2 == 0 else p for n, p in enumerate(parts))
+        for key, var in vars_.items():
+            if not isinstance(var, dict):
+                continue
+            for field in ('attrspec', 'dimension', 'check', 'depend', '=', 'charselector', 'kindselector'):
+                cur = var.get(field)
+                if isinstance(cur, str):
+                    var[field] = sub(cur)
+                elif isinstance(cur, dict):
+                    cur.update({k: sub(v) for k, v in cur.items() if isinstance(v, str)})
+                elif isinstance(cur, list):
+                    var[field] = [sub(x) if isinstance(x, str) and (field != 'attrspec' or x.split('(', 1)[0].strip().lower() in ('dimension', 'check', 'depend')) else x for x in cur]
+    old = copied.get('name'); copied['name'] = ext
+    if old and old != ext and copied.get('result') == old:
+        copied['result'] = ext
+    if isinstance(vars_, dict) and old and old != ext and old in vars_ and ext not in vars_:
+        vars_[ext] = vars_.pop(old)
+    routine.setdefault('body', []).append({'block': 'interface', 'body': [copied], 'vars': {}, 'name': 'unknown_interface', 'from': routine.get('from') or '', 'externals': [], 'interfaced': []})
+    routine.setdefault('interfaced', []).append(ext)
+def _bind_passed_externals():
+    names = _bind_passed_externals.names = set()
+    for group in _routine_index.values():
+        for routine in group:
+            if routine.get('externals') and routine.get('interfaced'):
+                routine['__prior_iface'] = 1; names.add(routine.get('name') or '')
+            for ext in list(routine.get('externals') or []):
+                if _callback_proc(routine, ext) is None and (
+                        proc := _resolve_callback(routine, ext, _routine_index, set())) is not None:
+                    _attach_callback(routine, ext, proc)
+    _passed_notes.clear(); _routine_index.clear(); _host_uses.clear()
+
 def crackfortran(files):
     global usermodules, post_processing_hooks
 
+    _passed_notes.clear()
+    _routine_index.clear(); _host_uses.clear()
     outmess('Reading fortran codes...\n', 0)
     readfortrancode(files, crackline)
     outmess('Post-processing...\n', 0)
     usermodules = []
+    _bind_passed_externals()
     postlist = postcrack(grouplist[0])
     outmess('Applying post-processing hooks...\n', 0)
     for hook in post_processing_hooks:
