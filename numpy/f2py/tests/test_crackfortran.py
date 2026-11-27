@@ -571,3 +571,319 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+
+class TestImplicitRules:
+    @pytest.fixture(autouse=True)
+    def _saved_defaults(self):
+        saved = {k: dict(v) for k, v in crackfortran.defaultimplicitrules.items()}
+        try:
+            yield
+        finally:
+            crackfortran.defaultimplicitrules.clear()
+            crackfortran.defaultimplicitrules.update(saved)
+
+    def test_upper_letters_and_no_leak(self, monkeypatch, tmp_path):
+        # gh-13356: keep the source case, and do not rewrite the next routine.
+        monkeypatch.setattr(crackfortran, "dolowercase", 0)
+        by = self._crack(tmp_path, "implicit.f90", """\
+            subroutine FIRST(X)
+              implicit double precision (A-H,O-Z)
+              X = 1
+            end
+
+            subroutine SECOND(X)
+              X = 1
+            end
+            """)
+        assert by["FIRST"]["vars"]["X"]["typespec"] == "double precision"
+        assert by["SECOND"]["vars"]["X"]["typespec"] == "real"
+        assert crackfortran.defaultimplicitrules["a"]["typespec"] == "real"
+        assert "A" not in crackfortran.defaultimplicitrules
+
+    def test_implicit_none_from_host_stays_none(self):
+        parent = {"name": "host", "implicit": None}
+        child = {"name": "inner", "parent_block": parent}
+        rules, attrs = crackfortran.buildimplicitrules(child)
+        assert rules is None
+        assert attrs == {}
+
+    def _find(self, block, name):
+        if isinstance(block, dict):
+            if block.get("name") == name:
+                return block
+            for child in block.get("body") or []:
+                found = self._find(child, name)
+                if found:
+                    return found
+        return None
+
+    def _crack(self, tmp_path, name, source):
+        path = tmp_path / name
+        path.write_text(textwrap.dedent(source))
+        blocks = crackfortran.crackfortran([str(path)])
+        return {b["name"]: b for b in blocks if isinstance(b, dict)}
+
+    def test_interface_body_keeps_default_rules(self, tmp_path):
+        # A Fortran interface body keeps the default map. A contained
+        # routine and a call wrapper still see the host map.
+        by = self._crack(tmp_path, "iface.f90", """\
+            module none
+              implicit none
+            contains
+              subroutine caller(cb)
+                interface
+                  subroutine cb(x, i)
+                  end subroutine
+                end interface
+              end subroutine
+            end module
+            module host
+              implicit double precision (a-h,o-z)
+              interface
+                subroutine ext(a)
+                end subroutine
+              end interface
+            contains
+              subroutine inner(a)
+              end subroutine
+            end module
+            subroutine wrap(cb, ext, x)
+              implicit double precision (a-h,o-z)
+              external cb
+              call cb(x)
+              interface
+                subroutine ext(a)
+                end subroutine
+              end interface
+            end subroutine
+            """)
+        cb = self._find(by["none"], "cb")
+        assert cb["vars"]["x"]["typespec"] == "real"
+        assert cb["vars"]["i"]["typespec"] == "integer"
+        assert self._find(by["host"], "ext")["vars"]["a"]["typespec"] == "real"
+        assert self._find(by["host"], "inner")["vars"]["a"]["typespec"] == \
+            "double precision"
+        assert self._find(by["wrap__user__routines"], "cb")["vars"]["x"][
+            "typespec"] == "double precision"
+        assert self._find(by["wrap"], "ext")["vars"]["a"]["typespec"] == "real"
+
+    def test_use_associated_implicit_is_folded_on_host(self, tmp_path):
+        # Kind and length come from the module that defined them.
+        by = self._crack(tmp_path, "kind.f90", """\
+            module kinds
+              integer, parameter :: wp = 4
+              integer, parameter :: n = 4
+            end module
+            module host
+              use kinds, only: wp, n
+              implicit real(kind=wp) (a-b,d-h,o-z)
+              implicit character(len=n) (c)
+            contains
+              subroutine inner(a, c)
+                integer, parameter :: wp = 8
+                integer, parameter :: n = 8
+              end subroutine
+              subroutine later(b, c)
+              end subroutine
+            end module
+            """)
+        inner = self._find(by["host"], "inner")
+        later = self._find(by["host"], "later")
+        assert inner["vars"]["a"]["kindselector"]["kind"] == "4"
+        assert later["vars"]["b"]["kindselector"]["kind"] == "4"
+        assert inner["vars"]["c"]["charselector"]["*"] == "4"
+        assert later["vars"]["c"]["charselector"]["*"] == "4"
+        assert "kindselector" not in crackfortran.defaultimplicitrules["a"]
+
+    def test_use_visibility_and_scope(self, tmp_path):
+        by = self._crack(tmp_path, "visibility.f90", """\
+            module kinds
+              integer, parameter :: wp = 4
+              integer, parameter :: n = 99
+              integer, parameter :: k = 8
+              integer, parameter :: dp = 8
+            end module
+            module host
+              use kinds, only: wp
+              integer, parameter :: k = 4
+              integer, parameter :: n = 2
+              interface
+                subroutine ext(a, n)
+                  real :: a(n)
+                end subroutine ext
+                subroutine extwp(x)
+                  real(kind=wp) :: x
+                end subroutine extwp
+              end interface
+            contains
+              subroutine inner(c, n)
+                integer :: n
+                character(len=n) :: c
+              end subroutine inner
+              subroutine folded(c)
+                character(len=n) :: c
+              end subroutine folded
+              subroutine withk(a)
+                real(kind=k) :: a
+              end subroutine withk
+              subroutine fromother(a)
+                use other, only: wp
+                real(kind=wp) :: a
+              end subroutine fromother
+            end module
+            module other
+              integer, parameter :: wp = 8
+              integer, parameter :: dp = 4
+            end module
+            module secret
+              integer, parameter, private :: n = 7
+              integer, parameter :: wp = 4
+            end module
+            module foldmod
+              use kinds
+            contains
+              subroutine uses_n(c)
+                character(len=n) :: c
+              end subroutine uses_n
+            end module
+            subroutine onlyfree(c)
+              use kinds, only: wp
+              character(len=n) :: c
+            end subroutine onlyfree
+            subroutine renamekind(a, b)
+              use kinds, only: rk => wp
+              real(kind=rk) :: a
+              real(kind=wp) :: b
+            end subroutine renamekind
+            subroutine twouse(x)
+              use other, only: dp
+              use kinds, only: wp
+              real(kind=dp) :: x
+            end subroutine twouse
+            subroutine private_extent(a)
+              use secret
+              real :: a(n)
+            end subroutine private_extent
+            subroutine private_dummy(a, n)
+              use secret
+              integer :: n
+              real :: a(n)
+            end subroutine private_dummy
+            subroutine only_extent(a, n)
+              use kinds, only: wp
+              integer :: n
+              real(kind=wp) :: a(n)
+            end subroutine only_extent
+            module wide
+              integer, parameter :: wp = 8
+            end module
+            module hostwide
+              use wide
+            contains
+              subroutine child(a, b)
+                use wide, only: rk => wp
+                real(kind=wp) :: a
+                real(kind=rk) :: b
+              end subroutine child
+            end module
+            module bothuse
+            contains
+              subroutine shaped(a)
+                use kinds
+                use kinds, only: wp
+                real(kind=wp) :: a(:)
+              end subroutine shaped
+            end module
+            module bothnames
+            contains
+              subroutine renameonly(a, b)
+                use kinds, only: rk => wp
+                use kinds, only: wp
+                real(kind=rk) :: a(:)
+                real(kind=wp) :: b(:)
+              end subroutine renameonly
+              subroutine renamebare(a, b)
+                use kinds, rk => wp
+                use kinds, only: wp
+                real(kind=rk) :: a(:)
+                real(kind=wp) :: b(:)
+              end subroutine renamebare
+            end module
+            """)
+        host = by["host"]
+        inner = self._find(host, "inner")
+        folded = self._find(host, "folded")
+        withk = self._find(host, "withk")
+        ext = self._find(host, "ext")
+        extwp = self._find(host, "extwp")
+        fromother = self._find(host, "fromother")
+        uses_n = self._find(by["foldmod"], "uses_n")
+
+        def kind(block, name):
+            return block["vars"][name]["kindselector"]["kind"]
+
+        def length(block, name):
+            return block["vars"][name]["charselector"]["*"]
+
+        def dim(block, name):
+            return block["vars"][name]["dimension"]
+
+        assert length(inner, "c") == "n"
+        assert length(folded, "c") == "2"
+        assert kind(withk, "a") == "4"
+        assert dim(ext, "a") == ["n"]
+        assert kind(extwp, "x") == "wp"
+        assert kind(fromother, "a") == "8"
+        assert length(uses_n, "c") == "99"
+        assert length(by["onlyfree"], "c") == "n"
+        assert kind(by["renamekind"], "a") == "4"
+        assert kind(by["renamekind"], "b") == "wp"
+        assert kind(by["twouse"], "x") == "4"
+        assert dim(by["private_extent"], "a") == ["n"]
+        assert dim(by["private_dummy"], "a") == ["n"]
+        assert kind(by["only_extent"], "a") == "4"
+        assert dim(by["only_extent"], "a") == ["n"]
+        child = self._find(by["hostwide"], "child")
+        assert (kind(child, "a"), kind(child, "b")) == ("8", "8")
+        shaped = self._find(by["bothuse"], "shaped")
+        assert "use kinds\n" in shaped["saved_interface"]
+
+        def use_lines(block):
+            return [
+                ln.strip()
+                for ln in block["saved_interface"].splitlines()
+                if ln.strip().startswith("use ")
+            ]
+
+        renameonly = self._find(by["bothnames"], "renameonly")
+        renamebare = self._find(by["bothnames"], "renamebare")
+        assert (
+            use_lines(renameonly) == [
+                "use kinds, only: rk=>wp",
+                "use kinds, only: wp",
+            ]
+            and use_lines(renamebare) == [
+                "use kinds, rk=>wp",
+                "use kinds, only: wp",
+            ]
+            and (kind(renameonly, "a"), kind(renameonly, "b")) == ("4", "4")
+            and (kind(renamebare, "a"), kind(renamebare, "b")) == ("4", "4")
+        )
+
+    def test_entry_name_gets_its_own_type(self, tmp_path):
+        by = self._crack(tmp_path, "entry.f90", """\
+            double precision function eta0(tk)
+              implicit double precision (a-h,o-z)
+              eta0 = tk
+              return
+            entry eta1(tk, kk)
+              eta1 = tk * kk
+              return
+            end
+            """)
+        eta = by["eta0"]["vars"]
+        assert eta["eta0"]["typespec"] == "double precision"
+        assert eta["eta1"]["typespec"] == "double precision"
+        assert eta["tk"]["typespec"] == "double precision"
+        assert eta["kk"]["typespec"] == "integer"

@@ -317,3 +317,32 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+@pytest.mark.slow
+class TestGH13356Result(util.F2PyTest):
+    # A function RESULT must not replace the type of an ENTRY
+    suffix = ".f90"
+    code = """
+        function f(x) result(r)
+          double precision :: x
+          double precision :: r
+          integer :: g
+          r = 2 * x
+          return
+        entry g(x)
+          g = 3 * x
+          return
+        entry h(x)
+          h = 4 * x
+        end function f
+        """
+
+    def test_values(self):
+        assert self.module.f(1.5) == 3.0
+        got = self.module.g(1.5)
+        assert got == 4
+        assert np.issubdtype(np.asarray(got).dtype, np.integer)
+        got = self.module.h(0.1)
+        assert got == np.float32(4 * 0.1)
+        assert got != 4 * 0.1

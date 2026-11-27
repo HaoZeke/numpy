@@ -1120,6 +1120,9 @@ def analyzeline(m, case, line):
             groupname[groupcounter] = 'interface'
             groupcache[groupcounter]['block'] = 'interface'
             groupcache[groupcounter]['name'] = 'unknown_interface'
+            # Wrapper for a call or an f77 module routine, not a Fortran
+            # interface body.
+            groupcache[groupcounter]['f2py_generated'] = True
             prev_group = groupcache[groupcounter - 1]
             groupcache[groupcounter]['from'] = f"{prev_group['from']}:{prev_group['name']}"
             groupcache[groupcounter]['body'] = []
@@ -1523,12 +1526,9 @@ def analyzeline(m, case, line):
             if 'use' not in groupcache[groupcounter]:
                 groupcache[groupcounter]['use'] = {}
             name = m1.group('name')
-            groupcache[groupcounter]['use'][name] = {}
-            isonly = 0
+            spec = {}
             if 'list' in mm and mm['list'] is not None:
-                if 'notonly' in mm and mm['notonly'] is None:
-                    isonly = 1
-                groupcache[groupcounter]['use'][name]['only'] = isonly
+                isonly = int(mm.get('notonly') is None)
                 ll = [x.strip() for x in mm['list'].split(',')]
                 rl = {}
                 for l in ll:
@@ -1543,7 +1543,11 @@ def analyzeline(m, case, line):
                                 f'analyzeline: Not local=>use pattern found in {repr(l)}\n')
                     else:
                         rl[l] = l
-                    groupcache[groupcounter]['use'][name]['map'] = rl
+                spec = {'only': isonly, 'map': rl}
+            uses = groupcache[groupcounter]['use']
+            if name in uses:
+                spec = _merge_use(uses[name], spec)
+            uses[name] = spec
         else:
             print(m.groupdict())
             outmess('analyzeline: Could not crack the use statement.\n')
@@ -1981,74 +1985,145 @@ def setmesstext(block):
         pass
 
 
-def get_usedict(block):
-    usedict = {}
-    if 'parent_block' in block:
-        usedict = get_usedict(block['parent_block'])
-    if 'use' in block:
-        usedict.update(block['use'])
-    return usedict
+def _merge_use(left, right):
+    """Combine USE statements for the same module."""
+    mapping = dict((left or {}).get('map') or {})
+    mapping.update((right or {}).get('map') or {})
+    only = bool((left or {}).get('only') and (right or {}).get('only'))
+    if mapping or only:
+        return {'only': int(only), 'map': mapping}
+    return {}
+
+
+def _is_real_interface(block):
+    return (
+        isinstance(block, dict)
+        and block.get('block') in ('interface', 'abstract interface')
+        and not block.get('f2py_generated')
+    )
+
+
+def _parameter_is_private(mvars, name):
+    """True when a module parameter is not visible through USE."""
+    target = str(name).lower()
+    var = None
+    for cand, spec in mvars.items():
+        if str(cand).lower() == target and isinstance(spec, dict):
+            var = spec
+            break
+    attr = []
+    if isinstance(var, dict):
+        attr = [str(item).lower() for item in (var.get('attrspec') or [])]
+    access = [item for item in attr if item in ('public', 'private')]
+    if access:
+        return access[-1] == 'private'
+    default = mvars.get('')
+    if isinstance(default, dict):
+        dattr = [str(item).lower()
+                 for item in (default.get('attrspec') or [])]
+        return 'private' in dattr and 'public' not in dattr
+    return False
+
+
+def _import_use_parameters(usename, mapping, param_map, blockname):
+    """Copy one module's visible parameters into ``param_map``.
+
+    An ONLY list contributes just ``map`` (local name = use-name).
+    A private parameter is never copied.
+    """
+    usename = str(usename).lower()
+    if usename not in f90modulevars:
+        outmess(f'get_useparameters: no module {usename} info used by '
+                f'{blockname}\n')
+        return
+    mvars = f90modulevars[usename]
+    params = get_parameters(mvars)
+    if not params:
+        return
+    mapping = mapping or {}
+    mmap = mapping.get('map') or {}
+    renamed = {
+        str(remote).lower()
+        for local, remote in mmap.items()
+        if str(local).lower() != str(remote).lower()
+    }
+    explicit = {
+        str(remote).lower()
+        for local, remote in mmap.items()
+        if str(local).lower() == str(remote).lower()
+    }
+    for k, v in list(params.items()):
+        key = str(k).lower()
+        if _parameter_is_private(mvars, key):
+            continue
+        if mapping.get('only') or (key in renamed and key not in explicit):
+            continue
+        if k in param_map:
+            outmess(f'get_useparameters: overriding parameter {k!r} with'
+                    f' value from module {usename!r}\n')
+        param_map[k] = v
+    for local, remote in mmap.items():
+        remote_l = str(remote).lower()
+        if _parameter_is_private(mvars, remote_l):
+            continue
+        if remote_l in params:
+            param_map[str(local).lower()] = params[remote_l]
+
+
+def _hide_local_nonparams(block, param_map):
+    for name, var in (block.get('vars') or {}).items():
+        if not isinstance(var, dict):
+            continue
+        if 'parameter' in (var.get('attrspec') or []):
+            continue
+        param_map.pop(name, None)
+        lowered = str(name).lower()
+        if lowered != name:
+            param_map.pop(lowered, None)
 
 
 def get_useparameters(block, param_map=None):
-    global f90modulevars
-
     if param_map is None:
         param_map = {}
-    usedict = get_usedict(block)
-    if not usedict:
+    if not isinstance(block, dict):
         return param_map
-    for usename, mapping in list(usedict.items()):
-        usename = usename.lower()
-        if usename not in f90modulevars:
-            outmess(f'get_useparameters: no module {usename} info used by '
-                    f'{block.get("name")}\n')
-            continue
-        mvars = f90modulevars[usename]
-        params = get_parameters(mvars)
-        if not params:
-            continue
-        # XXX: apply mapping
-        if mapping:
-            errmess(f'get_useparameters: mapping for {mapping} not impl.\n')
-        for k, v in list(params.items()):
-            if k in param_map:
-                outmess(f'get_useparameters: overriding parameter {k!r} with'
-                        f' value from module {usename!r}\n')
-            param_map[k] = v
-
+    blockname = block.get('name')
+    parent = block.get('parent_block')
+    # A Fortran interface body does not take the host association.
+    if not (_is_real_interface(block) or _is_real_interface(parent)):
+        if isinstance(parent, dict):
+            # Parent values first. This block's USE is applied on top.
+            inherited = get_useparameters(parent)
+            inherited = get_parameters(
+                parent.get('vars') or {}, dict(inherited))
+            param_map.update(inherited)
+    for usename, mapping in (block.get('use') or {}).items():
+        mmap = mapping.get('map') if isinstance(mapping, dict) else None
+        # Drop a parent name only when this USE's local name is that name.
+        local_names = {str(key).lower() for key in (mmap or {})}
+        if local_names:
+            for key in list(param_map):
+                if str(key).lower() in local_names:
+                    param_map.pop(key, None)
+        _import_use_parameters(usename, mapping, param_map, blockname)
+    _hide_local_nonparams(block, param_map)
     return param_map
 
 
-def postcrack2(block, tab='', param_map=None):
+def postcrack2(block, tab=''):
     global f90modulevars
 
     if not f90modulevars:
         return block
     if isinstance(block, list):
-        ret = [postcrack2(g, tab=tab + '\t', param_map=param_map)
-               for g in block]
+        ret = [postcrack2(g, tab=tab + '\t') for g in block]
         return ret
     setmesstext(block)
     outmess(f"{tab}Block: {block['name']}\n", 0)
 
-    if param_map is None:
-        param_map = get_useparameters(block)
-
-    if param_map is not None and 'vars' in block:
-        vars = block['vars']
-        for n in list(vars.keys()):
-            var = vars[n]
-            if 'kindselector' in var:
-                kind = var['kindselector']
-                if 'kind' in kind:
-                    val = kind['kind']
-                    if val in param_map:
-                        kind['kind'] = param_map[val]
-    new_body = [postcrack2(b, tab=tab + '\t', param_map=param_map)
-                for b in block['body']]
-    block['body'] = new_body
-
+    # Kinds are folded in analyzevars, which rebuilds each scope.
+    block['body'] = [
+        postcrack2(b, tab=tab + '\t') for b in block['body']]
     return block
 
 
@@ -2058,9 +2133,13 @@ def postcrack(block, args=None, tab=''):
           function return values
           determine expression types if in argument list
     """
-    global usermodules, onlyfunctions
+    global usermodules, onlyfunctions, f90modulevars
 
     if isinstance(block, list):
+        # Register every module first so a contained USE sees a later one.
+        for g in block:
+            if isinstance(g, dict) and g.get('block') == 'module' and g.get('name'):
+                f90modulevars[g['name']] = g.get('vars') or {}
         gret = []
         uret = []
         for g in block:
@@ -2144,6 +2223,8 @@ def postcrack(block, args=None, tab=''):
             usermodules.append(mblock)
     if useblock:
         block['use'] = useblock
+    if block.get('block') == 'module':
+        f90modulevars[block['name']] = block['vars']
     return block
 
 
@@ -2267,7 +2348,7 @@ def analyzecommon(block):
 
 
 def analyzebody(block, args, tab=''):
-    global usermodules, skipfuncs, onlyfuncs, f90modulevars
+    global usermodules, skipfuncs, onlyfuncs
 
     setmesstext(block)
 
@@ -2305,8 +2386,6 @@ def analyzebody(block, args, tab=''):
         if b['block'].replace(' ', '') == 'pythonmodule':
             usermodules.append(b)
         else:
-            if b['block'] == 'module':
-                f90modulevars[b['name']] = b['vars']
             body.append(b)
     return body
 
@@ -2315,6 +2394,13 @@ def buildimplicitrules(block):
     setmesstext(block)
     implicitrules = defaultimplicitrules
     attrrules = {}
+    parent = block.get('parent_block')
+    # A call wrapper is not a scoping unit. A Fortran interface body is.
+    if isinstance(parent, dict) and parent.get('f2py_generated'):
+        parent = parent.get('parent_block')
+    if isinstance(parent, dict) and parent.get('block') not in (
+            'interface', 'abstract interface'):
+        implicitrules = buildimplicitrules(parent)[0]
     if 'implicit' in block:
         if block['implicit'] is None:
             implicitrules = None
@@ -2322,11 +2408,18 @@ def buildimplicitrules(block):
                 outmess(
                     f"buildimplicitrules: no implicit rules for routine {repr(block['name'])}.\n")
         else:
+            # Copy before this block replaces letter entries.
+            # None is an empty mapping and must not become the defaults.
+            if implicitrules is None:
+                implicitrules = {}
+            else:
+                implicitrules = dict(implicitrules)
             for k in list(block['implicit'].keys()):
+                lk = k.lower()
                 if block['implicit'][k].get('typespec') not in ['static', 'automatic']:
-                    implicitrules[k] = block['implicit'][k]
+                    implicitrules[lk] = block['implicit'][k]
                 else:
-                    attrrules[k] = block['implicit'][k]['typespec']
+                    attrrules[lk] = block['implicit'][k]['typespec']
     return implicitrules, attrrules
 
 
@@ -2648,6 +2741,21 @@ def _eval_scalar(value, params):
     return value
 
 
+def _fold_block_implicit(block, params):
+    """Evaluate this block's IMPLICIT selectors before a child reads them."""
+    for decl in (block.get('implicit') or {}).values():
+        if not isinstance(decl, dict):
+            continue
+        for sel, keys in (
+                (decl.get('kindselector'), ('kind',)),
+                (decl.get('charselector'), ('len', '*'))):
+            if not isinstance(sel, dict):
+                continue
+            for key in keys:
+                if key in sel and sel[key] not in ('*', '(*)', '(:)'):
+                    sel[key] = _eval_length(sel[key], params)
+
+
 def analyzevars(block):
     """
     Sets correct dimension information for each variable/parameter
@@ -2658,8 +2766,11 @@ def analyzevars(block):
     setmesstext(block)
     implicitrules, attrrules = buildimplicitrules(block)
     vars = copy.copy(block['vars'])
-    if block['block'] == 'function' and block['name'] not in vars:
-        vars[block['name']] = {}
+    if block['block'] == 'function':
+        # An ENTRY name is a result variable of that function.
+        for ename in (block['name'], *block.get('entry', ())):
+            if ename not in vars:
+                vars[ename] = {}
     if '' in block['vars']:
         del vars['']
         if 'attrspec' in block['vars']['']:
@@ -2681,6 +2792,7 @@ def analyzevars(block):
             svars.append(n)
 
     params = get_parameters(vars, get_useparameters(block))
+    _fold_block_implicit(block, params)
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
     dep_matches = {}
@@ -2694,20 +2806,23 @@ def analyzevars(block):
             except KeyError:
                 dep_matches[n] = re.compile(rf'.*\b{v}\b', re.I).match
     for n in svars:
-        if n[0] in list(attrrules.keys()):
-            vars[n] = setattrspec(vars[n], attrrules[n[0]])
+        first = n[0].lower()
+        if first in attrrules:
+            vars[n] = setattrspec(vars[n], attrrules[first])
         if 'typespec' not in vars[n]:
             if not ('attrspec' in vars[n] and 'external' in vars[n]['attrspec']):
                 if implicitrules:
                     ln0 = n[0].lower()
-                    for k in list(implicitrules[ln0].keys()):
-                        if k == 'typespec' and implicitrules[ln0][k] == 'undefined':
-                            continue
-                        if k not in vars[n]:
-                            vars[n][k] = implicitrules[ln0][k]
-                        elif k == 'attrspec':
-                            for l in implicitrules[ln0][k]:
-                                vars[n] = setattrspec(vars[n], l)
+                    if ln0 in implicitrules:
+                        rule = copy.deepcopy(implicitrules[ln0])
+                        for k in list(rule.keys()):
+                            if k == 'typespec' and rule[k] == 'undefined':
+                                continue
+                            if k not in vars[n]:
+                                vars[n][k] = rule[k]
+                            elif k == 'attrspec':
+                                for l in rule[k]:
+                                    vars[n] = setattrspec(vars[n], l)
                 elif n in block['args']:
                     outmess(f"analyzevars: typespec of variable {n!r} is not defined "
                             f"in routine {block['name']}.\n")
@@ -3302,8 +3417,9 @@ def determineexprtype(expr, vars, rules={}):
             if t and 'attrspec' in t:
                 del t['attrspec']
             if not t:
-                if rn[0] in rules:
-                    return _ensure_exprdict(rules[rn[0]])
+                lk = rn[0].lower()
+                if lk in rules:
+                    return _ensure_exprdict(rules[lk])
     if expr[0] in '\'"':
         return {'typespec': 'character', 'charselector': {'*': '*'}}
     if not t:
@@ -3408,17 +3524,28 @@ def use2fortran(use, tab=''):
             continue
         if 'only' in use[m] and use[m]['only']:
             ret = f'{ret} only:'
+        hidden = []
         if 'map' in use[m] and use[m]['map']:
+            mapping = use[m]['map']
+            targets = {v for k, v in mapping.items() if k != v}
             c = ' '
-            for k in list(use[m]['map'].keys()):
-                if k == use[m]['map'][k]:
+            for k in list(mapping.keys()):
+                if k == mapping[k]:
+                    # `use m, wp` is not Fortran. A renamed wp gets its own line.
+                    if k in targets:
+                        hidden.append(k)
+                        continue
+                    if not use[m].get('only'):
+                        continue
                     ret = f'{ret}{c}{k}'
                     c = ','
                 else:
-                    ret = f"{ret}{c}{k}=>{use[m]['map'][k]}"
+                    ret = f"{ret}{c}{k}=>{mapping[k]}"
                     c = ','
         if ret and ret[-1] == ',':
             ret = ret[:-1]
+        if hidden:
+            ret = f"{ret}{tab}use {m}, only: {','.join(hidden)}"
     return ret
 
 
