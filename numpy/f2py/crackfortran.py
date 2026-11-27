@@ -139,6 +139,7 @@ TODO:
     The above may be solved by creating appropriate preprocessor program, for example.
 
 """
+import ast
 import codecs
 import copy
 import fileinput
@@ -1340,7 +1341,7 @@ def analyzeline(m, case, line):
                     initexpr = initexpr[1:].lower().replace('d', 'e').\
                         replace(',', '+1j*(')
             try:
-                v = eval(initexpr, {}, params)
+                v = _eval_fortran(initexpr, params)
             except (SyntaxError, NameError, TypeError) as msg:
                 errmess(f'analyzeline: Failed to evaluate {initexpr!r}. '
                         f'Ignoring: {msg}\n')
@@ -2523,6 +2524,34 @@ def _selected_real_kind_func(p, r=0, radix=0):
     return -1
 
 
+def _intdiv(a, b):
+    if type(a) is int and type(b) is int:
+        q = abs(a) // abs(b)
+        return q if (a < 0) == (b < 0) else -q
+    return a / b
+
+
+def _eval_fortran(expr, params):
+    if isinstance(expr, str):
+        expr = expr.strip()
+    tree = ast.parse(expr, mode='eval')
+
+    class _Div(ast.NodeTransformer):
+        def visit_BinOp(self, node):
+            self.generic_visit(node)
+            if isinstance(node.op, ast.Div):
+                return ast.Call(
+                    func=ast.Name(id='_intdiv', ctx=ast.Load()),
+                    args=[node.left, node.right],
+                    keywords=[])
+            return node
+
+    ns = dict(params)
+    ns['_intdiv'] = _intdiv
+    return eval(compile(ast.fix_missing_locations(_Div().visit(tree)),
+                        '<fortran>', 'eval'), ns)
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2638,7 +2667,7 @@ def _eval_scalar(value, params):
         value = value.split('_')[0]
     try:
         # TODO: use symbolic from PR #19805
-        value = eval(value, {}, params)
+        value = _eval_fortran(value, params)
         value = (repr if isinstance(value, str) else str)(value)
     except (NameError, SyntaxError, TypeError):
         return value
@@ -3067,7 +3096,7 @@ def param_eval(v, g_params, params, dimspec=None):
     """
     if dimspec is None:
         try:
-            p = eval(v, g_params, params)
+            p = _eval_fortran(v, {**g_params, **params})
         except Exception as msg:
             p = v
             outmess(f'param_eval: got "{msg}" on {v!r}\n')
@@ -3098,7 +3127,7 @@ def param_eval(v, g_params, params, dimspec=None):
     v_eval = []
     for item in v:
         try:
-            item = eval(item, g_params, params)
+            item = _eval_fortran(item, {**g_params, **params})
         except Exception as msg:
             outmess(f'param_eval: got "{msg}" on {item!r}\n')
         v_eval.append(item)
