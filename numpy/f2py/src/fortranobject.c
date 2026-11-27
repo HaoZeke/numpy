@@ -400,6 +400,33 @@ fortran_getattr(PyFortranObject *fp, char *name)
     return ret;
 }
 
+static PyArrayObject *
+fortran_attr_array(FortranDataDef *def, npy_intp *dims, PyObject *v)
+{
+    if (def->type == NPY_STRING && def->elsize > 0) {
+        return ndarray_from_pyobj(def->type, def->elsize, dims, def->rank,
+                                  F2PY_INTENT_IN, v, NULL);
+    }
+    return array_from_pyobj(def->type, dims, def->rank, F2PY_INTENT_IN, v);
+}
+
+static void
+blank_pad_strings(char *base, npy_intp count, int elsize)
+{
+    npy_intp i;
+    int j;
+
+    if (base == NULL || count < 1 || elsize < 1) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        char *item = base + i * elsize;
+        for (j = elsize - 1; j >= 0 && item[j] == '\0'; j--) {
+            item[j] = ' ';
+        }
+    }
+}
+
 static int
 fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
 {
@@ -422,9 +449,7 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                                    see f2py generated code for more
                                    details ) */
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = -1;
-                if ((arr = array_from_pyobj(fp->defs[i].type, dims,
-                                            fp->defs[i].rank, F2PY_INTENT_IN,
-                                            v)) == NULL)
+                if ((arr = fortran_attr_array(&fp->defs[i], dims, v)) == NULL)
                     return -1;
                 (*(fp->defs[i].func))(&fp->defs[i].rank, PyArray_DIMS(arr),
                                       set_data, &flag);
@@ -439,9 +464,8 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                    fp->defs[i].rank * sizeof(npy_intp));
         }
         else { /* not allocatable array */
-            if ((arr = array_from_pyobj(fp->defs[i].type, fp->defs[i].dims.d,
-                                        fp->defs[i].rank, F2PY_INTENT_IN,
-                                        v)) == NULL)
+            if ((arr = fortran_attr_array(&fp->defs[i], fp->defs[i].dims.d,
+                                          v)) == NULL)
                 return -1;
         }
         if (fp->defs[i].data !=
@@ -456,6 +480,10 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                     Py_DECREF(arr);
                 }
                 return -1;
+            }
+            if (fp->defs[i].type == NPY_STRING && fp->defs[i].elsize > 0 &&
+                PyArray_ITEMSIZE(arr) == fp->defs[i].elsize) {
+                blank_pad_strings(fp->defs[i].data, s, fp->defs[i].elsize);
             }
             if ((PyObject *)arr != v) {
                 Py_DECREF(arr);
