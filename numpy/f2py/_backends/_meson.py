@@ -158,6 +158,8 @@ class MesonBackend(Backend):
 
     def _move_exec_to_root(self, build_dir: Path):
         walk_dir = Path(build_dir) / self.meson_build_dir
+        parts = self.modulename.split(".")
+        stem = parts[-1]
         path_objects = chain(
             walk_dir.glob(f"{self.modulename}*.so"),
             walk_dir.glob(f"{self.modulename}*.pyd"),
@@ -166,7 +168,10 @@ class MesonBackend(Backend):
         # Same behavior as distutils
         # https://github.com/numpy/numpy/issues/24874#issuecomment-1835632293
         for path_object in path_objects:
-            dest_path = Path.cwd() / path_object.name
+            suffix = path_object.name[len(self.modulename):]
+            dest_dir = Path.cwd().joinpath(*parts[:-1])
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = dest_dir / f"{stem}{suffix}"
             if dest_path.exists():
                 dest_path.unlink()
             shutil.copy2(path_object, dest_path)

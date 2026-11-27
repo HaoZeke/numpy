@@ -219,8 +219,8 @@ def buildhooks(pymod):
                 ar['docshort'] = []
                 ret = dictappend(ret, ar)
                 cadd(f'\t{{"{b_name}",-1,{{{{-1}}}},0,0,NULL,(void *)'
-                      f'f2py_rout_#modulename#_{m_name}_{b_name},'
-                      f'doc_f2py_rout_#modulename#_{m_name}_{b_name}}},')
+                      f'f2py_rout_#cmodulename#_{m_name}_{b_name},'
+                      f'doc_f2py_rout_#cmodulename#_{m_name}_{b_name}}},')
                 sargs.append(f"char *{b_name}")
                 sargsp.append('char *')
                 iadd(f"\tf2py_{m_name}_def[i_f2py++].data = {b_name};")

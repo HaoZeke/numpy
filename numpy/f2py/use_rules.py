@@ -84,7 +84,7 @@ def buildusevar(name, realname, vars, usemodulename):
            'texname': name.replace('_', '\\_'),
            'begintitle': gentitle(f'{name}=>{realname}'),
            'endtitle': gentitle(f'end of {name}=>{realname}'),
-           'apiname': f'#modulename#_use_{realname}_from_{usemodulename}'
+           'apiname': f'#cmodulename#_use_{realname}_from_{usemodulename}'
            }
     nummap = {0: 'Ro', 1: 'Ri', 2: 'Rii', 3: 'Riii', 4: 'Riv',
               5: 'Rv', 6: 'Rvi', 7: 'Rvii', 8: 'Rviii', 9: 'Rix'}

@@ -110,11 +110,11 @@ f2py_cb_start_clock();
     CFUNCSMESSPY(\"cb:#name#_capi=\",cb->capi);
     if (cb->capi==NULL) {
         capi_longjmp_ok = 0;
-        cb->capi = PyObject_GetAttrString(#modulename#_module,\"#argname#\");
+        cb->capi = PyObject_GetAttrString(#cmodulename#_module,\"#argname#\");
         CFUNCSMESSPY(\"cb:#name#_capi=\",cb->capi);
     }
     if (cb->capi==NULL) {
-        PyErr_SetString(#modulename#_error,\"cb: Callback #argname# not defined (as an argument or module #modulename# attribute).\\n\");
+        PyErr_SetString(#cmodulename#_error,\"cb: Callback #argname# not defined (as an argument or module #modulename# attribute).\\n\");
         goto capi_fail;
     }
     if (F2PyCapsule_Check(cb->capi)) {
@@ -125,12 +125,12 @@ f2py_cb_start_clock();
     }
     if (capi_arglist==NULL) {
         capi_longjmp_ok = 0;
-        capi_tmp = PyObject_GetAttrString(#modulename#_module,\"#argname#_extra_args\");
+        capi_tmp = PyObject_GetAttrString(#cmodulename#_module,\"#argname#_extra_args\");
         if (capi_tmp) {
             capi_arglist = (PyTupleObject *)PySequence_Tuple(capi_tmp);
             Py_DECREF(capi_tmp);
             if (capi_arglist==NULL) {
-                PyErr_SetString(#modulename#_error,\"Failed to convert #modulename#.#argname#_extra_args to tuple.\\n\");
+                PyErr_SetString(#cmodulename#_error,\"Failed to convert #modulename#.#argname#_extra_args to tuple.\\n\");
                 goto capi_fail;
             }
         } else {
@@ -139,7 +139,7 @@ f2py_cb_start_clock();
         }
     }
     if (capi_arglist == NULL) {
-        PyErr_SetString(#modulename#_error,\"Callback #argname# argument list is not set.\\n\");
+        PyErr_SetString(#cmodulename#_error,\"Callback #argname# argument list is not set.\\n\");
         goto capi_fail;
     }
 #setdims#

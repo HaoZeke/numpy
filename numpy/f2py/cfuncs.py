@@ -439,7 +439,7 @@ cppmacros['GETSTRFROMPYTUPLE'] = """
             STRINGCOPYN((str),PyBytes_AS_STRING((PyBytesObject*)rv_cb_str),(len));\\
         } else {\\
             PRINTPYOBJERR(rv_cb_str);\\
-            PyErr_SetString(#modulename#_error,\"string object expected\");\\
+            PyErr_SetString(#cmodulename#_error,\"string object expected\");\\
             goto capi_fail;\\
         }\\
     }
@@ -522,25 +522,25 @@ cppmacros['STRINGCOPY'] = """
 cppmacros['CHECKGENERIC'] = """
 #define CHECKGENERIC(check,tcheck,name) \\
     if (!(check)) {\\
-        PyErr_SetString(#modulename#_error,\"(\"tcheck\") failed for \"name);\\
+        PyErr_SetString(#cmodulename#_error,\"(\"tcheck\") failed for \"name);\\
         /*goto capi_fail;*/\\
     } else """
 cppmacros['CHECKARRAY'] = """
 #define CHECKARRAY(check,tcheck,name) \\
     if (!(check)) {\\
-        PyErr_SetString(#modulename#_error,\"(\"tcheck\") failed for \"name);\\
+        PyErr_SetString(#cmodulename#_error,\"(\"tcheck\") failed for \"name);\\
         /*goto capi_fail;*/\\
     } else """
 cppmacros['CHECKSTRING'] = """
 #define CHECKSTRING(check,tcheck,name,show,var)\\
     if (!(check)) {\\
-        PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, slen(var), var);\\
+        PyErr_Format(#cmodulename#_error, \"(\"tcheck\") failed for \"name\": \"show, slen(var), var);\\
         /*goto capi_fail;*/\\
     } else """
 cppmacros['CHECKSCALAR'] = """
 #define CHECKSCALAR(check,tcheck,name,show,var)\\
     if (!(check)) {\\
-        PyErr_Format(#modulename#_error, \"(\"tcheck\") failed for \"name\": \"show, var);\\
+        PyErr_Format(#cmodulename#_error, \"(\"tcheck\") failed for \"name\": \"show, var);\\
         /*goto capi_fail;*/\\
     } else """
 # cppmacros['CHECKDIMS']="""
@@ -686,7 +686,7 @@ fprintf(stderr, "try_pyarr_from_string(str='%s', len=%d, obj=%p)\\n",
     }
 capi_fail:
     PRINTPYOBJERR(obj);
-    PyErr_SetString(#modulename#_error, \"try_pyarr_from_string failed\");
+    PyErr_SetString(#cmodulename#_error, \"try_pyarr_from_string failed\");
     return 0;
 }
 """
@@ -783,7 +783,7 @@ capi_fail:
     {
         PyObject* err = PyErr_Occurred();
         if (err == NULL) {
-            err = #modulename#_error;
+            err = #cmodulename#_error;
         }
         PyErr_SetString(err, errmess);
     }
@@ -942,7 +942,7 @@ int_from_pyobj(int* v, PyObject *obj, const char *errmess)
     {
         PyObject* err = PyErr_Occurred();
         if (err == NULL) {
-            err = #modulename#_error;
+            err = #cmodulename#_error;
         }
         PyErr_SetString(err, errmess);
     }
@@ -990,7 +990,7 @@ long_from_pyobj(long* v, PyObject *obj, const char *errmess) {
     {
         PyObject* err = PyErr_Occurred();
         if (err == NULL) {
-            err = #modulename#_error;
+            err = #cmodulename#_error;
         }
         PyErr_SetString(err, errmess);
     }
@@ -1040,7 +1040,7 @@ long_long_from_pyobj(long_long* v, PyObject *obj, const char *errmess)
     {
         PyObject* err = PyErr_Occurred();
         if (err == NULL) {
-            err = #modulename#_error;
+            err = #cmodulename#_error;
         }
         PyErr_SetString(err,errmess);
     }
@@ -1112,7 +1112,7 @@ double_from_pyobj(double* v, PyObject *obj, const char *errmess)
     }
     {
         PyObject* err = PyErr_Occurred();
-        if (err==NULL) err = #modulename#_error;
+        if (err==NULL) err = #cmodulename#_error;
         PyErr_SetString(err,errmess);
     }
     return 0;
@@ -1474,7 +1474,7 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
 
 capi_fail:
     if (PyErr_Occurred() == NULL)
-        PyErr_SetString(#modulename#_error, errmess);
+        PyErr_SetString(#cmodulename#_error, errmess);
     Py_XDECREF(tmp_fun);
     return 0;
 }

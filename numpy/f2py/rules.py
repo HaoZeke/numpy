@@ -186,8 +186,8 @@ extern \"C\" {
 #includes0#
 
 """ + gentitle("See f2py2e/rules.py: mod_rules['modulebody']") + """
-static PyObject *#modulename#_error;
-static PyObject *#modulename#_module;
+static PyObject *#cmodulename#_error;
+static PyObject *#cmodulename#_module;
 
 """ + gentitle("See f2py2e/cfuncs.py: typedefs") + """
 #typedefs#
@@ -248,7 +248,7 @@ static PyObject *f2py_module_interface_usercode(PyObject *m, PyObject *d) {
 static int f2py_module_exec(PyObject *m) {
     int i;
     PyObject *d, *s, *tmp;
-    #modulename#_module = m;
+    #cmodulename#_module = m;
     Py_SET_TYPE((PyObject*)&PyFortran_Type, &PyType_Type);
     import_array2(\"can't initialize module #modulename# (failed to import numpy)\", -1);
     d = PyModule_GetDict(m);
@@ -262,13 +262,13 @@ static int f2py_module_exec(PyObject *m) {
     s = PyUnicode_FromString(\"""" + numpy_version + """\");
     PyDict_SetItemString(d, \"__f2py_numpy_version__\", s);
     Py_DECREF(s);
-    #modulename#_error = PyErr_NewException (\"#modulename#.error\", NULL, NULL);
+    #cmodulename#_error = PyErr_NewException (\"#modulename#.error\", NULL, NULL);
     /*
      * Store the error object inside the dict, so that it could get deallocated.
      * (in practice, this is a module, so it likely will not and cannot.)
      */
-    PyDict_SetItemString(d, \"_#modulename#_error\", #modulename#_error);
-    Py_DECREF(#modulename#_error);
+    PyDict_SetItemString(d, \"_#cmodulename#_error\", #cmodulename#_error);
+    Py_DECREF(#cmodulename#_error);
     for(i=0;f2py_routine_defs[i].name!=NULL;i++) {
         tmp = PyFortranObject_NewAsAttr(&f2py_routine_defs[i]);
         PyDict_SetItemString(d, f2py_routine_defs[i].name, tmp);
@@ -316,7 +316,7 @@ static struct PyModuleDef moduledef = {
     NULL
 };
 
-PyMODINIT_FUNC PyInit_#modulename#(void) {
+PyMODINIT_FUNC PyInit_#pyinitname#(void) {
     return PyModuleDef_Init(&moduledef);
 }
 #endif
@@ -336,7 +336,7 @@ static PySlot f2py_module_pyslots[] = {
 };
 
 
-PyMODEXPORT_FUNC PyModExport_#modulename#(void)
+PyMODEXPORT_FUNC PyModExport_#pyinitname#(void)
 {
     return f2py_module_pyslots;
 }
@@ -490,12 +490,12 @@ rout_rules = [
         'initf2pywraphook': '',
         'routnote': {hasnote: '--- #note#', l_not(hasnote): ''},
     }, {
-        'apiname': 'f2py_rout_#modulename#_#name#',
+        'apiname': 'f2py_rout_#cmodulename#_#name#',
         'pyname': '#modulename#.#name#',
         'decl': '',
         '_check': l_not(ismoduleroutine)
     }, {
-        'apiname': 'f2py_rout_#modulename#_#f90modulename#_#name#',
+        'apiname': 'f2py_rout_#cmodulename#_#f90modulename#_#name#',
         'pyname': '#modulename#.#f90modulename#.#name#',
         'decl': '',
         '_check': ismoduleroutine
@@ -920,11 +920,11 @@ if(F2PyCapsule_Check(#varname#_cb.capi)) {
 }
 """}, {isintent_callback: """\
 if (#varname#_cb.capi==Py_None) {
-  #varname#_cb.capi = PyObject_GetAttrString(#modulename#_module,\"#varname#\");
+  #varname#_cb.capi = PyObject_GetAttrString(#cmodulename#_module,\"#varname#\");
   if (#varname#_cb.capi) {
     if (#varname#_xa_capi==NULL) {
-      if (PyObject_HasAttrString(#modulename#_module,\"#varname#_extra_args\")) {
-        PyObject* capi_tmp = PyObject_GetAttrString(#modulename#_module,\"#varname#_extra_args\");
+      if (PyObject_HasAttrString(#cmodulename#_module,\"#varname#_extra_args\")) {
+        PyObject* capi_tmp = PyObject_GetAttrString(#cmodulename#_module,\"#varname#_extra_args\");
         if (capi_tmp) {
           #varname#_xa_capi = (PyTupleObject *)PySequence_Tuple(capi_tmp);
           Py_DECREF(capi_tmp);
@@ -933,14 +933,14 @@ if (#varname#_cb.capi==Py_None) {
           #varname#_xa_capi = (PyTupleObject *)Py_BuildValue(\"()\");
         }
         if (#varname#_xa_capi==NULL) {
-          PyErr_SetString(#modulename#_error,\"Failed to convert #modulename#.#varname#_extra_args to tuple.\\n\");
+          PyErr_SetString(#cmodulename#_error,\"Failed to convert #modulename#.#varname#_extra_args to tuple.\\n\");
           return NULL;
         }
       }
     }
   }
   if (#varname#_cb.capi==NULL) {
-    PyErr_SetString(#modulename#_error,\"Callback #varname# not defined (as an argument or module #modulename# attribute).\\n\");
+    PyErr_SetString(#cmodulename#_error,\"Callback #varname# not defined (as an argument or module #modulename# attribute).\\n\");
     return NULL;
   }
 }
@@ -1208,7 +1208,7 @@ if (#varname#_cb.capi==Py_None) {
     if (capi_#varname#_as_array == NULL) {
         PyObject* capi_err = PyErr_Occurred();
         if (capi_err == NULL) {
-            capi_err = #modulename#_error;
+            capi_err = #cmodulename#_error;
             PyErr_SetString(capi_err, capi_errmess);
         }
     } else {
@@ -1232,7 +1232,7 @@ if (#varname#_cb.capi==Py_None) {
         } else {
             PyObject *exc, *val, *tb;
             PyErr_Fetch(&exc, &val, &tb);
-            PyErr_SetString(exc ? exc : #modulename#_error,
+            PyErr_SetString(exc ? exc : #cmodulename#_error,
                 \"Initialization of #nth# #varname# failed (initforcomb).\");
             npy_PyErr_ChainExceptionsCause(exc, val, tb);
             f2py_success = 0;

@@ -664,6 +664,14 @@ def routsign2map(rout):
     return ret
 
 
+def _c_ident(name):
+    return re.sub(r'[^0-9A-Za-z_]', '_', name)
+
+
+def _init_ident(name):
+    return _c_ident(name.rsplit('.', 1)[-1])
+
+
 def modsign2map(m):
     """
     modulename
@@ -674,6 +682,8 @@ def modsign2map(m):
                'texf90modulename': m['name'].replace('_', '\\_')}
     else:
         ret = {'modulename': m['name'],
+               'cmodulename': _c_ident(m['name']),
+               'pyinitname': _init_ident(m['name']),
                'MODULENAME': m['name'].upper(),
                'texmodulename': m['name'].replace('_', '\\_')}
     ret['restdoc'] = getrestdoc(m) or []
