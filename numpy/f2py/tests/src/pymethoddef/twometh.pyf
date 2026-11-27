@@ -1,0 +1,16 @@
+python module twometh
+    usercode '''
+static PyObject *meth_a(PyObject *self, PyObject *args) {
+  return PyLong_FromLong(2);
+}
+static PyObject *meth_b(PyObject *self, PyObject *args) {
+  return PyLong_FromLong(3);
+}
+    '''
+    pymethoddef '''
+    {"a", meth_a, METH_NOARGS, NULL},
+    '''
+    pymethoddef '''
+    {"b", meth_b, METH_NOARGS, NULL},
+    '''
+end python module twometh

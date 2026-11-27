@@ -1004,6 +1004,13 @@ def _resolvenameargspattern(line):
     return None, [], None, None
 
 
+def _pyf_quoted_body(text):
+    text = text.strip()
+    if len(text) >= 6 and text.startswith("'''") and text.endswith("'''"):
+        return text[3:-3]
+    return text
+
+
 def analyzeline(m, case, line):
     """
     Reads each line in the input file in sequence and updates global vars.
@@ -1555,6 +1562,10 @@ def analyzeline(m, case, line):
             if isinstance(d['usercode'], str):
                 d['usercode'] = [d['usercode']]
             d['usercode'].append(m.group('after'))
+        elif m.group('this') == 'pymethoddef' and 'pymethoddef' in d:
+            d['pymethoddef'] = (
+                "'''" + _pyf_quoted_body(d['pymethoddef'])
+                + _pyf_quoted_body(m.group('after')) + "'''")
         else:
             d[m.group('this')] = m.group('after')
     elif case == 'multiline':
