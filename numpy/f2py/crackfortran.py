@@ -1183,6 +1183,11 @@ def analyzeline(m, case, line):
                 pass
             if case == 'callfun':  # return type
                 if result and result in groupcache[groupcounter]['vars']:
+                    # The result name is a dummy in `r = f(r)`, so its
+                    # intent, optional, and value belong to that argument.
+                    if result not in args:
+                        _drop_copied_result_attrs(
+                            groupcache[groupcounter]['vars'][result])
                     if not name == result:
                         groupcache[groupcounter]['vars'][name] = appenddecl(
                             groupcache[groupcounter]['vars'][name], groupcache[groupcounter]['vars'][result])
@@ -2264,6 +2269,27 @@ def analyzecommon(block):
     else:
         block['commonvars'] = block['commonvars'] + commonvars
     return block
+
+
+def _drop_copied_result_attrs(var):
+    """Drop intent, optional, and value from a callback result."""
+    attrs = var.get('attrspec')
+    if not attrs:
+        return
+    kept = []
+    dropped = False
+    for attr in attrs:
+        key = ''.join(str(attr).split()).lower()
+        if key.startswith('intent') or key in ('optional', 'value'):
+            dropped = True
+            continue
+        kept.append(attr)
+    if not dropped:
+        return
+    if kept:
+        var['attrspec'] = kept
+    else:
+        var.pop('attrspec', None)
 
 
 def analyzebody(block, args, tab=''):

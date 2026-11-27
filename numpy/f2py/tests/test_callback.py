@@ -1,5 +1,7 @@
 import math
 import platform
+import shutil
+import subprocess
 import sys
 import textwrap
 import threading
@@ -215,6 +217,106 @@ class TestF90Callback(util.F2PyTest):
         y = np.array([1, 2, 3], dtype=np.int64)
         r = self.module.gh17797(incr, y)
         assert r == 123 + 1 + 2 + 3
+
+
+def _gh20157_r_decls(text):
+    """Split ``:: r`` lines into callback results and host dummies."""
+    callback, host = [], []
+    in_fun = False
+    for line in text.splitlines():
+        if (not in_fun and "function " in line and "result (r)" in line
+                and "e_0_e" in line):
+            in_fun = True
+            continue
+        if in_fun and "end function" in line:
+            in_fun = False
+            continue
+        if ":: r" not in line:
+            continue
+        (callback if in_fun else host).append(line.strip())
+    return callback, host
+
+
+def test_gh20157_callback_result(tmp_path):
+    """Callback results drop intent, optional, and value; arguments keep them."""
+    from numpy.f2py import auxfuncs, crackfortran
+    from numpy.f2py.f2py2e import run_main
+
+    src = tmp_path / "gh20157.f90"
+    src.write_text(textwrap.dedent("""\
+        subroutine gh20157(f, y, r)
+          external f
+          integer(8), dimension(:) :: y
+          integer(8), intent(out) :: r
+          r = f(0)
+          r = r + sum(y)
+        end subroutine gh20157
+
+        subroutine gh20157_opt(f, y, r)
+          external f
+          integer, dimension(:) :: y
+          integer, optional :: r
+          r = f(0)
+          r = r + sum(y)
+        end subroutine gh20157_opt
+
+        subroutine gh20157_val(f, y, r)
+          external f
+          integer, dimension(:) :: y
+          integer, value :: r
+          r = f(0)
+          r = r + sum(y)
+        end subroutine gh20157_val
+
+        subroutine gh20157_inout(f, r)
+          external f
+          integer, intent(inout) :: r
+          r = f(r)
+        end subroutine gh20157_inout
+
+        subroutine gh20157_optself(f, r)
+          external f
+          integer, optional :: r
+          r = f(r)
+        end subroutine gh20157_optself
+
+        subroutine gh20157_outself(f, r)
+          external f
+          integer, intent(out) :: r
+          r = f(r)
+        end subroutine gh20157_outself
+        """))
+    with util.switchdir(tmp_path):
+        try:
+            run_main(["--lower", "-m", "gh20157", str(src)])
+        finally:
+            crackfortran.reset_global_f2py_vars()
+            auxfuncs.wrapfuncs = 1
+
+    wrapper_path = tmp_path / "gh20157-f2pywrappers2.f90"
+    wrapper = wrapper_path.read_text()
+    callback, host = _gh20157_r_decls(wrapper)
+    assert callback == [
+        "integer(kind=8) :: r",
+        "integer :: r",
+        "integer :: r",
+    ]
+    assert "integer(kind=8), intent(out) :: r" in host
+    assert "integer, optional :: r" in host
+    assert "integer, value :: r" in host
+    csrc = (tmp_path / "gh20157module.c").read_text()
+    assert "r : in/output rank-0 array(int,'i')" in csrc
+    assert "def f([r]): return r" in csrc
+    assert "def f(): return r,r" in csrc
+
+    gfortran = shutil.which("gfortran")
+    if gfortran is None:
+        pytest.skip("gfortran is not available")
+    compiled = subprocess.run(
+        [gfortran, "-std=f2008", "-c", str(wrapper_path)],
+        cwd=tmp_path, capture_output=True, text=True, check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
 
 
 @pytest.mark.slow

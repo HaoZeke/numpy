@@ -1,0 +1,6 @@
+``f2py`` drops intent, optional, and value on callback results
+--------------------------------------------------------------
+An F90 wrapper copied ``intent``, ``optional``, or ``value`` from a
+host dummy onto a callback result, and gfortran rejected the result.
+``f2py`` removes those attributes when the result is not a callback
+argument.
