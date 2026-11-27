@@ -461,6 +461,12 @@ def getinit(a, var):
                 init = f'"{escaped_init}"'
             if init[0] == '"':
                 showinit = f"'{init[1:-1]}'"
+        elif islogical(var):
+            token = init.strip().lower()
+            if re.fullmatch(r'\.true\.(?:_\w+)?', token):
+                init = '1'
+            elif re.fullmatch(r'\.false\.(?:_\w+)?', token):
+                init = '0'
     return init, showinit
 
 
