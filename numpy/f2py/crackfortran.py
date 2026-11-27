@@ -145,6 +145,7 @@ import fileinput
 import os
 import platform
 import re
+import shutil
 import string
 import sys
 from pathlib import Path
@@ -2505,9 +2506,67 @@ def _selected_int_kind_func(r):
     return -1
 
 
+def _path_basename(token):
+    name = token.replace('\\', '/').rsplit('/', 1)[-1]
+    if name.lower().endswith('.exe'):
+        name = name[:-4]
+    return name.lower()
+
+
+def _is_flang_family(name):
+    return (
+        name == 'flang'
+        or name == 'flang-new'
+        or name.endswith('-flang')
+        or name.endswith('-flang-new')
+    )
+
+
+def _fc_text_is_flang(fc):
+    """True when FC names flang or flang-new. The compiler is not run."""
+    text = fc.strip()
+    if text[:1] in '"\'':
+        quote = text[0]
+        end = text.find(quote, 1)
+        body = text[1:] if end == -1 else text[1:end]
+        return _is_flang_family(_path_basename(body))
+    lower = text.lower()
+    if '\\' in text or ('.exe' in lower and ' ' in text):
+        end = lower.rfind('.exe')
+        if end != -1:
+            return _is_flang_family(_path_basename(text[:end]))
+    for token in text.split():
+        if _is_flang_family(_path_basename(token)):
+            return True
+    return False
+
+
+def _flang_real_kind_is_2():
+    """True when the Fortran compiler is flang.
+
+    LLVM flang returns kind 2 from selected_real_kind for a precision
+    below 4 when the range and radix are omitted. Search FC, else
+    gfortran, flang-new, and flang on PATH.
+    """
+    fc = os.environ.get('FC')
+    if fc and fc.strip():
+        return _fc_text_is_flang(fc)
+    for candidate in ('gfortran', 'flang-new', 'flang'):
+        found = shutil.which(candidate)
+        if found:
+            return _fc_text_is_flang(found)
+    return False
+
+
 def _selected_real_kind_func(p, r=0, radix=0):
     # XXX: This should be processor dependent
     # This is only verified for 0 <= p <= 20, possibly good for p <= 33 and above
+    # real kind 2 is not a key of f2cmap_all['real'] (no 2-byte C type).
+    if p < 4 and not r and not radix and _flang_real_kind_is_2():
+        errmess(
+            'selected_real_kind: flang uses kind 2 for precision below 4 '
+            '(binary16). f2py has no 2-byte real map, so the kind stays 4.\n'
+        )
     if p < 7:
         return 4
     if p < 16:

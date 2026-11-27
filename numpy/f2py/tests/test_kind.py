@@ -51,3 +51,67 @@ class TestKind(util.F2PyTest):
             assert selectedrealkind(i) == selected_real_kind(
                 i
             ), f"selectedrealkind({i}): expected {selected_real_kind(i)!r} but got {selectedrealkind(i)!r}"
+
+
+class TestSelectedRealKindBelow4:
+    @pytest.mark.parametrize('fc', [
+        'flang',
+        'flang-new',
+        'flang-new -O2',
+        'ccache flang',
+        'x86_64-linux-gnu-flang',
+        r'C:\Program Files\LLVM\bin\flang-new.exe',
+        r'"C:\Program Files\LLVM\bin\flang-new.exe"',
+        r'C:\Program Files\LLVM\bin\flang-new.exe -O2',
+    ])
+    def test_flang_keeps_kind_4_and_warns(self, monkeypatch, capsys, fc):
+        monkeypatch.setenv('FC', fc)
+        for p in range(4):
+            assert selected_real_kind(p) == 4
+        err = capsys.readouterr().err
+        assert err.count('kind 2') == 4
+        assert 'stays 4' in err
+        assert selected_real_kind(4) == 4
+        assert capsys.readouterr().err == ''
+
+    def test_range_and_radix_keep_the_table(self, monkeypatch, capsys):
+        monkeypatch.setenv('FC', 'flang-new')
+        assert selected_real_kind(3, 37) == 4
+        assert selected_real_kind(3, 200) == 4
+        assert selected_real_kind(3, 0, 2) == 4
+        assert capsys.readouterr().err == ''
+
+    @pytest.mark.parametrize('fc', [
+        'gfortran',
+        'aarch64-linux-gnu-gfortran',
+        r'C:\flang\bin\gfortran.exe',
+        r'C:\Program Files\gfortran\bin\gfortran.exe',
+        'false',
+    ])
+    def test_other_compilers_stay_4(self, monkeypatch, capsys, fc):
+        monkeypatch.setenv('FC', fc)
+        assert selected_real_kind(0) == 4
+        assert selected_real_kind(3) == 4
+        assert capsys.readouterr().err == ''
+
+    def test_missing_compiler_keeps_kind_4(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv('FC', str(tmp_path / 'missing-fc'))
+        assert selected_real_kind(0) == 4
+        assert capsys.readouterr().err == ''
+
+    def test_no_compiler_keeps_kind_4(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.delenv('FC', raising=False)
+        monkeypatch.setenv('PATH', str(tmp_path))
+        assert selected_real_kind(0) == 4
+        assert selected_real_kind(3) == 4
+        assert capsys.readouterr().err == ''
+
+    def test_fc_is_not_executed(self, monkeypatch, tmp_path, capsys):
+        marker = tmp_path / 'ran'
+        fc = tmp_path / 'flang-new'
+        fc.write_text(f'#!/bin/sh\ntouch {marker}\nexit 1\n')
+        fc.chmod(0o755)
+        monkeypatch.setenv('FC', str(fc))
+        assert selected_real_kind(0) == 4
+        assert not marker.exists()
+        assert 'kind 2' in capsys.readouterr().err
