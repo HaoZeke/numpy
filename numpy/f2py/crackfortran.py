@@ -2713,12 +2713,15 @@ def analyzevars(block):
                             f"in routine {block['name']}.\n")
         if 'charselector' in vars[n]:
             if 'len' in vars[n]['charselector']:
-                l = vars[n]['charselector']['len']
+                l = _fold_int_spec(vars[n]['charselector']['len'], params)
                 try:
                     l = str(eval(l, {}, params))
                 except Exception:
                     pass
                 vars[n]['charselector']['len'] = l
+            if '*' in vars[n]['charselector']:
+                vars[n]['charselector']['*'] = _fold_int_spec(
+                    vars[n]['charselector']['*'], params)
 
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
@@ -2786,6 +2789,7 @@ def analyzevars(block):
                 ):
                     # d is the expression inside the dimension declaration
                     # Evaluate `d` with respect to params
+                    d = _fold_int_spec(d, params)
                     try:
                         # the dimension for this variable depends on a
                         # previously defined parameter
@@ -3106,6 +3110,40 @@ def param_eval(v, g_params, params, dimspec=None):
     p = dict(zip(dimrange, v_eval))
 
     return p
+
+
+def _fold_int_spec(expr, params):
+    if not isinstance(expr, str) or '(' not in expr:
+        return expr
+    blocked = {str(k).lower() for k in params}
+    call = re.compile(
+        r'\b(abs|modulo|mod)\s*\(\s*([+-]?\d+\s*(?:,\s*[+-]?\d+\s*)?)\)',
+        re.I)
+
+    def repl(match):
+        name = match.group(1).lower()
+        if name in blocked:
+            return match.group(0)
+        args = [int(part) for part in match.group(2).split(',')]
+        if name == 'abs':
+            if len(args) != 1:
+                return match.group(0)
+            return str(abs(args[0]))
+        if len(args) != 2 or args[1] == 0:
+            return match.group(0)
+        quot = abs(args[0]) // abs(args[1])
+        if (args[0] < 0) != (args[1] < 0):
+            quot = -quot
+        rem = args[0] - quot * args[1]
+        if name == 'modulo' and rem and (rem < 0) != (args[1] < 0):
+            rem += args[1]
+        return str(rem)
+
+    prev = None
+    while expr != prev:
+        prev = expr
+        expr = call.sub(repl, expr)
+    return expr
 
 
 def param_parse(d, params):
