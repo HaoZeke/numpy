@@ -2266,6 +2266,32 @@ def analyzecommon(block):
     return block
 
 
+def _enclosing_module(block):
+    current = block
+    seen = set()
+    while isinstance(current, dict) and id(current) not in seen:
+        seen.add(id(current))
+        if current.get('block') == 'module':
+            return current.get('name') or ''
+        current = current.get('parent_block')
+    return ''
+
+
+def _name_selected(name, names, module):
+    if name in names:
+        return True
+    if not module:
+        return False
+    for item in names:
+        for sep in ('::', '.'):
+            if sep in item:
+                head, tail = item.split(sep, 1)
+                if head == module and tail == name:
+                    return True
+                break
+    return False
+
+
 def analyzebody(block, args, tab=''):
     global usermodules, skipfuncs, onlyfuncs, f90modulevars
 
@@ -2278,6 +2304,7 @@ def analyzebody(block, args, tab=''):
     }
 
     body = []
+    module = _enclosing_module(block)
     for b in block['body']:
         b['parent_block'] = block
         if b['block'] in ['function', 'subroutine']:
@@ -2288,9 +2315,9 @@ def analyzebody(block, args, tab=''):
             # Add private members to skipfuncs for gh-23879
             if b['name'] in maybe_private.keys():
                 skipfuncs.append(b['name'])
-            if b['name'] in skipfuncs:
+            if _name_selected(b['name'], skipfuncs, module):
                 continue
-            if onlyfuncs and b['name'] not in onlyfuncs:
+            if onlyfuncs and not _name_selected(b['name'], onlyfuncs, module):
                 continue
             b['saved_interface'] = crack2fortrangen(
                 b, '\n' + ' ' * 6, as_interface=True)
@@ -3322,9 +3349,10 @@ def crack2fortrangen(block, tab='\n', as_interface=False):
     if isinstance(block, list):
         for g in block:
             if g and g['block'] in ['function', 'subroutine']:
-                if g['name'] in skipfuncs:
+                module = _enclosing_module(g)
+                if _name_selected(g['name'], skipfuncs, module):
                     continue
-                if onlyfuncs and g['name'] not in onlyfuncs:
+                if onlyfuncs and not _name_selected(g['name'], onlyfuncs, module):
                     continue
             ret = ret + crack2fortrangen(g, tab, as_interface=as_interface)
         return ret
