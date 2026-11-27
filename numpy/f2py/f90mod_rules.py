@@ -12,9 +12,13 @@ __version__ = "$Revision: 1.27 $"[10:-1]
 
 f2py_version = 'See `f2py -v`'
 
+import re
+
 import numpy as np
 
 from . import capi_maps, func2subr
+from ._isocbind import isoc_kindmap
+from ._isofenv import isof_kindmap
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -23,6 +27,62 @@ from .auxfuncs import *
 from .crackfortran import undo_rmbadname, undo_rmbadname1
 
 options = {}
+
+# Words that appear in a generated declaration and are not names to import.
+_DECL_WORDS = {
+    'integer', 'real', 'complex', 'logical', 'character',
+    'double', 'precision', 'kind', 'len',
+}
+_INTRINSIC_NAMES = {
+    'abs', 'ceiling', 'floor', 'int', 'kind', 'len', 'nint',
+    'selected_int_kind', 'selected_real_kind', 'size',
+}
+_OPEN_DIMS = {'*', ':', '(*)', '(:)', ''}
+
+
+def _parameter_save_decl(vars, name, local, imported):
+    """Declaration of a saved local that receives one module parameter.
+
+    Return None when the declaration would not compile in the wrapper.
+    """
+    var = vars[name]
+    if var.get('typespec') in (None, 'type'):
+        return None
+    for dim in var.get('dimension', []):
+        if str(dim).strip() in _OPEN_DIMS:
+            return None
+    selector = var.get('charselector') or {}
+    if (selector.get('len') in _OPEN_DIMS
+            or selector.get('*') in _OPEN_DIMS):
+        return None
+    decl = func2subr.var2fixfortran(vars, name, fa=local, f90mode=True)
+    if not decl or f' {local}' not in decl:
+        return None
+    imported_l = {item.lower() for item in imported}
+    for ident in re.findall(r'[A-Za-z][A-Za-z0-9_]*', decl):
+        low = ident.lower()
+        if low == local.lower() or low in _DECL_WORDS or low in _INTRINSIC_NAMES:
+            continue
+        if low in isoc_kindmap or low in isof_kindmap or low in imported_l:
+            continue
+        return None
+    return decl.replace(f' {local}', f', save :: {local}', 1)
+
+
+def _parameter_use_lines(decls):
+    """Intrinsic uses required by kind names in the saved declarations."""
+    c_names = []
+    f_names = []
+    for decl in decls:
+        for ident in re.findall(r'[A-Za-z][A-Za-z0-9_]*', decl):
+            low = ident.lower()
+            if low in isoc_kindmap and low not in c_names:
+                c_names.append(low)
+            elif low in isof_kindmap and low not in f_names:
+                f_names.append(low)
+    lines = [f'use, intrinsic :: iso_c_binding, only: {n}' for n in c_names]
+    lines += [f'use, intrinsic :: iso_fortran_env, only: {n}' for n in f_names]
+    return lines
 
 
 def findf90modules(m):
@@ -102,6 +162,7 @@ def buildhooks(pymod):
         sargsp = []
         ifargs = []
         mfargs = []
+        param_copies = []
         if hasbody(m):
             for b in m['body']:
                 notvars.append(b['name'])
@@ -145,6 +206,12 @@ def buildhooks(pymod):
             dadd(note)
         if onlyvars:
             dadd('\\begin{description}')
+        reserved = {a.lower() for a in undo_rmbadname(mfargs)}
+        reserved.add('f2pysetupfunc')
+        if hasbody(m):
+            for b in m['body']:
+                reserved.add(str(b.get('name', '')).lower())
+        param_index = 0
         for n in onlyvars:
             var = m['vars'][n]
             modobjs.append(n)
@@ -184,7 +251,23 @@ def buildhooks(pymod):
                 fhooks[0] = fhooks[0] + use_fgetdims2
                 fadd(f'end subroutine {fargs[-1]}')
             else:
-                fargs.append(n)
+                # A parameter passed to this implicit procedure may be a
+                # temporary. Pass a saved local so the address stays valid.
+                passed = n
+                if 'parameter' in var.get('attrspec', []):
+                    local = f'f2py_par_{param_index}'
+                    while local in reserved:
+                        param_index += 1
+                        local = f'f2py_par_{param_index}'
+                    decl = _parameter_save_decl(
+                        m['vars'], n, local, reserved)
+                    if decl is not None:
+                        reserved.add(local)
+                        param_index += 1
+                        param_copies.append(
+                            (local, undo_rmbadname1(n), decl))
+                        passed = local
+                fargs.append(passed)
                 sargs.append(f'char *{n}')
                 sargsp.append('char*')
                 iadd(f"\tf2py_{m['name']}_def[i_f2py++].data = {n};")
@@ -255,6 +338,10 @@ def buildhooks(pymod):
         if mfargs:
             for a in undo_rmbadname(mfargs):
                 fadd(f"use {m_name}, only : {a}")
+        if param_copies:
+            for line in _parameter_use_lines(
+                    [decl for _, _, decl in param_copies]):
+                fadd(line)
         if ifargs:
             fadd(' '.join(['interface'] + ifargs))
             fadd('end interface')
@@ -262,6 +349,10 @@ def buildhooks(pymod):
         if efargs:
             for a in undo_rmbadname(efargs):
                 fadd(f'external {a}')
+        for _local, _src, decl in param_copies:
+            fadd(decl)
+        for local, src, _decl in param_copies:
+            fadd(f'{local} = {src}')
         fadd(f"call f2pysetupfunc({','.join(undo_rmbadname(fargs))})")
         fadd(f"end subroutine f2pyinit{m_name}\n")
 

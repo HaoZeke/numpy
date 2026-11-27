@@ -1,8 +1,34 @@
+import re
+import shutil
+import subprocess
 import textwrap
+from pathlib import Path
 
 import pytest
 
+from numpy.f2py import crackfortran, f90mod_rules
+
 from . import util
+
+
+def _gh32148_source():
+    return Path(__file__).resolve().parent / "src" / "modules" / "gh32148.f90"
+
+
+def _continue_free_form(text):
+    # Match the line breaks f2py writes into the f90 wrapper.
+    out = []
+    for line in text.split("\n"):
+        if len(line) > 72 and line.startswith(" "):
+            out.append(line[:72] + "&")
+            rest = line[72:]
+            while len(rest) > 66:
+                out.append("     &" + rest[:66] + "&")
+                rest = rest[66:]
+            out.append("     &" + rest)
+        else:
+            out.append(line)
+    return "\n".join(out)
 
 
 @pytest.mark.slow
@@ -86,6 +112,53 @@ class TestAllocatableCharacterArray(util.F2PyTest):
         names = mod.names
         assert names.shape == (3,)
         assert names.dtype.kind == 'U' or names.dtype.kind == 'S'
+
+
+def test_gh32148_parameter_saved_local(tmp_path):
+    # gh-32148: pass a saved local for each module parameter
+    source = _gh32148_source()
+    blocks = crackfortran.crackfortran([str(source)])
+    mod = next(b for b in blocks if b.get("name") == "constants")
+    _ret, hook = f90mod_rules.buildhooks(mod)
+    call = re.search(r"call f2pysetupfunc\((.*)\)", hook)
+    assert call is not None
+    args = [item.strip() for item in call.group(1).split(",") if item.strip()]
+    assert "constant" not in args
+    assert "non_parameter" in args
+    assert re.search(r"f2py_par_\d+ = constant\b", hook)
+    assert "save ::" in hook
+    wrapper = tmp_path / "wrap.f90"
+    wrapper.write_text(_continue_free_form(hook))
+    if shutil.which("gfortran"):
+        syntax = subprocess.run(
+            ["gfortran", "-fsyntax-only", str(source), str(wrapper)],
+            capture_output=True, text=True,
+        )
+        assert syntax.returncode == 0, syntax.stderr
+
+
+@pytest.mark.slow
+class TestGh32148Parameters(util.F2PyTest):
+    sources = [
+        str(Path(__file__).resolve().parent / "src" / "modules" / "gh32148.f90")
+    ]
+
+    def test_parameter_values(self):
+        mod = self.module.constants
+        assert mod.constant == 4
+        assert mod.get_constant() == 4
+        assert mod.non_parameter == 5
+        assert mod.vector.tolist() == [1, 2, 3]
+        assert mod.ratio == 1.5
+        assert mod.word == b"abc"
+        assert mod.names.tolist() == [b"ab", b"cd"]
+        assert mod.dp == 8
+        assert mod.wide == 2.5
+        assert mod.counted == 6
+        assert mod.sized == 11
+        assert mod.from_c == 7
+        assert mod.flag == 1 or mod.flag == True  # noqa: E712
+        assert complex(mod.zed) == 1 + 2j
 
 
 @pytest.mark.slow
