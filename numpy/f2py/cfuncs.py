@@ -302,7 +302,36 @@ cppmacros['pyobj_from_string1'] = """
 needs['pyobj_from_string1size'] = ['string']
 cppmacros['pyobj_from_string1size'] = """
 #define pyobj_from_string1size(v,len) (PyUnicode_FromStringAndSize((char *)v, len))"""
-needs['TRYPYARRAYTEMPLATE'] = ['PRINTPYOBJERR']
+cppmacros['F2PY_INOUT_BSWAP'] = r"""
+#define F2PY_STORE_NATIVE(arr, T, val) \
+    do { \
+        T *_f2py_dst = (T *)PyArray_DATA(arr); \
+        *_f2py_dst = (val); \
+        if (PyArray_ISBYTESWAPPED(arr)) { \
+            if (sizeof(T) == (size_t)PyArray_ITEMSIZE(arr)) { \
+                PyDataType_GetArrFuncs(PyArray_DESCR(arr))->copyswap( \
+                    _f2py_dst, NULL, 1, (arr)); \
+            } \
+            else { \
+                char *_f2py_p = (char *)_f2py_dst; \
+                size_t _f2py_i, _f2py_n = sizeof(T); \
+                for (_f2py_i = 0; _f2py_i < _f2py_n / 2; ++_f2py_i) { \
+                    char _f2py_t = _f2py_p[_f2py_i]; \
+                    _f2py_p[_f2py_i] = _f2py_p[_f2py_n - 1 - _f2py_i]; \
+                    _f2py_p[_f2py_n - 1 - _f2py_i] = _f2py_t; \
+                } \
+            } \
+        } \
+    } while (0)
+#define F2PY_SWAP_ELEM(arr) \
+    do { \
+        if (PyArray_ISBYTESWAPPED(arr)) { \
+            PyDataType_GetArrFuncs(PyArray_DESCR(arr))->copyswap( \
+                PyArray_DATA(arr), NULL, 1, (arr)); \
+        } \
+    } while (0)
+"""
+needs['TRYPYARRAYTEMPLATE'] = ['PRINTPYOBJERR', 'F2PY_INOUT_BSWAP']
 cppmacros['TRYPYARRAYTEMPLATE'] = """
 /* New SciPy */
 #define TRYPYARRAYTEMPLATECHAR case NPY_STRING: *(char *)(PyArray_DATA(arr))=*v; break;
@@ -314,32 +343,32 @@ cppmacros['TRYPYARRAYTEMPLATE'] = """
         if (!obj) return -2;\\
         if (!PyArray_Check(obj)) return -1;\\
         if (!(arr=(PyArrayObject *)obj)) {fprintf(stderr,\"TRYPYARRAYTEMPLATE:\");PRINTPYOBJERR(obj);return 0;}\\
-        if (PyArray_DESCR(arr)->type==typecode)  {*(ctype *)(PyArray_DATA(arr))=*v; return 1;}\\
+        if (PyArray_DESCR(arr)->type==typecode)  {F2PY_STORE_NATIVE(arr, ctype, *v); return 1;}\\
         switch (PyArray_TYPE(arr)) {\\
-                case NPY_DOUBLE: *(npy_double *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_INT: *(npy_int *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_LONG: *(npy_long *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_FLOAT: *(npy_float *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_CDOUBLE: *(npy_double *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_CFLOAT: *(npy_float *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_BOOL: *(npy_bool *)(PyArray_DATA(arr))=(*v!=0); break;\\
-                case NPY_UBYTE: *(npy_ubyte *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_BYTE: *(npy_byte *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_SHORT: *(npy_short *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_USHORT: *(npy_ushort *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_UINT: *(npy_uint *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_ULONG: *(npy_ulong *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_LONGLONG: *(npy_longlong *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_ULONGLONG: *(npy_ulonglong *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_LONGDOUBLE: *(npy_longdouble *)(PyArray_DATA(arr))=*v; break;\\
-                case NPY_CLONGDOUBLE: *(npy_longdouble *)(PyArray_DATA(arr))=*v; break;\\
+                case NPY_DOUBLE: F2PY_STORE_NATIVE(arr, npy_double, *v); break;\\
+                case NPY_INT: F2PY_STORE_NATIVE(arr, npy_int, *v); break;\\
+                case NPY_LONG: F2PY_STORE_NATIVE(arr, npy_long, *v); break;\\
+                case NPY_FLOAT: F2PY_STORE_NATIVE(arr, npy_float, *v); break;\\
+                case NPY_CDOUBLE: F2PY_STORE_NATIVE(arr, npy_double, *v); break;\\
+                case NPY_CFLOAT: F2PY_STORE_NATIVE(arr, npy_float, *v); break;\\
+                case NPY_BOOL: F2PY_STORE_NATIVE(arr, npy_bool, (*v!=0)); break;\\
+                case NPY_UBYTE: F2PY_STORE_NATIVE(arr, npy_ubyte, *v); break;\\
+                case NPY_BYTE: F2PY_STORE_NATIVE(arr, npy_byte, *v); break;\\
+                case NPY_SHORT: F2PY_STORE_NATIVE(arr, npy_short, *v); break;\\
+                case NPY_USHORT: F2PY_STORE_NATIVE(arr, npy_ushort, *v); break;\\
+                case NPY_UINT: F2PY_STORE_NATIVE(arr, npy_uint, *v); break;\\
+                case NPY_ULONG: F2PY_STORE_NATIVE(arr, npy_ulong, *v); break;\\
+                case NPY_LONGLONG: F2PY_STORE_NATIVE(arr, npy_longlong, *v); break;\\
+                case NPY_ULONGLONG: F2PY_STORE_NATIVE(arr, npy_ulonglong, *v); break;\\
+                case NPY_LONGDOUBLE: F2PY_STORE_NATIVE(arr, npy_longdouble, *v); break;\\
+                case NPY_CLONGDOUBLE: F2PY_STORE_NATIVE(arr, npy_longdouble, *v); break;\\
                 case NPY_OBJECT: PyArray_SETITEM(arr, PyArray_DATA(arr), pyobj_from_ ## ctype ## 1(*v)); break;\\
         default: return -2;\\
         };\\
         return 1
 """
 
-needs['TRYCOMPLEXPYARRAYTEMPLATE'] = ['PRINTPYOBJERR', 'npy_math.h']
+needs['TRYCOMPLEXPYARRAYTEMPLATE'] = ['PRINTPYOBJERR', 'npy_math.h', 'F2PY_INOUT_BSWAP']
 cppmacros['TRYCOMPLEXPYARRAYTEMPLATE'] = """
 #define TRYCOMPLEXPYARRAYTEMPLATEOBJECT case NPY_OBJECT: PyArray_SETITEM(arr, PyArray_DATA(arr), pyobj_from_complex_ ## ctype ## 1((*v))); break;
 /* Helper to extract real/imag from complex value via cast to npy_cdouble */
@@ -364,6 +393,7 @@ static inline double _f2py_cimag_as_double(const void *p, int typenum) {
         if (PyArray_TYPE(arr)==typenum) {\\
             *(ctype *)(PyArray_DATA(arr))=(ctype)_re;\\
             *(ctype *)(PyArray_DATA(arr)+sizeof(ctype))=(ctype)_im;\\
+            F2PY_SWAP_ELEM(arr);\\
             return 1;\\
         }\\
         switch (PyArray_TYPE(arr)) {\\
@@ -393,6 +423,7 @@ static inline double _f2py_cimag_as_double(const void *p, int typenum) {
                 case NPY_OBJECT: PyArray_SETITEM(arr, PyArray_DATA(arr), pyobj_from_complex_ ## ctype ## 1((*v))); break;\\
                 default: return -2;\\
         };\\
+        F2PY_SWAP_ELEM(arr);\\
         return -1;
 """
 # cppmacros['NUMFROMARROBJ']="""
