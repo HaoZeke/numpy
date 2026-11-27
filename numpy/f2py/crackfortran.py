@@ -139,6 +139,7 @@ TODO:
     The above may be solved by creating appropriate preprocessor program, for example.
 
 """
+import ast
 import codecs
 import copy
 import fileinput
@@ -888,18 +889,19 @@ def markouterparen(line):
 def markoutercomma(line, comma=','):
     l = ''
     f = 0
-    before, after = split_by_unquoted(line, comma + '()')
+    brackets = comma + '()[]'
+    before, after = split_by_unquoted(line, brackets)
     l += before
     while after:
         if (after[0] == comma) and (f == 0):
             l += '@' + comma + '@'
         else:
             l += after[0]
-            if after[0] == '(':
+            if after[0] in '([':
                 f += 1
-            elif after[0] == ')':
+            elif after[0] in ')]':
                 f -= 1
-        before, after = split_by_unquoted(after[1:], comma + '()')
+        before, after = split_by_unquoted(after[1:], brackets)
         l += before
     assert not f, repr((f, line, l))
     return l
@@ -2572,6 +2574,16 @@ def get_parameters(vars, global_params={}):
                     is_replaced = len(v) < orig_v_len
 
             if not is_replaced:
+                compact_v = ''.join(v.split())
+                if '**' in compact_v or _len_kind_suffix.search(compact_v):
+                    known = {k: val for k, val in params.items()
+                             if type(val) is int}
+                    pre = _int_const(v, known)
+                    if type(pre) is int:
+                        v = str(pre)
+                        vars[n]['='] = v
+                        is_replaced = True
+            if not is_replaced:
                 if not selected_kind_re.match(v):
                     v_ = v.split('_')
                     # In case there are additive parameters
@@ -2624,10 +2636,334 @@ def get_parameters(vars, global_params={}):
     return params
 
 
+_len_kind_suffix = re.compile(r'(?<![\w$])(\d+)_\w+')
+
+
 def _eval_length(length, params):
     if length in ['(:)', '(*)', '*']:
         return '(*)'
+    raw = ''.join(str(length).split())
+    if '**' in raw or _len_kind_suffix.search(raw):
+        return length
     return _eval_scalar(length, params)
+
+
+def _skip_quoted(text, i, counted=False):
+    quote = text[i]
+    i += 1
+    n = len(text)
+    total = 0
+    while i < n:
+        if text[i] == quote:
+            if i + 1 < n and text[i + 1] == quote:
+                i += 2
+                total += 1
+                continue
+            return (total, i + 1) if counted else i + 1
+        total += 1
+        i += 1
+    return None if counted else n
+
+def _keyword_at(text, i, word):
+    k = len(word)
+    if text[i:i + k].lower() != word:
+        return False
+    prev = i and (text[i - 1].isalnum() or text[i - 1] in '_$')
+    nxt = i + k
+    post = nxt < len(text) and (text[nxt].isalnum() or text[nxt] in '_$')
+    return not prev and not post
+def _walk(text, i, stops='', token=None):
+    n = len(text)
+    depth = 0
+    while i < n:
+        c = text[i]
+        if c in "'\"":
+            i = _skip_quoted(text, i)
+            continue
+        if c in '([':
+            depth += 1
+        elif c in ')]' and depth:
+            depth -= 1
+        elif depth == 0 and (
+                (token and text.startswith(token, i)) or c in stops):
+            return i
+        i += 1
+    return n
+def _literal_concat_length(text):
+    n = len(text)
+    i = 0
+    total = 0
+    seen = False
+
+    def skip(i):
+        while i < n and text[i].isspace():
+            i += 1
+        return i
+
+    i = skip(i)
+    while i < n:
+        if i >= n or text[i] not in "'\"":
+            return None
+        lit = _skip_quoted(text, i, counted=True)
+        if lit is None:
+            return None
+        count, i = lit
+        total += count
+        seen = True
+        i = skip(i)
+        if i >= n:
+            return total
+        if not text.startswith('//', i):
+            return None
+        i = skip(i + 2)
+    return total if seen else None
+def _split_top_commas(text):
+    parts = []
+    start = i = 0
+    n = len(text)
+    while True:
+        j = _walk(text, i, ',')
+        parts.append(text[start:j])
+        if j >= n:
+            return parts
+        start = i = j + 1
+def _len_expr_in(inner):
+    n = len(inner)
+    i = 0
+    while i < n:
+        c = inner[i]
+        if c in "'\"":
+            i = _skip_quoted(inner, i)
+            continue
+        if c == '(':
+            end = _walk(inner, i + 1, ')')
+            i = end + 1 if end < n and inner[end] == ')' else n
+            continue
+        if _keyword_at(inner, i, 'len'):
+            j = i + 3
+            while j < n and inner[j].isspace():
+                j += 1
+            if j < n and inner[j] == '=':
+                return inner[j + 1:_walk(inner, j + 1, ',)')].strip()
+        i += 1
+    head = inner.lstrip()
+    if head and _keyword_at(head, 0, 'kind'):
+        return None
+    return inner.strip()
+
+_CHAR_LEN_STAR = object()
+_CHAR_LEN_BAD = object()
+_DEFERRED_LEN = {'*', ':', '(*)', '(:)', ''}
+
+def _int_const(expr, params):
+    known = {str(k).lower(): v for k, v in (params or {}).items() if type(v) is int}
+    s = _len_kind_suffix.sub(r'\1', ''.join(str(expr).split()))
+    if not s or any(c in s for c in "'\".") or '//' in s:
+        return None
+    try:
+        node = ast.parse(s, mode='eval').body
+    except SyntaxError:
+        return None
+
+    def ev(nd):
+        if isinstance(nd, ast.Constant) and type(nd.value) is int:
+            return nd.value
+        if isinstance(nd, ast.Name):
+            return known[nd.id.lower()]
+        if isinstance(nd, ast.UnaryOp):
+            val = ev(nd.operand)
+            if isinstance(nd.op, ast.UAdd):
+                return val
+            if isinstance(nd.op, ast.USub):
+                return -val
+            raise ValueError
+        left, right = ev(nd.left), ev(nd.right)
+        if isinstance(nd.op, ast.Add):
+            return left + right
+        if isinstance(nd.op, ast.Sub):
+            return left - right
+        if isinstance(nd.op, ast.Mult):
+            return left * right
+        if isinstance(nd.op, ast.Pow):
+            if right < 0:
+                if left == 0:
+                    raise ValueError
+                denom = left ** (-right)
+                quot = 1 // abs(denom)
+                return -quot if denom < 0 else quot
+            return left ** right
+        if not isinstance(nd.op, ast.Div) or not right:
+            raise ZeroDivisionError
+        quot = abs(left) // abs(right)
+        return -quot if (left < 0) ^ (right < 0) else quot
+
+    try:
+        return ev(node)
+    except (KeyError, ValueError, ZeroDivisionError, TypeError, AttributeError,
+            RecursionError):
+        return None
+
+def _fold_char_len(expr, params):
+    if expr is None:
+        return _CHAR_LEN_BAD
+    compact = ''.join(str(expr).split())
+    if compact in ('*', ':', '(*)', '(:)'):
+        return _CHAR_LEN_STAR
+    value = _int_const(expr, params)
+    if type(value) is int:
+        return str(value) if value >= 0 else '0'
+    return _CHAR_LEN_BAD
+
+def _block_len_eval(expr, skipped):
+    raw = ''.join(str(expr).split())
+    key = raw.lower()
+    if key in skipped and re.fullmatch(r'[A-Za-z_][\w$]*', key) is not None:
+        return True
+    stripped = _len_kind_suffix.sub(r'\1', raw)
+    names = [n.lower() for n in re.findall(r'[A-Za-z_][\w$]*', stripped)]
+    if not names:
+        return '**' in stripped or _len_kind_suffix.search(raw) is not None
+    if any(n in skipped for n in names) and (
+            '**' in stripped or _len_kind_suffix.search(raw)):
+        return True
+    return False
+
+def _try_character_spec(text, i, params):
+    n = len(text)
+    j = i + len('character')
+    while j < n and text[j].isspace():
+        j += 1
+    if j >= n or text[j] != '(':
+        return None
+    end = _walk(text, j + 1, ')')
+    if end >= n or text[end] != ')':
+        return None
+    expr = _len_expr_in(text[j + 1:end])
+    j = end + 1
+    while j < n and text[j].isspace():
+        j += 1
+    if not text.startswith('::', j):
+        return None
+    return _fold_char_len(expr, params), j + 2
+
+def _constructor_char_spec(text, params):
+    n = len(text)
+    i = 0
+    while i < n:
+        if text[i] in "'\"":
+            i = _skip_quoted(text, i)
+            continue
+        if _keyword_at(text, i, 'character'):
+            parsed = _try_character_spec(text, i, params)
+            if parsed is not None:
+                return parsed
+        i += 1
+    return None, None
+
+def _param_facts(variables, params):
+    ints, lens, pending = {}, {}, []
+    params = params or {}
+    for name, var in variables.items():
+        if not isinstance(var, dict):
+            continue
+        key = name.lower()
+        attrs = var.get('attrspec') or []
+        if var.get('typespec') == 'integer' and 'parameter' in attrs:
+            init = var.get('=')
+            if isinstance(init, str):
+                pending.append((name, key, init))
+            else:
+                val = params.get(name, params.get(key))
+                if type(val) is int:
+                    ints[key] = val
+        sel = var.get('charselector')
+        if isinstance(sel, dict) and ('len' in sel or '*' in sel):
+            lens[key] = sel['len'] if 'len' in sel else sel['*']
+    while pending:
+        rest, moved = [], False
+        for name, key, init in pending:
+            value = _int_const(init, ints)
+            if type(value) is int:
+                ints[key] = value
+                moved = True
+            else:
+                rest.append((name, key, init))
+        if not moved:
+            break
+        pending = rest
+    skipped = set()
+    for name, key, init in pending:
+        if re.search(r'\d+_', init):
+            skipped.add(key)
+            continue
+        val = params.get(name, params.get(key))
+        if type(val) is int:
+            ints[key] = val
+    return ints, lens, skipped
+
+def _parameter_character_length(var, variables, int_params, declared):
+    if 'parameter' not in (var.get('attrspec') or []):
+        return None
+    variables = variables or {}
+    declared = declared or {}
+
+    def ref(text, seen):
+        if not re.fullmatch(r'[A-Za-z_][\w$]*', text):
+            return None
+        key = text.lower()
+        if key in seen:
+            return None
+        target = variables.get(text) or variables.get(key)
+        if (not isinstance(target, dict) or target.get('typespec') != 'character'
+                or 'parameter' not in (target.get('attrspec') or [])):
+            return None
+        raw = declared.get(key)
+        if raw is None:
+            return None
+        if ''.join(str(raw).split()) not in _DEFERRED_LEN:
+            folded = _fold_char_len(raw, int_params)
+            return int(folded) if isinstance(folded, str) else None
+        return expr(target.get('='), seen | {key})
+
+    def expr(text, seen):
+        if not isinstance(text, str) or not text.strip():
+            return None
+        body = text.strip()
+        if body.startswith('[') and body.endswith(']'):
+            close, inner = ']', body[1:-1].strip()
+        elif body.startswith('(/') and body.endswith('/)'):
+            close, inner = '/)', body[2:-2].strip()
+        else:
+            close = inner = None
+        if close is not None:
+            folded, after = _constructor_char_spec(body, int_params)
+            if folded is _CHAR_LEN_BAD:
+                return None
+            if isinstance(folded, str):
+                return int(folded)
+            if after is not None:
+                inner = body[after:].strip()
+                if inner.endswith(close):
+                    inner = inner[:-len(close)].strip()
+            parts = [p.strip() for p in _split_top_commas(inner) if p.strip()]
+            if not parts:
+                return None
+            lens, named = [], False
+            for part in parts:
+                got = _literal_concat_length(part)
+                if got is None:
+                    named = True
+                    got = ref(part, seen)
+                if got is None:
+                    return None
+                lens.append(got)
+            return lens[0] if named else max(lens)
+        got = _literal_concat_length(body)
+        return got if got is not None else ref(body, seen)
+
+    got = expr(var.get('='), set())
+    return None if got is None else str(got)
+
 
 
 _is_kind_number = re.compile(r'\d+_').match
@@ -2681,6 +3017,7 @@ def analyzevars(block):
             svars.append(n)
 
     params = get_parameters(vars, get_useparameters(block))
+    int_params, declared_lens, skipped_kind = _param_facts(vars, params)
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
     dep_matches = {}
@@ -2712,13 +3049,41 @@ def analyzevars(block):
                     outmess(f"analyzevars: typespec of variable {n!r} is not defined "
                             f"in routine {block['name']}.\n")
         if 'charselector' in vars[n]:
-            if 'len' in vars[n]['charselector']:
-                l = vars[n]['charselector']['len']
-                try:
-                    l = str(eval(l, {}, params))
-                except Exception:
-                    pass
-                vars[n]['charselector']['len'] = l
+            blocked_keys = []
+            sel = vars[n]['charselector']
+            for key in ('len', '*'):
+                if key not in sel:
+                    continue
+                l = sel[key]
+                compact = ''.join(str(l).split())
+                if compact in ('*', ':', '(*)', '(:)'):
+                    continue
+                folded_len = _fold_char_len(l, int_params)
+                if isinstance(folded_len, str):
+                    sel[key] = folded_len
+                elif _block_len_eval(l, skipped_kind):
+                    blocked_keys.append(key)
+                else:
+                    stripped = _len_kind_suffix.sub(r'\1', compact)
+                    if stripped != compact:
+                        sel[key] = stripped
+                    else:
+                        try:
+                            sel[key] = str(eval(l, {}, params))
+                        except Exception:
+                            pass
+            for cand in ('len', '*'):
+                raw = sel.get(cand)
+                if raw is None:
+                    continue
+                if str(raw).replace(' ', '') in ('*', ':', '(*)', '(:)'):
+                    folded = _parameter_character_length(
+                        vars[n], vars, int_params, declared_lens)
+                    if folded:
+                        sel[cand] = folded
+                    break
+            for key in blocked_keys:
+                sel[key] = '*'
 
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
