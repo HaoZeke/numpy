@@ -3436,9 +3436,41 @@ def true_intent_list(var):
     return ret
 
 
+_DIM_SPEC_RE = re.compile(r'^dimension\s*\((.*)\)\s*$', re.I)
+_DIM_INQUIRY_RE = re.compile(
+    r'\b(?:size|shape|lbound|ubound|len|bit_size|digits|epsilon|huge|'
+    r'kind|maxexponent|minexponent|precision|radix|range|tiny)\s*\([^()]*\)',
+    re.I)
+_DIM_IDENT_RE = re.compile(r'[A-Za-z_][\w]*')
+
+
+def _dimension_bound_names(vars):
+    """Names used as a dimension bound of another variable."""
+    bounds = set()
+    for owner, var in vars.items():
+        texts = []
+        for spec in var.get('attrspec') or []:
+            match = _DIM_SPEC_RE.match(spec.strip())
+            if match:
+                texts.append(match.group(1))
+        texts.extend(var.get('dimension') or [])
+        scrubbed = ' '.join(texts)
+        previous = None
+        while scrubbed != previous:
+            previous = scrubbed
+            scrubbed = _DIM_INQUIRY_RE.sub(' ', scrubbed)
+        owner_name = owner.lower()
+        for found in _DIM_IDENT_RE.finditer(scrubbed):
+            ident = found.group(0).lower()
+            if ident != owner_name:
+                bounds.add(ident)
+    return bounds
+
+
 def vars2fortran(block, vars, args, tab='', as_interface=False):
     setmesstext(block)
     ret = ''
+    bound_names = _dimension_bound_names(vars) if as_interface else set()
     nout = []
     for a in args:
         if a in block['vars']:
@@ -3520,8 +3552,28 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             vardef = f"{vardef}(kind={selector['kind']})"
         c = ' '
         if 'attrspec' in vars[a]:
-            attr = [l for l in vars[a]['attrspec']
-                    if l not in ['external']]
+            # Signature words are not Fortran. A compiled interface also
+            # rejects optional on a name that another dummy uses as a
+            # dimension bound, and any intent other than in, out, or
+            # inout (gh-13553).
+            attr = []
+            for spec in vars[a]['attrspec']:
+                if spec == 'external':
+                    continue
+                if as_interface:
+                    head = spec.split('(', 1)[0].strip().lower()
+                    if head in ('required', 'check', 'depend', 'note'):
+                        continue
+                    if head == 'optional' and a.lower() in bound_names:
+                        continue
+                    if head == 'intent':
+                        body = spec.partition('(')[2].rstrip(')')
+                        toks = [''.join(t.split()).lower()
+                                for t in body.split(',') if t.strip()]
+                        if not toks or any(t not in ('in', 'out', 'inout')
+                                            for t in toks):
+                            continue
+                attr.append(spec)
             if as_interface and 'intent(in)' in attr and 'intent(out)' in attr:
                 # In Fortran, intent(in, out) are conflicting while
                 # intent(in, out) can be specified only via
@@ -3546,7 +3598,14 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
         if 'depend' in vars[a]:
             vardef = f"{vardef}{c}depend({','.join(vars[a]['depend'])})"
             c = ','
-        if '=' in vars[a]:
+        # A dummy initializer is not legal in an interface. Parameters
+        # need their values, and the signature file still prints them.
+        emit_init = '=' in vars[a]
+        if emit_init and as_interface:
+            specs = vars[a].get('attrspec') or []
+            if not any(spec.strip().lower() == 'parameter' for spec in specs):
+                emit_init = False
+        if emit_init:
             v = vars[a]['=']
             if vars[a]['typespec'] in ['complex', 'double complex']:
                 try:

@@ -1,5 +1,7 @@
 import os
 import platform
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -317,3 +319,110 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+def test_pyf_wrapper_interface_compiles(tmp_path):
+    # gh-13553: a reloaded signature must compile as a Fortran interface.
+    gfortran = shutil.which("gfortran")
+    if gfortran is None:
+        pytest.skip("gfortran is not available")
+    cases = (
+        (
+            "trapz",
+            "function trapz(x, y) result(r)\n"
+            "  real*8, dimension(:), intent(in) :: x\n"
+            "  real*8, dimension(size(x)), intent(in) :: y\n"
+            "  real*8 :: r\n"
+            "  integer :: n\n"
+            "  n = size(x)\n"
+            "  r = sum((y(2:n)+y(1:n-1))*(x(2:n)-x(1:n-1)))/2\n"
+            "end function trapz\n",
+            "program main\n"
+            "  real*8 :: x(3), y(3), r\n"
+            "  x = [0.0d0, 1.0d0, 3.0d0]\n"
+            "  y = [0.0d0, 1.0d0, 1.0d0]\n"
+            "  call f2pywraptrapz(r, x, y, 3)\n"
+            "  if (abs(r - 2.5d0) > 1.0d-12) stop 1\n"
+            "end program\n",
+            ("required", "check(", "depend(x)"),
+        ),
+        (
+            "both",
+            "subroutine both(a, b, n)\n"
+            "  real a(n)\n"
+            "  real, dimension(:) :: b\n"
+            "  integer n\n"
+            "  a(1) = b(1) + n\n"
+            "end subroutine both\n",
+            "program main\n"
+            "  real a(2), b(2)\n"
+            "  b = 1.0\n"
+            "  call f2pywrapboth(a, b, 2, 2)\n"
+            "  if (abs(a(1) - 3.0) > 1.0e-6) stop 1\n"
+            "end program\n",
+            ("optional", "shape("),
+        ),
+    )
+
+    def run(cmd, cwd):
+        subprocess.run(
+            cmd, cwd=cwd, check=True, capture_output=True, text=True)
+
+    for name, code, driver, needles in cases:
+        src = tmp_path / f"{name}.f90"
+        src.write_text(code)
+        pyf = tmp_path / f"{name}.pyf"
+        run([sys.executable, "-m", "numpy.f2py", str(src), "-m", f"{name}mod",
+             "-h", str(pyf)], tmp_path)
+        signature = pyf.read_text()
+        for needle in needles:
+            assert needle in signature
+        wrap = tmp_path / f"w_{name}"
+        wrap.mkdir()
+        run([sys.executable, "-m", "numpy.f2py", str(pyf)], wrap)
+        wrapper = wrap / f"{name}mod-f2pywrappers2.f90"
+        text = wrapper.read_text()
+        for word in ("required", "check(", "depend(", "optional", "shape("):
+            assert word not in text
+        drv = tmp_path / f"{name}_drv.f90"
+        drv.write_text(driver)
+        exe = tmp_path / name
+        run([gfortran, "-o", str(exe), str(drv), str(wrapper), str(src)],
+            tmp_path)
+        run([str(exe)], tmp_path)
+
+
+def test_pyf_interface_omits_intent_hide(tmp_path):
+    # gh-13553: intent(hide) is an f2py word, not a Fortran intent.
+    gfortran = shutil.which("gfortran")
+    if gfortran is None:
+        pytest.skip("gfortran is not available")
+    src = tmp_path / "hideme.f90"
+    src.write_text(
+        "subroutine hideme(a, b, n)\n"
+        "  real, intent(in) :: a(n)\n"
+        "  real, dimension(:) :: b\n"
+        "  !f2py intent(hide) :: n\n"
+        "  integer :: n\n"
+        "end subroutine hideme\n"
+    )
+    pyf = tmp_path / "hideme.pyf"
+    subprocess.run(
+        [sys.executable, "-m", "numpy.f2py", str(src), "-m", "hidemod",
+         "-h", str(pyf)],
+        cwd=tmp_path, check=True, capture_output=True, text=True)
+    signature = pyf.read_text().lower()
+    assert "intent(hide)" in signature
+    assert "intent(in)" in signature
+    wrap = tmp_path / "w"
+    wrap.mkdir()
+    subprocess.run(
+        [sys.executable, "-m", "numpy.f2py", str(pyf)],
+        cwd=wrap, check=True, capture_output=True, text=True)
+    text = (wrap / "hidemod-f2pywrappers2.f90").read_text().lower()
+    assert "intent(hide)" not in text
+    assert "intent(in)" in text
+    subprocess.run(
+        [gfortran, "-fsyntax-only",
+         str(wrap / "hidemod-f2pywrappers2.f90")],
+        cwd=tmp_path, check=True, capture_output=True, text=True)
