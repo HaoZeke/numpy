@@ -78,6 +78,37 @@ fgetdims2_sa = """\
       flag = 2
       call f2pysetdata(d,allocated(d))"""
 
+fgetdims_ro = f"""\
+      external f2pysetdata
+      logical allzero
+      integer r,i
+      integer({np.intp().itemsize}) s(*)
+      if (s(1).lt.0) then
+         if (allocated(d)) then
+            do i=1,r
+               s(i) = size(d,i)
+            end do
+         end if
+         flag = 1
+      else
+         flag = 0
+         if (allocated(d)) then
+            flag = 1
+            do i=1,r
+               if (size(d,i).ne.s(i)) flag = 0
+            end do
+            ! All-zero shape is the C deallocate sentinel (flag 4).
+            if (flag.eq.1) then
+               allzero = .TRUE.
+               do i=1,r
+                  if (s(i).ne.0) allzero = .FALSE.
+               end do
+               if (allzero) flag = 4
+            end if
+         end if
+      end if
+      call f2pysetdata(d,allocated(d))"""
+
 
 def buildhooks(pymod):
     from . import rules
@@ -177,11 +208,14 @@ def buildhooks(pymod):
                 fadd(f'subroutine {fargs[-1]}(r,s,f2pysetdata,flag)')
                 fadd(f"use {m['name']}, only: d => {undo_rmbadname1(n)}\n")
                 fadd('integer flag\n')
-                fhooks[0] = fhooks[0] + fgetdims1
-                dms = range(1, int(dm['rank']) + 1)
-                alloc_args = ','.join(f's({i})' for i in dms)
-                fadd(f' allocate(d({alloc_args}))\n')
-                fhooks[0] = fhooks[0] + use_fgetdims2
+                if 'protected' in (var.get('attrspec') or []):
+                    fhooks[0] = fhooks[0] + fgetdims_ro
+                else:
+                    fhooks[0] = fhooks[0] + fgetdims1
+                    dms = range(1, int(dm['rank']) + 1)
+                    alloc_args = ','.join(f's({i})' for i in dms)
+                    fadd(f' allocate(d({alloc_args}))\n')
+                    fhooks[0] = fhooks[0] + use_fgetdims2
                 fadd(f'end subroutine {fargs[-1]}')
             else:
                 fargs.append(n)

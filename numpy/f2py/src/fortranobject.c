@@ -435,6 +435,22 @@ fortran_setattr(PyFortranObject *fp, char *name, PyObject *v)
                                       &flag);
                 for (k = 0; k < fp->defs[i].rank; k++) dims[k] = -1;
             }
+            /* flag 4: protected extents match the all-zero deallocate
+               shape. None leaves arr NULL; a store of that shape does not. */
+            if (flag == 4) {
+                if (arr == NULL)
+                    flag = 0;
+                else
+                    flag = 1;
+            }
+            if (flag == 0) {
+                if (arr != NULL && (PyObject *)arr != v) {
+                    Py_DECREF(arr);
+                }
+                PyErr_SetString(PyExc_ValueError,
+                                "cannot change allocation of a protected array");
+                return -1;
+            }
             memcpy(fp->defs[i].dims.d, dims,
                    fp->defs[i].rank * sizeof(npy_intp));
         }
