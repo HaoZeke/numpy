@@ -99,8 +99,10 @@ def test_include_path():
 @pytest.mark.slow
 class TestIncludeFiles(util.F2PyTest):
     sources = [util.getpath("tests", "src", "regression", "incfile.f90")]
+    # Flag and directory are separate argv tokens (gh-31958).
     options = [f"-I{util.getpath('tests', 'src', 'regression')}",
-               f"--include-paths {util.getpath('tests', 'src', 'regression')}"]
+               "--include-paths",
+               util.getpath('tests', 'src', 'regression')]
 
     def test_gh25344(self):
         exp = 7.0

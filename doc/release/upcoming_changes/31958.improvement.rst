@@ -1,0 +1,4 @@
+``f2py`` keeps spaces in command-line arguments
+-----------------------------------------------
+A path given to ``f2py`` as one command-line argument stays one argument
+when that path contains spaces.

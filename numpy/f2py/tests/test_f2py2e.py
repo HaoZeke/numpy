@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from numpy.f2py.f2py2e import get_newer_options, main as f2pycli
+from numpy.f2py.f2py2e import get_newer_options, main as f2pycli, run_compile
 from numpy.testing._private.utils import NOGIL_BUILD
 
 from . import util
@@ -752,6 +752,135 @@ def test_inclpath(monkeypatch):
     assert include_paths == [r"C:\inc1;D:\inc2"]
     assert ftcompat is None
     assert remain == []
+
+
+def test_get_newer_options_keeps_spaced_tokens(monkeypatch):
+    """Argv tokens that contain spaces stay one argument.
+
+    gh-31958
+    """
+    include_paths, ftcompat, remain = get_newer_options(
+        ["-I", r"C:\Users\First Last\include", r"C:\src\fib.f90"]
+    )
+    assert include_paths == [r"C:\Users\First Last\include"]
+    assert ftcompat is None
+    assert remain == [r"C:\src\fib.f90"]
+
+    include_paths, ftcompat, remain = get_newer_options(
+        [r"-IC:\Users\First Last\include", r"C:\src\fib.f90"]
+    )
+    assert include_paths == [r"C:\Users\First Last\include"]
+    assert ftcompat is None
+    assert remain == [r"C:\src\fib.f90"]
+
+    include_paths, ftcompat, remain = get_newer_options(
+        [
+            "--build-dir",
+            r"C:\Users\First Last\f2py build",
+            "-m",
+            "fib",
+            r"C:\src\fib.f90",
+        ]
+    )
+    assert include_paths == []
+    assert ftcompat is None
+    assert remain == [
+        "--build-dir",
+        r"C:\Users\First Last\f2py build",
+        "-m",
+        "fib",
+        r"C:\src\fib.f90",
+    ]
+
+    include_paths, ftcompat, remain = get_newer_options(
+        ["--freethreading-compatible", r"C:\Users\First Last\src\fib.f90"]
+    )
+    assert include_paths == []
+    assert ftcompat is True
+    assert remain == [r"C:\Users\First Last\src\fib.f90"]
+
+    left = "/home/First Last/include"
+    right = "/opt/vendor headers"
+    include_paths, ftcompat, remain = get_newer_options(
+        ["--include-paths", left + os.pathsep + right, "/src/fib.f90"]
+    )
+    assert set(include_paths) == {left, right}
+    assert ftcompat is None
+    assert remain == ["/src/fib.f90"]
+
+    monkeypatch.setattr(os, "pathsep", ";")
+    include_paths, ftcompat, remain = get_newer_options(
+        [
+            "--include-paths",
+            r"C:\Users\First Last\include;D:\vendor headers",
+            r"C:\src\fib.f90",
+        ]
+    )
+    assert set(include_paths) == {
+        r"C:\Users\First Last\include",
+        r"D:\vendor headers",
+    }
+    assert ftcompat is None
+    assert remain == [r"C:\src\fib.f90"]
+
+
+def test_run_compile_keeps_spaced_paths(tmp_path, monkeypatch):
+    """Compile setup receives include and source paths with spaces.
+
+    gh-31958
+    """
+    include_dir = tmp_path / "include dir"
+    include_dir.mkdir()
+    source = tmp_path / "First Last" / "fib.f"
+    source.parent.mkdir()
+    source.write_text("      subroutine fib\n      end\n")
+    build_dir = tmp_path / "build dir"
+    seen = {}
+
+    def capture_run_main(argv):
+        seen["argv"] = list(argv)
+        return {}
+
+    class CaptureBackend:
+        def __init__(self, *args, **kwargs):
+            seen["sources"] = list(args[1])
+            seen["include_dirs"] = list(args[4])
+
+        def compile(self):
+            return None
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "f2py",
+            "-c",
+            "-I",
+            os.fspath(include_dir),
+            "--build-dir",
+            os.fspath(build_dir),
+            "-m",
+            "fib",
+            os.fspath(source),
+        ],
+    )
+    monkeypatch.setattr("numpy.f2py.f2py2e.run_main", capture_run_main)
+    monkeypatch.setattr(
+        "numpy.f2py.f2py2e.f2py_build_generator",
+        lambda backend: CaptureBackend,
+    )
+    run_compile()
+
+    assert seen["argv"] == [
+        "--lower",
+        "-m",
+        "fib",
+        "-I",
+        os.fspath(include_dir),
+        os.fspath(source),
+    ]
+    assert seen["sources"] == [os.fspath(source)]
+    assert seen["include_dirs"] == [os.fspath(include_dir)]
 
 
 def test_hlink():
