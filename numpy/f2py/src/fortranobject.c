@@ -1005,15 +1005,21 @@ ndarray_from_pyobj(const int type_num,
             }
         }
         if (intent & F2PY_INTENT_INOUT) {
-            /* Must use PyArray_IS*ARRAY because intent(inout) requires
-             * writable input */
+            int is_c = (intent & F2PY_INTENT_C) != 0;
+            int contig = is_c ? PyArray_IS_C_CONTIGUOUS(arr)
+                              : PyArray_IS_F_CONTIGUOUS(arr);
             PyObject *extra_msg;
             PyObject *msg = PyUnicode_FromFormat(
-                "failed to initialize intent(inout) array%s%s",
-                (((intent & F2PY_INTENT_C) && !PyArray_ISCARRAY(arr)) ?
-                    " -- input not contiguous" : ""),
-                ((!(intent & F2PY_INTENT_C) && !PyArray_ISFARRAY(arr)) ?
-                    " -- input not fortran contiguous" : "")
+                "failed to initialize intent(inout) array%s%s%s%s",
+                (contig ? "" :
+                    (is_c ? " -- input not contiguous"
+                          : " -- input not fortran contiguous")),
+                (PyArray_ISBYTESWAPPED(arr) ?
+                    " -- input not native byte order" : ""),
+                (PyArray_ISWRITEABLE(arr) ? "" :
+                    " -- input not writeable"),
+                (PyArray_ISALIGNED(arr) ? "" :
+                    " -- input not aligned")
             );
             if (!msg) goto end_intent_err_handling;
             if (PyArray_ITEMSIZE(arr) != elsize) {
