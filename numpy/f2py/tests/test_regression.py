@@ -186,6 +186,27 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\n1foo =" not in meson_build
 
 
+def test_llvm_flang_link_language():
+    # gh-32148: llvm-flang must drive the link so its runtime is present
+    mparser = pytest.importorskip("mesonbuild.mparser")
+    meson_build = MesonTemplate(
+        modulename="Blah",
+        sources=[Path("constants.f90")],
+        deps=[],
+        libraries=[],
+        library_dirs=[],
+        include_dirs=[],
+        object_files=[],
+        linker_args=[],
+        fortran_args=[],
+        build_type="release",
+        python_exe=sys.executable,
+    ).generate_meson_build()
+    mparser.Parser(meson_build, "meson.build").parse()
+    assert "fc.get_id() == 'llvm-flang'" in meson_build
+    assert "'link_language': 'fortran'" in meson_build
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():
