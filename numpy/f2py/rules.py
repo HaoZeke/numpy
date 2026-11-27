@@ -1367,7 +1367,8 @@ def buildmodule(m, um):
                 errmess('buildmodule: Expected interface block. Skipping.\n')
                 continue
             for b in bi['body']:
-                if b['name'] == n:
+                if (b['name'] == n and
+                        b.get('block') in ('function', 'subroutine')):
                     nb = b
                     break
 

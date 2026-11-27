@@ -136,7 +136,11 @@ def buildhooks(pymod):
             s[0] = f'{s[0]}\n{line}'
 
         vrd = capi_maps.modsign2map(m)
+        shared = m['name'] in (pymod.get('interfaced') or [])
         cadd(f"static FortranDataDef f2py_{m['name']}_def[] = {{")
+        if shared:
+            cadd('\t{"' + m['name'] + '",-1,{{-1}},0,0,NULL,NULL,NULL},')
+            iadd('\ti_f2py++;')
         dadd(f"\\subsection{{Fortran 90/95 module \\texttt{{{m['name']}}}}}\n")
         if hasnote(m):
             note = m['note']
@@ -242,14 +246,31 @@ def buildhooks(pymod):
              f'F2PYINIT{m_name.upper()})(f2py_setup_{m_name});')
         iadd('}\n')
         ret['f90modhooks'] = ret['f90modhooks'] + chooks + ihooks
-        ret['initf90modhooks'] = [
-            '\t{',
-            ('\t\tPyObject *tmp = '
-            f'PyFortranObject_New(f2py_{m_name}_def,f2py_init_{m_name});'),
-            f'\t\tPyDict_SetItemString(d, "{m_name}", tmp);',
-            '\t\tPy_XDECREF(tmp);',
-            '\t}',
-        ] + ret["initf90modhooks"]
+        if shared:
+            init_lines = [
+                '\t{',
+                f'\t\tPyObject *prev = PyDict_GetItemString(d, "{m_name}");',
+                '\t\tPyObject *tmp;',
+                '\t\tif (prev != NULL && PyFortran_Check(prev)) {',
+                (f'\t\t\tf2py_{m_name}_def[0] = '
+                 '((PyFortranObject *)prev)->defs[0];'),
+                '\t\t}',
+                ('\t\ttmp = PyFortranObject_New'
+                 f'(f2py_{m_name}_def,f2py_init_{m_name});'),
+                f'\t\tPyDict_SetItemString(d, "{m_name}", tmp);',
+                '\t\tPy_XDECREF(tmp);',
+                '\t}',
+            ]
+        else:
+            init_lines = [
+                '\t{',
+                ('\t\tPyObject *tmp = '
+                 f'PyFortranObject_New(f2py_{m_name}_def,f2py_init_{m_name});'),
+                f'\t\tPyDict_SetItemString(d, "{m_name}", tmp);',
+                '\t\tPy_XDECREF(tmp);',
+                '\t}',
+            ]
+        ret['initf90modhooks'] = init_lines + ret['initf90modhooks']
         fadd('')
         fadd(f"subroutine f2pyinit{m_name}(f2pysetupfunc)")
         if mfargs:
