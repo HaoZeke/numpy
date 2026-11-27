@@ -30,8 +30,9 @@ end subroutine srk_extent
     assert "selected_real_kind" in dim
 
 
-def test_portable_kind_suffix_extent(tmp_path):
-    vs = _dims(tmp_path, """
+@pytest.mark.parametrize(("code", "expected"), [
+    (
+        """
 subroutine lit_extent(a, b, c, d, e, f, g, mx_supply_curves)
   integer, parameter :: n = 10_8
   integer, intent(in) :: mx_supply_curves
@@ -50,14 +51,64 @@ subroutine lit_extent(a, b, c, d, e, f, g, mx_supply_curves)
   f = 1
   g = 1
 end subroutine lit_extent
-""")
-    assert vs["a"]["dimension"] == ["10"]
-    assert vs["b"]["dimension"] == ["81"]
-    assert vs["c"]["dimension"] == ["20"]
-    assert vs["d"]["dimension"] == ["mx_supply_curves"]
-    assert vs["e"]["dimension"] == ["kind(10_8)"]
-    assert vs["f"]["dimension"] == ["10"]
-    assert vs["g"]["dimension"] == ["11"]
+""",
+        {
+            "a": ["10"],
+            "b": ["81"],
+            "c": ["20"],
+            "d": ["mx_supply_curves"],
+            "e": ["kind(10_8)"],
+            "f": ["10"],
+            "g": ["11"],
+        },
+    ),
+    (
+        # ik is not the default integer kind, so a leftover suffix
+        # would remain in the dimension expression.
+        """
+subroutine named_kind_extent(a, b, c, d)
+  use iso_fortran_env, only: int64
+  integer, parameter :: ik = 8
+  integer, intent(out) :: a(10_int64)
+  integer, intent(out) :: b(3_ik)
+  integer, intent(out) :: c(0_ik:9_ik)
+  integer, intent(out) :: d(10_c_int)
+  a = 1
+  b = 1
+  c = 1
+  d = 1
+end subroutine named_kind_extent
+""",
+        {
+            "a": ["10"],
+            "b": ["3"],
+            "c": ["10"],
+            "d": ["10"],
+        },
+    ),
+    (
+        """
+subroutine quoted_kind_extent(a)
+  integer, intent(out) :: a(len("10_8"))
+  a = 1
+end subroutine quoted_kind_extent
+""",
+        {"a": ['len("10_8")']},
+    ),
+    (
+        """
+subroutine kind_call_extent(a)
+  integer, intent(out) :: a(kind(10_8) + 2_8)
+  a = 1
+end subroutine kind_call_extent
+""",
+        {"a": ["2 + kind(10_8)"]},
+    ),
+])
+def test_portable_kind_suffix_extent(tmp_path, code, expected):
+    vs = _dims(tmp_path, code)
+    for name, dim in expected.items():
+        assert vs[name]["dimension"] == dim
 
 
 @pytest.mark.slow

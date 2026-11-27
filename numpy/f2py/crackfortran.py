@@ -2530,20 +2530,72 @@ _selected_kind_re = re.compile(
     r'\bselected_(int|real)_kind\s*\(\s*(?P<value>.*)\s*\)', re.I)
 _kind_inquiry_re = re.compile(
     r'\b(?:selected_(?:int|real)_kind|kind)\s*\(', re.I)
-_portable_int_kind_re = re.compile(r'(?<![\w.])([+-]?\d+_\d+)\b')
+# 10_8, 3_ik, 10_int64, 10_c_int: the suffix does not change the value.
+_portable_int_kind_re = re.compile(
+    r'(?<![\w.])([+-]?\d+)_(?:\d+|[A-Za-z]\w*)\b')
+
+
+def _mask_quoted_literals(expr):
+    found = []
+
+    def repl(match):
+        found.append(match.group(0))
+        return f'@__f2py_lit{len(found) - 1}__@'
+
+    return _quoted_string_re.sub(repl, expr), found
+
+
+def _restore_quoted_literals(expr, found):
+    for i, literal in enumerate(found):
+        expr = expr.replace(f'@__f2py_lit{i}__@', literal, 1)
+    return expr
+
+
+def _matching_paren(expr, open_at):
+    depth = 0
+    for i in range(open_at, len(expr)):
+        ch = expr[i]
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
+def _fold_extent_kind_suffixes(expr):
+    # Quoted text is restored as written. kind() and selected_*_kind()
+    # stay written out; suffixes outside those calls are removed.
+    masked, found = _mask_quoted_literals(expr)
+    parts = []
+    pos = 0
+    while True:
+        match = _kind_inquiry_re.search(masked, pos)
+        if match is None:
+            parts.append(_portable_int_kind_re.sub(r'\1', masked[pos:]))
+            break
+        end = _matching_paren(masked, match.end() - 1)
+        if end is None:
+            parts.append(
+                _portable_int_kind_re.sub(r'\1', masked[pos:match.start()]))
+            parts.append(masked[match.start():])
+            break
+        parts.append(
+            _portable_int_kind_re.sub(r'\1', masked[pos:match.start()]))
+        parts.append(masked[match.start():end])
+        pos = end
+    return _restore_quoted_literals(''.join(parts), found)
 
 
 def _normalize_kind_expr(v, kind=None, *, extent=False):
-    # A portable integer kind suffix (10_8) is the literal value.
-    # kind() and selected_*_kind() stay written in an extent: the
-    # kind number depends on the processor.
+    # An integer kind suffix (10_8, 3_ik, 10_c_int) is the literal value.
+    # kind() and selected_*_kind() stay written in an extent: the kind
+    # number depends on the processor.
     if not isinstance(v, str):
         return v
     if extent:
-        if _kind_inquiry_re.search(v):
-            return v
-        return _portable_int_kind_re.sub(
-            lambda m: _normalize_kind_expr(m.group(1)), v)
+        return _fold_extent_kind_suffixes(v)
 
     v = _kind_call_re.sub(r'kind("\1")', v)
     v = _selected_int_kind_re.sub(r'selected_int_kind(\1)', v)
