@@ -139,6 +139,7 @@ TODO:
     The above may be solved by creating appropriate preprocessor program, for example.
 
 """
+import ast
 import codecs
 import copy
 import fileinput
@@ -2523,6 +2524,23 @@ def _selected_real_kind_func(p, r=0, radix=0):
     return -1
 
 
+def _slash_number(folded, integer):
+    """Numeric value of a slash fold.
+
+    An integer truncates toward zero. Any other type is a float so a
+    later quotient can promote.
+    """
+    if not isinstance(folded, str) or not re.fullmatch(
+            r'[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?', folded):
+        return folded
+    if integer and re.fullmatch(r'[+-]?\d+', folded):
+        return int(folded)
+    number = float(folded)
+    if integer and number == number and abs(number) != float('inf'):
+        return int(number)
+    return number
+
+
 def get_parameters(vars, global_params={}):
     params = copy.copy(global_params)
     g_params = copy.copy(global_params)
@@ -2543,6 +2561,17 @@ def get_parameters(vars, global_params={}):
     for n in param_names:
         if '=' in vars[n]:
             v = vars[n]['=']
+            # Lengths and shapes read this map before scalar initializers
+            # are folded. A slash uses that same toward-zero value.
+            if _has_slash_div(v):
+                folded = _eval_scalar(v, params, vars)
+                number = _slash_number(folded, isinteger(vars[n]))
+                if _is_int_value(number) or isinstance(number, float):
+                    params[n] = number
+                    nl = n.lower()
+                    if nl != n:
+                        params[nl] = params[n]
+                    continue
             if islogical(vars[n]):
                 v = v.lower()
                 for repl in [
@@ -2613,6 +2642,12 @@ def get_parameters(vars, global_params={}):
                 params[n] = v
                 outmess(f'get_parameters: got "{msg}" on {n!r}\n')
 
+            # A finite float is truncated so a later read sees an int.
+            if (isinteger(vars[n]) and isinstance(params[n], float)
+                    and params[n] == params[n]
+                    and abs(params[n]) != float('inf')):
+                params[n] = int(params[n])
+
             if isstring(vars[n]) and isinstance(params[n], int):
                 params[n] = chr(params[n])
             nl = n.lower()
@@ -2630,22 +2665,211 @@ def _eval_length(length, params):
     return _eval_scalar(length, params)
 
 
-_is_kind_number = re.compile(r'\d+_').match
+# Integer literal with a numeric kind suffix, such as 4_4.
+_int_kind_token = re.compile(r"(?<![\w.])(\d+)_\d+\b")
+# Integer literal with a named kind, such as 4_wp or
+# 1_selected_int_kind(8). A nested call stays in the text.
+_named_int_kind_token = re.compile(
+    r"(?<![\w.])(\d+)_[A-Za-z]\w*\b(?:\s*\([^()]*\))?(?!\s*\()"
+)
+# Real literal with a kind suffix, such as 1.0_8, 1.0e2_8, or 3.14_dp.
+_real_kind_token = re.compile(
+    r"(?<![\w.])("
+    r"(?:\d+\.\d*|\d*\.\d+)(?:[edED][+-]?\d+)?"
+    r"|\d+[edED][+-]?\d+"
+    r")_(?:[A-Za-z]\w*|\d+)\b(?!\s*\()"
+)
+_quoted_span = re.compile(r"""("[^"]*"|'[^']*')""")
+# A leading zero would be rejected by the Python parser (09/2).
+_lead_zero = re.compile(r"(?<![\w.])0+(\d+)")
+_ARITH_NODES = (
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.Name,
+    ast.Load, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow,
+    ast.UAdd, ast.USub,
+)
 
 
-def _eval_scalar(value, params):
-    if _is_kind_number(value):
-        value = value.split('_')[0]
+class _NotFolded(Exception):
+    """Expression is not a pure arithmetic fold."""
+
+
+def _is_int_value(obj):
+    return isinstance(obj, int) and not isinstance(obj, bool)
+
+
+def _trunc_div(left, right):
+    """Integer operands truncate toward zero. A real operand promotes."""
+    if _is_int_value(left) and _is_int_value(right):
+        if right == 0:
+            raise ZeroDivisionError
+        quot, rem = divmod(left, right)
+        if rem and (left < 0) != (right < 0):
+            quot += 1
+        return quot
+    return left / right
+
+
+def _has_slash_div(text):
+    """True when text has a division slash outside quotes."""
+    if not isinstance(text, str):
+        return False
+    parts = _quoted_span.split(text)
+    for i, part in enumerate(parts):
+        if i % 2 == 0 and "/" in part.replace("//", ""):
+            return True
+    return False
+
+
+class _DivToTrunc(ast.NodeTransformer):
+    def visit_BinOp(self, node):
+        self.generic_visit(node)
+        if isinstance(node.op, ast.Div):
+            return ast.Call(
+                func=ast.Name(id="_trunc_div", ctx=ast.Load()),
+                args=[node.left, node.right],
+                keywords=[],
+            )
+        return node
+
+
+def _div_toward_zero(text, params):
+    """Fold arithmetic, truncating integer division toward zero."""
+    parts = _quoted_span.split(text)
+    chunks = []
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            if "//" in part:
+                raise _NotFolded
+            part = _lead_zero.sub(r"\1", part)
+        chunks.append(part)
+    try:
+        tree = ast.parse("".join(chunks), mode="eval")
+    except SyntaxError:
+        raise _NotFolded
+    for node in ast.walk(tree):
+        if not isinstance(node, _ARITH_NODES):
+            raise _NotFolded
+    tree = ast.fix_missing_locations(_DivToTrunc().visit(tree))
+    env = dict(params)
+    env["_trunc_div"] = _trunc_div
+    value = eval(compile(tree, "<expr>", "eval"), env)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _NotFolded
+    return value
+
+
+def _strip_numeric_kinds(value):
+    """Cut each whole kind suffix down to its number."""
+    parts = _quoted_span.split(value)
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            part = _real_kind_token.sub(r"\1", part)
+            part = _int_kind_token.sub(r"\1", part)
+            part = _named_int_kind_token.sub(r"\1", part)
+            parts[i] = part
+    return "".join(parts)
+
+
+def _float_real_div_params(params, vars):
+    """Float copy of real and complex integer values.
+
+    Double precision and double complex are included. The stored map
+    is not written, so a dimension and a 1.0d0 kind value remain
+    ints. An integer parameter remains an int.
+    """
+    if not isinstance(vars, dict):
+        return params
+    specs = {}
+    for key, var in vars.items():
+        if isinstance(key, str) and isinstance(var, dict):
+            spec = var.get("typespec")
+            if spec:
+                specs[key.lower()] = spec
+    promoted = None
+    for name, value in params.items():
+        if not isinstance(name, str) or not _is_int_value(value):
+            continue
+        spec = specs.get(name.lower())
+        if spec not in ("real", "double precision", "complex",
+                        "double complex"):
+            continue
+        if promoted is None:
+            promoted = dict(params)
+        promoted[name] = float(value)
+    return params if promoted is None else promoted
+
+
+def _eval_scalar(value, params, vars=None):
+    folded = _strip_numeric_kinds(value)
     try:
         # TODO: use symbolic from PR #19805
-        value = eval(value, {}, params)
-        value = (repr if isinstance(value, str) else str)(value)
+        if "/" in folded:
+            try:
+                div_params = params
+                if vars is not None:
+                    div_params = _float_real_div_params(params, vars)
+                return str(_div_toward_zero(folded, div_params))
+            except _NotFolded:
+                pass
+        folded = eval(folded, {}, params)
+        folded = (repr if isinstance(folded, str) else str)(folded)
     except (NameError, SyntaxError, TypeError):
-        return value
+        return folded
     except Exception as msg:
-        errmess(f'"{msg}" in evaluating {value!r} '
+        errmess(f'"{msg}" in evaluating {folded!r} '
                 f'(available names: {list(params)})\n')
-    return value
+    return folded
+
+
+def _param_defined(pvars, name):
+    var = pvars.get(name)
+    if var is None:
+        var = pvars.get(name.lower())
+    return var is not None and "parameter" in (var.get("attrspec") or [])
+
+
+def _star_len_params(block, params):
+    """Parameters of this block and of the blocks that contain it."""
+    seen = set()
+    parent = block.get("parent_block")
+    chain = []
+    while isinstance(parent, dict) and id(parent) not in seen:
+        seen.add(id(parent))
+        chain.append(parent)
+        parent = parent.get("parent_block")
+    outer = {}
+    owned = []
+    for parent in reversed(chain):
+        pvars = parent.get("vars") or {}
+        outer = get_parameters(pvars, outer)
+        owned.append(
+            (
+                pvars,
+                {name: outer[name] for name in outer if _param_defined(pvars, name)},
+            )
+        )
+    hidden = set()
+    for name in block.get("vars") or {}:
+        hidden.add(name)
+        hidden.add(name.lower())
+    visible = {}
+    for pvars, own in reversed(owned):
+        for name, value in own.items():
+            if name in hidden or name.lower() in hidden:
+                continue
+            visible[name] = value
+        for name in pvars:
+            hidden.add(name)
+            hidden.add(name.lower())
+    visible.update(params)
+    local = block.get("vars") or {}
+    for name in list(visible):
+        var = local.get(name)
+        if var is None:
+            var = local.get(name.lower())
+        if var is not None and "parameter" not in (var.get("attrspec") or []):
+            del visible[name]
+    return visible
 
 
 def analyzevars(block):
@@ -2681,6 +2905,7 @@ def analyzevars(block):
             svars.append(n)
 
     params = get_parameters(vars, get_useparameters(block))
+    star_params = None
     # At this point, params are read and interpreted, but
     # the params used to define vars are not yet parsed
     dep_matches = {}
@@ -2712,13 +2937,29 @@ def analyzevars(block):
                     outmess(f"analyzevars: typespec of variable {n!r} is not defined "
                             f"in routine {block['name']}.\n")
         if 'charselector' in vars[n]:
-            if 'len' in vars[n]['charselector']:
-                l = vars[n]['charselector']['len']
-                try:
-                    l = str(eval(l, {}, params))
-                except Exception:
-                    pass
-                vars[n]['charselector']['len'] = l
+            if "len" in vars[n]["charselector"]:
+                raw_len = vars[n]["charselector"]["len"]
+                folded = _eval_scalar(raw_len, params, vars)
+                if (not re.fullmatch(r"[+-]?\d+", folded)
+                        and block.get("parent_block")):
+                    if star_params is None:
+                        star_params = _star_len_params(block, params)
+                    folded = _eval_scalar(raw_len, star_params, vars)
+                if re.fullmatch(r"[+-]?\d+", folded):
+                    vars[n]["charselector"]["len"] = folded
+            # character*(n) leaves the name in the C wrapper. An integer
+            # parameter can be substituted here, including one from the
+            # enclosing module.
+            raw = vars[n]['charselector'].get('*')
+            if raw and any(ch.isalpha() or ch == '_' for ch in raw):
+                folded = _eval_scalar(raw, params, vars)
+                if (not re.fullmatch(r'[+-]?\d+', folded)
+                        and block.get('parent_block')):
+                    if star_params is None:
+                        star_params = _star_len_params(block, params)
+                    folded = _eval_scalar(raw, star_params, vars)
+                if re.fullmatch(r'[+-]?\d+', folded):
+                    vars[n]['charselector']['*'] = folded
 
         if 'kindselector' in vars[n]:
             if 'kind' in vars[n]['kindselector']:
@@ -2966,7 +3207,15 @@ def analyzevars(block):
                 if not vars[n]['depend']:
                     del vars[n]['depend']
             if isscalar(vars[n]):
-                vars[n]['='] = _eval_scalar(vars[n]['='], params)
+                raw_init = vars[n]['=']
+                folded = _eval_scalar(raw_init, params, vars)
+                # Integer text keeps a host reread off the real literal
+                # pattern that would turn "6.0" into 4.
+                if isinteger(vars[n]):
+                    number = _slash_number(folded, True)
+                    if _is_int_value(number):
+                        folded = str(number)
+                vars[n]['='] = folded
 
     for n in list(vars.keys()):
         if n == block['name']:  # n is block name
