@@ -1551,7 +1551,15 @@ def analyzeline(m, case, line):
             outmess('analyzeline: Could not crack the use statement.\n')
     elif case == 'import':
         after = m.group('after').strip()
-        stmt = 'import' if not after else f'import {after}'
+        if not after:
+            stmt = 'import'
+        elif after.startswith(','):
+            # "import, only:" / "import, none" / "import, all": the comma
+            # stays flush, and the keyword stays lowercase.
+            head, sep, tail = after.partition(':')
+            stmt = 'import' + head.lower() + sep + tail
+        else:
+            stmt = f'import {after}'
         groupcache[groupcounter].setdefault('imports', []).append(stmt)
     elif case in ['f2pyenhancements']:
         if 'f2pyenhancements' not in groupcache[groupcounter]:
