@@ -76,6 +76,20 @@ def var2fixfortran(vars, a, fa=None, f90mode=None):
         vardef = f"{vardef}({','.join(vars[a]['dimension'])})"
     return vardef
 
+
+def _f90_scalar_decl(vars, a, f90mode):
+    decl = var2fixfortran(vars, a, f90mode=f90mode)
+    if not (f90mode and decl) or '::' in decl:
+        return decl
+    var = vars.get(a) or {}
+    if 'value' not in (var.get('attrspec') or []):
+        return decl
+    if var.get('typespec') in ('complex', 'double complex', 'character'):
+        return decl
+    typ, name = decl.rsplit(' ', 1)
+    return f'{typ}, value :: {name}'
+
+
 def useiso_c_binding(rout):
     useisoc = False
     for value in rout['vars'].values():
@@ -180,7 +194,7 @@ def createfuncwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(_f90_scalar_decl(vars, a, f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
@@ -282,7 +296,7 @@ def createsubrwrapper(rout, signature=0):
         if a in dumped_args:
             continue
         if isscalar(vars[a]):
-            add(var2fixfortran(vars, a, f90mode=f90mode))
+            add(_f90_scalar_decl(vars, a, f90mode))
             dumped_args.append(a)
     for a in args:
         if a in dumped_args:
