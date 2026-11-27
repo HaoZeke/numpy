@@ -2809,6 +2809,9 @@ def analyzevars(block):
                     if len(dl) == 2:
                         d1, d2 = map(symbolic.Expr.parse, dl)
                         dsize = d2 - d1 + 1
+                        if (dsize.op is symbolic.Op.INTEGER
+                                and dsize.data[0] < 0):
+                            dsize = symbolic.as_number(0)
                         d = dsize.tostring(language=symbolic.Language.C)
                         # find variables v that define d as a linear
                         # function, `d == a * v + b`, and store
