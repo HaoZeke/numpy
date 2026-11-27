@@ -334,6 +334,16 @@ cppmacros['TRYPYARRAYTEMPLATE'] = """
                 case NPY_LONGDOUBLE: *(npy_longdouble *)(PyArray_DATA(arr))=*v; break;\\
                 case NPY_CLONGDOUBLE: *(npy_longdouble *)(PyArray_DATA(arr))=*v; break;\\
                 case NPY_OBJECT: PyArray_SETITEM(arr, PyArray_DATA(arr), pyobj_from_ ## ctype ## 1(*v)); break;\\
+                case NPY_HALF: {\\
+                    PyObject *_npy_half_tmp = PyFloat_FromDouble((double)(*v));\\
+                    if (_npy_half_tmp == NULL) return 0;\\
+                    if (PyArray_SETITEM(arr, PyArray_DATA(arr), _npy_half_tmp) < 0) {\\
+                        Py_DECREF(_npy_half_tmp);\\
+                        return 0;\\
+                    }\\
+                    Py_DECREF(_npy_half_tmp);\\
+                    break;\\
+                }\\
         default: return -2;\\
         };\\
         return 1
@@ -391,6 +401,16 @@ static inline double _f2py_cimag_as_double(const void *p, int typenum) {
                                       npy_csetimagl((npy_clongdouble *)PyArray_DATA(arr), (npy_longdouble)_im);\\
                                       break;\\
                 case NPY_OBJECT: PyArray_SETITEM(arr, PyArray_DATA(arr), pyobj_from_complex_ ## ctype ## 1((*v))); break;\\
+                case NPY_HALF: {\\
+                    PyObject *_npy_half_tmp = PyFloat_FromDouble(_re);\\
+                    if (_npy_half_tmp == NULL) return 0;\\
+                    if (PyArray_SETITEM(arr, PyArray_DATA(arr), _npy_half_tmp) < 0) {\\
+                        Py_DECREF(_npy_half_tmp);\\
+                        return 0;\\
+                    }\\
+                    Py_DECREF(_npy_half_tmp);\\
+                    break;\\
+                }\\
                 default: return -2;\\
         };\\
         return -1;
