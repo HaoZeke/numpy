@@ -748,6 +748,42 @@ return_value=
 """
         else:
             ret['returncptr'] = 'return_value='
+    if isarrayfunction(rout):
+        if 'result' in rout:
+            aname = rout['result']
+        else:
+            aname = rout['name']
+        avar = rout['vars'][aname]
+        dims = list(avar.get('dimension') or [])
+        has_args = bool(rout.get('args'))
+        comma = ',' if has_args else ''
+        else_sig = '' if has_args else 'void'
+        ret['rctype'] = (
+            "\n#ifdef F2PY_CB_RETURNARRAY\nvoid\n#else\n"
+            f"{ret['ctype']}\n#endif\n")
+        ret['returncptr'] = (
+            "\n#ifndef F2PY_CB_RETURNARRAY\nreturn_value=\n#endif\n")
+        ret['arrargs'] = (
+            "\n#ifdef F2PY_CB_RETURNARRAY\n"
+            f"char **f2py_result_desc{comma}\n"
+            "#else\n"
+            f"{else_sig}\n"
+            "#endif\n")
+        ret['arrargs_nm'] = (
+            "\n#ifdef F2PY_CB_RETURNARRAY\n"
+            f"f2py_result_desc{comma}\n"
+            "#endif\n")
+        ret['arrargs_td'] = (
+            "\n#ifdef F2PY_CB_RETURNARRAY\n"
+            f"char **{comma}\n"
+            "#else\n"
+            f"{else_sig}\n"
+            "#endif\n")
+        ret['result_rank'] = repr(len(dims))
+        ret['result_dims_init'] = repr(len(dims) * [-1])[1:-1]
+        ret['result_cbsetdims'] = ','.join(
+            f'f2py_result_Dims[{i}]={d}' for i, d in enumerate(dims))
+        ret['result_atype'] = c2capi_map[ret['ctype']]
     if ret['ctype'] in cformat_map:
         ret['showvalueformat'] = f"{cformat_map[ret['ctype']]}"
     if isstringfunction(rout):

@@ -1,0 +1,39 @@
+python module cbarr__user__routines
+    interface
+        function cb(n) result (r)
+            integer intent(in) :: n
+            integer dimension(2) :: r
+        end function cb
+        function cbn(n) result (r)
+            integer intent(in) :: n
+            integer dimension(n) :: r
+        end function cbn
+        function cb2(n) result (r)
+            integer intent(in) :: n
+            integer dimension(2,3) :: r
+        end function cb2
+    end interface
+end python module cbarr__user__routines
+
+python module cbarr
+    interface
+        subroutine run(cb, n, out)
+            use cbarr__user__routines
+            external cb
+            integer intent(in) :: n
+            integer dimension(2),intent(out) :: out
+        end subroutine run
+        subroutine runn(cbn, n, out)
+            use cbarr__user__routines
+            external cbn
+            integer intent(in) :: n
+            integer dimension(n),intent(out) :: out
+        end subroutine runn
+        subroutine fill(cb2, n, out)
+            use cbarr__user__routines
+            external cb2
+            integer intent(in) :: n
+            integer dimension(2,3),intent(out) :: out
+        end subroutine fill
+    end interface
+end python module cbarr

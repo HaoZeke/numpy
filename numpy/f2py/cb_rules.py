@@ -17,6 +17,7 @@ from .auxfuncs import (
     getargs,
     hasnote,
     isarray,
+    isarrayfunction,
     iscomplex,
     iscomplexarray,
     iscomplexfunction,
@@ -48,7 +49,7 @@ f2py_version = __version__.version
 ################## Rules for callback function ##############
 
 cb_routine_rules = {
-    'cbtypedefs': 'typedef #rctype#(*#name#_typedef)(#optargs_td##args_td##strarglens_td##noargs#);',
+    'cbtypedefs': 'typedef #rctype#(*#name#_typedef)(#arrargs_td##optargs_td##args_td##strarglens_td##noargs#);',
     'body': """
 #begintitle#
 typedef struct {
@@ -86,8 +87,8 @@ static #name#_t *get_active_#name#(void) {
 
 #endif
 
-/*typedef #rctype#(*#name#_typedef)(#optargs_td##args_td##strarglens_td##noargs#);*/
-#static# #rctype# #callbackname# (#optargs##args##strarglens##noargs#) {
+/*typedef #rctype#(*#name#_typedef)(#arrargs_td##optargs_td##args_td##strarglens_td##noargs#);*/
+#static# #rctype# #callbackname# (#arrargs##optargs##args##strarglens##noargs#) {
     #name#_t cb_local = { NULL, NULL, 0 };
     #name#_t *cb = NULL;
     PyTupleObject *capi_arglist = NULL;
@@ -120,7 +121,7 @@ f2py_cb_start_clock();
     if (F2PyCapsule_Check(cb->capi)) {
     #name#_typedef #name#_cptr;
     #name#_cptr = F2PyCapsule_AsVoidPtr(cb->capi);
-    #returncptr#(*#name#_cptr)(#optargs_nm##args_nm##strarglens_nm#);
+    #returncptr#(*#name#_cptr)(#arrargs_nm##optargs_nm##args_nm##strarglens_nm#);
     #return#
     }
     if (capi_arglist==NULL) {
@@ -218,6 +219,7 @@ cb_rout_rules = [
         'args': [], 'optargs': '', 'return': '', 'strarglens': '', 'freemem': '/*freemem*/',
         'args_td': [], 'optargs_td': '', 'strarglens_td': '',
         'args_nm': [], 'optargs_nm': '', 'strarglens_nm': '',
+        'arrargs': '', 'arrargs_td': '', 'arrargs_nm': '',
         'noargs': '',
         'setdims': '/*setdims*/',
         'docstrsigns': '', 'latexdocstrsigns': '',
@@ -249,7 +251,60 @@ cb_rout_rules = [
         ],
         'need': ['#ctype#_from_pyobj', {debugcapi: 'CFUNCSMESS'}, 'GETSCALARFROMPYTUPLE'],
         'return': '    return return_value;',
-        '_check': l_and(isfunction, l_not(isstringfunction), l_not(iscomplexfunction))
+        '_check': l_and(isfunction, l_not(isstringfunction),
+                        l_not(iscomplexfunction), l_not(isarrayfunction))
+    },
+    {  # Array-valued function
+        'decl': """\
+#ifndef F2PY_CB_RETURNARRAY
+    #ctype# return_value = 0;
+#else
+    npy_intp f2py_result_Dims[#result_rank#] = {#result_dims_init#};
+#endif
+""",
+        'setdims': """\
+#ifdef F2PY_CB_RETURNARRAY
+    #result_cbsetdims#;
+#endif
+""",
+        'frompyobj': """\
+#ifdef F2PY_CB_RETURNARRAY
+    if (capi_j>capi_i) {
+        PyArrayObject *rv_cb_arr = NULL;
+        if ((capi_tmp = PyTuple_GetItem(capi_return,capi_i++))==NULL) goto capi_fail;
+        rv_cb_arr = array_from_pyobj(#result_atype#,f2py_result_Dims,#result_rank#,F2PY_INTENT_IN,capi_tmp);
+        if (rv_cb_arr == NULL) {
+            fprintf(stderr,"rv_cb_arr is NULL\\n");
+            goto capi_fail;
+        }
+        MEMCOPY(*f2py_result_desc,PyArray_DATA(rv_cb_arr),PyArray_NBYTES(rv_cb_arr));
+        if (capi_tmp != (PyObject *)rv_cb_arr) {
+            Py_DECREF(rv_cb_arr);
+        }
+    } else {
+        fprintf(stderr,"Warning: call-back function #name# did not provide"
+                       " return value (index=%d, type=#ctype#)\\n",capi_i);
+    }
+#else
+    if (capi_j>capi_i) {
+        GETSCALARFROMPYTUPLE(capi_return,capi_i++,&return_value,#ctype#,
+          "#ctype#_from_pyobj failed in converting return_value of"
+          " call-back function #name# to C #ctype#\\n");
+    } else {
+        fprintf(stderr,"Warning: call-back function #name# did not provide"
+                       " return value (index=%d, type=#ctype#)\\n",capi_i);
+    }
+#endif
+""",
+        'return': """\
+#ifdef F2PY_CB_RETURNARRAY
+    return;
+#else
+    return return_value;
+#endif
+""",
+        'need': ['MEMCOPY', 'GETSCALARFROMPYTUPLE', '#ctype#_from_pyobj'],
+        '_check': isarrayfunction
     },
     {  # String function
         'pyobjfrom': {debugcapi: '    fprintf(stderr,"debug-capi:cb:#name#:%d:\\n",return_value_len);'},
@@ -622,7 +677,8 @@ def buildcallback(rout, um):
         rd['args'] = ''
         rd['args_td'] = ''
         rd['args_nm'] = ''
-    if not (rd.get('args') or rd.get('optargs') or rd.get('strarglens')):
+    if not (rd.get('args') or rd.get('optargs') or rd.get('strarglens')
+            or rd.get('arrargs')):
         rd['noargs'] = 'void'
 
     ar = applyrules(cb_routine_rules, rd)

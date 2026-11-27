@@ -26,7 +26,8 @@ __all__ = [
     'isallocatable', 'isarray', 'isarrayofstrings',
     'ischaracter', 'ischaracterarray', 'ischaracter_or_characterarray',
     'iscomplex', 'iscstyledirective',
-    'iscomplexarray', 'iscomplexfunction', 'iscomplexfunction_warn',
+    'isarrayfunction', 'iscomplexarray', 'iscomplexfunction',
+    'iscomplexfunction_warn',
     'isdouble', 'isdummyroutine', 'isexternal', 'isfunction',
     'isfunction_wrap', 'isint1', 'isint1array', 'isinteger', 'isintent_aux',
     'isintent_c', 'isintent_callback', 'isintent_copy', 'isintent_dict',
@@ -409,6 +410,24 @@ def isstringfunction(rout):
     if a in rout['vars']:
         return isstring(rout['vars'][a])
     return 0
+
+
+def isarrayfunction(rout):
+    if not isfunction(rout):
+        return 0
+    if 'result' in rout:
+        a = rout['result']
+    else:
+        a = rout['name']
+    if a not in rout.get('vars', {}):
+        return 0
+    var = rout['vars'][a]
+    if isstringarray(var) or ischaracterarray(var):
+        return 0
+    for d in var.get('dimension') or []:
+        if d in ('*', ':', '(*)', '(:)'):
+            return 0
+    return isarray(var)
 
 
 def hasexternals(rout):
