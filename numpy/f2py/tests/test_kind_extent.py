@@ -1,9 +1,11 @@
 import contextlib
 import io
+import warnings
 
 import pytest
 
 from numpy.f2py import crackfortran
+from numpy.f2py.symbolic import ExprWarning
 
 from . import util
 
@@ -68,6 +70,7 @@ end subroutine lit_extent
         """
 subroutine named_kind_extent(a, b, c, d)
   use iso_fortran_env, only: int64
+  use iso_c_binding
   integer, parameter :: ik = 8
   integer, intent(out) :: a(10_int64)
   integer, intent(out) :: b(3_ik)
@@ -125,3 +128,60 @@ end subroutine literal_kind_extent
         out = self.module.literal_kind_extent()
         assert out.shape == (10,)
         assert int(out[0]) == 3
+
+
+def test_backslash_quote_kind_suffix():
+    fold = crackfortran._fold_extent_kind_suffixes
+    expr = 'len("10_8\\") + 2_8'
+    assert fold(expr) == 'len("10_8\\") + 2'
+    expr = "len('10_8\\') + 2_8"
+    assert fold(expr) == "len('10_8\\') + 2"
+    expr = "len('10_8''x') + 2_8"
+    assert fold(expr) == "len('10_8''x') + 2"
+
+
+def test_dotted_operator_kind_suffix(tmp_path):
+    fold = crackfortran._fold_extent_kind_suffixes
+    assert fold('n.eq.3_8') == 'n.eq.3'
+    assert fold('3.0_8') == '3.0_8'
+    assert fold('1.e5_8') == '1.e5_8'
+    assert fold('n.ne.-3_ik') == 'n.ne.-3'
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', ExprWarning)
+        vs = _dims(tmp_path, """
+subroutine dotted_kind_extent(a, b, c)
+  integer, intent(out) :: a(n.eq.3_8)
+  integer, intent(out) :: b(3.0_8)
+  integer, intent(out) :: c(1.e5_8)
+  a = 1
+  b = 1
+  c = 1
+end subroutine dotted_kind_extent
+""")
+    assert vs['a']['dimension'] == ['n.eq.3']
+    assert vs['b']['dimension'] == ['3.0_8']
+    assert vs['c']['dimension'] == ['100000.0_8']
+
+
+def test_quoted_mask_token_kind_suffix():
+    expr = '"@__f2py_lit1__@" + "@__f2py_lit0__@" + 4_8'
+    assert crackfortran._fold_extent_kind_suffixes(expr) == (
+        '"@__f2py_lit1__@" + "@__f2py_lit0__@" + 4'
+    )
+
+
+@pytest.mark.slow
+class TestCIntKindExtent(util.F2PyTest):
+    suffix = ".f90"
+    code = """
+subroutine c_int_kind_extent(a)
+  use iso_c_binding
+  integer, intent(out) :: a(10_c_int)
+  a = 4
+end subroutine c_int_kind_extent
+"""
+
+    def test_c_int_kind_extent(self):
+        out = self.module.c_int_kind_extent()
+        assert out.shape == (10,)
+        assert int(out[0]) == 4

@@ -683,7 +683,7 @@ def split_by_unquoted(line, characters):
 
 
 _quoted_string_re = re.compile(
-    r"('([^'\\]|(\\.))*')|(\"([^\"\\]|(\\.))*\")")
+    r"""('([^']|'')*')|("([^"]|"")*")""")
 
 
 def mask_string_literals(expr):
@@ -2532,22 +2532,26 @@ _kind_inquiry_re = re.compile(
     r'\b(?:selected_(?:int|real)_kind|kind)\s*\(', re.I)
 # 10_8, 3_ik, 10_int64, 10_c_int: the suffix does not change the value.
 _portable_int_kind_re = re.compile(
-    r'(?<![\w.])([+-]?\d+)_(?:\d+|[A-Za-z]\w*)\b')
+    r'(?<![\w.])([+-]?\d+)_(?:\d+|[A-Za-z]\w*)\b'
+    r'|(\.[A-Za-z]\w*\.[+-]?\d+)_(?:\d+|[A-Za-z]\w*)\b')
 
 
 def _mask_quoted_literals(expr):
     found = []
+    tag = '@__f2py_lit'
+    while tag in expr:
+        tag += 'x'
 
     def repl(match):
         found.append(match.group(0))
-        return f'@__f2py_lit{len(found) - 1}__@'
+        return f'{tag}{len(found) - 1}__@'
 
-    return _quoted_string_re.sub(repl, expr), found
+    return _quoted_string_re.sub(repl, expr), found, tag
 
 
-def _restore_quoted_literals(expr, found):
+def _restore_quoted_literals(expr, found, tag):
     for i, literal in enumerate(found):
-        expr = expr.replace(f'@__f2py_lit{i}__@', literal, 1)
+        expr = expr.replace(f'{tag}{i}__@', literal, 1)
     return expr
 
 
@@ -2567,25 +2571,25 @@ def _matching_paren(expr, open_at):
 def _fold_extent_kind_suffixes(expr):
     # Quoted text is restored as written. kind() and selected_*_kind()
     # stay written out; suffixes outside those calls are removed.
-    masked, found = _mask_quoted_literals(expr)
+    masked, found, tag = _mask_quoted_literals(expr)
     parts = []
     pos = 0
     while True:
         match = _kind_inquiry_re.search(masked, pos)
         if match is None:
-            parts.append(_portable_int_kind_re.sub(r'\1', masked[pos:]))
+            parts.append(_portable_int_kind_re.sub(r'\1\2', masked[pos:]))
             break
         end = _matching_paren(masked, match.end() - 1)
         if end is None:
             parts.append(
-                _portable_int_kind_re.sub(r'\1', masked[pos:match.start()]))
+                _portable_int_kind_re.sub(r'\1\2', masked[pos:match.start()]))
             parts.append(masked[match.start():])
             break
         parts.append(
-            _portable_int_kind_re.sub(r'\1', masked[pos:match.start()]))
+            _portable_int_kind_re.sub(r'\1\2', masked[pos:match.start()]))
         parts.append(masked[match.start():end])
         pos = end
-    return _restore_quoted_literals(''.join(parts), found)
+    return _restore_quoted_literals(''.join(parts), found, tag)
 
 
 def _normalize_kind_expr(v, kind=None, *, extent=False):
