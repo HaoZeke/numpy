@@ -429,6 +429,17 @@ def getarrdocsign(a, var):
     return sig
 
 
+def _size_shape_rank(expr):
+    if not isinstance(expr, str) or 'shape' not in expr.lower():
+        return expr
+    return re.sub(
+        r'\bsize\s*\(\s*shape\s*\(\s*([A-Za-z_]\w*)\s*\)\s*\)',
+        r'rank(\1)',
+        expr,
+        flags=re.I,
+    )
+
+
 def getinit(a, var):
     if isstring(var):
         init, showinit = '""', "''"
@@ -437,6 +448,8 @@ def getinit(a, var):
     if hasinitvalue(var):
         init = var['=']
         showinit = init
+        if not (iscomplex(var) or iscomplexarray(var) or isstring(var)):
+            init = _size_shape_rank(init)
         if iscomplex(var) or iscomplexarray(var):
             ret = {}
 
