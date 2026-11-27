@@ -129,7 +129,7 @@ Python with compiled code while still allowing for separate
 distribution of the extension module. The only draw-back is that it
 requires the existence of a Fortran compiler in order for a user to
 install the code. However, with the existence of the free-compilers
-g77, gfortran, and g95, as well as high-quality commercial compilers,
+gfortran, as well as high-quality commercial compilers,
 this restriction is not particularly onerous. In our opinion, Fortran
 is still the easiest way to write fast and clear code for scientific
 computing. It handles complex numbers, and multi-dimensional indexing
@@ -165,7 +165,6 @@ Here is an example of how to set up a Python project that contains a Cython
 extension. The example uses the `meson-python Python build backend
 <https://mesonbuild.com/meson-python/>`_ and `the meson build system
 <https://mesonbuild.com>`_. This is the same build system NumPy itself uses.
-.
 
 First, create a file named ``my_extension.pyx``.
 
@@ -240,7 +239,7 @@ the function defined in the extension from Python:
 
    $ pip install .
    $ python -c "from my_module_with_extension import say_hello; say_hello()"
-   "Hello!"
+   Hello!
 
 Adding a NumPy dependency to your Meson configuration is only necessary
 if you are using the NumPy C API in the extension module via ``cimport
@@ -287,7 +286,7 @@ complex addition functions we previously implemented using f2py:
         return out
 
 This module shows use of the ``cimport`` statement to load the definitions
-from the ``numpy.pxd`` header that ships with Cython. It looks like NumPy is
+from the ``numpy.pxd`` header distributed with NumPy. It looks like NumPy is
 imported twice; ``cimport`` only makes the NumPy C-API available, while the
 regular ``import`` causes a Python-style import at runtime and makes it
 possible to call into the familiar NumPy Python API.
@@ -461,10 +460,10 @@ simply have a shared library available to you). Items to remember are:
   ``__declspec(dllexport)`` in the C-definition of the function to avoid
   the need for this ``.def`` file.
 
-There is no standard way in Python distutils to create a standard
+There is no standard way in Python to create a standard
 shared library (an extension module is a "special" shared library
 Python understands) in a cross-platform manner. Thus, a big
-disadvantage of ctypes at the time of writing this book is that it is
+disadvantage of ctypes is that it is
 difficult to distribute in a cross-platform manner a Python extension
 that uses ctypes and includes your own code which should be compiled
 as a shared library on the users system.
@@ -513,8 +512,8 @@ contains characters that are not allowable in Python variable names.
 Converting arguments
 --------------------
 
-Python ints/longs, strings, and unicode objects are automatically
-converted as needed to equivalent ctypes arguments The None object is
+Python integers, bytes, and strings are automatically
+converted as needed to equivalent ctypes arguments. The None object is
 also converted automatically to a NULL pointer. All other Python
 objects must be converted to ctypes-specific types. There are two ways
 around this restriction that allow ctypes to integrate with other
@@ -560,8 +559,8 @@ attributes that may be convenient when passing additional information
 about the array into a ctypes function. The attributes **data**,
 **shape**, and **strides** can provide ctypes compatible types
 corresponding to the data-area, the shape, and the strides of the
-array. The data attribute returns a ``c_void_p`` representing a
-pointer to the data area. The shape and strides attributes each return
+array. The data attribute returns a Python integer, the address of
+the data area. The shape and strides attributes each return
 an array of ctypes integers (or None representing a NULL pointer, if a
 0-d array). The base ctype of the array is a ctype integer of the same
 size as a pointer on the platform. There are also methods
@@ -679,15 +678,16 @@ The ``code.c`` file also contains the function ``dfilter2d``:
 
 .. code-block:: c
 
+    #include <stddef.h>
     /*
      * Assumes b is contiguous and has strides that are multiples of
      * sizeof(double)
      */
     void
-    dfilter2d(double *a, double *b, ssize_t *astrides, ssize_t *dims)
+    dfilter2d(double *a, double *b, ptrdiff_t *astrides, ptrdiff_t *dims)
     {
-        ssize_t i, j, M, N, S0, S1;
-        ssize_t r, c, rm1, rp1, cp1, cm1;
+        ptrdiff_t i, j, M, N, S0, S1;
+        ptrdiff_t r, c, rm1, rp1, cp1, cm1;
 
         M = dims[0]; N = dims[1];
         S0 = astrides[0]/sizeof(double);
@@ -731,6 +731,7 @@ following lines at the top:
 
     __all__ = ['add', 'filter2d']
 
+    import ctypes
     import numpy as np
     import os
 
@@ -836,8 +837,8 @@ C-code. Its advantages for extending Python include
 Its disadvantages include
 
 - It is difficult to distribute an extension module made using ctypes
-  because of a lack of support for building shared libraries in
-  distutils.
+  because the shared library has to be built and distributed with the
+  package.
 
 - You must have shared-libraries of your code (no static libraries).
 
@@ -848,9 +849,6 @@ Its disadvantages include
 Because of the difficulty in distributing an extension module made
 using ctypes, f2py and Cython are still the easiest ways to extend Python
 for package creation. However, ctypes is in some cases a useful alternative.
-This should bring more features to ctypes that should
-eliminate the difficulty in extending Python and distributing the
-extension using ctypes.
 
 
 Additional tools you may find useful

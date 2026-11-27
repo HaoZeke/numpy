@@ -1,3 +1,5 @@
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -64,3 +66,24 @@ class TestDocAdvanced(util.F2PyTest):
         ftype.data.a = 0
 
     # TODO: implement test methods for other example Fortran codes
+
+
+def test_glue_dfilter2d_compiles(tmp_path):
+    page = Path(__file__).resolve().parents[3] / "doc/source/user/c-info.python-as-glue.rst"
+    if not page.is_file():
+        pytest.skip("glue guide is not available")
+    text = page.read_text(encoding="utf-8")
+    blocks = re.findall(r"(?ms)^.. code-block:: c\n\n(.*?)(?=\n\S|\Z)", text)
+    block = next(b for b in blocks if "dfilter2d" in b)
+    code = "".join(
+        line[4:] if line.startswith("    ") else "\n"
+        for line in block.splitlines(True)
+    )
+    src = tmp_path / "dfilter2d.c"
+    src.write_text(code, encoding="utf-8")
+    built = subprocess.run(
+        ["gcc", "-fsyntax-only", str(src)],
+        capture_output=True,
+        text=True,
+    )
+    assert built.returncode == 0, built.stderr
