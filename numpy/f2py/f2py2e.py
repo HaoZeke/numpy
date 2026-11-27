@@ -351,7 +351,7 @@ def callcrackfortran(files, options):
     if 'signsfile' in options:
         outmess(f"Saving signatures to file \"{options['signsfile']}\"\n")
         pyf = crackfortran.crack2fortran(postlist)
-        if options['signsfile'][-6:] == 'stdout':
+        if os.path.basename(options['signsfile']) == 'stdout':
             sys.stdout.write(pyf)
         else:
             with open(options['signsfile'], 'w') as f:

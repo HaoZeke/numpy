@@ -205,6 +205,22 @@ def test_gen_pyf_stdout(capfd, hello_world_f90, monkeypatch):
         assert "function hi() ! in " in out
 
 
+def test_h_filename_like_stdout(capfd, tmp_path, hello_world_f90, monkeypatch):
+    """A signature path that only ends with stdout is still a file."""
+    src = tmp_path / "hi.f90"
+    src.write_text(Path(hello_world_f90).read_text())
+    sig = tmp_path / "mystdout"
+    monkeypatch.setattr(
+        sys, "argv", ["f2py", "-h", "mystdout", "-m", "hi", str(src)]
+    )
+    with util.switchdir(tmp_path):
+        f2pycli()
+        out, _ = capfd.readouterr()
+    text = sig.read_text()
+    assert "function hi" in text
+    assert "function hi() ! in " not in out
+
+
 def test_gen_pyf_no_overwrite(capfd, hello_world_f90, monkeypatch):
     """Ensures that the CLI refuses to overwrite signature files
     CLI :: -h without --overwrite-signature
