@@ -632,6 +632,9 @@ publicpattern = re.compile(
     beforethisafter % ('', 'public', 'public', '.*'), re.I), 'public'
 privatepattern = re.compile(
     beforethisafter % ('', 'private', 'private', '.*'), re.I), 'private'
+specattrpattern = re.compile(beforethisafter % (
+    '', 'protected|volatile|asynchronous|contiguous',
+    'protected|volatile|asynchronous|contiguous', '.*'), re.I), 'specattr'
 intrinsicpattern = re.compile(
     beforethisafter % ('', 'intrinsic', 'intrinsic', '.*'), re.I), 'intrinsic'
 intentpattern = re.compile(beforethisafter % (
@@ -777,7 +780,7 @@ def crackline(line, reset=0):
     for pat in [dimensionpattern, externalpattern, intentpattern, optionalpattern,
                 requiredpattern,
                 parameterpattern, datapattern, publicpattern, privatepattern,
-                intrinsicpattern,
+                specattrpattern, intrinsicpattern,
                 endifpattern, endpattern,
                 formatpattern,
                 beginpattern, functionpattern, subroutinepattern,
@@ -1225,7 +1228,8 @@ def analyzeline(m, case, line):
         last_name = updatevars(typespec, selector, attr, edecl)
         if last_name is not None:
             previous_context = ('variable', last_name, groupcounter)
-    elif case in ['dimension', 'intent', 'optional', 'required', 'external', 'public', 'private', 'intrinsic']:
+    elif case in ['dimension', 'intent', 'optional', 'required', 'external',
+                  'public', 'private', 'intrinsic', 'specattr']:
         edecl = groupcache[groupcounter]['vars']
         ll = m.group('after').strip()
         i = ll.find('::')
@@ -1290,6 +1294,8 @@ def analyzeline(m, case, line):
                                 ' in argument list\n')
             if case in ['optional', 'required', 'public', 'external', 'private', 'intrinsic']:
                 ap = case
+            if case == 'specattr':
+                ap = m.group('this').lower()
             if 'attrspec' in edecl[k]:
                 edecl[k]['attrspec'].append(ap)
             else:
