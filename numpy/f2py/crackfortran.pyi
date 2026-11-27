@@ -136,6 +136,8 @@ def readfortrancode(
     ffile: StrOrBytesPath | Iterable[StrOrBytesPath],
     dowithline: Callable[[str, int], object] = ...,
     istop: int = 1,
+    *,
+    fixed_form: bool = False,
 ) -> None: ...
 
 #
@@ -228,7 +230,11 @@ def vars2fortran(
 ) -> str: ...
 
 #
-def crackfortran(files: StrOrBytesPath | Iterable[StrOrBytesPath]) -> list[dict[str, Any]]: ...
+def crackfortran(
+    files: StrOrBytesPath | Iterable[StrOrBytesPath],
+    *,
+    fixed_form: bool = False,
+) -> list[dict[str, Any]]: ...
 def crack2fortran(block: Mapping[str, Any]) -> str: ...
 
 #

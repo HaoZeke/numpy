@@ -186,22 +186,69 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\n1foo =" not in meson_build
 
 
+def test_gh26704_fixed_form_keeps_the_subroutine_name(tmp_path):
+    # Column 6 continues a fixed-form statement. A free-form suffix drops
+    # that continuation and the subroutine name. The choice applies to
+    # this parse, and the next file is read from its own suffix.
+    from numpy.f2py import crackfortran, f2py2e
+
+    flags = [
+        "--f77flags='-ffixed-form -O2'",
+        '--f90flags="-ffixed-form -g"',
+    ]
+    assert f2py2e._compile_wants_fixed_form(flags)
+    assert f2py2e._compile_wants_fixed_form(["--f77flags=-fixed"])
+    assert not f2py2e._compile_wants_fixed_form(
+        ["--f90flags=-ffixed-line-length-none"]
+    )
+    assert not f2py2e._compile_wants_fixed_form(
+        ["--f77flags=-ffixed-form -ffree-form"]
+    )
+
+    src = util.getpath("tests", "src", "regression", "f77fixedform.f95")
+    free = tmp_path / "add.f90"
+    free.write_text(
+        "subroutine add(x, y)\n"
+        "  real x, y\n"
+        "  x = x + y\n"
+        "end subroutine add\n"
+    )
+    dotf = tmp_path / "mwe.f"
+    dotf.write_text(Path(src).read_text())
+
+    crackfortran.reset_global_f2py_vars()
+    found = crackfortran.crackfortran([src], fixed_form=True)
+    assert found[0]["name"] == "mwe"
+    assert found[0]["args"] == ["x"]
+    assert crackfortran.sourcecodeform == "fix"
+    assert crackfortran.strictf77 == 0
+
+    crackfortran.reset_global_f2py_vars()
+    as_fixed_suffix = crackfortran.crackfortran([str(dotf)], fixed_form=True)
+    assert as_fixed_suffix[0]["name"] == "mwe"
+    assert crackfortran.strictf77 == 1
+
+    crackfortran.reset_global_f2py_vars()
+    later = crackfortran.crackfortran([str(free)])
+    assert later[0]["name"] == "add"
+    assert later[0]["args"] == ["x", "y"]
+    assert crackfortran.sourcecodeform == "free"
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():
-    # Compile dubious file using passed flags
-    try:
-        aa = util.build_module(
-            [util.getpath("tests", "src", "regression", "f77fixedform.f95")],
-            options=[
-                # Meson will collect and dedup these to pass to fortran_args:
-                "--f77flags='-ffixed-form -O2'",
-                "--f90flags=\"-ffixed-form -g\"",
-            ],
-            module_name="Blah",
-        )
-    except ImportError as rerr:
-        assert "unknown_subroutine_" in str(rerr)
+    # --f77flags and --f90flags pass -ffixed-form to the compiler.
+    # The wrapper has to export mwe, the subroutine in that file.
+    aa = util.build_module(
+        [util.getpath("tests", "src", "regression", "f77fixedform.f95")],
+        options=[
+            "--f77flags='-ffixed-form -O2'",
+            "--f90flags=\"-ffixed-form -g\"",
+        ],
+        module_name="Blah",
+    )
+    aa.mwe(np.float32(1.0))
 
 
 @pytest.mark.slow

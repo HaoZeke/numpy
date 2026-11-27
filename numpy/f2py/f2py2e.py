@@ -347,7 +347,8 @@ def callcrackfortran(files, options):
         crackfortran.onlyfuncs = options['onlyfuncs']
     crackfortran.include_paths[:] = options['include_paths']
     crackfortran.dolowercase = options['do-lower']
-    postlist = crackfortran.crackfortran(files)
+    postlist = crackfortran.crackfortran(
+        files, fixed_form=bool(options.get('fixed_form')))
     if 'signsfile' in options:
         outmess(f"Saving signatures to file \"{options['signsfile']}\"\n")
         pyf = crackfortran.crack2fortran(postlist)
@@ -423,7 +424,7 @@ def dict_append(d_out, d_in):
             d_out[k].append(v)
 
 
-def run_main(comline_list):
+def run_main(comline_list, *, fixed_form=False):
     """
     Equivalent to running::
 
@@ -468,6 +469,8 @@ def run_main(comline_list):
         comline_list += ['-m', modname]  # needed for the rest of scaninputline
     # gh-22819 -- end
     files, options = scaninputline(comline_list)
+    if fixed_form:
+        options['fixed_form'] = True
     auxfuncs.options = options
     capi_maps.load_f2cmap_file(options['f2cmap_file'])
     postlist = callcrackfortran(files, options)
@@ -589,6 +592,19 @@ def preparse_sysargv():
         "modulename": args.module_name,
     }
 
+def _compile_wants_fixed_form(fc_flags):
+    """True when this compile's Fortran flags select fixed form."""
+    from ._backends._meson import _get_flags
+
+    want = False
+    for token in _get_flags(fc_flags):
+        if token in ('-ffixed-form', '-fixed'):
+            want = True
+        elif token == '-ffree-form':
+            want = False
+    return want
+
+
 def run_compile():
     """
     Do it all in one call!
@@ -701,11 +717,15 @@ def run_compile():
             print('Invalid use of -D:', name_value)
 
     # Construct wrappers / signatures / things
+    fixed_form = _compile_wants_fixed_form(fc_flags)
     if backend_key == 'meson':
         if not pyf_files:
             outmess('Using meson backend\nWill pass --lower to f2py\nSee https://numpy.org/doc/stable/f2py/buildtools/meson.html\n')
             f2py_flags.append('--lower')
-            run_main(f" {' '.join(f2py_flags)} -m {modulename} {' '.join(sources)}".split())
+            run_main(
+                f" {' '.join(f2py_flags)} -m {modulename} {' '.join(sources)}".split(),
+                fixed_form=fixed_form,
+            )
         else:
             run_main(f" {' '.join(f2py_flags)} {' '.join(pyf_files)}".split())
 

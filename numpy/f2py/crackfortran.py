@@ -355,7 +355,7 @@ def is_free_format(fname):
 
 
 # Read fortran (77,90) code
-def readfortrancode(ffile, dowithline=show, istop=1):
+def readfortrancode(ffile, dowithline=show, istop=1, *, fixed_form=False):
     """
     Read fortran codes from files and
      1) Get rid of comments, line continuations, and empty lines; lower cases.
@@ -411,6 +411,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 strictf77 = 1
             elif is_free_format(currentfilename) and not _has_fix_header(l):
                 sourcecodeform = 'free'
+            if fixed_form and sourcecodeform == 'free':
+                sourcecodeform = 'fix'
             if strictf77:
                 beginpattern = beginpattern77
             else:
@@ -527,7 +529,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         if m:
             fn = m.group('name')
             if os.path.isfile(fn):
-                readfortrancode(fn, dowithline=dowithline, istop=0)
+                readfortrancode(fn, dowithline=dowithline, istop=0, fixed_form=fixed_form)
             else:
                 include_dirs = [
                     os.path.dirname(currentfilename)] + include_paths
@@ -536,7 +538,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     fn1 = os.path.join(inc_dir, fn)
                     if os.path.isfile(fn1):
                         foundfile = 1
-                        readfortrancode(fn1, dowithline=dowithline, istop=0)
+                        readfortrancode(fn1, dowithline=dowithline, istop=0, fixed_form=fixed_form)
                         break
                 if not foundfile:
                     outmess(f'readfortrancode: could not find include file {fn!r} '
@@ -555,7 +557,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     if m:
         fn = m.group('name')
         if os.path.isfile(fn):
-            readfortrancode(fn, dowithline=dowithline, istop=0)
+            readfortrancode(fn, dowithline=dowithline, istop=0, fixed_form=fixed_form)
         else:
             include_dirs = [os.path.dirname(currentfilename)] + include_paths
             foundfile = 0
@@ -563,7 +565,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 fn1 = os.path.join(inc_dir, fn)
                 if os.path.isfile(fn1):
                     foundfile = 1
-                    readfortrancode(fn1, dowithline=dowithline, istop=0)
+                    readfortrancode(fn1, dowithline=dowithline, istop=0, fixed_form=fixed_form)
                     break
             if not foundfile:
                 outmess(f'readfortrancode: could not find include file {fn!r} '
@@ -3567,11 +3569,11 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
 post_processing_hooks = []
 
 
-def crackfortran(files):
+def crackfortran(files, *, fixed_form=False):
     global usermodules, post_processing_hooks
 
     outmess('Reading fortran codes...\n', 0)
-    readfortrancode(files, crackline)
+    readfortrancode(files, crackline, fixed_form=fixed_form)
     outmess('Post-processing...\n', 0)
     usermodules = []
     postlist = postcrack(grouplist[0])
