@@ -1551,13 +1551,34 @@ def analyzeline(m, case, line):
         if 'f2pyenhancements' not in groupcache[groupcounter]:
             groupcache[groupcounter]['f2pyenhancements'] = {}
         d = groupcache[groupcounter]['f2pyenhancements']
-        if m.group('this') == 'usercode' and 'usercode' in d:
+        name = m.group('this')
+        after = m.group('after')
+        if name == 'usercode' and 'usercode' in d:
             if isinstance(d['usercode'], str):
                 d['usercode'] = [d['usercode']]
-            d['usercode'].append(m.group('after'))
+            d['usercode'].append(after)
         else:
-            d[m.group('this')] = m.group('after')
+            d[name] = after
+        if (name.lower() in ('callstatement', 'callprotoargument',
+                             'usercode', 'pymethoddef')
+                and not after.strip()):
+            previous_context = ('f2pyenhancements', name, groupcounter)
     elif case == 'multiline':
+        if (previous_context is not None
+                and previous_context[0] == 'f2pyenhancements'):
+            d = groupcache[previous_context[2]].setdefault(
+                'f2pyenhancements', {})
+            key = previous_context[1]
+            body = "'''" + m.group('this') + "'''"
+            cur = d.get(key)
+            if isinstance(cur, list):
+                if cur and not str(cur[-1]).strip():
+                    cur[-1] = body
+                else:
+                    cur.append(body)
+            elif not str(cur or '').strip():
+                d[key] = body
+            return
         if previous_context is None:
             if verbose:
                 outmess('analyzeline: No context for multiline block.\n')
