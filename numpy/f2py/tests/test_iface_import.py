@@ -32,8 +32,6 @@ def test_import_only_clause(tmp_path):
         "  end interface\n"
         "end subroutine s\n"
     )
-    text = crackfortran.crack2fortran(
-        crackfortran.crackfortran([str(src)])
-    )
+    text = crackfortran.crack2fortran(crackfortran.crackfortran([str(src)]))
     assert "import, only: a" in text
     assert "import ," not in text
