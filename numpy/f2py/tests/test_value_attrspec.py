@@ -13,3 +13,10 @@ class TestValueAttr(util.F2PyTest):
         out = self.module.fortfuncs.square(inp)
         exp_out = 4
         assert out == exp_out
+
+    def test_gh21665_complex(self):
+        out = self.module.fortfuncs.square_complex(2 + 0j)
+        assert out == 4
+
+    def test_gh21665_function(self):
+        assert self.module.fortfuncs.square_fn(2) == 4

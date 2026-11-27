@@ -15,6 +15,7 @@ from ._isocbind import isoc_kindmap
 from ._isofenv import isof_kindmap
 from .auxfuncs import (
     getfortranname,
+    hasvaluearg,
     isexternal,
     isfunction,
     isfunction_wrap,
@@ -28,6 +29,25 @@ from .auxfuncs import (
     outmess,
     show,
 )
+
+
+def _copy_for_wrap(rout):
+    """Copy a routine before building its Fortran wrapper.
+
+    When a module procedure has a value dummy, the wrapper receives a
+    pointer and the inner call uses the module interface. Drop value on
+    this copy so the generated C call passes a pointer.
+    """
+    if not (ismoduleroutine(rout) and hasvaluearg(rout)):
+        return copy.copy(rout)
+    copied = copy.deepcopy(rout)
+    for arg in copied.get('args', ()):
+        var = copied.get('vars', {}).get(arg, {})
+        attr = var.get('attrspec')
+        if not attr or 'value' not in attr:
+            continue
+        var['attrspec'] = [item for item in attr if item != 'value']
+    return copied
 
 
 def var2fixfortran(vars, a, fa=None, f90mode=None):
@@ -318,12 +338,14 @@ def assubr(rout):
         name = rout['name']
         outmess('\t\tCreating wrapper for Fortran function '
                 f'"{name}"("{fortranname}")...\n')
-        rout = copy.copy(rout)
         fname = name
         rname = fname
         if 'result' in rout:
             rname = rout['result']
             rout['vars'][fname] = rout['vars'][rname]
+        # The later signature wrapper reads this argument list.
+        rout['args'][:] = [fname] + rout['args']
+        rout = _copy_for_wrap(rout)
         fvar = rout['vars'][fname]
         if not isintent_out(fvar):
             if 'intent' not in fvar:
@@ -336,13 +358,12 @@ def assubr(rout):
                     break
             if flag:
                 fvar['intent'].append(f'out={rname}')
-        rout['args'][:] = [fname] + rout['args']
         return rout, createfuncwrapper(rout)
     if issubroutine_wrap(rout):
         fortranname = getfortranname(rout)
         name = rout['name']
         outmess('\t\tCreating wrapper for Fortran subroutine '
                 f'"{name}"("{fortranname}")...\n')
-        rout = copy.copy(rout)
+        rout = _copy_for_wrap(rout)
         return rout, createsubrwrapper(rout)
     return rout, ''

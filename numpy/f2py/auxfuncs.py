@@ -312,10 +312,24 @@ def issubroutine(rout):
 def issubroutine_wrap(rout):
     if isintent_c(rout):
         return 0
+    # A module subroutine with a value dummy needs a Fortran wrapper.
+    # The compiler that builds the wrapper applies the attribute on the
+    # inner call. intent(c) routines stay on the direct C call above.
+    if (issubroutine(rout) and ismoduleroutine(rout) and
+            hasvaluearg(rout)):
+        return 1
     return issubroutine(rout) and hasassumedshape(rout)
 
 def isattr_value(var):
     return 'value' in var.get('attrspec', [])
+
+
+def hasvaluearg(rout):
+    variables = rout.get('vars', {})
+    for arg in rout.get('args', ()):
+        if isattr_value(variables.get(arg, {})):
+            return True
+    return False
 
 
 def hasassumedshape(rout):
