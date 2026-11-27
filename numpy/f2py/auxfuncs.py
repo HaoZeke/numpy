@@ -159,6 +159,9 @@ def get_kind(var):
                     if c_type == f2cmap_for_type.get(test_kind, ""):
                         result = test_kind
                         break
+            else:
+                if c_type == 'unsigned_char':
+                    result = '-1'
         return result
 
 
@@ -178,7 +181,7 @@ def islong_long(var):
 def isunsigned_char(var):
     if not isscalar(var):
         return 0
-    if var.get('typespec') != 'integer':
+    if var.get('typespec') not in ('integer', 'logical'):
         return 0
     return get_kind(var) == '-1'
 
