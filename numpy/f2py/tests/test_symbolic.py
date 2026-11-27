@@ -1,12 +1,16 @@
+import warnings
+
 import pytest
 
 from numpy.f2py.symbolic import (
     ArithOp,
     Expr,
+    ExprWarning,
     Language,
     Op,
     as_apply,
     as_array,
+    as_cast,
     as_complex,
     as_deref,
     as_eq,
@@ -499,3 +503,38 @@ class TestSymbolic(util.F2PyTest):
         #gh - 30268
         with pytest.raises(ValueError, match=r"Mismatch of \(\) parenthesis"):
             Expr.parse("DATA (A, I=1, N", language=Language.Fortran)
+
+    def test_gh20771_c_dimension_expr(self):
+        # .pyf dimension expressions use C ||, &&, !, and casts.
+        samples = [
+            "(compute_v?(2*(*range=='A'||(*range=='I' && iu-il+1==n)?n:0)):0)",
+            "((jobt == 0)&&(jobu == 3)?0:m)",
+            "((jobt == 0)&&(jobu == 3)?0:(jobu == 1?m:n))",
+            "((jobt == 0)&&(jobv == 3)?0:ldv)",
+            "((jobt == 0)&&(jobv == 3)?0:n)",
+            "(int)v+1",
+            "abs((int)v)+2",
+            "(unsigned long)x",
+            "(double *)p",
+            "!flag",
+        ]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ExprWarning)
+            parsed = [fromstring(sample) for sample in samples]
+        isuppz = parsed[0].tostring(language=Language.C)
+        assert "*range" in isuppz
+        assert "||" in isuppz and "&&" in isuppz
+        assert "1 - il + iu == n" in isuppz
+        assert "&&" in parsed[1].tostring(language=Language.C)
+        assert parsed[5] == as_cast("int", as_symbol("v")) + 1
+        assert "(int)v" in parsed[5].tostring(language=Language.C).replace(" ", "")
+        assert parsed[6] == (
+            as_apply(as_symbol("abs"), as_cast("int", as_symbol("v"))) + 2)
+        assert parsed[7].tostring(language=Language.C) == "(unsigned long)x"
+        assert parsed[8].tostring(language=Language.C) == "(double *)p"
+        assert parsed[9].tostring(language=Language.C) == "!flag"
+        assert fromstring("a || b && c").tostring(language=Language.C) == "a || b && c"
+        assert fromstring("(f)(x)") == as_apply(as_symbol("f"), as_symbol("x"))
+        assert fromstring("(x) * y") == as_symbol("x") * as_symbol("y")
+        with pytest.raises(RuntimeError):
+            parsed[5].linear_solve(as_symbol("v"))

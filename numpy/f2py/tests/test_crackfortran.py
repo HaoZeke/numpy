@@ -3,6 +3,7 @@ import importlib
 import io
 import textwrap
 import time
+import warnings
 
 import pytest
 
@@ -10,6 +11,7 @@ import numpy as np
 from numpy.f2py import capi_maps, crackfortran
 from numpy.f2py.auxfuncs import getargs2
 from numpy.f2py.crackfortran import markinnerspaces, nameargspattern
+from numpy.f2py.symbolic import ExprWarning, Language, fromstring
 
 from . import util
 
@@ -353,6 +355,46 @@ class TestStringLiteralDepend:
         assert any(b.get("name") == "nonchar_literal_cycle" for b in mod)
         err = capsys.readouterr().err
         assert "cyclic dependencies" in err
+
+
+class TestGh20771DimensionExpr:
+    # gh-20771: C ||, &&, and casts in a .pyf dimension specification.
+    # character*1 is a C string, so *range stays a dereference.
+    def test_dimension(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(crackfortran, "dolowercase", 0)
+        isuppz_dim = (
+            "(compute_v?(2*(*range=='A'||"
+            "(*range=='I' && iu-il+1==n)?n:0)):0)")
+        src = tmp_path / "gh20771.pyf"
+        src.write_text(
+            "python module gh20771\n"
+            "interface\n"
+            "  subroutine isuppz_len(compute_v, range, n, il, iu, isuppz)\n"
+            "    integer intent(in) :: compute_v, n, il, iu\n"
+            "    character*1 intent(in) :: range\n"
+            "    integer intent(out), dimension(" + isuppz_dim +
+            "), depend(n, iu, il, compute_v, range) :: isuppz\n"
+            "  end subroutine isuppz_len\n"
+            "  subroutine vl_len(v, vl)\n"
+            "    double precision intent(in) :: v\n"
+            "    double precision intent(out), depend(v), "
+            "dimension((int)v+1) :: vl\n"
+            "  end subroutine vl_len\n"
+            "end interface\n"
+            "end python module gh20771\n")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ExprWarning)
+            mod = crackfortran.crackfortran([str(src)])
+        iface = next(b for b in mod if b.get("name") == "gh20771")["body"][0]
+        routines = {b["name"]: b for b in iface["body"]}
+        isuppz = (
+            "(compute_v?(2*(*range=='A'||(*range=='I' && iu-il+1==n)?n:0)):0)")
+        expect = fromstring(isuppz).tostring(language=Language.C)
+        assert "*range" in expect
+        assert routines["isuppz_len"]["vars"]["isuppz"]["dimension"] == [expect]
+        vl = fromstring("(int)v+1").tostring(language=Language.C)
+        assert "(int)" in vl
+        assert routines["vl_len"]["vars"]["vl"]["dimension"] == [vl]
 
 
 @pytest.mark.slow

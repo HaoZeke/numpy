@@ -57,6 +57,8 @@ class Op(Enum):
     INDEXING = 210
     CONCAT = 220
     RELATIONAL = 300
+    LOGICAL = 310
+    CAST = 320
     TERMS = 1000
     FACTORS = 2000
     REF = 3000
@@ -91,6 +93,25 @@ class RelOp(Enum):
         return {RelOp.EQ: '==', RelOp.NE: '!=',
                 RelOp.LT: '<', RelOp.LE: '<=',
                 RelOp.GT: '>', RelOp.GE: '>='}[self]
+
+
+class LogicalOp(Enum):
+    """
+    Used in Op.LOGICAL expression to specify the function part.
+    """
+    NOT = 1
+    AND = 2
+    OR = 3
+
+    def tostring(self, language=Language.C):
+        if language is Language.Fortran:
+            return {LogicalOp.NOT: '.not.', LogicalOp.AND: '.and.',
+                    LogicalOp.OR: '.or.'}[self]
+        if language is Language.Python:
+            return {LogicalOp.NOT: 'not', LogicalOp.AND: 'and',
+                    LogicalOp.OR: 'or'}[self]
+        return {LogicalOp.NOT: '!', LogicalOp.AND: '&&',
+                LogicalOp.OR: '||'}[self]
 
 
 class ArithOp(Enum):
@@ -225,6 +246,17 @@ class Expr:
         elif op is Op.RELATIONAL:
             # data is (<relop>, <left>, <right>)
             assert isinstance(data, tuple) and len(data) == 3
+        elif op is Op.LOGICAL:
+            # data is (<logicalop>, <operand>) for NOT, otherwise
+            # (<logicalop>, <left>, <right>)
+            assert isinstance(data, tuple) and isinstance(data[0], LogicalOp)
+            assert all(isinstance(item, Expr) for item in data[1:])
+            assert len(data) == (2 if data[0] is LogicalOp.NOT else 3)
+        elif op is Op.CAST:
+            # data is (<type name>, <operand>)
+            assert isinstance(data, tuple) and len(data) == 2
+            assert isinstance(data[0], str) and data[0]
+            assert isinstance(data[1], Expr)
         else:
             raise NotImplementedError(
                 f'unknown op or missing sanity check: {op}')
@@ -410,6 +442,33 @@ class Expr:
             right = right.tostring(precedence, language=language)
             rop = rop.tostring(language=language)
             r = f'{left} {rop} {right}'
+        elif self.op is Op.LOGICAL:
+            lop = self.data[0]
+            if lop is LogicalOp.NOT:
+                operand = self.data[1].tostring(Precedence.UNARY,
+                                                language=language)
+                opname = lop.tostring(language=language)
+                if language is Language.C:
+                    r = f'{opname}{operand}'
+                else:
+                    r = f'{opname} {operand}'
+                precedence = Precedence.UNARY
+            else:
+                precedence = (Precedence.LAND if lop is LogicalOp.AND
+                              else Precedence.LOR)
+                left = self.data[1].tostring(precedence, language=language)
+                right = self.data[2].tostring(precedence, language=language)
+                opname = lop.tostring(language=language)
+                r = f'{left} {opname} {right}'
+        elif self.op is Op.CAST:
+            typ, operand = self.data
+            if language is Language.C:
+                inner = operand.tostring(Precedence.UNARY, language=language)
+                r = f'({typ}){inner}'
+            else:
+                inner = operand.tostring(Precedence.TUPLE, language=language)
+                r = f'{typ}({inner})'
+            precedence = Precedence.UNARY
         else:
             raise NotImplementedError(f'tostring for op {self.op}')
         if parent_precedence.value < precedence.value:
@@ -654,6 +713,12 @@ class Expr:
             left = left.substitute(symbols_map)
             right = right.substitute(symbols_map)
             return normalize(Expr(self.op, (rop, left, right)))
+        if self.op is Op.LOGICAL:
+            args = tuple(item.substitute(symbols_map) for item in self.data[1:])
+            return normalize(Expr(self.op, (self.data[0],) + args))
+        if self.op is Op.CAST:
+            return normalize(Expr(
+                self.op, (self.data[0], self.data[1].substitute(symbols_map))))
         raise NotImplementedError(f'substitute method for {self.op}: {self!r}')
 
     def traverse(self, visit, *args, **kwargs):
@@ -710,6 +775,13 @@ class Expr:
             left = left.traverse(visit, *args, **kwargs)
             right = right.traverse(visit, *args, **kwargs)
             return normalize(Expr(self.op, (rop, left, right)))
+        elif self.op is Op.LOGICAL:
+            args = tuple(item.traverse(visit, *args, **kwargs)
+                         for item in self.data[1:])
+            return normalize(Expr(self.op, (self.data[0],) + args))
+        elif self.op is Op.CAST:
+            operand = self.data[1].traverse(visit, *args, **kwargs)
+            return normalize(Expr(self.op, (self.data[0], operand)))
         raise NotImplementedError(f'traverse method for {self.op}')
 
     def contains(self, other):
@@ -1031,6 +1103,22 @@ def as_deref(expr):
     return Expr(Op.DEREF, expr)
 
 
+def as_cast(ctype, expr):
+    return Expr(Op.CAST, (ctype, expr))
+
+
+def as_not(operand):
+    return Expr(Op.LOGICAL, (LogicalOp.NOT, operand))
+
+
+def as_and(left, right):
+    return Expr(Op.LOGICAL, (LogicalOp.AND, left, right))
+
+
+def as_or(left, right):
+    return Expr(Op.LOGICAL, (LogicalOp.OR, left, right))
+
+
 def as_eq(left, right):
     return Expr(Op.RELATIONAL, (RelOp.EQ, left, right))
 
@@ -1118,7 +1206,7 @@ def as_numer_denom(obj):
     if isinstance(obj, Expr):
         obj = normalize(obj)
         if obj.op in (Op.INTEGER, Op.REAL, Op.COMPLEX, Op.SYMBOL,
-                      Op.INDEXING, Op.TERNARY):
+                      Op.INDEXING, Op.TERNARY, Op.LOGICAL, Op.CAST):
             return obj, as_number(1)
         elif obj.op is Op.APPLY:
             if obj.data[0] is ArithOp.DIV and not obj.data[2]:
@@ -1269,6 +1357,19 @@ def unreplace_parenthesis(s, d):
     return s
 
 
+# C type specifier keywords. A parenthesized call such as (f)(x) is not a cast.
+_C_TYPE_NAMES = frozenset((
+    'void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed',
+    'unsigned', '_Bool', '_Complex'))
+
+_C_CAST_TYPE = re.compile(r'\A(?:[A-Za-z_]\w*|[ *]+)+\Z')
+
+
+def _is_c_cast_type(ctype):
+    return (_C_CAST_TYPE.match(ctype) is not None
+            and re.search(r'[A-Za-z_]', ctype) is not None)
+
+
 def fromstring(s, language=Language.C):
     """Create an expression from a string.
 
@@ -1362,6 +1463,22 @@ class _FromStringWorker:
             expr2 = self.process(expr2)
             return as_ternary(oper, expr1, expr2)
 
+        # C logical OR and AND. OR binds more loosely than AND.
+        if self.language is Language.C:
+            for lop, token in ((LogicalOp.OR, '||'), (LogicalOp.AND, '&&')):
+                if token not in r:
+                    continue
+                parts = r.split(token)
+                if len(parts) > 1 and all(part.strip() for part in parts):
+                    operands = [self.process(restore(part)) for part in parts]
+                    expr = operands[0]
+                    for operand in operands[1:]:
+                        if lop is LogicalOp.OR:
+                            expr = as_or(expr, operand)
+                        else:
+                            expr = as_and(expr, operand)
+                    return expr
+
         # relational expression
         if self.language is Language.Fortran:
             m = re.match(
@@ -1430,6 +1547,24 @@ class _FromStringWorker:
             op = {'*': Op.DEREF, '&': Op.REF}[r[0]]
             operand = self.process(restore(r[1:]))
             return Expr(op, operand)
+
+        # logical NOT. `!=` is a relational operator and is handled above.
+        if self.language is Language.C and r.startswith('!') and not r.startswith('!='):
+            return as_not(self.process(restore(r[1:])))
+
+        # C cast, such as (int)v, (unsigned long)x, or (double *)p.
+        # (f)(x) stays a call. (a)*b stays a product.
+        if self.language is Language.C:
+            cast = re.match(
+                r'\A(@__f2py_PARENTHESIS_ROUND_\d+@)\s*(.+)\Z', r)
+            if cast and cast.group(1) in raw_symbols_map:
+                ctype = ' '.join(raw_symbols_map[cast.group(1)].split())
+                operand = cast.group(2)
+                if _is_c_cast_type(ctype) and not (
+                        operand.startswith('@__f2py_PARENTHESIS_ROUND_')
+                        and ' ' not in ctype and '*' not in ctype
+                        and ctype not in _C_TYPE_NAMES):
+                    return as_cast(ctype, self.process(restore(operand)))
 
         # exponentiation operations
         if self.language is not Language.C and '**' in r:
