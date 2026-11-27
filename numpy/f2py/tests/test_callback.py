@@ -120,6 +120,37 @@ class TestF77Callback(util.F2PyTest):
             res = f(callback, cu, cu.size)
             assert res == 0
 
+    def test_raising_callback(self, capfd):
+        # gh-5098
+        def callback():
+            raise RuntimeError("callback failed on purpose")
+
+        with pytest.raises(RuntimeError, match="callback failed on purpose"):
+            self.module.t(callback)
+        assert capfd.readouterr().err == ""
+        assert self.module.t(lambda: 4) == 4
+
+    def test_argument_list_errors(self, capfd):
+        # gh-5098
+        error = getattr(self.module, f"_{self.module.__name__}_error")
+        with pytest.raises(error, match="call-back fun -- call-back argument"
+                                        " must be function"):
+            self.module.t(42)
+        with pytest.raises(error, match="call-back fun -- failed to build"
+                                        " argument list"):
+            self.module.t(lambda a, b, c: 0)
+        with pytest.raises(error, match="call-back fun -- extra arguments"
+                                        " tuple cannot be used with PyCapsule"):
+            self.module.t(self.module.func0._cpointer, fun_extra_args=(1,))
+        assert capfd.readouterr().err == ""
+
+    def test_callback_without_return_value(self, capfd):
+        # gh-5098
+        f = self.module.string_callback
+        with pytest.warns(RuntimeWarning, match="did not provide return value"):
+            assert f(lambda code: None) == 0
+        assert capfd.readouterr().err == ""
+
     def test_threadsafety(self):
         # Segfaults if the callback handling is not threadsafe
 
@@ -260,3 +291,48 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestGH5098(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh5098.pyf"),
+               util.getpath("tests", "src", "callback", "gh5098.f")]
+    module_name = "gh5098cb"
+
+    def test_rank_mismatch_includes_argument(self, capfd):
+        # gh-5098: declared rank is higher than the input rank
+        with pytest.raises(ValueError, match="argument `a` -- 0-th dimension"
+                           " must be fixed to 3 but got 5"):
+            self.module.fixed2d(np.zeros(5))
+        assert capfd.readouterr().err == ""
+
+    def test_same_rank_mismatch_includes_argument(self, capfd):
+        with pytest.raises(ValueError, match="argument `a` -- 1-th dimension"
+                           " must be fixed to 4 but got 5"):
+            self.module.fixed2d(np.zeros((3, 5)))
+        assert capfd.readouterr().err == ""
+
+    def test_fixed2d_success(self):
+        assert self.module.fixed2d(np.zeros((3, 4))) is None
+
+    def test_array_result(self):
+        r = self.module.array_result(lambda n: np.arange(n, dtype=float), 3)
+        assert list(r) == [0.0, 1.0, 2.0]
+
+    def test_array_result_wrong_shape(self, capfd):
+        # gh-5098
+        with pytest.raises(ValueError, match="argument x of call-back function"
+                           " cb_array_cb_in___user__routines -- 0-th dimension"
+                           " must be fixed to 3 but got 4"):
+            self.module.array_result(lambda n: np.zeros(n + 1), 3)
+        assert capfd.readouterr().err == ""
+
+    def test_array_result_raises(self, capfd):
+        def callback(n):
+            raise RuntimeError("callback failed on purpose")
+
+        with pytest.raises(RuntimeError, match="callback failed on purpose"):
+            self.module.array_result(callback, 3)
+        assert capfd.readouterr().err == ""
+        r = self.module.array_result(lambda n: np.ones(n), 3)
+        assert list(r) == [1.0, 1.0, 1.0]

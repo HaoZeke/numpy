@@ -46,13 +46,18 @@ F2PyDict_SetItemString(PyObject *dict, char *name, PyObject *obj)
 }
 
 /*
- * Python-only fallback for thread-local callback pointers
+ * Python-only fallback for thread-local callback pointers.
+ * A call-back failure may leave an exception set. Set that aside
+ * for this lookup, then put it back.
  */
 void *
 F2PySwapThreadLocalCallbackPtr(char *key, void *ptr)
 {
     PyObject *local_dict, *value;
+    PyObject *exc_type, *exc_value, *exc_tb;
     void *prev;
+
+    PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
 
     local_dict = PyThreadState_GetDict();
     if (local_dict == NULL) {
@@ -86,6 +91,7 @@ F2PySwapThreadLocalCallbackPtr(char *key, void *ptr)
 
     Py_DECREF(value);
 
+    PyErr_Restore(exc_type, exc_value, exc_tb);
     return prev;
 }
 
@@ -93,7 +99,10 @@ void *
 F2PyGetThreadLocalCallbackPtr(char *key)
 {
     PyObject *local_dict, *value;
+    PyObject *exc_type, *exc_value, *exc_tb;
     void *prev;
+
+    PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
 
     local_dict = PyThreadState_GetDict();
     if (local_dict == NULL) {
@@ -113,6 +122,7 @@ F2PyGetThreadLocalCallbackPtr(char *key)
         prev = NULL;
     }
 
+    PyErr_Restore(exc_type, exc_value, exc_tb);
     return prev;
 }
 
@@ -1166,6 +1176,11 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
      */
     const npy_intp arr_size =
             (PyArray_NDIM(arr)) ? PyArray_Size((PyObject *)arr) : 1;
+    /* Empty context stays out of the message. */
+    const char *prefix =
+            (errmess != NULL && errmess[0] != '\0') ? errmess : "";
+    const char *sep =
+            (errmess != NULL && errmess[0] != '\0') ? " -- " : "";
 #ifdef DEBUG_COPY_ND_ARRAY
     dump_attrs(arr);
     printf("check_and_fix_dimensions:init: dims=");
@@ -1183,9 +1198,9 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                 if (d > 1 && dims[i] != d) {
                     PyErr_Format(
                             PyExc_ValueError,
-                            "%d-th dimension must be fixed to %" NPY_INTP_FMT
+                            "%s%s%d-th dimension must be fixed to %" NPY_INTP_FMT
                             " but got %" NPY_INTP_FMT "\n",
-                            i, dims[i], d);
+                            prefix, sep, i, dims[i], d);
                     return 1;
                 }
                 if (!dims[i])
@@ -1199,9 +1214,9 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
         for (i = PyArray_NDIM(arr); i < rank; ++i)
             if (dims[i] > 1) {
                 PyErr_Format(PyExc_ValueError,
-                             "%d-th dimension must be %" NPY_INTP_FMT
+                             "%s%s%d-th dimension must be %" NPY_INTP_FMT
                              " but got 0 (not defined).\n",
-                             i, dims[i]);
+                             prefix, sep, i, dims[i]);
                 return 1;
             }
             else if (free_axe < 0)
@@ -1214,10 +1229,10 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
         }
         if (new_size != arr_size) {
             PyErr_Format(PyExc_ValueError,
-                         "unexpected array size: new_size=%" NPY_INTP_FMT
+                         "%s%sunexpected array size: new_size=%" NPY_INTP_FMT
                          ", got array with arr_size=%" NPY_INTP_FMT
                          " (maybe too many free indices)\n",
-                         new_size, arr_size);
+                         prefix, sep, new_size, arr_size);
             return 1;
         }
     }
@@ -1231,10 +1246,9 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                 if (d > 1 && d != dims[i]) {
                     PyErr_Format(
                         PyExc_ValueError,
-                        "%s -- %d-th dimension must be fixed to %"
+                        "%s%s%d-th dimension must be fixed to %"
                             NPY_INTP_FMT " but got %" NPY_INTP_FMT,
-                        (errmess != NULL ? errmess : ""),
-                        i, dims[i], d);
+                        prefix, sep, i, dims[i], d);
                     return 1;
                 }
                 if (!dims[i])
@@ -1246,9 +1260,9 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
         }
         if (new_size != arr_size) {
             PyErr_Format(PyExc_ValueError,
-                         "unexpected array size: new_size=%" NPY_INTP_FMT
+                         "%s%sunexpected array size: new_size=%" NPY_INTP_FMT
                          ", got array with arr_size=%" NPY_INTP_FMT "\n",
-                         new_size, arr_size);
+                         prefix, sep, new_size, arr_size);
             return 1;
         }
     }
@@ -1263,9 +1277,9 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
         if (dims[rank - 1] >= 0)
             if (effrank > rank) {
                 PyErr_Format(PyExc_ValueError,
-                             "too many axes: %d (effrank=%d), "
+                             "%s%stoo many axes: %d (effrank=%d), "
                              "expected rank=%d\n",
-                             PyArray_NDIM(arr), effrank, rank);
+                             prefix, sep, PyArray_NDIM(arr), effrank, rank);
                 return 1;
             }
 
@@ -1279,11 +1293,10 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
                 if (d > 1 && d != dims[i]) {
                     PyErr_Format(
                         PyExc_ValueError,
-                        "%s -- %d-th dimension must be fixed to %"
+                        "%s%s%d-th dimension must be fixed to %"
                         NPY_INTP_FMT " but got %" NPY_INTP_FMT
                         " (real index=%d)\n",
-                        errmess != NULL ? errmess : "",
-                        i, dims[i], d, j-1);
+                        prefix, sep, i, dims[i], d, j-1);
                     return 1;
                 }
                 if (!dims[i])
@@ -1321,12 +1334,12 @@ check_and_fix_dimensions(const PyArrayObject* arr, const int rank,
             }
             PyErr_Format(
                 PyExc_ValueError,
-                "unexpected array size: size=%" NPY_INTP_FMT
+                "%s%sunexpected array size: size=%" NPY_INTP_FMT
                 ", arr_size=%" NPY_INTP_FMT
                 ", rank=%d, effrank=%d, arr.nd=%d, dims=[%U]"
                 ", arr.dims=[%U ]\n",
-                size, arr_size, rank, effrank, PyArray_NDIM(arr),
-                dims_str, arr_dims_str);
+                prefix, sep, size, arr_size, rank, effrank,
+                PyArray_NDIM(arr), dims_str, arr_dims_str);
             end_size_not_arr_size_err_handling:
             Py_XDECREF(dims_str);
             Py_XDECREF(arr_dims_str);

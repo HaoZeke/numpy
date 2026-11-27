@@ -157,7 +157,6 @@ f2py_cb_stop_call_clock();
 #endif
     CFUNCSMESSPY(\"cb:capi_return=\",capi_return);
     if (capi_return == NULL) {
-        fprintf(stderr,\"capi_return is NULL\\n\");
         goto capi_fail;
     }
     if (capi_return == Py_None) {
@@ -177,7 +176,9 @@ f2py_cb_stop_clock();
 #endif
     goto capi_return_pt;
 capi_fail:
-    fprintf(stderr,\"Call-back #name# failed.\\n\");
+    if (!PyErr_Occurred()) {
+        PyErr_SetString(#modulename#_error, \"Call-back #name# failed.\");
+    }
     Py_XDECREF(capi_return);
     Py_XDECREF(capi_arglist_list);
     if (capi_longjmp_ok) {
@@ -240,9 +241,10 @@ cb_rout_rules = [
         GETSCALARFROMPYTUPLE(capi_return,capi_i++,&return_value,#ctype#,
           "#ctype#_from_pyobj failed in converting return_value of"
           " call-back function #name# to C #ctype#\\n");
-    } else {
-        fprintf(stderr,"Warning: call-back function #name# did not provide"
-                       " return value (index=%d, type=#ctype#)\\n",capi_i);
+    } else if (PyErr_WarnFormat(PyExc_RuntimeWarning, 1,
+                   "call-back function #name# did not provide"
+                   " return value (index=%d, type=#ctype#)", capi_i) < 0) {
+        goto capi_fail;
     }''',
             {debugcapi:
              '    fprintf(stderr,"#showvalueformat#.\\n",return_value);'}
@@ -261,9 +263,10 @@ cb_rout_rules = [
             """\
     if (capi_j>capi_i) {
         GETSTRFROMPYTUPLE(capi_return,capi_i++,return_value,return_value_len);
-    } else {
-        fprintf(stderr,"Warning: call-back function #name# did not provide"
-                       " return value (index=%d, type=#ctype#)\\n",capi_i);
+    } else if (PyErr_WarnFormat(PyExc_RuntimeWarning, 1,
+                   "call-back function #name# did not provide"
+                   " return value (index=%d, type=#ctype#)", capi_i) < 0) {
+        goto capi_fail;
     }""",
             {debugcapi:
              '    fprintf(stderr,"#showvalueformat#\\".\\n",return_value);'}
@@ -307,10 +310,10 @@ return_value
           \"#ctype#_from_pyobj failed in converting return_value of call-back\"
           \" function #name# to C #ctype#\\n\");
 #endif
-    } else {
-        fprintf(stderr,
-                \"Warning: call-back function #name# did not provide\"
-                \" return value (index=%d, type=#ctype#)\\n\",capi_i);
+    } else if (PyErr_WarnFormat(PyExc_RuntimeWarning, 1,
+                   \"call-back function #name# did not provide\"
+                   \" return value (index=%d, type=#ctype#)\", capi_i) < 0) {
+        goto capi_fail;
     }""",
             {debugcapi: """\
 #ifdef F2PY_CB_RETURNCOMPLEX
@@ -485,12 +488,18 @@ cb_arg_rules = [
         'frompyobj': [{debugcapi: '    CFUNCSMESS("cb:Getting #varname#->");'},
                       """    if (capi_j>capi_i) {
         PyArrayObject *rv_cb_arr = NULL;
+        PyArray_Descr *rv_cb_descr = NULL;
+        int rv_cb_elsize;
         if ((capi_tmp = PyTuple_GetItem(capi_return,capi_i++))==NULL) goto capi_fail;
-        rv_cb_arr =  array_from_pyobj(#atype#,#varname_i#_Dims,#rank#,F2PY_INTENT_IN""",
+        rv_cb_descr = PyArray_DescrFromType(#atype#);
+        if (rv_cb_descr == NULL) goto capi_fail;
+        rv_cb_elsize = PyDataType_ELSIZE(rv_cb_descr);
+        Py_DECREF(rv_cb_descr);
+        rv_cb_arr = ndarray_from_pyobj(#atype#,rv_cb_elsize,#varname_i#_Dims,#rank#,F2PY_INTENT_IN""",
                       {isintent_c: '|F2PY_INTENT_C'},
-                      """,capi_tmp);
+                      """,capi_tmp,
+            \"failed to convert argument #varname# of call-back function #name#\");
         if (rv_cb_arr == NULL) {
-            fprintf(stderr,\"rv_cb_arr is NULL\\n\");
             goto capi_fail;
         }
         MEMCOPY(#varname_i#,PyArray_DATA(rv_cb_arr),PyArray_NBYTES(rv_cb_arr));

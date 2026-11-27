@@ -1381,7 +1381,9 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
             if (xa != NULL)
                 ext = PyTuple_Size((PyObject *)xa);
             if(ext>0) {
-                fprintf(stderr,\"extra arguments tuple cannot be used with PyCapsule call-back\\n\");
+                PyErr_Format(#modulename#_error,
+                    \"%s -- extra arguments tuple cannot be used with PyCapsule call-back\",
+                    errmess);
                 goto capi_fail;
             }
             tmp_fun = fun;
@@ -1406,10 +1408,10 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
             tp_name = Py_TYPE(fun)->tp_name;
 #endif
         }
-        fprintf(stderr,
-                \"Call-back argument must be function|instance|instance.__call__|f2py-function \"
-                \"but got %s.\\n\",
-                tp_name);
+        PyErr_Format(#modulename#_error,
+                \"%s -- call-back argument must be function|instance|instance.__call__|f2py-function \"
+                \"but got %s\",
+                errmess, tp_name);
 #if defined(Py_LIMITED_API)
         Py_XDECREF(tp_name_obj);
 #endif
@@ -1448,11 +1450,11 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
 #endif
 
     if (siz < tot-opt) {
-        fprintf(stderr,
-                \"create_cb_arglist: Failed to build argument list \"
+        PyErr_Format(#modulename#_error,
+                \"%s -- failed to build argument list \"
                 \"(siz) with enough arguments (tot-opt) required by \"
-                \"user-supplied function (siz,tot,opt=%zd, %zd, %zd).\\n\",
-                siz, tot, opt);
+                \"user-supplied function (siz,tot,opt=%zd, %zd, %zd)\",
+                errmess, siz, tot, opt);
         goto capi_fail;
     }
 
