@@ -384,6 +384,7 @@ static PyObject *#apiname#(const PyObject *capi_self,
 #decl#
     static char *capi_kwlist[] = {#kwlist##kwlistopt##kwlistxa#NULL};
 #usercode#
+#usercode1#
 #routdebugenter#
 #ifdef F2PY_REPORT_ATEXIT
 f2py_start_clock();
