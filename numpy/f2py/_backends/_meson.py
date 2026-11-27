@@ -203,20 +203,86 @@ class MesonBackend(Backend):
         self._run_subprocess_command(compile_command, build_dir)
 
     def compile(self) -> None:
-        self.sources = _prepare_sources(self.modulename, self.sources, self.build_dir)
+        self.sources = _prepare_sources(
+            self.modulename, self.sources, self.build_dir, self.include_dirs
+        )
         _prepare_objects(self.modulename, self.extra_objects, self.build_dir)
         self.write_meson_build(self.build_dir)
         self.run_meson(self.build_dir)
         self._move_exec_to_root(self.build_dir)
 
 
-def _prepare_sources(mname, sources, bdir):
+_INC_RE = re.compile(r"""(?i)^\s*include\s*(['"])([^'"]+)\1""")
+_MODUSE_RE = re.compile(
+    r"(?im)^[ \t]*(?:module[ \t]+(?!procedure\b)|use\b)"
+)
+# Lowercase suffixes only. gfortran runs the preprocessor on the
+# uppercase forms and reads INCLUDE after that.
+_FSRC = {".f", ".for", ".f90", ".f95", ".f03", ".f08"}
+
+
+def _locate_include(name, from_dir, incdirs):
+    dirs = []
+    if from_dir is not None:
+        dirs.append(from_dir)
+    for inc in incdirs:
+        if inc not in dirs:
+            dirs.append(inc)
+    for inc in dirs:
+        cand = Path(inc) / name
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _expand_includes(text, incdirs, seen, from_dir):
+    # Splice an include only when its text contains a module or use
+    # statement. gfortran searches the top-level source directory and
+    # then each -I directory, in order.
+    parts = []
+    for line in text.splitlines(keepends=True):
+        m = _INC_RE.match(line)
+        found = _locate_include(m.group(2), from_dir, incdirs) if m else None
+        key = None if found is None else str(found.resolve())
+        if key is None or key in seen:
+            parts.append(line)
+            continue
+        seen.add(key)
+        body = found.read_text(encoding="utf-8", errors="surrogateescape")
+        if body and not body.endswith("\n"):
+            body += "\n"
+        expanded = _expand_includes(body, incdirs, seen, from_dir)
+        seen.remove(key)
+        if _MODUSE_RE.search(expanded):
+            parts.append(expanded)
+        else:
+            parts.append(line)
+    return "".join(parts)
+
+
+def _prepare_sources(mname, sources, bdir, include_dirs=None):
     extended_sources = sources.copy()
     Path(bdir).mkdir(parents=True, exist_ok=True)
     # Copy sources
     for source in sources:
         if Path(source).exists() and Path(source).is_file():
             shutil.copy(source, bdir)
+    incdirs = [str(bdir)]
+    for inc in include_dirs or []:
+        p = Path(inc)
+        incdirs.append(str(p if p.is_absolute() else Path(bdir) / p))
+    for source in sources:
+        src = Path(source)
+        dest = Path(bdir) / src.name
+        if src.suffix not in _FSRC or not dest.is_file():
+            continue
+        raw = dest.read_bytes()
+        text = raw.decode("utf-8", errors="surrogateescape")
+        expanded = _expand_includes(text, incdirs, set(), str(dest.parent))
+        if expanded != text:
+            dest.write_text(
+                expanded, encoding="utf-8", errors="surrogateescape", newline=""
+            )
     generated_sources = [
         Path(f"{mname}module.c"),
         Path(f"{mname}-f2pywrappers2.f90"),
