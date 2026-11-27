@@ -354,6 +354,31 @@ def is_free_format(fname):
     return result
 
 
+def _has_pyf_triple(line):
+    """True when ''' appears outside a double quoted string."""
+    in_dq = False
+    i = 0
+    limit = len(line)
+    while i < limit:
+        ch = line[i]
+        if in_dq:
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == '"':
+                in_dq = False
+            i += 1
+            continue
+        if ch == '"':
+            in_dq = True
+            i += 1
+            continue
+        if line.startswith("'''", i):
+            return True
+        i += 1
+    return False
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -380,7 +405,6 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         r'\s*include\s*(\'|")(?P<name>[^\'"]*)(\'|")', re.I)
     cont1 = re.compile(r'(?P<line>.*)&\s*\Z')
     cont2 = re.compile(r'(\s*&|)(?P<line>.*)')
-    mline_mark = re.compile(r".*?'''")
     if istop:
         dowithline('', -1)
     ll, l1 = '', ''
@@ -489,7 +513,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     ll = l
 
         elif sourcecodeform == 'free':
-            if not cont and ext == '.pyf' and mline_mark.match(l):
+            if not cont and ext == '.pyf' and _has_pyf_triple(l):
                 l = l + '\n'
                 while True:
                     lc = fin.readline()
@@ -498,7 +522,7 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                             'Unexpected end of file when reading multiline\n')
                         break
                     l = l + lc
-                    if mline_mark.match(lc):
+                    if _has_pyf_triple(lc):
                         break
                 l = l.rstrip()
             r = cont1.match(l)

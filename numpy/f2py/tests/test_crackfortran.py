@@ -563,6 +563,81 @@ class TestParamParseNestedParens:
         assert vs["dimension"] == ["26", "1800"]
 
 
+def _find_named(blocks, name):
+    for block in blocks:
+        if block.get("name") == name:
+            return block
+        found = _find_named(block.get("body") or [], name)
+        if found is not None:
+            return found
+    return None
+
+
+def _usercode_blobs(blocks):
+    blobs = []
+    for block in blocks:
+        enh = block.get("f2pyenhancements") or {}
+        usercode = enh.get("usercode")
+        if isinstance(usercode, str):
+            blobs.append(usercode)
+        elif isinstance(usercode, list):
+            blobs.extend(usercode)
+        blobs.extend(_usercode_blobs(block.get("body") or []))
+    return blobs
+
+
+@pytest.mark.parametrize("code, expect, snippet", [
+    (
+        (
+            "python module m\n"
+            "usercode '''\n"
+            "void foo(int *x) {\n"
+            "    const char *s = \"'''\";\n"
+            "    *x = 9;\n"
+            "}\n"
+            "'''\n"
+            "interface\n"
+            "subroutine foo(x)\n"
+            "integer, intent(out) :: x\n"
+            "end subroutine foo\n"
+            "end interface\n"
+            "end python module m\n"
+        ),
+        {"x": {"intent": ["out"]}},
+        "*x = 9",
+    ),
+    (
+        (
+            "python module m\n"
+            "interface\n"
+            "subroutine foo(s, n)\n"
+            "character*3 :: s = \"'''\"\n"
+            "integer, intent(in) :: n\n"
+            "end subroutine foo\n"
+            "end interface\n"
+            "end python module m\n"
+        ),
+        {
+            "s": {"typespec": "character"},
+            "n": {"intent": ["in"]},
+        },
+        None,
+    ),
+])
+def test_pyf_quoted_triple(tmp_path, code, expect, snippet):
+    path = tmp_path / "m.pyf"
+    path.write_text(code)
+    crackfortran.reset_global_f2py_vars()
+    mod = crackfortran.crackfortran([str(path)])
+    foo = _find_named(mod, "foo")
+    assert foo is not None
+    for name, spec in expect.items():
+        for key, value in spec.items():
+            assert foo["vars"][name][key] == value
+    if snippet is not None:
+        assert any(snippet in blob for blob in _usercode_blobs(mod))
+
+
 @pytest.mark.slow
 class TestLowerF2PYDirective(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "gh27697.f90")]
