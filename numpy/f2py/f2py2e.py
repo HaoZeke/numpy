@@ -702,6 +702,7 @@ def run_compile():
 
     # Construct wrappers / signatures / things
     if backend_key == 'meson':
+        crackfortran._pending_fflags = fc_flags
         if not pyf_files:
             outmess('Using meson backend\nWill pass --lower to f2py\nSee https://numpy.org/doc/stable/f2py/buildtools/meson.html\n')
             f2py_flags.append('--lower')

@@ -166,6 +166,9 @@ f2py_version = __version__.version
 # Global flags:
 strictf77 = 1          # Ignore `!' comments unless line[0]=='!'
 sourcecodeform = 'fix'  # 'fix','free'
+fixed_line_length = 72  # 0 keeps every column of a fixed form line
+force_fixed_form = 0    # 1 when -ffixed-form was passed to the compiler
+_pending_fflags = None
 quiet = 0              # Be verbose if 0 (Obsolete: not used any more)
 verbose = 1            # Be quiet if 0, extra verbose if > 1.
 tabchar = 4 * ' '
@@ -204,10 +207,13 @@ def reset_global_f2py_vars():
     global onlyfuncs, include_paths, previous_context
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
     global f77modulename, skipemptyends, ignorecontains, dolowercase, debug
+    global fixed_line_length, force_fixed_form
 
     # flags
     strictf77 = 1
     sourcecodeform = 'fix'
+    fixed_line_length = 72
+    force_fixed_form = 0
     quiet = 0
     verbose = 1
     tabchar = 4 * ' '
@@ -354,6 +360,79 @@ def is_free_format(fname):
     return result
 
 
+def apply_fixed_form_flags(flags=None):
+    """Apply -ffixed-form and -ffixed-line-length from compiler flags."""
+    global fixed_line_length, force_fixed_form
+    if flags is None:
+        flags = _pending_fflags
+    # Keep _pending_fflags so the next crackfortran() call reapplies it.
+    fixed_line_length = 72
+    force_fixed_form = 0
+    if not flags:
+        return
+    for flag in flags:
+        match = re.match(r'--f(?:77|90)flags=(.*)$', flag)
+        if not match:
+            continue
+        for tok in match.group(1).split():
+            tok = tok.strip("'\"")
+            if tok == '-ffixed-form':
+                force_fixed_form = 1
+            elif tok == '-ffree-form':
+                force_fixed_form = 0
+            elif tok == '-ffixed-line-length-none':
+                fixed_line_length = 0
+            else:
+                length = re.match(r'-ffixed-line-length-(\d+)$', tok)
+                if length:
+                    fixed_line_length = int(length.group(1))
+
+
+def _limit_fixed_line(line, maxlen):
+    """Drop columns past maxlen using gfortran fixed form tab columns.
+
+    A tab before column 6 skips to column 7, unless the next character
+    is a nonzero digit: that digit then occupies column 6. A later tab
+    counts as one column. A !f2py directive past maxlen is retained.
+    """
+    kept = []
+    col = 0
+    i = 0
+    n = len(line)
+    while i < n:
+        c = line[i]
+        if c == '\n':
+            break
+        if c == '\r':
+            i += 1
+            continue
+        if c == '\t' and col < 6:
+            nxt = line[i + 1] if i + 1 < n else ''
+            if '1' <= nxt <= '9':
+                while col < 5:
+                    kept.append(' ')
+                    col += 1
+                kept.append(nxt)
+                col += 1
+                i += 2
+                continue
+            while col < 6:
+                kept.append(' ')
+                col += 1
+            i += 1
+            continue
+        if col >= maxlen:
+            break
+        kept.append(c)
+        col += 1
+        i += 1
+    rest = line[i:]
+    directive = re.search(r'!f2py[^\r\n]*', rest, re.I)
+    if directive:
+        kept.append(directive.group(0))
+    return ''.join(kept)
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -409,7 +488,8 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             if Path(currentfilename).suffix.lower() in COMMON_FIXED_EXTENSIONS and \
                     not (_has_f90_header(l) or _has_fix_header(l)):
                 strictf77 = 1
-            elif is_free_format(currentfilename) and not _has_fix_header(l):
+            elif not force_fixed_form and is_free_format(currentfilename) \
+                    and not _has_fix_header(l):
                 sourcecodeform = 'free'
             if strictf77:
                 beginpattern = beginpattern77
@@ -418,6 +498,10 @@ def readfortrancode(ffile, dowithline=show, istop=1):
             outmess(f"\tReading file {currentfilename!r} "
                     f"(format:{sourcecodeform}{',strict' if strictf77 else ''})\n")
 
+        # Cut the raw line. expandtabs() would shift a tab-form column.
+        if sourcecodeform == 'fix' and fixed_line_length and not (
+                l[:1] in '*cC!#' and l[1:5].lower() == 'f2py'):
+            l = _limit_fixed_line(l, fixed_line_length)
         l = l.expandtabs().replace('\xa0', ' ')
         # Get rid of newline characters
         while not l == '':
@@ -456,9 +540,6 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                     cont = False
                     is_f2py_directive = False
                     continue
-            elif strictf77:
-                if len(l) > 72:
-                    l = l[:72]
             if l[0] not in spacedigits:
                 raise Exception('readfortrancode: Found non-(space,digit) char '
                                 'in the first column.\n\tAre you sure that '
@@ -3569,6 +3650,7 @@ post_processing_hooks = []
 
 def crackfortran(files):
     global usermodules, post_processing_hooks
+    apply_fixed_form_flags()
 
     outmess('Reading fortran codes...\n', 0)
     readfortrancode(files, crackline)
