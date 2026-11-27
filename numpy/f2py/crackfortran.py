@@ -155,6 +155,7 @@ except ImportError:
     charset_normalizer = None
 
 from . import __version__, symbolic
+from ._isofenv import isof_kindmap
 
 # The environment provided by auxfuncs.py is needed for some calls to eval.
 # As the needed functions cannot be determined by static inspection of the
@@ -1516,8 +1517,12 @@ def analyzeline(m, case, line):
         groupcache[groupcounter]['common'] = commonkey
         previous_context = ('common', bn, groupcounter)
     elif case == 'use':
+        # F2018 R1409: USE [[, module-nature] ::] module-name
         m1 = re.match(
-            r'\A\s*(?P<name>\b\w+\b)\s*((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z', m.group('after'), re.I)
+            r'\A\s*(?:(?:,\s*(?:intrinsic|non_intrinsic)\s*)?::)?'
+            r'\s*(?P<name>\b\w+\b)\s*'
+            r'((,(\s*\bonly\b\s*:|(?P<notonly>))\s*(?P<list>.*))|)\s*\Z',
+            m.group('after'), re.I)
         if m1:
             mm = m1.groupdict()
             if 'use' not in groupcache[groupcounter]:
@@ -1988,6 +1993,51 @@ def get_usedict(block):
     if 'use' in block:
         usedict.update(block['use'])
     return usedict
+
+
+def _iso_fortran_env_kind(block, kind, typespec):
+    """Return the lowercase iso_fortran_env kind, or None.
+
+    A rename such as ``dp => real64``, or ``REAL64`` after
+    ``use, intrinsic ::``, is recorded under the name the kind map uses.
+    The nearest rename wins. A use without only still imports the
+    module names, and an only list that skips the token keeps an
+    outer rename.
+    """
+    if not isinstance(kind, str) or not isinstance(typespec, str):
+        return None
+    token = kind.strip()
+    if not re.fullmatch(r'[A-Za-z][\w$]*', token):
+        return None
+    blocks = []
+    current = block
+    while isinstance(current, dict):
+        blocks.append(current)
+        current = current.get('parent_block')
+    target = None
+    blanket = None
+    low = token.lower()
+    for current in reversed(blocks):
+        for uname, spec in (current.get('use') or {}).items():
+            if uname.lower() != 'iso_fortran_env':
+                continue
+            spec = spec or {}
+            local = None
+            for name, use_name in (spec.get('map') or {}).items():
+                if name.lower() == low:
+                    local = use_name
+                    break
+            if local is not None:
+                target = local
+            elif not spec.get('only') and target is None:
+                blanket = token
+    chosen = target if target is not None else blanket
+    if chosen is None:
+        return None
+    chosen = chosen.strip().lower()
+    if isof_kindmap.get(chosen) != typespec.lower():
+        return None
+    return chosen
 
 
 def get_useparameters(block, param_map=None):
@@ -2726,7 +2776,10 @@ def analyzevars(block):
                 try:
                     l = str(eval(l, {}, params))
                 except Exception:
-                    pass
+                    resolved = _iso_fortran_env_kind(
+                        block, l, vars[n].get('typespec'))
+                    if resolved is not None:
+                        l = resolved
                 vars[n]['kindselector']['kind'] = l
 
         dimension_exprs = {}
@@ -2999,7 +3052,10 @@ def analyzevars(block):
                                     kindselect['kind'] = eval(
                                         kindselect['kind'], {}, params)
                                 except Exception:
-                                    pass
+                                    resolved = _iso_fortran_env_kind(
+                                        block, kindselect['kind'], typespec)
+                                    if resolved is not None:
+                                        kindselect['kind'] = resolved
                             vars[n]['kindselector'] = kindselect
                         if charselect:
                             vars[n]['charselector'] = charselect

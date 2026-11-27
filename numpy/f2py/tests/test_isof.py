@@ -52,3 +52,19 @@ class TestIOSF(util.F2PyTest):
         exp_out = args[:3] + args[3:]
         assert_allclose(out, exp_out)
         assert out.dtype == exp_out.dtype
+
+
+@pytest.mark.slow
+class TestGH23633(util.F2PyTest):
+    sources = [
+        util.getpath('tests', 'src', 'isofenv', 'gh23633.f90'),
+    ]
+
+    @pytest.mark.parametrize('name', ['add_renamed', 'add_intrinsic'])
+    def test_real64_kind(self, name):
+        a = np.array([1.0, 2.0], dtype=np.float64)
+        b = np.array([3.0, 4.0], dtype=np.float64)
+        fn = getattr(self.module, name)
+        c = fn(a, b)
+        assert c.dtype == np.dtype(np.float64)
+        assert_allclose(c, [4.0, 6.0])

@@ -571,3 +571,85 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+
+def _kind_of(blocks, name):
+    found = {}
+
+    def walk(node):
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        if node.get('block') == 'subroutine':
+            var = node.get('vars', {}).get('a', {})
+            kind = var.get('kindselector', {}).get('kind')
+            found[node.get('name')] = kind
+        walk(node.get('body', []))
+
+    walk(blocks)
+    return found[name]
+
+
+def test_gh23633_iso_kind_name(tmp_path):
+    src = tmp_path / 'kinds.f90'
+    src.write_text(textwrap.dedent("""\
+        subroutine add_case(a)
+          use, intrinsic :: iso_fortran_env, only: REAL64
+          real(kind=REAL64), intent(out) :: a
+          a = 1.0_REAL64
+        end subroutine add_case
+        subroutine add_renamed(a)
+          use, intrinsic :: iso_fortran_env, only: DP => REAL64
+          real(kind=DP), intent(out) :: a
+          a = 1.0_DP
+        end subroutine add_renamed
+        subroutine add_plain(a)
+          use iso_fortran_env, only: dp => real64
+          real(kind=dp), intent(out) :: a
+          a = 1.0_dp
+        end subroutine add_plain
+        subroutine add_whole(a)
+          use iso_fortran_env, dp => real64
+          real(REAL64), intent(out) :: a
+          a = 1.0_REAL64
+        end subroutine add_whole
+        module hostkind
+          use iso_fortran_env, only: dp => real64
+        contains
+          subroutine add_host(a)
+            use iso_fortran_env
+            real(kind=dp), intent(out) :: a
+            a = 1.0_dp
+          end subroutine add_host
+          subroutine add_kept(a)
+            use iso_fortran_env, only: int64
+            real(kind=dp), intent(out) :: a
+            a = 1.0_dp
+          end subroutine add_kept
+        end module hostkind
+        module spellkind
+          use iso_fortran_env, only: int32
+        contains
+          subroutine add_inner(a)
+            use ISO_FORTRAN_ENV, only: dp => real64
+            real(kind=dp), intent(out) :: a
+            a = 1.0_dp
+          end subroutine add_inner
+        end module spellkind
+    """))
+    crackfortran.reset_global_f2py_vars()
+    crackfortran.dolowercase = 0
+    try:
+        blocks = crackfortran.crackfortran([str(src)])
+    finally:
+        crackfortran.reset_global_f2py_vars()
+    assert _kind_of(blocks, 'add_case') == 'real64'
+    assert _kind_of(blocks, 'add_renamed') == 'real64'
+    assert _kind_of(blocks, 'add_plain') == 'real64'
+    assert _kind_of(blocks, 'add_whole') == 'real64'
+    assert _kind_of(blocks, 'add_host') == 'real64'
+    assert _kind_of(blocks, 'add_kept') == 'real64'
+    assert _kind_of(blocks, 'add_inner') == 'real64'
