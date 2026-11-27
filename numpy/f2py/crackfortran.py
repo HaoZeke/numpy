@@ -179,6 +179,7 @@ debug = []
 # Global variables
 beginpattern = ''
 currentfilename = ''
+_top_source_file = ''
 expectbegin = 1
 f90modulevars = {}
 filepositiontext = ''
@@ -200,7 +201,7 @@ usermodules = []
 def reset_global_f2py_vars():
     global groupcounter, grouplist, neededmodule, expectbegin
     global skipblocksuntil, usermodules, f90modulevars, gotnextfile
-    global filepositiontext, currentfilename, skipfunctions, skipfuncs
+    global filepositiontext, currentfilename, _top_source_file, skipfunctions, skipfuncs
     global onlyfuncs, include_paths, previous_context
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
     global f77modulename, skipemptyends, ignorecontains, dolowercase, debug
@@ -228,6 +229,7 @@ def reset_global_f2py_vars():
     gotnextfile = 1
     filepositiontext = ''
     currentfilename = ''
+    _top_source_file = ''
     skipfunctions = []
     skipfuncs = []
     onlyfuncs = []
@@ -354,6 +356,147 @@ def is_free_format(fname):
     return result
 
 
+def _include_search_dirs():
+    """Directories for a relative INCLUDE name.
+
+    The top-level source directory comes first, then ``include_paths``.
+    """
+    top = _top_source_file or currentfilename
+    dirs = []
+    if top:
+        top_dir = os.path.dirname(top)
+        dirs.append(top_dir if top_dir else os.curdir)
+    for inc_dir in include_paths:
+        if inc_dir not in dirs:
+            dirs.append(inc_dir)
+    return dirs
+
+
+def _resolve_include(fn):
+    """Locate an INCLUDE file.
+
+    Search the top-level source directory, then ``include_paths``.
+    An absolute path is used as given.
+    """
+    if os.path.isabs(fn):
+        return fn if os.path.isfile(fn) else None
+    for inc_dir in _include_search_dirs():
+        fn1 = os.path.join(inc_dir, fn)
+        if os.path.isfile(fn1):
+            return fn1
+    return None
+
+
+def _fixed_include_line(line, maxlen=72):
+    """Map one include line onto fixed-form columns before expandtabs.
+
+    A tab before column 6 skips to column 7, unless the next character
+    is a nonzero digit, which then sits in column 6. Text past maxlen
+    is dropped.
+    """
+    line = line.replace('\xa0', ' ')
+    kept = []
+    col = 0
+    i = 0
+    n = len(line)
+    while i < n:
+        c = line[i]
+        if c == '\n':
+            break
+        if c == '\r':
+            i += 1
+            continue
+        if c == '\t' and col < 6:
+            nxt = line[i + 1] if i + 1 < n else ''
+            if nxt in '\r\n':
+                nxt = ''
+            if '1' <= nxt <= '9':
+                while col < 5:
+                    kept.append(' ')
+                    col += 1
+                kept.append(nxt)
+                col += 1
+                i += 2
+                continue
+            while col < 6:
+                kept.append(' ')
+                col += 1
+            i += 1
+            continue
+        if maxlen and col >= maxlen:
+            break
+        kept.append(c)
+        col += 1
+        i += 1
+    text = ''.join(kept)
+    while text and text[-1] in '\n\r\f':
+        text = text[:-1]
+    return text
+
+
+def _splice_fixed_include_line(line):
+    """Adapt a fixed-form include line to the reader's column checks.
+
+    Column 6 zero starts a statement. Column 6 ``!`` continues a
+    statement, so the mark becomes ``*`` and the comment scan keeps
+    the tail.
+    """
+    text = _fixed_include_line(line)
+    if len(text) > 5 and text[0] not in '*cC!#' and text[5] == '!':
+        text = text[:5] + '*' + text[6:]
+    if len(text) > 5 and text[5] == '0':
+        text = text[:5] + ' ' + text[6:]
+    return text
+
+
+def _include_opens_continuation(lines, source_file=None, seen=None):
+    for raw in lines:
+        line = _fixed_include_line(raw)
+        if not line.strip():
+            continue
+        if line[0] in '*cC!#':
+            continue
+        # Column 6 zero starts a statement, as a blank does.
+        if len(line) > 5 and line[5] not in ' 0':
+            return True
+        # Blank or zero in column 6, with an empty statement or only a
+        # ! comment, is not the end of the continuation check.
+        rest = line[6:] if len(line) > 6 else ''
+        if not rest.strip() or rest.lstrip().startswith('!'):
+            continue
+        inc = re.match(
+            r'\s*include\s*(\'|")(?P<name>[^\'"]*)(\'|")', line, re.I)
+        if inc is None or not source_file:
+            return False
+        nested = _resolve_include(inc.group('name'))
+        if nested is None or is_free_format(nested):
+            return False
+        key = os.path.abspath(nested)
+        if seen is None:
+            seen = set()
+        if key in seen:
+            return False
+        seen.add(key)
+        return _include_opens_continuation(
+            _read_include_lines(nested), nested, seen)
+    return False
+
+
+def _read_include_lines(path):
+    with openhook(path, 'r') as handle:
+        return handle.readlines()
+
+
+def _read_include_stmt(fn, dowithline):
+    inc_path = _resolve_include(fn)
+    if inc_path is not None:
+        readfortrancode(inc_path, dowithline=dowithline, istop=0)
+        return
+    outmess(f'readfortrancode: could not find include file {fn!r} '
+            f'in {os.pathsep.join(_include_search_dirs())}. '
+            'Ignoring.\n')
+
+
 # Read fortran (77,90) code
 def readfortrancode(ffile, dowithline=show, istop=1):
     """
@@ -364,7 +507,10 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     """
     global gotnextfile, filepositiontext, currentfilename, sourcecodeform, strictf77
     global beginpattern, quiet, verbose, dolowercase, include_paths
+    global _top_source_file
 
+    if istop:
+        _top_source_file = ''
     if not istop:
         saveglobals = gotnextfile, filepositiontext, currentfilename, sourcecodeform, strictf77,\
             beginpattern, quiet, verbose, dolowercase
@@ -387,20 +533,32 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     spacedigits = [' '] + [str(_m) for _m in range(10)]
     filepositiontext = ''
     fin = fileinput.FileInput(ffile, openhook=openhook)
+    pending = []
+    # Top-level file that owns the statement in ll, which this line may close.
+    statement_top = ''
     while True:
-        try:
-            l = fin.readline()
-        except UnicodeDecodeError as msg:
-            raise Exception(
-                f'readfortrancode: reading {fin.filename()}#{fin.lineno()}'
-                f' failed with\n{msg}.\nIt is likely that installing charset_normalizer'
-                ' package will help f2py determine the input file encoding'
-                ' correctly.')
-        if not l:
-            break
-        if fin.isfirstline():
+        if pending:
+            l, pending_name = pending.pop(0)
+            from_pending = True
+        else:
+            from_pending = False
+            try:
+                l = fin.readline()
+            except UnicodeDecodeError as msg:
+                raise Exception(
+                    f'readfortrancode: reading {fin.filename()}#{fin.lineno()}'
+                    f' failed with\n{msg}.\nIt is likely that installing charset_normalizer'
+                    ' package will help f2py determine the input file encoding'
+                    ' correctly.')
+            if not l:
+                break
+        if from_pending:
+            currentfilename = pending_name
+        elif fin.isfirstline():
             filepositiontext = ''
             currentfilename = fin.filename()
+            if istop:
+                _top_source_file = currentfilename
             gotnextfile = 1
             l1 = l
             strictf77 = 0
@@ -417,7 +575,11 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 beginpattern = beginpattern90
             outmess(f"\tReading file {currentfilename!r} "
                     f"(format:{sourcecodeform}{',strict' if strictf77 else ''})\n")
+        else:
+            currentfilename = fin.filename()
 
+        if not istop and sourcecodeform == 'fix':
+            l = _splice_fixed_include_line(l)
         l = l.expandtabs().replace('\xa0', ' ')
         # Get rid of newline characters
         while not l == '':
@@ -447,6 +609,29 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                 # be reset.
                 cont = False
             continue
+        inc_match = None
+        if sourcecodeform != 'fix' or (
+                l[:1] not in '*cC!#' and not (len(l) > 5 and l[5] != ' ')):
+            inc_match = includeline.match(l)
+        if inc_match:
+            splice = sourcecodeform == 'free' and cont
+            if splice or sourcecodeform == 'fix':
+                inc_path = _resolve_include(inc_match.group('name'))
+                if inc_path is not None:
+                    inc_lines = _read_include_lines(inc_path)
+                    if sourcecodeform == 'fix':
+                        # A free-form include is read on its own.
+                        splice = (
+                            not is_free_format(inc_path)
+                            and _include_opens_continuation(
+                                inc_lines, inc_path))
+                    if splice:
+                        if sourcecodeform == 'fix':
+                            inc_lines = [
+                                _splice_fixed_include_line(ln)
+                                for ln in inc_lines]
+                        pending[0:0] = [(ln, inc_path) for ln in inc_lines]
+                        continue
         if sourcecodeform == 'fix':
             if l[0] in ['*', 'c', '!', 'C', '#']:
                 if l[1:5].lower() == 'f2py':  # f2py directive
@@ -525,25 +710,18 @@ def readfortrancode(ffile, dowithline=show, istop=1):
                             f'in {currentfilename}:"{l1}"\n\t')
         m = includeline.match(origfinalline)
         if m:
-            fn = m.group('name')
-            if os.path.isfile(fn):
-                readfortrancode(fn, dowithline=dowithline, istop=0)
-            else:
-                include_dirs = [
-                    os.path.dirname(currentfilename)] + include_paths
-                foundfile = 0
-                for inc_dir in include_dirs:
-                    fn1 = os.path.join(inc_dir, fn)
-                    if os.path.isfile(fn1):
-                        foundfile = 1
-                        readfortrancode(fn1, dowithline=dowithline, istop=0)
-                        break
-                if not foundfile:
-                    outmess(f'readfortrancode: could not find include file {fn!r} '
-                            f'in {os.pathsep.join(include_dirs)}. Ignoring.\n')
+            saved_top = _top_source_file
+            if statement_top:
+                _top_source_file = statement_top
+            try:
+                _read_include_stmt(m.group('name'), dowithline)
+            finally:
+                _top_source_file = saved_top
         else:
             dowithline(finalline)
         l1 = ll
+        if istop:
+            statement_top = _top_source_file
     # Last line should never have an f2py directive anyway
     if localdolowercase:
         finalline = ll.lower()
@@ -553,21 +731,13 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     filepositiontext = f'Line #{fin.filelineno() - 1} in {currentfilename}:"{l1}"\n\t'
     m = includeline.match(origfinalline)
     if m:
-        fn = m.group('name')
-        if os.path.isfile(fn):
-            readfortrancode(fn, dowithline=dowithline, istop=0)
-        else:
-            include_dirs = [os.path.dirname(currentfilename)] + include_paths
-            foundfile = 0
-            for inc_dir in include_dirs:
-                fn1 = os.path.join(inc_dir, fn)
-                if os.path.isfile(fn1):
-                    foundfile = 1
-                    readfortrancode(fn1, dowithline=dowithline, istop=0)
-                    break
-            if not foundfile:
-                outmess(f'readfortrancode: could not find include file {fn!r} '
-                        f'in {os.pathsep.join(include_dirs)}. Ignoring.\n')
+        saved_top = _top_source_file
+        if statement_top:
+            _top_source_file = statement_top
+        try:
+            _read_include_stmt(m.group('name'), dowithline)
+        finally:
+            _top_source_file = saved_top
     else:
         dowithline(finalline)
     filepositiontext = ''
