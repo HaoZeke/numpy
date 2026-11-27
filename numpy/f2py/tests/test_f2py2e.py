@@ -459,6 +459,20 @@ def test_build_dir(capfd, hello_world_f90, monkeypatch):
         assert f"Wrote C/API module \"{mname}\"" in out
 
 
+def test_build_dir_parents(tmp_path, hello_world_f90, monkeypatch):
+    """A build directory under a missing parent is created."""
+    src = tmp_path / "hi.f90"
+    src.write_text(Path(hello_world_f90).read_text())
+    odir = tmp_path / "nest" / "inner"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["f2py", "-m", "blah", str(src), "--build-dir", str(odir)],
+    )
+    with util.switchdir(tmp_path):
+        f2pycli()
+    assert (odir / "blahmodule.c").is_file()
+
+
 def test_overwrite(capfd, hello_world_f90, monkeypatch):
     """Ensures that the build directory can be specified
 

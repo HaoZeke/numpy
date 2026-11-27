@@ -302,7 +302,7 @@ def scaninputline(inputline):
     if not os.path.isdir(buildpath):
         if not verbose:
             outmess(f'Creating build directory {buildpath}\n')
-        os.mkdir(buildpath)
+        os.makedirs(buildpath)
     if signsfile:
         signsfile = os.path.join(buildpath, signsfile)
     if signsfile and os.path.isfile(signsfile) and 'h-overwrite' not in options:
