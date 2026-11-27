@@ -95,6 +95,7 @@ from .auxfuncs import (
     isintent_callback,
     isintent_copy,
     isintent_hide,
+    isintent_in,
     isintent_inout,
     isintent_inplace,
     isintent_nothide,
@@ -155,6 +156,30 @@ for k in ['decl',
           'commonhooks', 'initcommonhooks',
           'f90modhooks', 'initf90modhooks']:
     sepdict[k] = '\n'
+
+def _char_array_blank(var):
+    # Fortran blank-pads character comparisons. NumPy "|S" elements
+    # end in NUL, so a short element compares unequal.
+    if not isstringarray(var) or isintent_c(var):
+        return False
+    if isintent_inplace(var) or 'cache' in var.get('intent', []):
+        return False
+    kind = (var.get('charselector') or {}).get('kind')
+    if kind not in (None, '', '1'):
+        return False
+    if isintent_inout(var) or isintent_out(var):
+        return True
+    # A missing intent shares this buffer with callbacks, so leave it.
+    intent = var.get('intent') or []
+    return 'in' in intent and 'inout' not in intent
+
+
+def _char_array_blank_write(var):
+    # intent(in) must come back byte for byte. inout and out copy
+    # changed elements back onto the caller array.
+    return _char_array_blank(var) and bool(
+        isintent_inout(var) or isintent_out(var))
+
 
 #################### Rules for C/API module #################
 
@@ -1216,6 +1241,24 @@ if (#varname#_cb.capi==Py_None) {
 """,
             {isstringarray:
              '    slen(#varname#) = f2py_itemsize(#varname#);'},
+            {_char_array_blank: """\
+        if (slen(#varname#) > 1) {
+            npy_intp capi_#varname#_pad_n = PyArray_SIZE(capi_#varname#_as_array);
+            int capi_#varname#_pad_sl = slen(#varname#);
+            npy_intp capi_#varname#_pad_nb = capi_#varname#_pad_n * (npy_intp)capi_#varname#_pad_sl;
+            npy_intp capi_#varname#_pad_i;
+            capi_#varname#_pad_p = (char *)malloc(capi_#varname#_pad_nb ? (size_t)capi_#varname#_pad_nb : 1);
+            if (capi_#varname#_pad_p == NULL) {
+                PyErr_NoMemory();
+                f2py_success = 0;
+            } else {
+                if (capi_#varname#_pad_nb)
+                    memcpy(capi_#varname#_pad_p, #varname#, (size_t)capi_#varname#_pad_nb);
+                for (capi_#varname#_pad_i = 0; capi_#varname#_pad_i < capi_#varname#_pad_n; ++capi_#varname#_pad_i)
+                    STRINGPADN(capi_#varname#_pad_p + capi_#varname#_pad_i * capi_#varname#_pad_sl, capi_#varname#_pad_sl, '\\0', ' ');
+                #varname# = (#ctype# *)capi_#varname#_pad_p;
+            }
+        }"""},
             {hasinitvalue: [
                 {isintent_nothide:
                  '    if (#varname#_capi == Py_None) {'},
@@ -1251,6 +1294,7 @@ if (#varname#_cb.capi==Py_None) {
         Py_SETREF(capi_#varname#_as_array, (PyArrayObject*)#varname#_capi);"""},
             ],
         'closepyobjfrom': {isintent_inplace: '    } /*if (f2py_success) of #varname# pyobjfrom*/'},
+        'decl': {_char_array_blank: '    char *capi_#varname#_pad_p = NULL;'},
         'cleanupfrompyobj': [  # note that this list will be reversed
             ('    }  '
              '/* if (capi_#varname#_as_array == NULL) ... else of #varname# */'),
@@ -1259,8 +1303,40 @@ if (#varname#_cb.capi==Py_None) {
         Py_XDECREF(capi_#varname#_as_array); }"""},
             {l_and(isintent_hide, l_not(isintent_out))
                    : """        Py_XDECREF(capi_#varname#_as_array);"""},
+            {_char_array_blank: """\
+    if (capi_#varname#_pad_p != NULL) {
+        #varname# = (#ctype# *)PyArray_DATA(capi_#varname#_as_array);
+        free(capi_#varname#_pad_p);
+        capi_#varname#_pad_p = NULL;
+    }"""},
             {hasinitvalue: '    }  /*if (f2py_success) of #varname# init*/'},
+            {_char_array_blank_write: """\
+    if (capi_#varname#_pad_p != NULL) {
+        char *capi_#varname#_pad_dst = (char *)PyArray_DATA(capi_#varname#_as_array);
+        npy_intp capi_#varname#_pad_n = PyArray_SIZE(capi_#varname#_as_array);
+        int capi_#varname#_pad_sl = slen(#varname#);
+        npy_intp capi_#varname#_pad_i;
+        for (capi_#varname#_pad_i = 0; capi_#varname#_pad_i < capi_#varname#_pad_n; ++capi_#varname#_pad_i) {
+            char *src = capi_#varname#_pad_p + capi_#varname#_pad_i * capi_#varname#_pad_sl;
+            char *dst = capi_#varname#_pad_dst + capi_#varname#_pad_i * capi_#varname#_pad_sl;
+            int j, m = capi_#varname#_pad_sl, same = 1;
+            while (m > 0 && dst[m - 1] == '\\0')
+                --m;
+            for (j = 0; j < capi_#varname#_pad_sl; ++j) {
+                char expect = (j < m) ? dst[j] : ' ';
+                if (src[j] != expect) {
+                    same = 0;
+                    break;
+                }
+            }
+            if (!same) {
+                memcpy(dst, src, (size_t)capi_#varname#_pad_sl);
+                STRINGPADN(dst, capi_#varname#_pad_sl, ' ', '\\0');
+            }
+        }
+    }"""},
         ],
+        'need': {_char_array_blank: 'STRINGPADN'},
         '_check': isarray,
         '_depend': ''
     },

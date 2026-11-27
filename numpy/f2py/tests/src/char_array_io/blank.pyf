@@ -1,0 +1,16 @@
+python module _char_io_blank_pyf
+    interface
+        subroutine see_in(x, flag)
+            character*3 intent(in) :: x(2)
+            integer intent(out) :: flag
+        end subroutine see_in
+        subroutine see_inout(x, flag)
+            character*3 intent(inout) :: x(2)
+            integer intent(out) :: flag
+        end subroutine see_inout
+        subroutine see_out(x, flag)
+            character*3 intent(out) :: x(2)
+            integer intent(out) :: flag
+        end subroutine see_out
+    end interface
+end python module _char_io_blank_pyf
