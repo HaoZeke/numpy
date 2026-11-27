@@ -252,3 +252,29 @@ def test_multiple_signatures_fail_before_backend_and_restore_settings(
     assert not list(tmp_path.glob("*module.c"))
     for module, name, value in before:
         assert getattr(module, name) == value
+
+
+def test_later_run_omits_prior_include_and_callback_macros(
+        tmp_path, monkeypatch):
+    user = _write_source(tmp_path, "onlyuser.pyf", """
+        python module __user__routines
+          interface
+            function fun(i) result(r)
+              integer :: i
+              real*8 :: r
+            end function fun
+          end interface
+        end python module __user__routines
+    """)
+    plain = _write_source(tmp_path, "plain.f90", """
+        subroutine plain(a)
+          integer, intent(out) :: a
+          a = 1
+        end subroutine plain
+    """)
+    monkeypatch.chdir(tmp_path)
+    f2py2e.run_main(["-include<leftover.h>", user])
+    f2py2e.run_main(["-m", "after", plain])
+    generated = (tmp_path / "aftermodule.c").read_text(encoding="ascii")
+    assert "#include <leftover.h>" not in generated
+    assert "F2PY_THREAD_LOCAL_DECL" not in generated

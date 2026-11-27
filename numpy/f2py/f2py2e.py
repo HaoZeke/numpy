@@ -194,6 +194,7 @@ https://numpy.org/doc/stable/f2py/index.html\n"""
 
 
 def scaninputline(inputline):
+    cfuncs.reset_needs()
     files, skipfuncs, onlyfuncs, debug = [], [], [], []
     f, f2, f3, f5, f6, f8, f9, f10 = 1, 0, 0, 0, 0, 0, 0, 0
     verbose = 1
