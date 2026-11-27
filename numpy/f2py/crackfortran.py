@@ -386,19 +386,112 @@ def readfortrancode(ffile, dowithline=show, istop=1):
     ll, l1 = '', ''
     spacedigits = [' '] + [str(_m) for _m in range(10)]
     filepositiontext = ''
+    pending = []
+    # fileinput cannot push a line back. Fixed form decides a
+    # continuation from later lines, so keep every read-ahead line.
+    lookahead = []
     fin = fileinput.FileInput(ffile, openhook=openhook)
-    while True:
+
+    def _read_physical():
         try:
-            l = fin.readline()
+            nxt = fin.readline()
         except UnicodeDecodeError as msg:
             raise Exception(
                 f'readfortrancode: reading {fin.filename()}#{fin.lineno()}'
                 f' failed with\n{msg}.\nIt is likely that installing charset_normalizer'
                 ' package will help f2py determine the input file encoding'
-                ' correctly.')
-        if not l:
-            break
-        if fin.isfirstline():
+                ' correctly.') from msg
+        if not nxt:
+            return '', False
+        return nxt, fin.isfirstline()
+
+    def _fixed_col6_cont(raw):
+        # Same fixed-form continuation test as the reader below.
+        s = raw.expandtabs().replace('\xa0', ' ')
+        while s and s[-1] in '\n\r\f':
+            s = s[:-1]
+        s = split_by_unquoted(s, '!')[0]
+        s += ' '
+        if s.strip() == '':
+            return False
+        if s[0] in ['*', 'c', '!', 'C', '#']:
+            if s[1:5].lower() == 'f2py':
+                s = '     ' + s[5:]
+            else:
+                return False
+        if s[0] not in spacedigits:
+            return False
+        return len(s) > 5 and not s[5] == ' '
+
+    def _fixed_skip_line(raw):
+        # Lines the fixed-form reader drops before the column-6 test:
+        # a blank line, or a comment that is not an f2py directive.
+        s = raw.expandtabs().replace('\xa0', ' ')
+        while s and s[-1] in '\n\r\f':
+            s = s[:-1]
+        code, rl = split_by_unquoted(s, '!')
+        code += ' '
+        if rl[:5].lower() == '!f2py':
+            if code.strip():
+                # A column-1 comment is a directive only when columns 2-5
+                # are f2py. Later !f2py text stays inside the comment.
+                if (code[0] in ['*', 'c', '!', 'C', '#']
+                        and code[1:5].lower() != 'f2py'):
+                    return True
+                return False
+            rewritten, _ = split_by_unquoted(code + 4 * ' ' + rl[5:], '!')
+            return not rewritten.strip()
+        if not code.strip():
+            return True
+        if code[0] in ['*', 'c', '!', 'C', '#'] and code[1:5].lower() != 'f2py':
+            return True
+        return False
+
+    while True:
+        # Replay a queued directive only after the statement that
+        # carried it is passed to dowithline. Free form leaves that
+        # statement open while cont is true. Fixed form leaves it open
+        # while the next kept line is a column-6 continuation.
+        replay = bool(pending) and not cont
+        is_first = False
+        if replay and sourcecodeform == 'fix':
+            # Buffer lines the reader would skip. Replay when the next
+            # kept line is a new statement, so a column-6 continuation
+            # still joins the statement that carried the directive.
+            scan = 0
+            while True:
+                if scan == len(lookahead):
+                    lookahead.append(_read_physical())
+                raw, is_first = lookahead[scan]
+                if not raw or is_first:
+                    break
+                if _fixed_skip_line(raw):
+                    scan += 1
+                    continue
+                if _fixed_col6_cont(raw):
+                    replay = False
+                break
+        if replay:
+            l = pending.pop(0)
+            from_file = False
+            is_first = False
+        else:
+            if lookahead:
+                l, is_first = lookahead.pop(0)
+            else:
+                l, is_first = _read_physical()
+            if not l:
+                if not pending:
+                    break
+                # End of input closes the statement. Replay a queued
+                # directive after that statement is passed to dowithline.
+                cont = False
+                l = pending.pop(0)
+                from_file = False
+                is_first = False
+            else:
+                from_file = True
+        if from_file and is_first:
             filepositiontext = ''
             currentfilename = fin.filename()
             gotnextfile = 1
@@ -430,8 +523,14 @@ def readfortrancode(ffile, dowithline=show, istop=1):
         (l, rl) = split_by_unquoted(l, '!')
         l += ' '
         if rl[:5].lower() == '!f2py':  # f2py directive
-            l, _ = split_by_unquoted(l + 4 * ' ' + rl[5:], '!')
-            is_f2py_directive = True
+            if l.strip():
+                if not (sourcecodeform == 'fix'
+                        and l[0] in ['*', 'c', '!', 'C', '#']
+                        and l[1:5].lower() != 'f2py'):
+                    pending.append(rl + '\n')
+            else:
+                l, _ = split_by_unquoted(l + 4 * ' ' + rl[5:], '!')
+                is_f2py_directive = True
         if l.strip() == '':  # Skip empty line
             if sourcecodeform == 'free':
                 # In free form, a statement continues in the next line
