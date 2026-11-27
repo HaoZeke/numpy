@@ -1621,6 +1621,16 @@ lenarraypattern = re.compile(
     r'\s*(@\(@\s*(?!/)\s*(?P<array>.*?)\s*@\)@\s*\*\s*(?P<len>.*?)|(\*\s*(?P<len2>.*?)|)\s*(@\(@\s*(?!/)\s*(?P<array2>.*?)\s*@\)@|))\s*(=\s*(?P<init>.*?)|(@\(@|)/\s*(?P<init2>.*?)\s*/(@\)@|)|)\s*\Z', re.I)
 
 
+def c_nonneg_extent(expr):
+    """C extent. A negative sum or difference is zero."""
+    expr = expr.strip()
+    if re.fullmatch(r"[+-]?\d+(_\w+)?", expr):
+        return expr
+    if "+" in expr or "-" in expr:
+        return f"(({expr})<0?0:({expr}))"
+    return expr
+
+
 def removespaces(expr):
     expr = expr.strip()
     if len(expr) <= 1:
@@ -2898,8 +2908,9 @@ def analyzevars(block):
                                 if 'check' not in vars[v]:
                                     # add check only when no
                                     # user-specified checks exist
+                                    ext = c_nonneg_extent(d)
                                     vars[v]['check'] = [
-                                        f'shape({n}, {i}) == {d}']
+                                        f'shape({n}, {i}) == {ext}']
                             else:
                                 # d is a non-linear function on v,
                                 # hence, v must be a required input
@@ -2911,8 +2922,9 @@ def analyzevars(block):
                                     vars[v]['intent'].append('in')
                                 # v needs to be initialized before n
                                 n_deps.append(v)
+                                ext = c_nonneg_extent(d)
                                 n_checks.append(
-                                    f'shape({n}, {i}) == {d}')
+                                    f'shape({n}, {i}) == {ext}')
                             v_attr = vars[v].get('attrspec', [])
                             if not ('optional' in v_attr
                                     or 'required' in v_attr):

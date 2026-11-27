@@ -22,7 +22,7 @@ from ._isofenv import iso_fortran_env_map
 # As the needed functions cannot be determined by static inspection of the
 # code, it is safest to use import * pending a major refactoring of f2py.
 from .auxfuncs import *
-from .crackfortran import markoutercomma
+from .crackfortran import c_nonneg_extent, markoutercomma
 
 __all__ = [
     'getctype', 'getstrlength', 'getarrdims', 'getpydocsign',
@@ -320,14 +320,18 @@ def getarrdims(a, var, verbose=0):
         for d in dim:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
-                ret['setdims'] = f"{ret['setdims']}#varname#_Dims[{i}]={d},"
+                ext = c_nonneg_extent(d)
+                ret['setdims'] = f"{ret['setdims']}#varname#_Dims[{i}]={ext},"
         if ret['setdims']:
             ret['setdims'] = ret['setdims'][:-1]
         ret['cbsetdims'], i = '', -1
         for d in var['dimension']:
             i = i + 1
             if d not in ['*', ':', '(*)', '(:)']:
-                ret['cbsetdims'] = f"{ret['cbsetdims']}#varname#_Dims[{i}]={d},"
+                ext = c_nonneg_extent(d)
+                ret['cbsetdims'] = (
+                    f"{ret['cbsetdims']}#varname#_Dims[{i}]={ext},"
+                )
             elif isintent_in(var):
                 outmess('getarrdims:warning: assumed shape array, using 0 '
                         f'instead of {d!r}\n')
