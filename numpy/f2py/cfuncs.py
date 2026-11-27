@@ -1332,6 +1332,9 @@ cfuncs[
 needs['create_cb_arglist'] = ['CFUNCSMESS', 'PRINTPYOBJERR', 'MINMAX']
 # create the list of arguments to be used when calling back to python
 cfuncs['create_cb_arglist'] = """
+#ifndef CO_VARARGS
+#define CO_VARARGS 0x4
+#endif
 static int
 create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
                   const int nofoptargs, int *nofargs, PyTupleObject **args,
@@ -1339,9 +1342,45 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
 {
     PyObject *tmp = NULL;
     PyObject *tmp_fun = NULL;
-    Py_ssize_t tot, opt, ext, siz, i, di = 0;
+    PyObject *scan = NULL, *kws = NULL;
+    Py_ssize_t tot, opt, ext, siz, i, di = 0, npos = 0;
+    int kw_before_vararg = 0;
     CFUNCSMESS(\"create_cb_arglist\\n\");
     tot=opt=ext=siz=0;
+    /* Count positional slots functools.partial already bound. */
+    if (fun != NULL && !PyFunction_Check(fun)) {
+        PyObject *ft = PyImport_ImportModule(\"functools\");
+        PyObject *pt = ft ? PyObject_GetAttrString(ft, \"partial\") : NULL;
+        int depth = 0;
+        Py_XDECREF(ft);
+        PyErr_Clear();
+        if (pt != NULL && Py_TYPE(fun) == (PyTypeObject *)pt) {
+            Py_INCREF(fun);
+            scan = fun;
+            kws = PyDict_New();
+            while (kws != NULL && scan != NULL && depth++ < 64 &&
+                   Py_TYPE(scan) == (PyTypeObject *)pt) {
+                PyObject *nxt = PyObject_GetAttrString(scan, \"func\");
+                PyObject *pa = PyObject_GetAttrString(scan, \"args\");
+                PyObject *pk = PyObject_GetAttrString(scan, \"keywords\");
+                if (pa != NULL && PyTuple_Check(pa))
+                    npos += PyTuple_GET_SIZE(pa);
+                if (pk != NULL && PyDict_Check(pk))
+                    PyDict_Merge(kws, pk, 1);
+                Py_XDECREF(pa);
+                Py_XDECREF(pk);
+                Py_DECREF(scan);
+                scan = nxt;
+                PyErr_Clear();
+            }
+            if (scan == NULL || kws == NULL) {
+                Py_DECREF(pt);
+                goto capi_fail;
+            }
+            fun = scan;
+        }
+        Py_XDECREF(pt);
+    }
     /* Get the total number of arguments */
     if (PyFunction_Check(fun)) {
         tmp_fun = fun;
@@ -1433,9 +1472,75 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
             opt = PyTuple_Size(tmp);
         Py_XDECREF(tmp);
     }
+    /* Positional fills start after an implicit self. The first keyword
+       binding ends the positional signature. */
+    if (kws != NULL && (npos > 0 || PyDict_Size(kws) > 0)) {
+        PyObject *code = PyObject_GetAttrString(tmp_fun, \"__code__\");
+        PyObject *ovn = code ? PyObject_GetAttrString(code, \"co_varnames\") : NULL;
+        Py_ssize_t nac = tot + di, j, cut, nstart, first, origin;
+        if (ovn != NULL && PyTuple_Check(ovn) && nac >= 0 &&
+            nac <= PyTuple_GET_SIZE(ovn)) {
+            origin = di;
+            if (origin < 0)
+                origin = 0;
+            if (origin > nac)
+                origin = nac;
+            if (npos < 0)
+                npos = 0;
+            if (npos > nac - origin)
+                npos = nac - origin;
+            nstart = origin + npos;
+            cut = nac;
+            for (j = origin; j < nac; j++) {
+                int has = PyDict_Contains(kws, PyTuple_GET_ITEM(ovn, j));
+                if (has < 0)
+                    PyErr_Clear();
+                else if (has == 1) {
+                    cut = j;
+                    kw_before_vararg = 1;
+                    break;
+                }
+            }
+            if (cut < nstart)
+                cut = nstart;
+            tot = cut - nstart;
+            first = (nac > opt) ? nac - opt : 0;
+            opt = 0;
+            for (j = nstart; j < cut; j++) {
+                if (j >= first)
+                    opt++;
+            }
+        }
+        else if (code == NULL || ovn == NULL)
+            PyErr_Clear();
+        Py_XDECREF(ovn);
+        Py_XDECREF(code);
+    }
     /* Get the number of extra arguments */
     if (xa != NULL)
         ext = PyTuple_Size((PyObject *)xa);
+    /* Variable positionals stay open when no keyword binding cuts them.
+       Count every Fortran argument and then every extra argument. */
+    if (kws != NULL && !kw_before_vararg) {
+        PyObject *vcode = PyObject_GetAttrString(tmp_fun, "__code__");
+        PyObject *vflags = NULL;
+        long fl = -1;
+        if (vcode != NULL)
+            vflags = PyObject_GetAttrString(vcode, "co_flags");
+        if (vflags != NULL) {
+            fl = PyLong_AsLong(vflags);
+            if (fl == -1 && PyErr_Occurred()) {
+                PyErr_Clear();
+                fl = -1;
+            }
+        }
+        else
+            PyErr_Clear();
+        if (fl >= 0 && (fl & CO_VARARGS))
+            tot = MAX(tot, (Py_ssize_t)maxnofargs + ext);
+        Py_XDECREF(vflags);
+        Py_XDECREF(vcode);
+    }
     /* Calculate the size of call-backs argument list */
     siz = MIN(maxnofargs+ext,tot);
     *nofargs = MAX(0,siz-ext);
@@ -1470,12 +1575,16 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
         }
     CFUNCSMESS(\"create_cb_arglist-end\\n\");
     Py_DECREF(tmp_fun);
+    Py_XDECREF(kws);
+    Py_XDECREF(scan);
     return 1;
 
 capi_fail:
     if (PyErr_Occurred() == NULL)
         PyErr_SetString(#modulename#_error, errmess);
     Py_XDECREF(tmp_fun);
+    Py_XDECREF(kws);
+    Py_XDECREF(scan);
     return 0;
 }
 """
