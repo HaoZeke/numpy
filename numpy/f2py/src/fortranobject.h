@@ -117,6 +117,7 @@ F2PyGetThreadLocalCallbackPtr(char *key);
 #define F2PY_INTENT_ALIGNED4 512
 #define F2PY_INTENT_ALIGNED8 1024
 #define F2PY_INTENT_ALIGNED16 2048
+#define F2PY_INTENT_LOGICAL 4096
 
 #define ARRAY_ISALIGNED(ARR, SIZE) ((size_t)(PyArray_DATA(ARR)) % (SIZE) == 0)
 #define F2PY_ALIGN4(intent) (intent & F2PY_INTENT_ALIGNED4)

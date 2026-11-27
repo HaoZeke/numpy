@@ -32,6 +32,7 @@ __all__ = [
     'isintent_c', 'isintent_callback', 'isintent_copy', 'isintent_dict',
     'isintent_hide', 'isintent_in', 'isintent_inout', 'isintent_inplace',
     'isintent_nothide', 'isintent_out', 'isintent_overwrite', 'islogical',
+    'islogicaltype',
     'islogicalfunction', 'islong_complex', 'islong_double',
     'islong_doublefunction', 'islong_long', 'islong_longfunction',
     'ismodule', 'ismoduleroutine', 'isoptional', 'isprivate', 'isvariable',
@@ -120,6 +121,10 @@ def iscomplex(var):
 
 def islogical(var):
     return isscalar(var) and var.get('typespec') == 'logical'
+
+
+def islogicaltype(var):
+    return var.get('typespec') == 'logical'
 
 
 def isinteger(var):
@@ -535,6 +540,7 @@ isintent_dict = {isintent_in: 'INTENT_IN', isintent_inout: 'INTENT_INOUT',
                  isintent_aligned4: 'INTENT_ALIGNED4',
                  isintent_aligned8: 'INTENT_ALIGNED8',
                  isintent_aligned16: 'INTENT_ALIGNED16',
+                 islogicaltype: 'INTENT_LOGICAL',
                  }
 
 

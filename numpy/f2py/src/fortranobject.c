@@ -772,11 +772,13 @@ dump_attrs(const PyArrayObject *obj)
 }
 #endif
 
-#define ARRAY_ISCOMPATIBLE(arr,type_num)                                \
+#define ARRAY_ISCOMPATIBLE(arr,type_num,intent)                         \
     ((PyArray_ISINTEGER(arr) && PyTypeNum_ISINTEGER(type_num)) ||     \
      (PyArray_ISFLOAT(arr) && PyTypeNum_ISFLOAT(type_num)) ||         \
      (PyArray_ISCOMPLEX(arr) && PyTypeNum_ISCOMPLEX(type_num)) ||     \
      (PyArray_ISBOOL(arr) && PyTypeNum_ISBOOL(type_num)) ||           \
+     ((intent & F2PY_INTENT_LOGICAL) && PyArray_ISBOOL(arr) &&        \
+      (type_num == NPY_BYTE || type_num == NPY_UBYTE)) ||             \
      (PyArray_ISSTRING(arr) && PyTypeNum_ISSTRING(type_num)))
 
 static int
@@ -991,7 +993,7 @@ ndarray_from_pyobj(const int type_num,
         */
         if ((! (intent & F2PY_INTENT_COPY)) &&
             PyArray_ITEMSIZE(arr) == elsize &&
-            ARRAY_ISCOMPATIBLE(arr,type_num) &&
+            ARRAY_ISCOMPATIBLE(arr,type_num,intent) &&
             F2PY_CHECK_ALIGNMENT(arr, intent)) {
             if ((intent & F2PY_INTENT_INOUT || intent & F2PY_INTENT_INPLACE)
               ? ((intent & F2PY_INTENT_C) ? PyArray_ISCARRAY(arr) : PyArray_ISFARRAY(arr))
@@ -1024,7 +1026,7 @@ ndarray_from_pyobj(const int type_num,
                 PyUnicode_AppendAndDel(&msg, extra_msg);
                 if (!msg) goto end_intent_err_handling;
             }
-            if (!(ARRAY_ISCOMPATIBLE(arr, type_num))) {
+            if (!(ARRAY_ISCOMPATIBLE(arr, type_num, intent))) {
                 extra_msg = PyUnicode_FromFormat(
                     " -- input '%c' not compatible to '%c'",
                     PyArray_DESCR(arr)->type, descr->type);
@@ -1058,7 +1060,7 @@ ndarray_from_pyobj(const int type_num,
               | ((intent & F2PY_INTENT_C) ? NPY_ARRAY_IN_ARRAY
                  : NPY_ARRAY_IN_FARRAY);
           if (intent & F2PY_INTENT_INPLACE) {
-              if (!(ARRAY_ISCOMPATIBLE(arr, type_num)) ||
+              if (!(ARRAY_ISCOMPATIBLE(arr, type_num, intent)) ||
                   (PyArray_ISSIGNED(arr) && PyTypeNum_ISUNSIGNED(type_num)) ||
                   (PyArray_ISUNSIGNED(arr) && PyTypeNum_ISSIGNED(type_num))
                   ) {
