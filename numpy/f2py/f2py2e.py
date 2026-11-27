@@ -321,6 +321,9 @@ def scaninputline(inputline):
         options['module'] = modulename
     if signsfile:
         options['signsfile'] = signsfile
+    if options['do-lower']:
+        onlyfuncs = [name.lower() for name in onlyfuncs]
+        skipfuncs = [name.lower() for name in skipfuncs]
     if onlyfuncs:
         options['onlyfuncs'] = onlyfuncs
     if skipfuncs:
