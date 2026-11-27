@@ -380,7 +380,7 @@ static inline double _f2py_cimag_as_double(const void *p, int typenum) {
                 case NPY_SHORT: *(npy_short *)(PyArray_DATA(arr))=_re; break;\\
                 case NPY_UBYTE: *(npy_ubyte *)(PyArray_DATA(arr))=_re; break;\\
                 case NPY_BYTE: *(npy_byte *)(PyArray_DATA(arr))=_re; break;\\
-                case NPY_BOOL: *(npy_bool *)(PyArray_DATA(arr))=(_re!=0 && _im!=0); break;\\
+                case NPY_BOOL: *(npy_bool *)(PyArray_DATA(arr))=(_re!=0 || _im!=0); break;\\
                 case NPY_USHORT: *(npy_ushort *)(PyArray_DATA(arr))=_re; break;\\
                 case NPY_UINT: *(npy_uint *)(PyArray_DATA(arr))=_re; break;\\
                 case NPY_ULONG: *(npy_ulong *)(PyArray_DATA(arr))=_re; break;\\
