@@ -571,3 +571,196 @@ class TestLowerF2PYDirective(util.F2PyTest):
     def test_no_lower_fail(self):
         with pytest.raises(ValueError, match='aborting directly') as exc:
             self.module.utils.my_abort('aborting directly')
+
+
+def _crack_routines(src, tmp_path, filename):
+    path = tmp_path / filename
+    path.write_text(textwrap.dedent(src))
+    blocks = crackfortran.crackfortran([str(path)])
+    found = []
+
+    def walk(nodes):
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if node.get("block") in ("function", "subroutine"):
+                found.append(node)
+            walk(node.get("body") or [])
+
+    walk(blocks)
+    return {node["name"]: node for node in found}
+
+
+def _assert_routine(block, args, result=None, c_name=None):
+    assert block["args"] == args
+    if result is None:
+        assert "result" not in block
+    else:
+        assert block["result"] == result
+        assert block["vars"][result]["typespec"] == "integer"
+    if c_name is None:
+        assert "bindlang" not in block
+    else:
+        spec = block["bindlang"][block["name"]]
+        assert spec["lang"] == "c"
+        assert spec["name"] == c_name
+
+
+class TestBindClauseBoundary:
+    def test_name_ending_in_bind(self, tmp_path):
+        # A name that ends in bind is not a bind clause, including a
+        # routine whose name is bind. A later clause, with or without
+        # parentheses before it, still supplies the C name.
+        plain = _crack_routines(
+            """\
+            function rebind (n) result(r)
+              integer :: n
+              integer :: r
+              r = n
+            end function rebind
+
+            subroutine unbind (item)
+              integer :: item
+            end subroutine unbind
+
+            function mybind (x) result(r)
+              integer :: x
+              integer :: r
+              r = x + 1
+            end function mybind
+
+            function endbind(n) result(r)
+              integer :: n
+              integer :: r
+              r = n
+            end function endbind
+
+            function hookbind(n) bind(c, name="hb") result(r)
+              integer :: n
+              integer :: r
+              r = n
+            end function hookbind
+
+            subroutine bare bind(c)
+              integer :: k
+              k = 1
+            end subroutine bare
+
+            subroutine named bind(c, name="zz")
+              integer :: k
+              k = 1
+            end subroutine named
+
+            function addbad(x) bind(c) result(r)
+              integer :: x
+              integer :: r
+              r = x + 2
+            end function addbad
+
+            function addok(x) result(r) bind(c)
+              integer :: x
+              integer :: r
+              r = x + 1
+            end function addok
+
+            function addsp(x) bind (c) result(r)
+              integer :: x
+              integer :: r
+              r = x + 3
+            end function addsp
+
+            function addnm(x) bind(c, name="addnm") result(r)
+              integer :: x
+              integer :: r
+              r = x + 4
+            end function addnm
+            """,
+            tmp_path,
+            "plain.f90",
+        )
+        _assert_routine(plain["rebind"], ["n"], "r")
+        _assert_routine(plain["unbind"], ["item"])
+        _assert_routine(plain["mybind"], ["x"], "r")
+        _assert_routine(plain["endbind"], ["n"], "r")
+        _assert_routine(plain["hookbind"], ["n"], "r", "hb")
+        _assert_routine(plain["bare"], [])
+        _assert_routine(plain["named"], [], c_name="zz")
+        _assert_routine(plain["addbad"], ["x"], "r")
+        _assert_routine(plain["addok"], ["x"], "r")
+        _assert_routine(plain["addsp"], ["x"], "r")
+        _assert_routine(plain["addnm"], ["x"], "r", "addnm")
+
+        spaced = _crack_routines(
+            """\
+            function bind (n) result(r)
+              integer :: n
+              integer :: r
+              r = n
+            end function bind
+
+            function mybind (x) bind(c) result(r)
+              integer :: x
+              integer :: r
+              r = x + 1
+            end function mybind
+            """,
+            tmp_path,
+            "spaced.f90",
+        )
+        _assert_routine(spaced["bind"], ["n"], "r")
+        _assert_routine(spaced["mybind"], ["x"], "r")
+
+        tight = _crack_routines(
+            """\
+            function bind(n) result(r)
+              integer :: n
+              integer :: r
+              r = n
+            end function bind
+            """,
+            tmp_path,
+            "tight.f90",
+        )
+        _assert_routine(tight["bind"], ["n"], "r")
+
+        later = _crack_routines(
+            """\
+            function bind (n) bind(c, name="zz") result(r)
+              integer :: n
+              integer :: r
+              r = n
+            end function bind
+            """,
+            tmp_path,
+            "later.f90",
+        )
+        _assert_routine(later["bind"], ["n"], "r", "zz")
+
+    def test_entry_bind_result_orders(self, tmp_path):
+        # An entry may put bind before result, or result before bind.
+        # Both orders store the entry name and its arguments.
+        routines = _crack_routines(
+            """\
+            function fbind(x) result(o) bind(c)
+              integer :: x, o
+              o = x
+            entry ebind(x) bind(c) result(r)
+              integer :: r
+              r = x
+            end function fbind
+
+            function fres(x) result(o) bind(c)
+              integer :: x, o
+              o = x
+            entry eres(x) result(r) bind(c)
+              integer :: r
+              r = x
+            end function fres
+            """,
+            tmp_path,
+            "entry.f90",
+        )
+        _assert_routine(routines["fbind"], ["x"], "o")
+        assert routines["fbind"]["entry"] == {"ebind": ["x"]}
+        _assert_routine(routines["fres"], ["x"], "o")
+        assert routines["fres"]["entry"] == {"eres": ["x"]}

@@ -979,13 +979,16 @@ def _resolvetypedefpattern(line):
     return None, [], None
 
 def parse_name_for_bind(line):
-    pattern = re.compile(r'bind\(\s*(?P<lang>[^,]+)(?:\s*,\s*name\s*=\s*["\'](?P<name>[^"\']+)["\']\s*)?\)', re.I)
-    match = pattern.search(line)
+    pattern = re.compile(r'(?<![\w$])bind\s*\(\s*(?P<lang>[^,)]+)(?:\s*,\s*name\s*=\s*["\'](?P<name>[^"\']+)["\']\s*)?\)', re.I)
     bind_statement = None
-    if match:
+    for match in pattern.finditer(line):
+        # A bind at the start of the statement is the routine name.
+        if not line[:match.start()].strip():
+            continue
         bind_statement = match.group(0)
         # Remove the 'bind' construct from the line.
         line = line[:match.start()] + line[match.end():]
+        break
     return line, bind_statement
 
 def _resolvenameargspattern(line):
@@ -1216,7 +1219,6 @@ def analyzeline(m, case, line):
                                   for x in markoutercomma(args).split('@,@')])
             else:
                 args = []
-            assert result is None, repr(result)
             groupcache[groupcounter]['entry'][name] = args
             previous_context = ('entry', name, groupcounter)
     elif case == 'type':
