@@ -185,6 +185,7 @@ filepositiontext = ''
 gotnextfile = 1
 groupcache = None
 groupcounter = 0
+blockconstruct_depth = 0
 grouplist = {groupcounter: []}
 groupname = ''
 include_paths = []
@@ -204,6 +205,7 @@ def reset_global_f2py_vars():
     global onlyfuncs, include_paths, previous_context
     global strictf77, sourcecodeform, quiet, verbose, tabchar, pyffilename
     global f77modulename, skipemptyends, ignorecontains, dolowercase, debug
+    global blockconstruct_depth
 
     # flags
     strictf77 = 1
@@ -219,6 +221,7 @@ def reset_global_f2py_vars():
     debug = []
     # variables
     groupcounter = 0
+    blockconstruct_depth = 0
     grouplist = {groupcounter: []}
     neededmodule = -1
     expectbegin = 1
@@ -613,6 +616,11 @@ endifs = r'end\s*(if|do|where|select|while|forall|associate|'\
          r'critical|enum|team)'
 endifpattern = re.compile(
     beforethisafter % (r'[\w]*?', endifs, endifs, '.*'), re.I), 'endif'
+_block_start_re = re.compile(
+    r'\s*(?:[a-z_]\w*\s*:\s*)?block\s*\Z', re.I)
+_block_end_re = re.compile(
+    r'\s*(?:[a-z_]\w*\s*:\s*)?end\s*block\b(?!\s*data)'
+    r'(?:\s+[a-z_]\w*)?\s*\Z', re.I)
 #
 moduleprocedures = r'module\s*procedure'
 moduleprocedurepattern = re.compile(
@@ -712,6 +720,37 @@ crackline_re_1 = re.compile(r'\s*(?P<result>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bind_1 = re.compile(r'\s*(?P<bind>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bindlang = re.compile(r'\s*bind\(\s*(?P<lang>[^,]+)\s*,\s*name\s*=\s*"(?P<lang_name>[^"]+)"\s*\)', re.I)
 
+def _closes_host_unit(line):
+    if subroutinepattern[0].match(line) or functionpattern[0].match(line):
+        return True
+    if re.match(r'\s*program\b', line, re.I):
+        return True
+    if re.match(r'\s*module\b(?!\s*procedure)', line, re.I):
+        return True
+    mend = endpattern[0].match(line)
+    if not mend:
+        return False
+    this = re.sub(r'\s+', '', mend.group('this').lower())
+    if this in ('endsubroutine', 'endfunction', 'endmodule', 'endprogram',
+                'endblockdata', 'endpythonmodule'):
+        return True
+    if this != 'end':
+        return False
+    after = (mend.group('after') or '').strip().lower()
+    if not after:
+        return True
+    parts = after.split()
+    word = parts[0]
+    if word in ('subroutine', 'function', 'program', 'module'):
+        return True
+    if word == 'block' and len(parts) > 1 and parts[1] == 'data':
+        return True
+    if word in ('type', 'interface', 'procedure', 'block', 'select', 'if',
+                'do', 'where', 'forall', 'associate', 'critical', 'enum',
+                'team'):
+        return False
+    return True
+
 def crackline(line, reset=0):
     """
     reset=-1  --- initialize
@@ -723,6 +762,7 @@ def crackline(line, reset=0):
     global beginpattern, groupcounter, groupname, groupcache, grouplist
     global filepositiontext, currentfilename, neededmodule, expectbegin
     global skipblocksuntil, skipemptyends, previous_context, gotnextfile
+    global blockconstruct_depth
 
     _, has_semicolon = split_by_unquoted(line, ";")
     if has_semicolon and not (f2pyenhancementspattern[0].match(line) or
@@ -738,6 +778,7 @@ def crackline(line, reset=0):
         return
     if reset < 0:
         groupcounter = 0
+        blockconstruct_depth = 0
         groupname = {groupcounter: ''}
         groupcache = {groupcounter: {}}
         grouplist = {groupcounter: []}
@@ -773,6 +814,17 @@ def crackline(line, reset=0):
         return
     if line == '':
         return
+    if _block_end_re.match(line):
+        if blockconstruct_depth:
+            blockconstruct_depth -= 1
+        return
+    if _block_start_re.match(line):
+        blockconstruct_depth += 1
+        return
+    if blockconstruct_depth:
+        if endifpattern[0].match(line) or not _closes_host_unit(line):
+            return
+        blockconstruct_depth = 0
     flag = 0
     for pat in [dimensionpattern, externalpattern, intentpattern, optionalpattern,
                 requiredpattern,
