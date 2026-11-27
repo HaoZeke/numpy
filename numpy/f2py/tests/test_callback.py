@@ -260,3 +260,83 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestGH3423(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh3423.f90")]
+
+    def test_callable_instance_fewer_arguments(self):
+        class A:
+            def __call__(self, a):
+                return a + 10
+
+        assert self.module.call_two(A()) == 11
+
+    def test_callable_instance_optional_argument(self):
+        class A:
+            def __call__(self, a=4):
+                return a
+
+        assert self.module.call_two(A()) == 1
+
+    def test_callable_instance_extra_argument(self):
+        class A:
+            def __call__(self, a, e):
+                return a + e
+
+        assert self.module.call_two(A(), fun_extra_args=(7,)) == 8
+
+    def test_callable_instance_requires_too_many(self):
+        class A:
+            def __call__(self, a, b, c):
+                return 0
+
+        err = getattr(self.module, f"_{self.module.__name__}_error")
+        with pytest.raises(err, match="call-back fun"):
+            self.module.call_two(A())
+
+    def test_callable_instance_varargs(self):
+        class A:
+            def __call__(self, *args):
+                return len(args)
+
+        assert self.module.call_two(A()) == 2
+
+    def test_callable_instance_varargs_extra(self):
+        class A:
+            def __call__(self, *args):
+                return len(args)
+
+        assert self.module.call_two(A(), fun_extra_args=(7,)) == 3
+
+    def test_callable_instance_positional_varargs(self):
+        class A:
+            def __call__(self, a, *args):
+                return a + len(args)
+
+        assert self.module.call_two(A()) == 2
+
+    def test_bound_method_varargs(self):
+        class A:
+            def meth(self, *args):
+                return len(args)
+
+        assert self.module.call_two(A().meth) == 2
+
+    def test_staticmethod_object(self):
+        class A:
+            @staticmethod
+            def st(a, b=0):
+                return a + b
+
+        assert self.module.call_two(A.__dict__["st"]) == 3
+
+    def test_bound_method_varargs_requires_too_many(self):
+        class A:
+            def meth(self, a, b, c, *args):
+                return len(args)
+
+        err = getattr(self.module, f"_{self.module.__name__}_error")
+        with pytest.raises(err, match="call-back fun"):
+            self.module.call_two(A().meth)

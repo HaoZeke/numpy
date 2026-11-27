@@ -1349,13 +1349,14 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
     }
     else {
         di = 1;
-        if (PyObject_HasAttrString(fun,\"im_func\")) {
-            tmp_fun = PyObject_GetAttrString(fun,\"im_func\");
+        /* Require __self__ so a staticmethod is not unwrapped. */
+        if (PyCallable_Check(fun) && PyObject_HasAttrString(fun,\"__self__\") && PyObject_HasAttrString(fun,\"__func__\")) {
+            tmp_fun = PyObject_GetAttrString(fun,\"__func__\");
         }
         else if (PyObject_HasAttrString(fun,\"__call__\")) {
             tmp = PyObject_GetAttrString(fun,\"__call__\");
-            if (PyObject_HasAttrString(tmp,\"im_func\"))
-                tmp_fun = PyObject_GetAttrString(tmp,\"im_func\");
+            if (PyObject_HasAttrString(tmp,\"__func__\"))
+                tmp_fun = PyObject_GetAttrString(tmp,\"__func__\");
             else {
                 tmp_fun = fun; /* built-in function */
                 Py_INCREF(tmp_fun);
@@ -1386,6 +1387,13 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
             }
             tmp_fun = fun;
             Py_INCREF(tmp_fun);
+        }
+        /* __func__ has no __code__ for some wrappers. Pass all arguments
+           until a real co_argcount replaces tot. */
+        if (tmp_fun != NULL && tot == 0) {
+            tot = maxnofargs;
+            if (xa != NULL)
+                tot += PyTuple_Size((PyObject *)xa);
         }
     }
 
@@ -1419,11 +1427,34 @@ create_cb_arglist(PyObject* fun, PyTupleObject* xa , const int maxnofargs,
     if (PyObject_HasAttrString(tmp_fun,\"__code__\")) {
         if (PyObject_HasAttrString(tmp = PyObject_GetAttrString(tmp_fun,\"__code__\"),\"co_argcount\")) {
             PyObject *tmp_argcount = PyObject_GetAttrString(tmp,\"co_argcount\");
+            PyObject *tmp_flags = NULL;
+            int varargs = 0;
+            if (PyObject_HasAttrString(tmp,\"co_flags\")) {
+                tmp_flags = PyObject_GetAttrString(tmp,\"co_flags\");
+                if (tmp_flags != NULL) {
+                    long flags = PyLong_AsLong(tmp_flags);
+                    if (flags == -1 && PyErr_Occurred())
+                        PyErr_Clear();
+                    else if (flags & 0x04)
+                        varargs = 1;
+                }
+            }
             Py_DECREF(tmp);
             if (tmp_argcount == NULL) {
+                Py_XDECREF(tmp_flags);
                 goto capi_fail;
             }
+            /* 0x04 is CO_VARARGS. Bound callbacks take the greater
+               of the fixed count and the provided arguments. */
             tot = PyLong_AsSsize_t(tmp_argcount) - di;
+            if (varargs && di) {
+                Py_ssize_t cap = maxnofargs;
+                if (xa != NULL)
+                    cap += PyTuple_Size((PyObject *)xa);
+                if (cap > tot)
+                    tot = cap;
+            }
+            Py_XDECREF(tmp_flags);
             Py_DECREF(tmp_argcount);
         }
     }
