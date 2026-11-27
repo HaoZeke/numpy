@@ -186,6 +186,32 @@ def test_meson_library_names_use_valid_identifiers():
     assert "\n1foo =" not in meson_build
 
 
+def test_static_archive_is_linked_after_library_dirs():
+    archive = Path("/build/libhost.a")
+    meson_build = MesonTemplate(
+        modulename="Blah",
+        sources=[Path("entry.f90")],
+        deps=[],
+        libraries=["host"],
+        library_dirs=[Path("/build/static")],
+        include_dirs=[],
+        object_files=[Path("keep.o")],
+        linker_args=[],
+        fortran_args=[],
+        build_type="release",
+        python_exe=sys.executable,
+        archives=[archive],
+    ).generate_meson_build()
+
+    objects = meson_build.split("objects:")[1].split("dependencies")[0]
+    assert "keep.o" in objects
+    assert "libhost.a" not in objects
+    assert "declare_dependency(link_args : ['''/build/libhost.a'''])" in meson_build
+    deps = meson_build.split("dependencies")[1]
+    assert deps.index("lib_dir_0") < deps.index("lib_0_host")
+    assert deps.index("lib_0_host") < deps.index("archive_0_libhost_a")
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason='Unsupported on this platform for now')
 def test_gh25784():

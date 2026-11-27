@@ -34,6 +34,7 @@ class MesonTemplate:
         fortran_args: list[str],
         build_type: str,
         python_exe: str,
+        archives: list | None = None,
     ):
         self.modulename = modulename
         self.build_template_path = (
@@ -43,6 +44,7 @@ class MesonTemplate:
         self.deps = deps
         self.libraries = libraries
         self.library_dirs = library_dirs
+        self.archives = archives or []
         if include_dirs is not None:
             self.include_dirs = include_dirs
         else:
@@ -116,12 +118,25 @@ class MesonTemplate:
                 for name, lib in lib_names
             ]
         )
+        archive_names = [
+            (_meson_identifier("archive", Path(archive).name, i), archive)
+            for i, archive in enumerate(self.archives)
+        ]
+        self.substitutions["archive_declarations"] = "\n".join(
+            [
+                f"{name} = declare_dependency(link_args : ['''{archive}'''])"
+                for name, archive in archive_names
+            ]
+        )
 
+        self.substitutions["lib_dir_list"] = f"\n{self.indent}".join(
+            [f"{self.indent}lib_dir_{i}," for i in range(len(self.library_dirs))]
+        )
         self.substitutions["lib_list"] = f"\n{self.indent}".join(
             [f"{self.indent}{name}," for name, _ in lib_names]
         )
-        self.substitutions["lib_dir_list"] = f"\n{self.indent}".join(
-            [f"{self.indent}lib_dir_{i}," for i in range(len(self.library_dirs))]
+        self.substitutions["archive_list"] = f"\n{self.indent}".join(
+            [f"{self.indent}{name}," for name, _ in archive_names]
         )
 
     def include_substitution(self) -> None:
@@ -146,11 +161,31 @@ class MesonTemplate:
         return meson_build
 
 
+def _absolute_path(path):
+    return Path(path).absolute()
+
+
+def _partition_extra_objects(extra_objects):
+    """Split linker inputs. Meson object lists accept object files only."""
+    objects = []
+    archives = []
+    for item in extra_objects or []:
+        path = Path(item)
+        if path.suffix.lower() == ".a":
+            archives.append(_absolute_path(path))
+        else:
+            objects.append(item)
+    return objects, archives
+
+
 class MesonBackend(Backend):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dependencies = self.extra_dat.get("dependencies", [])
         self.meson_build_dir = "bbdir"
+        # -L is recorded from this process, which is the directory f2py was
+        # run from. The linker later runs inside the meson build tree.
+        self.library_dirs = [_absolute_path(path) for path in self.library_dirs or []]
         self.build_type = (
             "debug" if any("debug" in flag for flag in self.fc_flags) else "release"
         )
@@ -174,6 +209,7 @@ class MesonBackend(Backend):
 
     def write_meson_build(self, build_dir: Path) -> None:
         """Writes the meson build file at specified location"""
+        objects, archives = _partition_extra_objects(self.extra_objects)
         meson_template = MesonTemplate(
             self.modulename,
             self.sources,
@@ -181,11 +217,12 @@ class MesonBackend(Backend):
             self.libraries,
             self.library_dirs,
             self.include_dirs,
-            self.extra_objects,
+            objects,
             self.flib_flags,
             self.fc_flags,
             self.build_type,
             sys.executable,
+            archives=archives,
         )
         src = meson_template.generate_meson_build()
         Path(build_dir).mkdir(parents=True, exist_ok=True)

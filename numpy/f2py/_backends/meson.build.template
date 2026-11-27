@@ -39,6 +39,7 @@ quadmath_dep = fc.find_library('quadmath', required: false)
 
 ${lib_declarations}
 ${lib_dir_declarations}
+${archive_declarations}
 
 py.extension_module('${modulename}',
                      [
@@ -56,8 +57,9 @@ ${obj_list}
                      py_dep,
                      quadmath_dep,
 ${dep_list}
-${lib_list}
 ${lib_dir_list}
+${lib_list}
+${archive_list}
                      ],
 ${fortran_args}
                      install : true)

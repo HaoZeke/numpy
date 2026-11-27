@@ -1,0 +1,7 @@
+``f2py`` links prebuilt Fortran libraries on the command line
+-------------------------------------------------------------
+
+An absolute ``.a`` file and a relative ``-L`` directory passed to
+``f2py -c`` are forwarded to the linker. A callback passed into the
+wrapped routine, or registered on the extension, can then be called
+from Fortran that was compiled into that library.
