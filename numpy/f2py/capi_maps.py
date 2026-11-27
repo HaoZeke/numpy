@@ -439,9 +439,9 @@ def getinit(a, var):
         showinit = init
         if isarray(var) and var.get('typespec') == 'logical':
             token = init.strip().lower()
-            if token == '.true.':
+            if re.fullmatch(r'\.true\.(?:_\w+)?', token):
                 init = '1'
-            elif token == '.false.':
+            elif re.fullmatch(r'\.false\.(?:_\w+)?', token):
                 init = '0'
         if iscomplex(var) or iscomplexarray(var):
             ret = {}
