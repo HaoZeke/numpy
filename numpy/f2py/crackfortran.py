@@ -139,6 +139,7 @@ TODO:
     The above may be solved by creating appropriate preprocessor program, for example.
 
 """
+import ast
 import codecs
 import copy
 import fileinput
@@ -2965,7 +2966,8 @@ def analyzevars(block):
                         vars[n]['depend'].append(v)
                 if not vars[n]['depend']:
                     del vars[n]['depend']
-            if isscalar(vars[n]):
+            # getinit parses complex initializers. Do not eval them.
+            if isscalar(vars[n]) and not iscomplex(vars[n]):
                 vars[n]['='] = _eval_scalar(vars[n]['='], params)
 
     for n in list(vars.keys()):
@@ -3550,7 +3552,7 @@ def vars2fortran(block, vars, args, tab='', as_interface=False):
             v = vars[a]['=']
             if vars[a]['typespec'] in ['complex', 'double complex']:
                 try:
-                    v = eval(v, {}, {})
+                    v = ast.literal_eval(v)
                     v = f'({v.real},{v.imag})'
                 except Exception:
                     pass

@@ -10,6 +10,7 @@ from . import __version__
 
 f2py_version = __version__.version
 
+import ast
 import copy
 import os
 import re
@@ -446,11 +447,13 @@ def getinit(a, var):
                     ret['init.r'], ret['init.i'] = markoutercomma(
                         v[1:-1]).split('@,@')
                 else:
-                    v = eval(v, {}, {})
+                    v = ast.literal_eval(v)
                     ret['init.r'], ret['init.i'] = str(v.real), str(v.imag)
-            except Exception as exc:
+            except Exception:
                 expr = init.strip()
-                if ',' in expr or not isinstance(exc, NameError):
+                if expr.startswith('(') and expr.endswith(')'):
+                    expr = expr[1:-1].strip()
+                if not expr.isidentifier():
                     raise ValueError(
                         f'getinit: expected complex number `(r,i)\' but got `{init}\' as initial value of {a!r}.')
                 ret['init.r'] = f'({expr}).r'
