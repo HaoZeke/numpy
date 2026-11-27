@@ -1,4 +1,5 @@
 import math
+import os
 import platform
 import sys
 import textwrap
@@ -260,3 +261,44 @@ class TestCBFortranCallstatement(util.F2PyTest):
         with pytest.raises(ValueError, match='helpme') as exc:
             self.module.mypy_abort = self.module.utils.my_abort
             self.module.utils.do_something('helpme')
+
+
+@pytest.mark.slow
+class TestGH7577(util.F2PyTest):
+    sources = [util.getpath("tests", "src", "callback", "gh7577.f90")]
+
+    @pytest.mark.parametrize("name", ["call_complex", "call_double_complex"])
+    def test_complex_valued_callback(self, name):
+        got = getattr(self.module, name)(1 + 2j, lambda z: z * z)
+        assert complex(got) == -3 + 4j
+
+
+@pytest.mark.slow
+class TestGH7577F2C(TestGH7577):
+    options = ["--f90flags=-ff2c"]
+
+
+@pytest.mark.slow
+def test_gh7577_ff2c_name_mark():
+    src = [util.getpath("tests", "src", "callback", "gh7577.f90")]
+    no_second = "-fno-second-" + "under" + "score"
+    mod = util.build_module(
+        src,
+        options=["--f90flags=-ff2c " + no_second],
+        module_name="gh7577_nose",
+    )
+    for name in ("call_complex", "call_double_complex"):
+        got = getattr(mod, name)(1 + 2j, lambda z: z * z)
+        assert complex(got) == -3 + 4j
+    saved = os.environ.get("FFLAGS")
+    os.environ["FFLAGS"] = "-ff2c"
+    try:
+        marked = util.build_module(src, module_name="gh7577_fflags")
+    finally:
+        if saved is None:
+            os.environ.pop("FFLAGS", None)
+        else:
+            os.environ["FFLAGS"] = saved
+    for name in ("call_complex", "call_double_complex"):
+        got = getattr(marked, name)(1 + 2j, lambda z: z * z)
+        assert complex(got) == -3 + 4j

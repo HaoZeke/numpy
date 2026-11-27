@@ -251,6 +251,18 @@ In Python:
    bare Fortran routine will be used. For more details, see
    https://github.com/numpy/numpy/issues/26681#issuecomment-2466460943
 
+Call-back functions returning complex values
+--------------------------------------------
+
+A Fortran ``COMPLEX`` function may return its result by value or through
+a hidden first argument. GNU Fortran and LLVM Flang return by value.
+Intel Fortran, NVIDIA HPC Fortran, PGI, and AOCC (classic Flang) pass
+the hidden argument. ``f2py -c`` defines ``F2PY_CB_RETURNCOMPLEX`` from
+the Fortran compiler (``1`` by value, ``0`` for the hidden argument).
+The generated C tests that macro with ``#if``, so ``0`` selects the
+hidden argument. ``gfortran -ff2c`` selects the hidden argument when
+it is passed with ``--f90flags`` or ``--f77flags``.
+
 Resolving arguments to call-back functions
 ------------------------------------------
 

@@ -49,6 +49,17 @@ class MesonTemplate:
             self.include_dirs = []
         self.substitutions = {}
         self.objects = object_files
+        # gfortran -ff2c returns COMPLEX through a hidden pointer.
+        # Names that contain "_" gain one extra trailing "_" unless the
+        # no-second flag is set. Meson also applies FFLAGS.
+        _tokens = list(fortran_args)
+        _tokens += [
+            tok.strip("'\"") for tok in os.environ.get("FFLAGS", "").split()
+        ]
+        self.ff2c = "-ff2c" in _tokens
+        self.g77_names = self.ff2c and (
+            "-fno-second-" + "under" + "score"
+        ) not in _tokens
         # Convert args to '' wrapped variant for meson
         self.fortran_args = [
             f"'{x}'" if not (x.startswith("'") and x.endswith("'")) else x
@@ -81,6 +92,8 @@ class MesonTemplate:
         self.substitutions["modulename"] = self.modulename
         self.substitutions["buildtype"] = self.build_type
         self.substitutions["python"] = self.python_exe
+        self.substitutions["ff2c"] = "true" if self.ff2c else "false"
+        self.substitutions["g77_names"] = "true" if self.g77_names else "false"
 
     def sources_substitution(self) -> None:
         self.substitutions["source_list"] = ",\n".join(

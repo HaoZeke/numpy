@@ -13,6 +13,29 @@ add_project_arguments(
   cc.get_supported_arguments( '-fno-strict-aliasing'), language : 'c'
 )
 
+# COMPLEX call-back results follow the Fortran compiler. GNU Fortran and
+# LLVM Flang return the value. Intel Fortran, NVHPC, PGI, and classic
+# Flang (AOCC) pass a hidden result pointer. The generated C tests
+# F2PY_CB_RETURNCOMPLEX with #if, so 0 selects the hidden pointer.
+# gfortran -ff2c passes that pointer too. An external name that
+# already contains "_" gains one extra trailing "_" unless the
+# no-second flag is set. _ff2c is true when -ff2c is in the Fortran
+# flags or in FFLAGS.
+_ff2c = ${ff2c}
+_g77_names = ${g77_names}
+_fc_id = fc.get_id()
+if _fc_id == 'gcc' and _ff2c
+  _cb_flags = ['-DF2PY_CB_RETURNCOMPLEX=0']
+  if _g77_names
+    _cb_flags += ['-D' + 'UNDER' + 'SCORE_G77']
+  endif
+  add_project_arguments(_cb_flags, language : 'c')
+elif _fc_id in ['gcc', 'llvm-flang']
+  add_project_arguments('-DF2PY_CB_RETURNCOMPLEX=1', language : 'c')
+elif _fc_id in ['intel', 'intel-cl', 'intel-llvm', 'intel-llvm-cl', 'nvidia_hpc', 'pgi', 'flang']
+  add_project_arguments('-DF2PY_CB_RETURNCOMPLEX=0', language : 'c')
+endif
+
 py = import('python').find_installation('''${python}''', pure: false)
 py_dep = py.dependency()
 
