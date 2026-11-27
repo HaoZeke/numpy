@@ -270,7 +270,7 @@ def buildhooks(pymod):
 
         ret['latexdoc'] = []
         modobjs_str = ','.join(undo_rmbadname(modobjs))
-        ret['docs'].append(f"\"\t{m_name} --- {modobjs_str}\"")
+        ret['docs'].append(f"\"\t{m_name} --- {modobjs_str}\\n\"")
 
     ret['routine_defs'] = ''
     ret['doc'] = []
