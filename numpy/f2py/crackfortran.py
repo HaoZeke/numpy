@@ -160,6 +160,7 @@ from . import __version__, symbolic
 # As the needed functions cannot be determined by static inspection of the
 # code, it is safest to use import * pending a major refactoring of f2py.
 from .auxfuncs import *
+from .auxfuncs import F2PYError
 
 f2py_version = __version__.version
 
@@ -2052,6 +2053,87 @@ def postcrack2(block, tab='', param_map=None):
     return block
 
 
+def _frozen(value):
+    if isinstance(value, dict):
+        return tuple(sorted((str(key), _frozen(item))
+                            for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_frozen(item) for item in value)
+    return value
+
+
+def _bound_key(bound):
+    text = str(bound).strip()
+    if text in (':', '*') or text.lstrip('+-').isdigit():
+        return text
+    return 'arg'
+
+
+def _dim_key(dim):
+    if not dim:
+        return None
+    return tuple(_bound_key(bound) for bound in dim)
+
+
+def _intent_key(intent):
+    # Omitting intent selects the same input passing as intent(in).
+    if not intent:
+        return ('in',)
+    return tuple(intent)
+
+
+def _var_signature(var):
+    var = var or {}
+    return (
+        var.get('typespec'),
+        _frozen(var.get('kindselector')),
+        _frozen(var.get('charselector')),
+        _dim_key(var.get('dimension')),
+        _intent_key(var.get('intent')),
+    )
+
+
+def _callback_signature(rout):
+    variables = rout.get('vars') or {}
+    args = tuple(_var_signature(variables.get(name))
+                 for name in rout.get('args') or [])
+    result = None
+    if rout.get('block') == 'function':
+        result_name = rout.get('result') or rout.get('name')
+        result = _var_signature(variables.get(result_name))
+    return (rout.get('block'), result, args)
+
+
+def _shared_callback_module(edef):
+    """User module that already builds this intent(callback) external.
+
+    The external is one C function. A later routine with the same
+    signature uses that function. A different signature is an error.
+    """
+    if not isinstance(edef, dict) or not isintent_callback(edef):
+        return None
+    signature = _callback_signature(edef)
+    name = edef.get('name')
+    for module in usermodules:
+        for interface in module.get('body') or []:
+            if not isinstance(interface, dict):
+                continue
+            if interface.get('block') != 'interface':
+                continue
+            for routine in interface.get('body') or []:
+                if not isinstance(routine, dict):
+                    continue
+                if routine.get('name') != name or not isintent_callback(routine):
+                    continue
+                if _callback_signature(routine) != signature:
+                    raise F2PYError(
+                        f"intent(callback) external {name!r} has "
+                        f"different signatures in {module['name']!r} and "
+                        f"{edef.get('from', '')!r}")
+                return module['name']
+    return None
+
+
 def postcrack(block, args=None, tab=''):
     """
     TODO:
@@ -2133,7 +2215,14 @@ def postcrack(block, args=None, tab=''):
                                 del block['body'][j]
                             del interfaced[interfaced.index(e)]
                             break
-                interface['body'].append(edef)
+                if isinstance(edef, dict):
+                    shared = _shared_callback_module(edef)
+                    if shared:
+                        useblock[shared] = {}
+                    else:
+                        interface['body'].append(edef)
+                else:
+                    interface['body'].append(edef)
             elif e in mvars and not isexternal(mvars[e]):
                 interface['vars'][e] = mvars[e]
         if interface['vars'] or interface['body']:

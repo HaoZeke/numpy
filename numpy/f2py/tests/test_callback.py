@@ -1,5 +1,6 @@
 import math
 import platform
+import subprocess
 import sys
 import textwrap
 import threading
@@ -193,6 +194,28 @@ class TestF77Callback(util.F2PyTest):
         r = self.module.hidden_callback2(2)
         assert r == 3
 
+    def test_hidden_callback_required(self):
+        # gh-18385: a routine that does not declare the callback still
+        # passes its Fortran argument when the Python function requires it
+        self.module.global_f = lambda x: x + 1
+        try:
+            assert self.module.hidden_callback2(2) == 3
+        finally:
+            del self.module.global_f
+
+    def test_hidden_callback_extra_only(self):
+        # A callable that accepts the extra arguments alone keeps the
+        # values of its remaining parameters when the routine did not
+        # declare the callback.
+        self.module.global_f = lambda x, y=0: x + y
+        self.module.global_f_extra_args = (10,)
+        try:
+            assert self.module.hidden_callback(2) == 12
+            assert self.module.hidden_callback2(2) == 10
+        finally:
+            del self.module.global_f
+            del self.module.global_f_extra_args
+
 
 @pytest.mark.slow
 class TestF77CallbackPythonTLS(TestF77Callback):
@@ -215,6 +238,98 @@ class TestF90Callback(util.F2PyTest):
         y = np.array([1, 2, 3], dtype=np.int64)
         r = self.module.gh17797(incr, y)
         assert r == 123 + 1 + 2 + 3
+
+
+@pytest.mark.slow
+class TestGH18385(util.F2PyTest):
+    # primary and tertiary declare the hidden callback, secondary does not
+    sources = [util.getpath("tests", "src", "callback", "gh18385.f90")]
+
+    def test_gh18385(self, monkeypatch):
+        calls = []
+
+        def callback(a, b):
+            calls.append((a, b))
+
+        monkeypatch.setattr(self.module, "callback", callback, raising=False)
+        self.module.primary()
+        self.module.secondary()
+        self.module.tertiary()
+        assert calls == [(1, 2), (3, 4), (5, 6)]
+
+    def test_defaulted(self, monkeypatch):
+        calls = []
+
+        def callback(a=None, b=None):
+            calls.append((a, b))
+
+        monkeypatch.setattr(self.module, "callback", callback, raising=False)
+        self.module.secondary()
+        self.module.primary()
+        assert calls == [(None, None), (1, 2)]
+
+    def test_extra_args(self, monkeypatch):
+        calls = []
+
+        def callback(a, b=None):
+            calls.append((a, b))
+
+        monkeypatch.setattr(self.module, "callback", callback, raising=False)
+        monkeypatch.setattr(self.module, "callback_extra_args", (9,),
+                            raising=False)
+        self.module.primary()
+        self.module.secondary()
+        assert calls == [(1, 9), (9, None)]
+
+    def test_shared_signature(self, monkeypatch):
+        calls = []
+
+        def cbound(a, n):
+            calls.append((np.asarray(a, dtype=float).tolist(), int(n)))
+
+        def pyfunc(v):
+            calls.append(int(v))
+
+        def cintent(v):
+            calls.append(int(v))
+
+        monkeypatch.setattr(self.module, "cbound", cbound, raising=False)
+        monkeypatch.setattr(self.module, "pyfunc", pyfunc, raising=False)
+        monkeypatch.setattr(self.module, "cintent", cintent, raising=False)
+        self.module.bound_a(np.array([1.0, 2.0], dtype=np.float32))
+        self.module.bound_b(np.array([3.0, 4.0], dtype=np.float32))
+        self.module.name_a(1)
+        self.module.name_b(2)
+        self.module.intent_a(7)
+        self.module.intent_b(8)
+        assert calls == [([1.0, 2.0], 2), ([3.0, 4.0], 2), 1, 2, 7, 8]
+
+
+def test_gh18385_signature_mismatch(tmp_path):
+    # One trampoline serves both routines, so their signatures must agree
+    fpath = tmp_path / "gh18385_mismatch.f90"
+    fpath.write_text(textwrap.dedent("""\
+        subroutine one()
+          external cb
+          !f2py intent(callback, hide) :: cb
+          call cb(1)
+        end subroutine one
+
+        subroutine two()
+          external cb
+          !f2py intent(callback, hide) :: cb
+          call cb(1.0)
+        end subroutine two
+        """))
+    code = (
+        "import sys; sys.path = {!r}; import numpy.f2py; numpy.f2py.main()"
+        .format(sys.path))
+    res = subprocess.run(
+        [sys.executable, "-c", code, "-m", "mismatch", str(fpath)],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert res.returncode != 0
+    assert "F2PYError" in res.stderr
+    assert "different signatures" in res.stderr
 
 
 @pytest.mark.slow
