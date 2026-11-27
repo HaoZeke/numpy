@@ -69,21 +69,8 @@ typedefs['unsigned_char'] = 'typedef unsigned char unsigned_char;'
 typedefs['unsigned_short'] = 'typedef unsigned short unsigned_short;'
 typedefs['unsigned_long'] = 'typedef unsigned long unsigned_long;'
 typedefs['signed_char'] = 'typedef signed char signed_char;'
-typedefs['long_long'] = """
-#if defined(NPY_OS_WIN32)
-typedef __int64 long_long;
-#else
-typedef long long long_long;
-typedef unsigned long long unsigned_long_long;
-#endif
-"""
-typedefs['unsigned_long_long'] = """
-#if defined(NPY_OS_WIN32)
-typedef __uint64 long_long;
-#else
-typedef unsigned long long unsigned_long_long;
-#endif
-"""
+typedefs['long_long'] = 'typedef npy_longlong long_long;'
+typedefs['unsigned_long_long'] = 'typedef npy_ulonglong unsigned_long_long;'
 typedefs['long_double'] = """
 #ifndef _LONG_DOUBLE
 typedef long double long_double;

@@ -317,3 +317,30 @@ class TestLineWrapping:
         assert '\n     &' in result
         for line in result.strip().split('\n'):
             assert len(line) <= 66 or line.startswith('     &')
+
+
+@pytest.mark.slow
+def test_gh21161_integer_typedefs(tmp_path):
+    # gh-21161: one typedef each, taken from the numpy C integer types
+    pyf = util.getpath("tests", "src", "regression", "gh21161.pyf")
+    ret = np.f2py.run_main([str(pyf), "--build-dir", str(tmp_path)])
+    csrcs = [Path(p) for p in ret["_gh21161_test"]["csrc"]]
+    text = next(p for p in csrcs if p.name.endswith("module.c")).read_text()
+    assert text.count("typedef npy_longlong long_long;") == 1
+    assert text.count("typedef npy_ulonglong unsigned_long_long;") == 1
+    assert "__int64" not in text
+    assert "__uint64" not in text
+    assert "typedef unsigned long long unsigned_long_long;" not in text
+
+    mod = util.build_module(
+        [
+            util.getpath("tests", "src", "regression", "gh21161.pyf"),
+            util.getpath("tests", "src", "regression", "gh21161.f90"),
+        ],
+        module_name="_gh21161_test",
+    )
+    a = np.array([1, 4], dtype=np.uint64)
+    b = np.array(7, dtype=np.int64)
+    mod.addone(a, b)
+    npt.assert_array_equal(a, np.array([2, 5], dtype=np.uint64))
+    assert int(b) == 8

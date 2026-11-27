@@ -1,0 +1,9 @@
+python module _gh21161_test
+    interface
+        subroutine addone(n, a, b)
+            integer, intent(hide), depend(a) :: n = len(a)
+            integer(kind=-8), dimension(n), intent(inout) :: a
+            integer(kind=8), intent(inout) :: b
+        end subroutine addone
+    end interface
+end python module _gh21161_test
