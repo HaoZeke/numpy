@@ -563,6 +563,38 @@ class TestParamParseNestedParens:
         assert vs["dimension"] == ["26", "1800"]
 
 
+@pytest.mark.parametrize("code, expect", [
+    (
+        (
+            "subroutine foo(a, b)\n"
+            "  integer, intent(in) :: a; 20 integer, intent(out) :: b\n"
+            "end subroutine foo\n"
+        ),
+        {
+            "a": {"typespec": "integer", "intent": ["in"]},
+            "b": {"typespec": "integer", "intent": ["out"]},
+        },
+    ),
+    (
+        (
+            "subroutine foo(a)\n"
+            "  integer :: a; 10 dimension a(4)\n"
+            "end subroutine foo\n"
+        ),
+        {"a": {"typespec": "integer", "dimension": ["4"]}},
+    ),
+])
+def test_semicolon_statement_label(tmp_path, code, expect):
+    path = tmp_path / "semi_label.f90"
+    path.write_text(code)
+    crackfortran.reset_global_f2py_vars()
+    mod = crackfortran.crackfortran([str(path)])
+    found = mod[0]["vars"]
+    for name, spec in expect.items():
+        for key, value in spec.items():
+            assert found[name][key] == value
+
+
 @pytest.mark.slow
 class TestLowerF2PYDirective(util.F2PyTest):
     sources = [util.getpath("tests", "src", "crackfortran", "gh27697.f90")]

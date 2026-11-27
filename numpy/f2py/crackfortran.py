@@ -709,6 +709,17 @@ def _simplifyargs(argsline):
 
 
 crackline_re_1 = re.compile(r'\s*(?P<result>\b[a-z]+\w*\b)\s*=.*', re.I)
+_stmt_label_re = re.compile(r'\s*(?P<label>\d{1,5})\s+(?P<line>\S.*)\Z')
+
+
+def _strip_statement_label(line):
+    """Drop a free-form statement label from one statement."""
+    match = _stmt_label_re.match(line)
+    if match and int(match.group('label')) != 0:
+        return match.group('line')
+    return line
+
+
 crackline_bind_1 = re.compile(r'\s*(?P<bind>\b[a-z]+\w*\b)\s*=.*', re.I)
 crackline_bindlang = re.compile(r'\s*bind\(\s*(?P<lang>[^,]+)\s*,\s*name\s*=\s*"(?P<lang_name>[^"]+)"\s*\)', re.I)
 
@@ -734,6 +745,7 @@ def crackline(line, reset=0):
         while semicolon_line:
             crackline(line, reset)
             line, semicolon_line = split_by_unquoted(semicolon_line[1:], ";")
+            line = _strip_statement_label(line)
         crackline(line, reset)
         return
     if reset < 0:
