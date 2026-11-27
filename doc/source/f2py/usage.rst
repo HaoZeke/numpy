@@ -149,7 +149,7 @@ Common build flags:
 ``-D<macro>[=<defn=1>]``
   Define macro ``<macro>`` as ``<defn>``.
 ``-U<macro>``
-  Define macro ``<macro>``
+  Undefine macro ``<macro>``
 ``-I<dir>``
   Append directory ``<dir>`` to the list of directories searched for include
   files.
