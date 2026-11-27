@@ -1004,6 +1004,18 @@ def _resolvenameargspattern(line):
     return None, [], None, None
 
 
+def _use_symbol(text):
+    text = text.strip()
+    if re.match(r'\A\w+\Z', text):
+        return text
+    m = re.match(
+        r'\A(?P<kind>operator|assignment)\s*\((?P<body>.*)\)\Z', text, re.I)
+    if not m or not m.group('body').strip():
+        return None
+    body = ''.join(m.group('body').split())
+    return f"{m.group('kind')}({body})"
+
+
 def analyzeline(m, case, line):
     """
     Reads each line in the input file in sequence and updates global vars.
@@ -1532,12 +1544,19 @@ def analyzeline(m, case, line):
                 ll = [x.strip() for x in mm['list'].split(',')]
                 rl = {}
                 for l in ll:
-                    if '=' in l:
-                        m2 = re.match(
-                            r'\A\s*(?P<local>\b\w+\b)\s*=\s*>\s*(?P<use>\b\w+\b)\s*\Z', l, re.I)
-                        if m2:
-                            rl[m2.group('local').strip()] = m2.group(
-                                'use').strip()
+                    if '=>' in l:
+                        local, remote = re.split(r'\s*=>\s*', l, maxsplit=1)
+                        local_sym = _use_symbol(local)
+                        remote_sym = _use_symbol(remote)
+                        if local_sym and remote_sym:
+                            rl[local_sym] = remote_sym
+                        else:
+                            outmess(
+                                f'analyzeline: Not local=>use pattern found in {repr(l)}\n')
+                    elif '=' in l:
+                        sym = _use_symbol(l)
+                        if sym:
+                            rl[sym] = sym
                         else:
                             outmess(
                                 f'analyzeline: Not local=>use pattern found in {repr(l)}\n')
